@@ -4,7 +4,7 @@ from app.services.extraction_service import ExtractionService
 from app.schemas.document import DocumentResponse
 from app.schemas.feedback import PydanticFeedbackInput
 from app.schemas.schema_generator import SchemaGeneratorInput
-from app.services.schema_generator_service import SchemaDefinition, SchemaGeneratorService
+from app.services.ontology_generator_service import OntologyResponse, OntologyGeneratorService
 from datetime import datetime
 from app.utils.logger import logger
 import traceback
@@ -53,8 +53,8 @@ async def agent_updates(websocket: WebSocket, client_id: str):
     finally:
         await websocket.close()
 
-@router.post("/generate-schema", response_model=SchemaDefinition)
-def generate_schema(input_data: SchemaGeneratorInput) -> SchemaDefinition:
+@router.post("/generate-schema", response_model=OntologyResponse)
+def generate_schema(input_data: SchemaGeneratorInput) -> OntologyResponse:
     """
     Generate a Pydantic schema from input text.
     The endpoint uses AI to analyze the text and create appropriate schema definitions.
@@ -67,9 +67,9 @@ def generate_schema(input_data: SchemaGeneratorInput) -> SchemaDefinition:
 
     logger.info(f"Received schema generation request for schema: {input_data.base_schema_name}")
     try:
-        generator = SchemaGeneratorService()
+        generator = OntologyGeneratorService()
         
-        schema_definition = generator.generate_schema(
+        schema_definition = generator.generate_ontology(
             text=input_data.text
         )
         
@@ -79,7 +79,8 @@ def generate_schema(input_data: SchemaGeneratorInput) -> SchemaDefinition:
                 detail="Failed to generate schema"
             )
         
-        logger.info(f"Successfully generated {len(schema_definition.model_definitions)} schema models")
+        logger.info(f"Successfully generated {len(schema_definition.nodes)} node definitions")
+        logger.info(f"Successfully generated {len(schema_definition.relationships)} edge definitions")
         return schema_definition
     except HTTPException:
         raise
