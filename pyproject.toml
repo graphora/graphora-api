@@ -1,0 +1,25 @@
+[project]
+name = "graphit-api"
+version = "0.1.0"
+description = "FastAPI-based document processing backend with knowledge graph construction"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.6",
+    "instructor>=1.7.0",
+    "openai>=1.52.0",
+    "langchain>=0.3.12",
+    "neo4j>=5.27.0",
+    "pydantic-settings>=2.7.0",
+    "pydantic>=2.10.3",
+    "pypdf>=3.0.0",
+    "python-docx>=1.1.2",
+    "python-multipart>=0.0.20",
+    "trafilatura>=2.0.0",
+    "uvicorn>=0.34.0",
+    "flask-login>=0.6.3",
+    "flask-wtf>=1.2.2",
+    "langchain-community>=0.0.16",
+]
+
+[tool.setuptools]
+packages = ["app"]
