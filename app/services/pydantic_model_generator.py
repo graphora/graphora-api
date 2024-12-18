@@ -1,6 +1,6 @@
 from typing import Dict, List, Optional, Any, Type
 from pydantic import BaseModel, create_model, Field
-from app.services.schema_generator_service import SchemaDefinition
+from app.services.ontology_generator_service import SchemaDefinition
 import datetime
 from functools import lru_cache
 
