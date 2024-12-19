@@ -3,247 +3,271 @@ from datetime import datetime
 from instructor import patch
 from openai import OpenAI
 from app.utils.logger import logger
-from app.config import settings
+from dataclasses import dataclass
 from app.schemas.extraction import (
     ExtractedEntity, ExtractedRelationship,
-    EntityExtractionResponse, RelationshipExtractionResponse
+    ChunkExtraction
 )
+from app.schemas.document import (
+    Entity, 
+    Relationship
+)
+from app.utils.llm_client_service import LLMClientService
+from app.services.ontology_generator_service import Neo4jOntology
+import spacy
+
+@dataclass
+class Chunk:
+    id: str
+    text: str
+    start_pos: int
+    end_pos: int
+    metadata: Dict
+
+@dataclass
+class ExtractedData:
+    entities: List[Entity]
+    relationships: List[Relationship]
+    chunk_id: str
 
 class ExtractionService:
     def __init__(self):
-        self.temp_graphs = {}  # Store temporary subgraphs for review
-        self.client = None
-        self._init_client()
-    
-    def _init_client(self):
-        """Initialize OpenAI client with instructor patch"""
-        if not settings.OPENAI_API_KEY:
-            logger.warning("OpenAI API key not set. Entity extraction will be unavailable.")
-            self.client = None
-            return
+        self.llm_service = LLMClientService()
+        self.nlp = spacy.load("en_core_web_sm")
+
+    async def extract(self, content: str, ontology: Neo4jOntology) -> ExtractedData:
+        chunks = self._create_chunks(content)
+        logger.info(f"Created {len(chunks)} chunks from document")
         
-        try:
-            base_client = OpenAI(
-                api_key=settings.OPENAI_API_KEY
-            )
-            self.client = patch(base_client)
-            logger.info("OpenAI client initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize OpenAI client: {str(e)}")
-            self.client = None
+        # Process each chunk
+        all_extractions = []
+        for chunk in chunks:
+            extracted_data = await self._process_chunk(chunk, ontology)
+            all_extractions.append(extracted_data)
+        
+        # Combine extractions
+        return self._combine_extractions(all_extractions)
     
-    async def extract_entities(self, text: str) -> Tuple[List[Dict], str]:
-        """Extract entities from text using OpenAI"""
-        if not self.client:
-            error_msg = "OpenAI client not initialized. Cannot perform extraction."
-            logger.error(error_msg)
-            return [], error_msg
+    def generate_extraction_prompt(self, text: str, ontology: Neo4jOntology) -> str:
+        """Generate a prompt for the LLM to extract entities and relationships."""
+        # Convert ontology to a clear text format for the LLM
+        node_descriptions = []
+        for node in ontology.nodes:
+            # Format properties with their types and descriptions
+            props = [
+                f"- {prop.name} ({prop.type.value}): {prop.description}"
+                f"{' (Required)' if prop.required else ''}"
+                f"{' (Examples: ' + ', '.join(prop.examples) + ')' if prop.examples else ''}"
+                for prop in node.properties
+            ]
+            
+            node_desc = f"""Type: {node.label.name}
+            Description: {node.label.description}
+            Properties:
+            {chr(10).join(props) if props else '- No specific properties defined'}
+            """
+            if node.examples:
+                node_desc += f"\nExamples:\n{chr(10).join(f'- {ex}' for ex in node.examples)}"
+            
+            node_descriptions.append(node_desc)
 
-        try:
-            logger.info("Starting entity extraction")
-            chunks = self._split_text(text, max_length=1000)
-            all_entities = []
-            status = "Processing entities..."
+        relationship_descriptions = []
+        for rel in ontology.relationships:
+            # Format relationship properties if they exist
+            props = []
+            if rel.properties:
+                props = [
+                    f"- {prop.name} ({prop.type.value}): {prop.description}"
+                    f"{' (Required)' if prop.required else ''}"
+                    f"{' (Examples: ' + ', '.join(prop.examples) + ')' if prop.examples else ''}"
+                    for prop in rel.properties
+                ]
             
-            for i, chunk in enumerate(chunks):
-                try:
-                    completion = await self.client.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        response_model=EntityExtractionResponse,
-                        max_retries=2,
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": """You are an expert entity extraction system. Extract named entities from the given text.
-                                Focus on: PERSON (individual names), ORGANIZATION (company/group names), 
-                                LOCATION (places), DATE (temporal references), EVENT (significant occurrences)."""
-                            },
-                            {
-                                "role": "user",
-                                "content": f"Extract entities from this text:\n\n{chunk}"
-                            }
-                        ]
-                    )
-                    
-                    if completion and hasattr(completion, 'entities'):
-                        chunk_entities = [
-                            {
-                                'id': str(len(all_entities) + idx),
-                                'type': entity.type,
-                                'value': entity.value,
-                                'confidence': entity.confidence
-                            }
-                            for idx, entity in enumerate(completion.entities)
-                        ]
-                        all_entities.extend(chunk_entities)
-                        status = f"Processed {i+1}/{len(chunks)} chunks"
-                        logger.info(status)
-                    else:
-                        logger.warning(f"No entities found in chunk {i+1}")
-                except Exception as chunk_error:
-                    logger.error(f"Error processing chunk {i}: {str(chunk_error)}")
-                    continue
-            
-            if not all_entities:
-                return [], "Warning: No entities were extracted"
-            
-            logger.info(f"Successfully extracted {len(all_entities)} entities")
-            return all_entities, status
+            direction_symbol = {
+                "RIGHT": "->",
+                "LEFT": "<-",
+                "BOTH": "<->"
+            }[rel.direction.value]
 
-        except Exception as e:
-            error_msg = f"Error in entity extraction: {str(e)}"
-            logger.error(error_msg)
-            return [], error_msg
+            rel_desc = f"""Type: {rel.label.name}
+            Description: {rel.label.description}
+            Pattern: ({rel.source_label}){direction_symbol}[:{rel.label.name}]({rel.target_label})
+            Properties:
+            {chr(10).join(props) if props else '- No specific properties defined'}
+            """
+            if rel.examples:
+                rel_desc += f"\nExamples:\n{chr(10).join(f'- {ex}' for ex in rel.examples)}"
+                
+            relationship_descriptions.append(rel_desc)
+
+        prompt = f"""Extract entities and relationships from the following text according to this ontology:
+
+        # Node Types
+        {chr(10).join(node_descriptions)}
+
+        # Relationship Types
+        {chr(10).join(relationship_descriptions)}
+
+        Text to analyze:
+        {text}
+
+        Extract all entities and relationships that match the ontology definitions. For each extraction:
+        1. Identify entities that match the node types defined above
+        2. Include all required properties and any optional properties found in the text
+        3. Identify relationships between entities following the patterns defined
+        4. Ensure high confidence scores (>0.8) only for clear matches
+        5. Include example matches that follow the patterns shown in the examples
+
+        Format entities and relationships exactly according to the types and properties defined in the ontology."""
+
+        return prompt
     
-    async def extract_relationships(self, entities: List[Dict]) -> Tuple[List[Dict], str]:
-        """Extract relationships between entities using OpenAI"""
-        if not self.client:
-            error_msg = "OpenAI client not initialized. Cannot perform extraction."
-            logger.error(error_msg)
-            return [], error_msg
-
-        if not entities:
-            return [], "No entities provided for relationship extraction"
-
-        try:
-            logger.info("Starting relationship extraction")
-            relationships = []
-            status = "Analyzing relationships..."
-            
-            # Process entities in batches to avoid token limits
-            batches = [entities[i:i+5] for i in range(0, len(entities), 5)]
-            
-            for i, batch in enumerate(batches):
-                try:
-                    completion = await self.client.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        response_model=RelationshipExtractionResponse,
-                        max_retries=2,
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": """You are an expert relationship extraction system. 
-                                Identify meaningful relationships between entities, focusing on:
-                                - WORKS_FOR (employment/affiliation)
-                                - LOCATED_IN (physical location)
-                                - PART_OF (membership/composition)
-                                - ASSOCIATED_WITH (general connection)
-                                - INTERACTS_WITH (direct interaction)"""
-                            },
-                            {
-                                "role": "user",
-                                "content": f"Analyze these entities and identify any relationships between them:\n\n{batch}"
-                            }
-                        ]
-                    )
-                    
-                    if completion and hasattr(completion, 'relationships'):
-                        batch_relationships = [
-                            {
-                                'source_id': rel.source_id,
-                                'target_id': rel.target_id,
-                                'type': rel.type,
-                                'confidence': rel.confidence
-                            }
-                            for rel in completion.relationships
-                        ]
-                        relationships.extend(batch_relationships)
-                        status = f"Processed relationships: {i+1}/{len(batches)} batches"
-                        logger.info(status)
-                    else:
-                        logger.warning(f"No relationships found in batch {i+1}")
-                except Exception as batch_error:
-                    logger.error(f"Error processing batch {i}: {str(batch_error)}")
-                    continue
-            
-            if not relationships:
-                return [], "Warning: No relationships were extracted"
-            
-            logger.info(f"Successfully extracted {len(relationships)} relationships")
-            return relationships, status
-
-        except Exception as e:
-            error_msg = f"Error in relationship extraction: {str(e)}"
-            logger.error(error_msg)
-            return [], error_msg
-    
-    def _split_text(self, text: str, max_length: int) -> List[str]:
-        """Split text into manageable chunks"""
-        words = text.split()
+    def _create_chunks(self, text: str) -> List[Chunk]:
+        """Create intelligent chunks from text content."""
         chunks = []
+        chunk_id = 0
+        
+        # Process with spaCy for linguistic boundaries
+        doc = self.nlp(text)
+        
         current_chunk = []
         current_length = 0
+        chunk_start = 0
         
-        for word in words:
-            if current_length + len(word) > max_length:
-                chunks.append(" ".join(current_chunk))
-                current_chunk = [word]
-                current_length = len(word)
-            else:
-                current_chunk.append(word)
-                current_length += len(word) + 1
+        # Constants for chunking
+        MAX_CHUNK_LENGTH = 1000  # Characters
+        MIN_CHUNK_LENGTH = 100
         
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            sent_length = len(sent_text)
+            
+            # Check if adding this sentence would exceed max length
+            if current_length + sent_length > MAX_CHUNK_LENGTH and current_length >= MIN_CHUNK_LENGTH:
+                # Create new chunk
+                chunk_text = " ".join(current_chunk)
+                chunks.append(Chunk(
+                    id=f"chunk_{chunk_id}",
+                    text=chunk_text,
+                    start_pos=chunk_start,
+                    end_pos=chunk_start + len(chunk_text),
+                    metadata={
+                        "sentences": len(current_chunk),
+                        "length": current_length
+                    }
+                ))
+                chunk_id += 1
+                current_chunk = []
+                current_length = 0
+                chunk_start = sent.start_char
+            
+            current_chunk.append(sent_text)
+            current_length += sent_length
+        
+        # Add final chunk if there's content
         if current_chunk:
-            chunks.append(" ".join(current_chunk))
+            chunk_text = " ".join(current_chunk)
+            chunks.append(Chunk(
+                id=f"chunk_{chunk_id}",
+                text=chunk_text,
+                start_pos=chunk_start,
+                end_pos=chunk_start + len(chunk_text),
+                metadata={
+                    "sentences": len(current_chunk),
+                    "length": current_length
+                }
+            ))
+        
         return chunks
 
-    async def create_temp_subgraph(self, document_id: str, content: str, entities: List[Dict], relationships: List[Dict]) -> str:
-        """Create a temporary subgraph for user review"""
+    async def _process_chunk(self, chunk: Chunk, ontology: Neo4jOntology) -> ExtractedData:
+        """Process a text chunk using LLM-based extraction guided by the ontology."""
         try:
-            self.temp_graphs[document_id] = {
-                "content": content,
-                "entities": entities,
-                "relationships": relationships,
-                "status": "pending_review",
-                "created_at": datetime.now().isoformat()
-            }
-            logger.info(f"Created temporary subgraph for document {document_id}")
-            return document_id
+            # Generate the extraction prompt
+            prompt = self.generate_extraction_prompt(chunk.text, ontology)
+            
+            # Get structured extraction from LLM
+            extraction = self.llm_service.client.chat.completions.create(
+                response_model=ChunkExtraction,
+                messages=[
+                    {"role": "system", "content": """You are an expert at extracting structured information from text.
+Your task is to identify entities and relationships that match the given ontology definitions.
+Only extract items with high confidence that clearly match the ontology.
+Assign realistic confidence scores based on how clearly the text matches the definitions."""},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            # Convert to internal ExtractedData format
+            entities = []
+            for ent in extraction.entities:
+                entity = Entity(
+                    id=f"{chunk.id}_entity_{len(entities)}",
+                    type=ent.type,
+                    value=ent.value,
+                    confidence=ent.confidence,
+                    metadata={
+                        "chunk_id": chunk.id,
+                        "position": ent.metadata.get("position", None),
+                        **ent.metadata
+                    }
+                )
+                entities.append(entity)
+            
+            relationships = []
+            for rel in extraction.relationships:
+                # Ensure entity IDs reference extracted entities
+                if self._validate_relationship(rel, entities):
+                    relationship = Relationship(
+                        source_id=rel.source_id,
+                        target_id=rel.target_id,
+                        type=rel.type,
+                        confidence=rel.confidence
+                    )
+                    relationships.append(relationship)
+            
+            return ExtractedData(
+                entities=entities,
+                relationships=relationships,
+                chunk_id=chunk.id
+            )
+            
         except Exception as e:
-            logger.error(f"Error creating temporary subgraph: {str(e)}")
-            return ""  # Return empty string instead of None for type safety
+            logger.error(f"Error processing chunk {chunk.id}: {str(e)}")
+            raise
+
+    def _validate_relationship(self, rel: ExtractedRelationship, entities: List[Entity]) -> bool:
+        """Validate that a relationship references valid entities."""
+        entity_ids = {entity.id for entity in entities}
+        return rel.source_id in entity_ids and rel.target_id in entity_ids
     
-    async def get_temp_subgraph(self, document_id: str) -> Optional[Dict]:
-        """Retrieve a temporary subgraph for review"""
-        return self.temp_graphs.get(document_id)
+
     
-    async def process_feedback(self, document_id: str, feedback: Dict) -> bool:
-        """Process feedback for a temporary subgraph"""
-        try:
-            if document_id not in self.temp_graphs:
-                logger.error(f"No temporary graph found for document {document_id}")
-                return False
-            
-            temp_graph = self.temp_graphs[document_id]
-            
-            # Apply feedback updates
-            if "entity_updates" in feedback:
-                self._apply_entity_updates(temp_graph, feedback["entity_updates"])
-            
-            if "relationship_updates" in feedback:
-                self._apply_relationship_updates(temp_graph, feedback["relationship_updates"])
-            
-            temp_graph["status"] = "updated_from_feedback"
-            logger.info(f"Applied feedback to temporary graph for document {document_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Error processing feedback: {str(e)}")
-            return False
-    
-    def _apply_entity_updates(self, temp_graph: Dict, updates: List[Dict]):
-        """Apply user feedback updates to entities"""
-        for update in updates:
-            entity_id = update.get("id")
-            for i, entity in enumerate(temp_graph["entities"]):
-                if entity["id"] == entity_id:
-                    temp_graph["entities"][i].update(update)
-                    break
-    
-    def _apply_relationship_updates(self, temp_graph: Dict, updates: List[Dict]):
-        """Apply user feedback updates to relationships"""
-        for update in updates:
-            rel_id = (update.get("source_id"), update.get("target_id"))
-            for i, rel in enumerate(temp_graph["relationships"]):
-                if (rel["source_id"], rel["target_id"]) == rel_id:
-                    temp_graph["relationships"][i].update(update)
-                    break
+    def _combine_extractions(self, extractions: List[ExtractedData]) -> ExtractedData:
+        """Combine extractions from multiple chunks."""
+        all_entities = []
+        all_relationships = []
+        
+        # Combine entities with deduplication
+        entity_map = {}  # Track entities by normalized value
+        for ext in extractions:
+            for entity in ext.entities:
+                norm_value = entity.value.lower().strip()
+                if norm_value not in entity_map:
+                    entity_map[norm_value] = entity
+                    all_entities.append(entity)
+        
+        # Combine relationships
+        rel_set = set()  # Track unique relationships
+        for ext in extractions:
+            for rel in ext.relationships:
+                rel_key = (rel.source_id, rel.target_id, rel.type)
+                if rel_key not in rel_set:
+                    rel_set.add(rel_key)
+                    all_relationships.append(rel)
+        
+        return ExtractedData(
+            entities=all_entities,
+            relationships=all_relationships,
+            chunk_id="combined"
+        )

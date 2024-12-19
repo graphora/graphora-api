@@ -17,8 +17,8 @@ class Relationship(BaseModel):
 class DocumentOutput(BaseModel):
     id: str = Field(description="Document unique identifier")
     content: str = Field(description="Document content")
-    entities: List[Entity] = Field(description="List of extracted entities")
-    relationships: List[Relationship] = Field(description="List of extracted relationships")
+    entities: List[Entity]
+    relationships: List[Relationship]
     created_at: datetime = Field(default_factory=datetime.now, description="Document creation timestamp")
 
 class MetadataInput(BaseModel):
@@ -32,8 +32,8 @@ class DocumentInput(BaseModel):
 class DocumentResponse(BaseModel):
     id: str
     content: str
-    entities: List[dict]
-    relationships: List[dict]
+    entities: List[Entity]
+    relationships: List[Relationship]
     
     class Config:
         json_schema_extra = {
