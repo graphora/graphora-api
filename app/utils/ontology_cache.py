@@ -9,7 +9,7 @@ import hashlib
 class OntologyCache:
     def __init__(self):
         self._cache: Dict[str, tuple[Neo4jOntology, datetime]] = {}
-        self._ttl = timedelta(hours=1)  # Cache entries expire after 1 hour
+        self._ttl = timedelta(hours=3)  # Cache entries expire after 3 hour
     
     def store(self, session_id: str, ontology: Neo4jOntology):
         """Store ontology with timestamp"""

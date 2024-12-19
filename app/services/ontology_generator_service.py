@@ -7,6 +7,7 @@ from pydantic import BaseModel, field_validator, Field
 from app.config import settings
 from app.utils.logger import logger
 from enum import Enum
+from app.utils.llm_client_service import LLMClientService
 
 class PropertyType(str, Enum):
     """Neo4j-compatible property types"""
@@ -191,41 +192,11 @@ class Neo4jOntology(BaseModel):
 
 class OntologyGeneratorService:
     def __init__(self):
-        self.client = None
-        self._init_client()
+        self.llm_service = LLMClientService()
         
-    def _init_client(self) -> None:
-        """Initialize OpenAI client with instructor patch"""
-        if not settings.OPENAI_API_KEY and not settings.ANTHROPIC_API_KEY and not settings.GOOGLE_GEMINI_API_KEY:
-            logger.warning("LLM API key not set. Schema generation will be unavailable.")
-            return
-        
-        try:
-            if settings.OPENAI_API_KEY.strip():
-                base_client = OpenAI(api_key=settings.OPENAI_API_KEY.strip())
-                self.client = instructor.from_openai(base_client)
-                self.model = 'gpt-4'
-            elif settings.ANTHROPIC_API_KEY.strip():
-                base_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY.strip())
-                self.client = instructor.from_anthropic(base_client)
-                self.model = 'claude-3-5-haiku-20241022'
-            else:
-                genai.configure(api_key=settings.GOOGLE_GEMINI_API_KEY.strip())
-                self.client = instructor.from_gemini(
-                                    client=genai.GenerativeModel(
-                                        model_name="models/gemini-1.5-flash-latest",
-                                    ),
-                                    mode=instructor.Mode.GEMINI_JSON,
-                                )
-                self.model = 'models/gemini-1.5-flash-latest'
-            logger.info(f"LLM client [{str(self.client.provider.name)}] initialized successfully for schema generation")
-        except Exception as e:
-            logger.error(f"Failed to initialize LLM client: {str(e)}")
-            self.client = None
-
     def generate_ontology(self, text: str, max_retries: int = 5) -> Neo4jOntology:
         """Generate Neo4j ontology from text description with validation feedback loop"""
-        if not self.client:
+        if not self.llm_service.is_available:
             raise ValueError("LLM client not initialized")
             
         logger.info(f"Generating Neo4j ontology from text of length {len(text)}")
@@ -290,7 +261,7 @@ class OntologyGeneratorService:
                     Generate a corrected version of the Neo4j structure addressing all issues."""
 
                 # Generate or refine ontology
-                response = self.client.chat.completions.create(
+                response = self.llm_service.client.chat.completions.create(
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": f"Generate a Neo4j graph structure from this description:\n\n{text}"}
