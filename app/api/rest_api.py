@@ -3,13 +3,15 @@ from app.services.document_processor import DocumentProcessor
 from app.services.extraction_service import ExtractionService
 from app.schemas.document import DocumentResponse
 from app.schemas.feedback import PydanticFeedbackInput
-from app.schemas.schema_generator import SchemaGeneratorInput
-from app.services.ontology_generator_service import OntologyResponse, OntologyGeneratorService
+from app.schemas.schema_generator import SchemaGeneratorInput, SchemaGeneratorResponse
+from app.services.ontology_generator_service import OntologyGeneratorService
+from app.utils.ontology_cache import OntologyCache, generate_session_id
 from datetime import datetime
 from app.utils.logger import logger
 import traceback
 
 router = APIRouter()
+ontology_cache = OntologyCache()
 
 ALLOWED_MIME_TYPES = {
     "application/pdf": ".pdf",
@@ -39,8 +41,8 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # WebSocket endpoint for real-time updates
-@router.websocket("/ws/agent-updates/{client_id}")
-async def agent_updates(websocket: WebSocket, client_id: str):
+@router.websocket("/ws/agent-updates/{session_id}")
+async def agent_updates(websocket: WebSocket, session_id: str):
     await websocket.accept()
     try:
         while True:
@@ -53,8 +55,8 @@ async def agent_updates(websocket: WebSocket, client_id: str):
     finally:
         await websocket.close()
 
-@router.post("/generate-schema", response_model=OntologyResponse)
-def generate_schema(input_data: SchemaGeneratorInput) -> OntologyResponse:
+@router.post("/generate-schema", response_model=SchemaGeneratorResponse)
+def generate_schema(input_data: SchemaGeneratorInput) -> SchemaGeneratorResponse:
     """
     Generate a Pydantic schema from input text.
     The endpoint uses AI to analyze the text and create appropriate schema definitions.
@@ -81,7 +83,18 @@ def generate_schema(input_data: SchemaGeneratorInput) -> OntologyResponse:
         
         logger.info(f"Successfully generated {len(schema_definition.nodes)} node definitions")
         logger.info(f"Successfully generated {len(schema_definition.relationships)} edge definitions")
-        return schema_definition
+
+        # Generate session ID and store ontology
+        session_id = generate_session_id()
+        ontology_cache.store(session_id, schema_definition)
+
+        logger.info('Session ID: ' + session_id)
+        
+        return SchemaGeneratorResponse(
+            ontology=schema_definition,
+            session_id=session_id
+        )
+    
     except HTTPException:
         raise
     except Exception as e:
