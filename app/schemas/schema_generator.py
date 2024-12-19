@@ -1,5 +1,6 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional
+from app.services.ontology_generator_service import Neo4jOntology
 
 class SchemaGeneratorInput(BaseModel):
     text: str
@@ -7,5 +8,5 @@ class SchemaGeneratorInput(BaseModel):
     description: Optional[str] = None
 
 class SchemaGeneratorResponse(BaseModel):
-    models: Dict[str, Any]
-    message: Optional[str] = None
+    ontology: Neo4jOntology
+    session_id: str
