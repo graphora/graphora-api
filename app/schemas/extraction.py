@@ -1,18 +1,29 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Dict, Any
 from datetime import datetime
 
+
 class ExtractedEntity(BaseModel):
-    id: str = Field(description="Unique identifier for the entity")
-    type: str = Field(description="Type of entity (e.g., PERSON, ORGANIZATION, LOCATION)")
-    value: str = Field(description="The actual text value of the entity")
-    confidence: float = Field(description="Confidence score of the extraction", ge=0.0, le=1.0)
+    """Entity extracted from text following ontology definition"""
+    id: str
+    type: str 
+    value: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    metadata: Dict[str, Any] = {}
 
 class ExtractedRelationship(BaseModel):
-    source_id: str = Field(description="ID of the source entity")
-    target_id: str = Field(description="ID of the target entity")
-    type: str = Field(description="Type of relationship between entities")
-    confidence: float = Field(description="Confidence score of the relationship", ge=0.0, le=1.0)
+    """Relationship between entities following ontology definition"""
+    source_id: str
+    target_id: str
+    type: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    metadata: Dict[str, Any] = {}
+
+class ChunkExtraction(BaseModel):
+    """Complete extraction results from a text chunk"""
+    entities: List[ExtractedEntity]
+    relationships: List[ExtractedRelationship]
+    chunk_id: str
 
 class EntityExtractionResponse(BaseModel):
     entities: List[ExtractedEntity] = Field(description="List of extracted entities")

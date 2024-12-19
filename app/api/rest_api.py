@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, UploadFile, File, HTTPException, status, WebSocket, Query
 from app.services.document_processor import DocumentProcessor
 from app.services.extraction_service import ExtractionService
 from app.schemas.document import DocumentResponse
@@ -107,15 +107,15 @@ def generate_schema(input_data: SchemaGeneratorInput) -> SchemaGeneratorResponse
         )
 
 @router.post("/documents/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
-async def upload_document(file: UploadFile = File(...)) -> DocumentResponse:
+async def upload_document(
+    file: UploadFile = File(...),
+    session_id: str = Query(..., description="Session ID for accessing stored ontology")
+) -> DocumentResponse:
     """
-    Upload and process a document (PDF or text file).
-    The document will be processed through the extraction pipeline.
-    
-    Accepts only POST requests with multipart/form-data containing a file.
-    Supported file types: PDF (.pdf) and text (.txt) files.
+    Upload and process a document with intelligent chunking and entity extraction.
+    Requires a session ID to access the stored ontology.
     """
-    logger.info(f"Received upload request for file: {file.filename}")
+    logger.info(f"Received upload request for file: {file.filename} with session: {session_id}")
     
     if file.content_type not in ALLOWED_MIME_TYPES:
         logger.warning(f"Invalid file type: {file.content_type}")
@@ -126,25 +126,26 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentResponse:
     
     try:
         doc_processor = DocumentProcessor()
-        doc_output = await doc_processor.process_uploaded_file(file)
+        ontology = ontology_cache.get(session_id)
+        if ontology == None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail='Ontology Not set for extraction. Please set via /generate-schema first'
+            )
+        doc_output = await doc_processor.process_uploaded_file(file, ontology)
         logger.info(f"Successfully processed document with ID: {doc_output.id}")
         
-        # Convert DocumentOutput to DocumentResponse
         return DocumentResponse(
             id=doc_output.id,
             content=doc_output.content,
-            entities=[{
-                'id': entity.id,
-                'type': entity.type,
-                'value': entity.value,
-                'confidence': entity.confidence
-            } for entity in doc_output.entities],
-            relationships=[{
-                'source_id': rel.source_id,
-                'target_id': rel.target_id,
-                'type': rel.type,
-                'confidence': rel.confidence
-            } for rel in doc_output.relationships]
+            entities=doc_output.entities,
+            relationships=doc_output.relationships
+        )
+    except ValueError as ve:
+        logger.error(f"Validation error: {str(ve)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(ve)
         )
     except Exception as e:
         logger.error(f"Error processing document: {str(e)}")
