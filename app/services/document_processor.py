@@ -3,11 +3,10 @@ from fastapi import UploadFile
 from pypdf import PdfReader
 import uuid
 from app.schemas.document import (
-    DocumentInput, DocumentOutput, Entity, 
-    Relationship, MetadataInput
+    DocumentOutput
 )
 from app.services.extraction_service import ExtractionService
-from app.services.preprocessing_service import PreprocessingService
+from app.services.ontology_generator_service import Neo4jOntology
 from app.utils.logger import logger
 
 ALLOWED_FILE_TYPES = {".pdf", ".txt", ".csv", ".json", ".doc", ".docx"}
@@ -16,7 +15,9 @@ class DocumentProcessor:
     def __init__(self):
         self.extraction_service = ExtractionService()
     
-    async def process_uploaded_file(self, file: UploadFile) -> DocumentOutput:
+    async def process_uploaded_file(self, 
+                                    file: UploadFile, 
+                                    ontology: Neo4jOntology) -> DocumentOutput:
         """Process an uploaded document file and extract entities and relationships."""
         try:
             logger.info(f"Starting to process uploaded file: {file.filename}")
@@ -27,65 +28,15 @@ class DocumentProcessor:
             # Process content through extraction pipeline
             logger.info("Starting entity extraction")
             
-            # # Initialize preprocessing service
-            # preprocessing_service = PreprocessingService()
-            
-            # # Run preprocessing workflow
-            # success, message = await preprocessing_service.preprocess_document(content, doc_id) # changed content here
-            # if not success:
-            #     logger.error(f"Preprocessing failed: {message}")
-            #     raise ValueError(f"Document preprocessing failed: {message}")
-            
-            # # Get processed data from temporary subgraph
-            # temp_graph = await self.extraction_service.get_temp_subgraph(doc_id)
-            # if not temp_graph:
-            #     raise ValueError("Could not retrieve processed document data")
-            
-            # raw_entities = temp_graph.get("entities", [])
-            # if not raw_entities:
-            #     logger.warning(f"No entities extracted after preprocessing")
-            #     raise ValueError(f"Entity extraction failed after preprocessing")
+            extraction = await self.extraction_service.extract(content=content, ontology=ontology)
 
-            # logger.info(f"Successfully extracted {len(raw_entities)} entities")
+            # TODO: Store the data as a temporary subgraph so that its easier to discard the created nodes. Its important not to mess with pre-existing nodes in the DB
             
-            # # Process relationships only if we have entities
-            # logger.info("Starting relationship extraction")
-            # raw_relationships, rel_status = await self.extraction_service.extract_relationships(raw_entities)
-            # logger.info(f"Relationship extraction status: {rel_status}")
-            
-            # # Convert to proper types
-            # entities = []
-            # for i, e in enumerate(raw_entities):
-            #     try:
-            #         entities.append(Entity(
-            #             id=str(i),
-            #             type=e["type"],
-            #             value=e["value"],
-            #             confidence=e.get("confidence", 0.0)
-            #         ))
-            #     except Exception as entity_error:
-            #         logger.error(f"Error converting entity {e}: {str(entity_error)}")
-            #         continue
-            
-            # relationships = []
-            # for r in raw_relationships:
-            #     try:
-            #         relationships.append(Relationship(
-            #             source_id=r["source_id"],
-            #             target_id=r["target_id"],
-            #             type=r["type"],
-            #             confidence=r.get("confidence", 0.0)
-            #         ))
-            #     except Exception as rel_error:
-            #         logger.error(f"Error converting relationship {r}: {str(rel_error)}")
-            #         continue
-            entities=[]
-            relationships=[]
             return DocumentOutput(
                 id=doc_id,
                 content=content,
-                entities=entities,
-                relationships=relationships
+                entities=extraction.entities,
+                relationships=extraction.relationships
             )
         except Exception as e:
             logger.error(f"Error processing uploaded file: {str(e)}")
@@ -143,128 +94,3 @@ class DocumentProcessor:
             except Exception as seek_error:
                 logger.warning(f"Failed to reset file pointer: {str(seek_error)}")
     
-    async def get_document(self, doc_id: str) -> Optional[DocumentOutput]:
-        """Retrieve a processed document by its ID."""
-        try:
-            # Get document from extraction service's temporary storage
-            doc_data = await self.extraction_service.get_temp_subgraph(doc_id)
-            if not doc_data:
-                logger.warning(f"Document {doc_id} not found")
-                return None
-            
-            # Convert stored data to DocumentOutput format
-            entities = [
-                Entity(
-                    id=entity["id"],
-                    type=entity["type"],
-                    value=entity["value"],
-                    confidence=entity.get("confidence", 0.0)
-                )
-                for entity in doc_data.get("entities", [])
-            ]
-            
-            relationships = [
-                Relationship(
-                    source_id=rel["source_id"],
-                    target_id=rel["target_id"],
-                    type=rel["type"],
-                    confidence=rel.get("confidence", 0.0)
-                )
-                for rel in doc_data.get("relationships", [])
-            ]
-            
-            return DocumentOutput(
-                id=doc_id,
-                content=doc_data.get("content", ""),
-                entities=entities,
-                relationships=relationships
-            )
-        except Exception as e:
-            logger.error(f"Error retrieving document {doc_id}: {str(e)}")
-            return None
-    
-    async def list_documents(self) -> List[DocumentOutput]:
-        """List all processed documents."""
-        try:
-            # Get all documents from extraction service's temporary storage
-            temp_graphs = self.extraction_service.temp_graphs
-            
-            documents = []
-            for doc_id, doc_data in temp_graphs.items():
-                try:
-                    doc = await self.get_document(doc_id)
-                    if doc:
-                        documents.append(doc)
-                except Exception as doc_error:
-                    logger.error(f"Error processing document {doc_id}: {str(doc_error)}")
-                    continue
-            
-            logger.info(f"Retrieved {len(documents)} documents")
-            return documents
-        except Exception as e:
-            logger.error(f"Error listing documents: {str(e)}")
-            return []
-            
-    async def process_document(self, input: DocumentInput) -> DocumentOutput:
-        """Process a document input and extract entities and relationships."""
-        try:
-            logger.info("Starting document processing")
-            doc_id = str(uuid.uuid4())
-            
-            # Initialize preprocessing service
-            preprocessing_service = PreprocessingService()
-            
-            # Run preprocessing workflow
-            success, message = await preprocessing_service.preprocess_document(input.content, doc_id)
-            if not success:
-                logger.error(f"Preprocessing failed: {message}")
-                raise ValueError(f"Document preprocessing failed: {message}")
-            
-            # Get processed data from temporary subgraph
-            temp_graph = await self.extraction_service.get_temp_subgraph(doc_id)
-            if not temp_graph:
-                raise ValueError("Could not retrieve processed document data")
-            
-            # Convert to proper types
-            entities = []
-            raw_entities = temp_graph.get("entities", [])
-            for i, e in enumerate(raw_entities):
-                try:
-                    entities.append(Entity(
-                        id=str(i),
-                        type=e["type"],
-                        value=e["value"],
-                        confidence=e.get("confidence", 0.0)
-                    ))
-                except Exception as entity_error:
-                    logger.error(f"Error converting entity {e}: {str(entity_error)}")
-                    continue
-            
-            raw_relationships = temp_graph.get("relationships", [])
-            relationships = [
-                Relationship(
-                    source_id=r["source_id"],
-                    target_id=r["target_id"],
-                    type=r["type"],
-                    confidence=r.get("confidence", 0.0)
-                )
-                for r in raw_relationships
-            ]
-            
-            # Create temporary subgraph for review  - This line was already present in original code and needs to remain
-            await self.extraction_service.create_temp_subgraph(
-                doc_id,
-                input.content,
-                raw_entities,
-                raw_relationships
-            )
-            
-            return DocumentOutput(
-                id=doc_id,
-                content=input.content,
-                entities=entities,
-                relationships=relationships
-            )
-        except Exception as e:
-            logger.error(f"Error processing document: {str(e)}")
-            raise ValueError(f"Failed to process document: {str(e)}")
