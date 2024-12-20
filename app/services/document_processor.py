@@ -8,6 +8,7 @@ from app.schemas.document import (
 from app.services.extraction_service import ExtractionService
 from app.services.ontology_generator_service import Neo4jOntology
 from app.utils.logger import logger
+import traceback
 
 ALLOWED_FILE_TYPES = {".pdf", ".txt", ".csv", ".json", ".doc", ".docx"}
 
@@ -40,6 +41,7 @@ class DocumentProcessor:
             )
         except Exception as e:
             logger.error(f"Error processing uploaded file: {str(e)}")
+            traceback.print_exc()
             raise ValueError(f"Failed to process document: {str(e)}")
     
     async def _extract_text(self, file: UploadFile) -> str:
