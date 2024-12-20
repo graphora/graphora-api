@@ -1,8 +1,9 @@
-from typing import List, Optional, Any
-from pydantic import BaseModel, field_validator, Field
+from typing import List, Optional, Any, Dict, Type
+from pydantic import BaseModel, field_validator, Field, create_model
 from app.utils.logger import logger
 from enum import Enum
 from app.utils.llm_client_service import LLMClientService
+import datetime
 
 class PropertyType(str, Enum):
     """Neo4j-compatible property types"""
@@ -256,13 +257,22 @@ class OntologyGeneratorService:
                     Generate a corrected version of the Neo4j structure addressing all issues."""
 
                 # Generate or refine ontology
-                response = self.llm_service.client.chat.completions.create(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"Generate a Neo4j graph structure from this description:\n\n{text}"}
-                    ],
-                    response_model=Neo4jOntology
-                )
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Generate a Neo4j graph structure from this description:\n\n{text}"}
+                ]
+                if self.llm_service.provider in ['openai', 'anthropic', 'vertexai']:
+                    response = self.llm_service.client.chat.completions.create(
+                        model=self.llm_service.model,
+                        messages=messages,
+                        response_model=Neo4jOntology
+                    )
+                else:  # Gemini
+                    # For Gemini, we might need to use a simpler approach
+                    response = self.llm_service.client.chat.completions.create(
+                        messages=messages,
+                        response_model=Neo4jOntology
+                    )
                 
                 # Validate the generated ontology
                 try:
@@ -394,3 +404,133 @@ class OntologyGeneratorService:
         commands.extend(ontology.constraints)
         
         return commands
+    
+def create_extraction_models(ontology: Neo4jOntology) -> Dict[str, Type[BaseModel]]:
+    """Create Pydantic models for extraction from Neo4jOntology"""
+    models = {}
+    
+    def get_field_type(prop: PropertyDefinition) -> tuple:
+        """Convert PropertyDefinition to Pydantic field type"""
+        python_type = {
+            PropertyType.STRING: str,
+            PropertyType.INTEGER: int,
+            PropertyType.FLOAT: float,
+            PropertyType.BOOLEAN: bool,
+            PropertyType.DATE: datetime.date,
+            PropertyType.LIST: List
+        }.get(prop.type)
+        
+        # Handle list types
+        if prop.type == PropertyType.LIST and prop.array_type:
+            python_type = List[{
+                PropertyType.STRING: str,
+                PropertyType.INTEGER: int,
+                PropertyType.FLOAT: float,
+                PropertyType.BOOLEAN: bool,
+                PropertyType.DATE: datetime.date
+            }.get(prop.array_type, str)]
+        
+        # Make optional if not required
+        if not prop.required:
+            python_type = Optional[python_type]
+        
+        return (
+            python_type,
+            Field(
+                default=None if not prop.required else ...,
+                description=prop.description,
+                examples=prop.examples
+            )
+        )
+    
+    # First pass: Create base models for all nodes
+    for node in ontology.nodes:
+        fields = {}
+        
+        # Add properties
+        for prop in node.properties:
+            fields[prop.name] = get_field_type(prop)
+        
+        # Create model
+        model_name = node.label.name
+        models[model_name] = create_model(
+            model_name,
+            __doc__=node.label.description,
+            **fields
+        )
+    
+    # Second pass: Add relationships
+    relationship_map = {}
+    
+    for rel in ontology.relationships:
+        source = rel.source_label
+        target = rel.target_label
+        rel_name = rel.label.name.lower()
+        
+        if source not in relationship_map:
+            relationship_map[source] = []
+        relationship_map[source].append((rel_name, target))
+    
+    # Update models with relationships
+    for source, relationships in relationship_map.items():
+        fields = {}
+        
+        # Get original fields from model
+        original_model = models[source]
+        for name, field in original_model.model_fields.items():
+            fields[name] = (
+                field.annotation,
+                field
+            )
+        
+        # Add relationship fields
+        for rel_name, target in relationships:
+            target_model = models[target]
+            fields[rel_name] = (
+                List[target_model],
+                Field(
+                    default_factory=list,
+                    description=f"List of related {target} nodes"
+                )
+            )
+        
+        # Update model
+        models[source] = create_model(
+            source,
+            __doc__=original_model.__doc__,
+            **fields
+        )
+    
+    # Create extraction metadata model
+    class ExtractionMetadata(BaseModel):
+        """Metadata for extraction results"""
+        confidence: float = Field(ge=0.0, le=1.0)
+        source_text: Optional[str] = None
+        extraction_date: datetime.datetime = Field(default_factory=datetime.datetime.now)
+
+    # Find root nodes
+    all_nodes = {node.label.name for node in ontology.nodes}
+    target_nodes = {rel.target_label for rel in ontology.relationships}
+    root_nodes = all_nodes - target_nodes
+    
+    # Create main extraction model
+    extraction_fields = {
+        node_name.lower(): (
+            models[node_name],
+            Field(description=f"Extracted {node_name} information")
+        )
+        for node_name in root_nodes
+    }
+    
+    extraction_fields["metadata"] = (
+        ExtractionMetadata,
+        Field(default_factory=ExtractionMetadata)
+    )
+    
+    models["Extraction"] = create_model(
+        "Extraction",
+        __doc__="Complete extraction result with metadata",
+        **extraction_fields
+    )
+    
+    return models

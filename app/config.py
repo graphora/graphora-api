@@ -40,6 +40,14 @@ class Settings(BaseSettings):
         default=None,
         description="Google Gemini API key for LLM operations"
     )
+    VERTEXAI_PROJECT_ID: Optional[str] = Field(
+        default=None,
+        description="Google VertexAI Project ID for LLM operations"
+    )
+    VERTEXAI_LOCATION: Optional[str] = Field(
+        default='asia-southeast1-b',
+        description="Google VertexAI Project Location for LLM operations"
+    )
     
     # Logging
     LOG_LEVEL: str = Field(
@@ -59,8 +67,8 @@ def get_settings() -> Settings:
     """Create and cache application settings."""
     try:
         settings = Settings()
-        if not settings.OPENAI_API_KEY and not settings.ANTHROPIC_API_KEY and not settings.GOOGLE_GEMINI_API_KEY:
-            print("Warning: OPENAI_API_KEY/ANTHROPIC_API_KEY/GOOGLE_GEMINI_API_KEY not set. Some features will be unavailable.")
+        if not settings.OPENAI_API_KEY and not settings.ANTHROPIC_API_KEY and not settings.GOOGLE_GEMINI_API_KEY and not settings.VERTEXAI_PROJECT_ID:
+            print("Warning: OPENAI_API_KEY/ANTHROPIC_API_KEY/GOOGLE_GEMINI_API_KEY/VERTEXAI_PROJECT_ID not set")
         if not all([settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD]):
             raise ValueError("Required Neo4j settings are missing")
         print(f"Loaded settings from environment with LOG_LEVEL={settings.LOG_LEVEL}")
