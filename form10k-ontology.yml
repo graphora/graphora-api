@@ -1,0 +1,165 @@
+sections:
+  Metadata:
+  PartI:
+    - Business
+    - RiskFactor
+    - LegalProceeding
+    - MineSafety
+
+entities:
+  Metadata:
+    properties:
+      name: 
+        type: str
+        description: Form10K_2023
+      type: 
+        type: str
+        description: financial_report
+      about: 
+        type: str
+        description: Form 10K Annual report containing company's financial statements and operations
+      filingDate: 
+        type: str
+        description: Date in YYYY-MM-DD format
+      context: 
+        type: str
+        description: Contains high level information about the document processed
+    relationships: 
+      ABOUT_COMPANY: 
+        target: Company
+  Company:
+    properties:
+      name: 
+        type: str
+        description: Name of the Company
+      cik: 
+        type: str
+        description: Cusip Identifier for Company
+  PartI:
+    properties:
+      id: 
+        type: str
+        description: Identifier for Part I section
+        required: true
+    relationships:
+      HAS_BUSINESS:
+        target: Business
+      HAS_RISK_FACTOR:
+        target: RiskFactor
+      HAS_LEGAL_PROCEEDING:
+        target: LegalProceeding
+      HAS_MINE_SAFETY:
+        target: MineSafety
+  Business:
+    properties:
+      id: 
+        type: str
+        description: Identifier for business section
+        required: true
+      description: 
+        type: str
+        description: General business description
+      seasonality: 
+        type: str
+        description: Business seasonality patterns
+      employees: 
+        type: int
+        description: Number of employees
+      regulatoryEnvironment: 
+        type: str
+        description: Regulatory framework description
+    relationships:
+      HAS_SEGMENT:
+        target: BusinessSegment
+      HAS_PRODUCT:
+        target: Product
+      HAS_COMPETITION:
+        target: Company
+      HAS_RAW_MATERIAL:
+        target: RawMaterial
+      HAS_INTELLECTUAL_PROPERTY:
+        target: IntellectualProperty
+  BusinessSegment:
+    properties:
+      name: 
+        type: str
+        description: Name of the segment
+  Product:
+    properties:
+      name: 
+        type: str
+        description: Name of the product
+  RawMaterial:
+    properties:
+      name: 
+        type: str
+        description: Name of the raw material
+  IntellectualProperty:
+    properties:
+      name: 
+        type: str
+        description: Name of the IntellectualProperty
+  RiskFactor:
+    properties:
+      id: 
+        type: str
+        description: Risk factor identifier
+      description: 
+        type: str
+        description: General risk description
+      potentialImpact: 
+        type: str
+        description: Potential impact of the risk on business
+      mitigationStrategy: 
+        type: str
+        description: Risk mitigation strategy
+    relationships:
+      HAS_RISK_CATEGORY:
+        target: RiskCategory
+  RiskCategory:
+    properties:
+      name: 
+        type: str
+        description: Name of the Risk Category
+  LegalProceeding:
+    properties:
+      id: 
+        type: str
+        description: Legal proceeding identifier
+      description: 
+        type: str
+        description: Legal case description
+      jurisdiction: 
+        type: str
+        description: Legal jurisdiction
+      status: 
+        type: str
+        description: Current proceeding status
+      potentialLiability: 
+        type: str
+        description: Potential financial liability
+      expectedResolution: 
+        type: str
+        description: Expected resolution timeline
+  MineSafety:
+    properties:
+      id: 
+        type: str
+        description: Mine safety record identifier
+      violations: 
+        type: str
+        description: Number of safety violations
+      assessments: 
+        type: str
+        description: Number of financial assessments or penalties
+    relationships:
+      HAS_CITATION:
+        target: Citation
+  Citation:
+    properties:
+      name: 
+        type: str
+        description: Citation name
+      description: 
+        type: str
+        description: Citation description
