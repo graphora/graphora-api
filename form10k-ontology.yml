@@ -18,12 +18,15 @@ entities:
       about: 
         type: str
         description: Form 10K Annual report containing company's financial statements and operations
+        index: true
       filingDate: 
         type: str
         description: Date in YYYY-MM-DD format
+        unique: true
       context: 
         type: str
         description: Contains high level information about the document processed
+        index: true
     relationships: 
       ABOUT_COMPANY: 
         target: Company
@@ -32,15 +35,13 @@ entities:
       name: 
         type: str
         description: Name of the Company
+        unique: true
+        required: true
       cik: 
         type: str
         description: Cusip Identifier for Company
+        unique: true
   PartI:
-    properties:
-      id: 
-        type: str
-        description: Identifier for Part I section
-        required: true
     relationships:
       HAS_BUSINESS:
         target: Business
@@ -52,10 +53,6 @@ entities:
         target: MineSafety
   Business:
     properties:
-      id: 
-        type: str
-        description: Identifier for business section
-        required: true
       description: 
         type: str
         description: General business description
@@ -84,26 +81,36 @@ entities:
       name: 
         type: str
         description: Name of the segment
+        unique: true
+        required: true
   Product:
     properties:
       name: 
         type: str
         description: Name of the product
+        unique: true
+        required: true
   RawMaterial:
     properties:
       name: 
         type: str
         description: Name of the raw material
+        unique: true
+        required: true
   IntellectualProperty:
     properties:
       name: 
         type: str
         description: Name of the IntellectualProperty
+        unique: true
+        required: true
   RiskFactor:
     properties:
-      id: 
+      name: 
         type: str
-        description: Risk factor identifier
+        description: Risk factor name
+        unique: true
+        required: true
       description: 
         type: str
         description: General risk description
@@ -121,11 +128,15 @@ entities:
       name: 
         type: str
         description: Name of the Risk Category
+        unique: true
+        required: true
   LegalProceeding:
     properties:
-      id: 
+      name: 
         type: str
-        description: Legal proceeding identifier
+        description: Legal proceeding name
+        unique: true
+        required: true
       description: 
         type: str
         description: Legal case description
@@ -143,9 +154,11 @@ entities:
         description: Expected resolution timeline
   MineSafety:
     properties:
-      id: 
+      name: 
         type: str
-        description: Mine safety record identifier
+        description: Mine safety record name
+        unique: true
+        required: true
       violations: 
         type: str
         description: Number of safety violations
@@ -160,6 +173,8 @@ entities:
       name: 
         type: str
         description: Citation name
+        unique: true
+        required: true
       description: 
         type: str
         description: Citation description
