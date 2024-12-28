@@ -30,6 +30,8 @@ entities:
     relationships: 
       ABOUT_COMPANY: 
         target: Company
+      HAS_PART1:
+        target: PartI
   Company:
     properties:
       name: 
