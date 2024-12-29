@@ -22,7 +22,6 @@ entities:
       filingDate: 
         type: str
         description: Date in YYYY-MM-DD format
-        unique: true
       context: 
         type: str
         description: Contains high level information about the document processed
