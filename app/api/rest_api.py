@@ -1,10 +1,6 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, status, WebSocket, Query
-from app.services.document_processor import DocumentProcessor
-from app.services.extraction_service import ExtractionService
-from app.schemas.document import DocumentResponse
-from app.schemas.feedback import PydanticFeedbackInput
+from fastapi import APIRouter, File, HTTPException, status, Query
 from app.schemas.schema_generator import SchemaGeneratorInput, SchemaGeneratorResponse
-from app.services.ontology_generator_service import OntologyGeneratorService
+from app.services.ontology_parser import OntologyParser
 from app.utils.ontology_cache import OntologyCache, generate_session_id
 from datetime import datetime
 from app.utils.logger import logger
@@ -22,57 +18,19 @@ ALLOWED_MIME_TYPES = {
     "application/csv": ".json",
 }
 
-# WebSocket connection manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: list[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-
-    async def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-
-    async def broadcast(self, message: dict):
-        for connection in self.active_connections:
-            await connection.send_json(message)
-
-manager = ConnectionManager()
-
-# WebSocket endpoint for real-time updates
-@router.websocket("/ws/agent-updates/{session_id}")
-async def agent_updates(websocket: WebSocket, session_id: str):
-    await websocket.accept()
-    try:
-        while True:
-            # Handle real-time agent updates
-            data = await websocket.receive_text()
-            # Process and respond to websocket messages
-            await websocket.send_json({"status": "received", "data": data})
-    except Exception as e:
-        logger.error(f"WebSocket error: {str(e)}")
-    finally:
-        await websocket.close()
-
-@router.post("/generate-schema", response_model=SchemaGeneratorResponse)
-def generate_schema(input_data: SchemaGeneratorInput) -> SchemaGeneratorResponse:
-    """
-    Generate a Pydantic schema from input text.
-    The endpoint uses AI to analyze the text and create appropriate schema definitions.
-    """
+@router.post("/ontology", response_model=SchemaGeneratorResponse)
+async def generate_schema(input_data: SchemaGeneratorInput) -> SchemaGeneratorResponse:
     if not input_data.text.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Input text cannot be empty"
         )
-
-    logger.info(f"Received schema generation request for schema: {input_data.base_schema_name}")
+    
     try:
-        generator = OntologyGeneratorService()
+        parser = OntologyParser()
         
-        schema_definition = generator.generate_ontology(
-            text=input_data.text
+        schema_definition = await parser.parse(
+            ontology_text=input_data.text
         )
         
         if not schema_definition:
@@ -81,8 +39,7 @@ def generate_schema(input_data: SchemaGeneratorInput) -> SchemaGeneratorResponse
                 detail="Failed to generate schema"
             )
         
-        logger.info(f"Successfully generated {len(schema_definition.nodes)} node definitions")
-        logger.info(f"Successfully generated {len(schema_definition.relationships)} edge definitions")
+        logger.info(f"Successfully generated {str(schema_definition)} node definitions")
 
         # Generate session ID and store ontology
         session_id = generate_session_id()
@@ -91,7 +48,6 @@ def generate_schema(input_data: SchemaGeneratorInput) -> SchemaGeneratorResponse
         logger.info('Session ID: ' + session_id)
         
         return SchemaGeneratorResponse(
-            ontology=schema_definition,
             session_id=session_id
         )
     
@@ -106,85 +62,54 @@ def generate_schema(input_data: SchemaGeneratorInput) -> SchemaGeneratorResponse
             detail=error_msg
         )
 
-@router.post("/documents/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
-async def upload_document(
-    file: UploadFile = File(...),
-    session_id: str = Query(..., description="Session ID for accessing stored ontology")
-) -> DocumentResponse:
-    """
-    Upload and process a document with intelligent chunking and entity extraction.
-    Requires a session ID to access the stored ontology.
-    """
-    logger.info(f"Received upload request for file: {file.filename} with session: {session_id}")
+# @router.post("/documents/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
+# async def upload_document(
+#     file: UploadFile = File(...),
+#     session_id: str = Query(..., description="Session ID for accessing stored ontology")
+# ) -> DocumentResponse:
+#     """
+#     Upload and process a document with intelligent chunking and entity extraction.
+#     Requires a session ID to access the stored ontology.
+#     """
+#     logger.info(f"Received upload request for file: {file.filename} with session: {session_id}")
     
-    if file.content_type not in ALLOWED_MIME_TYPES:
-        logger.warning(f"Invalid file type: {file.content_type}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid file type. Allowed types are: {', '.join(ALLOWED_MIME_TYPES.values())}"
-        )
+#     if file.content_type not in ALLOWED_MIME_TYPES:
+#         logger.warning(f"Invalid file type: {file.content_type}")
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail=f"Invalid file type. Allowed types are: {', '.join(ALLOWED_MIME_TYPES.values())}"
+#         )
     
-    try:
-        doc_processor = DocumentProcessor()
-        ontology = ontology_cache.get(session_id)
-        if ontology == None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail='Ontology Not set for extraction. Please set via /generate-schema first'
-            )
-        doc_output = await doc_processor.process_uploaded_file(file, ontology)
-        logger.info(f"Successfully processed document with ID: {doc_output.id}")
+#     try:
+#         doc_processor = DocumentProcessor()
+#         ontology = ontology_cache.get(session_id)
+#         if ontology == None:
+#             raise HTTPException(
+#                 status_code=status.HTTP_400_BAD_REQUEST,
+#                 detail='Ontology Not set for extraction. Please set via /generate-schema first'
+#             )
+#         doc_output = await doc_processor.process_uploaded_file(file, ontology)
+#         logger.info(f"Successfully processed document with ID: {doc_output.id}")
         
-        return DocumentResponse(
-            id=doc_output.id,
-            content=doc_output.content,
-            entities=doc_output.entities,
-            relationships=doc_output.relationships
-        )
-    except ValueError as ve:
-        logger.error(f"Validation error: {str(ve)}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(ve)
-        )
-    except Exception as e:
-        logger.error(f"Error processing document: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error processing document"
-        )
+#         return DocumentResponse(
+#             id=doc_output.id,
+#             content=doc_output.content,
+#             entities=doc_output.entities,
+#             relationships=doc_output.relationships
+#         )
+#     except ValueError as ve:
+#         logger.error(f"Validation error: {str(ve)}")
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail=str(ve)
+#         )
+#     except Exception as e:
+#         logger.error(f"Error processing document: {str(e)}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="Error processing document"
+#         )
     
-# Implement notification function
-async def notify_frontend(message_type: str, data: dict):
-    await manager.broadcast({
-        "type": message_type,
-        "data": data
-    })
-
-
-@router.post("/feedback/{document_id}", status_code=status.HTTP_200_OK)
-async def submit_feedback(document_id: str, feedback: PydanticFeedbackInput):
-    """
-    Submit feedback for a processed document.
-    This allows for human-in-the-loop correction of extracted information.
-    """
-    logger.info(f"Received feedback for document: {document_id}")
-    try:
-        extraction_service = ExtractionService()
-        success = await extraction_service.process_feedback(document_id, feedback)
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to process feedback"
-            )
-        logger.info(f"Successfully processed feedback for document: {document_id}")
-        return {"status": "success"}
-    except Exception as e:
-        logger.error(f"Error processing feedback: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error processing feedback"
-        )
 
 # Health check endpoint
 @router.get("/health")
