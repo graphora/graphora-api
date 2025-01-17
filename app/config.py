@@ -45,7 +45,7 @@ class Settings(BaseSettings):
         description="Google VertexAI Project ID for LLM operations"
     )
     VERTEXAI_LOCATION: Optional[str] = Field(
-        default='asia-southeast1-b',
+        default='us-east5',
         description="Google VertexAI Project Location for LLM operations"
     )
     

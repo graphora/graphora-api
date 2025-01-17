@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any
 from openai import OpenAI
 import google.generativeai as genai
 from anthropic import Anthropic
@@ -72,3 +72,18 @@ class LLMClientService:
     def is_available(self) -> bool:
         """Check if LLM client is available"""
         return self.client is not None
+    
+    def complete(self, messages, response_model: Any):
+        if self.provider in ['openai', 'anthropic', 'vertexai']:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                response_model=response_model
+            )
+        else:  # Gemini
+            response = self.client.chat.completions.create(
+                messages=messages,
+                response_model=response_model
+            )
+        print(str(response))
+        return response

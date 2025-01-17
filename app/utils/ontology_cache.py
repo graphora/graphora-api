@@ -1,6 +1,5 @@
 from typing import Dict, Optional
 from datetime import datetime, timedelta
-from app.services.ontology_generator_service import Neo4jOntology
 import uuid
 import secrets
 import base64
@@ -8,15 +7,15 @@ import hashlib
 
 class OntologyCache:
     def __init__(self):
-        self._cache: Dict[str, tuple[Neo4jOntology, datetime]] = {}
+        self._cache: Dict[str, tuple[dict, datetime]] = {}
         self._ttl = timedelta(hours=3)  # Cache entries expire after 3 hour
     
-    def store(self, session_id: str, ontology: Neo4jOntology):
+    def store(self, session_id: str, ontology: dict):
         """Store ontology with timestamp"""
         self._cache[session_id] = (ontology, datetime.now())
         self._cleanup()
     
-    def get(self, session_id: str) -> Optional[Neo4jOntology]:
+    def get(self, session_id: str) -> Optional[dict]:
         """Retrieve ontology if exists and not expired"""
         if session_id not in self._cache:
             return None
