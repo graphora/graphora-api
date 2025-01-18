@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.rest_api import router as rest_router
+from app.api.ontology import router as ontology_router
 from app.config import settings
 from app.utils.logger import logger
 
@@ -38,6 +39,7 @@ app.add_middleware(
 
 # Add routes
 app.include_router(rest_router, prefix=settings.API_V1_STR)
+app.include_router(ontology_router)
 
 if __name__ == "__main__":
     import uvicorn
