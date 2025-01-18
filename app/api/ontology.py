@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException
 from uuid import uuid4
 import yaml
-
+from app.config import settings
 from app.schemas.ontology import OntologyRequest, OntologyResponse
 from app.services.ontology_validator import parse_and_validate_yaml, OntologyValidationError
 
-router = APIRouter(prefix="/api/v1", tags=["Ontology"])
+router = APIRouter(prefix=settings.API_V1_STR, tags=["Ontology"])
 
 # In-memory cache for validated ontologies
 # In production, this should be replaced with a proper caching solution

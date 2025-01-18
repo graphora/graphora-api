@@ -1,89 +1,68 @@
 from typing import Any
 from openai import OpenAI
-import google.generativeai as genai
-from anthropic import Anthropic
 import instructor
 from app.config import settings
 from app.utils.logger import logger
+from openai import OpenAI
+from tenacity import Retrying, stop_after_attempt, wait_fixed
 import vertexai
-import google.auth
-import google.auth.transport.requests
+from anthropic import AnthropicVertex
 from vertexai.generative_models import GenerativeModel
 
-class LLMClientService:
-    def __init__(self):
-        self.client = None
-        self.model = None
-        self.provider = None
-        self._init_client()
-
-    def _init_client(self) -> None:
-        """Initialize LLM client with instructor patch"""
-
-        if not settings.OPENAI_API_KEY and not settings.ANTHROPIC_API_KEY and not settings.GOOGLE_GEMINI_API_KEY and not settings.VERTEXAI_PROJECT_ID:
-            logger.warning("LLM API key not set. LLM features will be unavailable.")
-            return
-        
-        try:
-            if settings.OPENAI_API_KEY.strip():
-                base_client = OpenAI(api_key=settings.OPENAI_API_KEY.strip())
-                self.client = instructor.from_openai(base_client)
-                self.model = 'gpt-4'
-                self.provider = 'openai'
-            elif settings.ANTHROPIC_API_KEY.strip():
-                base_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY.strip())
-                self.client = instructor.from_anthropic(base_client)
-                self.model = 'claude-3-5-haiku-20241022'
-                self.provider = 'anthropic'
-            elif settings.GOOGLE_GEMINI_API_KEY.strip():
-                genai.configure(api_key=settings.GOOGLE_GEMINI_API_KEY.strip())
-                self.client = instructor.from_gemini(
-                    client=genai.GenerativeModel(
-                        model_name="models/gemini-1.5-flash-latest",
-                    ),
-                    mode=instructor.Mode.GEMINI_JSON,
-                )
-                self.model = 'models/gemini-1.5-flash-latest'
-                self.provider = 'gemini'
-            else:
-                creds, project = google.auth.default()
-                auth_req = google.auth.transport.requests.Request()
-                creds.refresh(auth_req)
-                PROJECT=settings.VERTEXAI_PROJECT_ID
-                LOCATION=settings.VERTEXAI_LOCATION
-                base_url = f'https://{LOCATION}-aiplatform.googleapis.com/v1beta1/projects/{PROJECT}/locations/{LOCATION}/endpoints/openapi'
-                self.client = instructor.from_openai(
-                    OpenAI(base_url=base_url, api_key=creds.token), mode=instructor.Mode.JSON
-                )
-
-                # vertexai.init(project=settings.VERTEXAI_PROJECT_ID)
-                # self.client = instructor.from_vertexai(
-                #     client=GenerativeModel("claude-3-5-sonnet-v2@20241022"),
-                #     mode=instructor.Mode.VERTEXAI_JSON,
-                # )
-                self.model = 'google/gemini-2.0-flash-exp'
-                self.provider = 'vertexai'
-            logger.info(f"LLM client [{str(self.client.provider.name)}] initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize LLM client: {str(e)}")
-            self.client = None
-
-    @property
-    def is_available(self) -> bool:
-        """Check if LLM client is available"""
-        return self.client is not None
+def call_llm(messages, response_model: Any):
+        return call_llm_deepseek(messages, response_model)
     
-    def complete(self, messages, response_model: Any):
-        if self.provider in ['openai', 'anthropic', 'vertexai']:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                response_model=response_model
-            )
-        else:  # Gemini
-            response = self.client.chat.completions.create(
-                messages=messages,
-                response_model=response_model
-            )
-        print(str(response))
-        return response
+def call_llm_deepseek(messages, response_model: Any, 
+                        model = 'deepseek-chat', max_tokens=8000):
+    base_client = OpenAI(api_key=settings.DEEPSEEK_API_KEY.strip(),
+                                    base_url=settings.DEEPSEEK_BASE_URL.strip())
+    client = instructor.from_openai(base_client, mode=instructor.Mode.JSON)
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        response_model=response_model,
+        max_tokens=max_tokens,
+        max_retries=Retrying(
+            stop=stop_after_attempt(5),
+            wait=wait_fixed(1),
+        )
+    )
+    return response
+
+def call_llm_anthropic(messages, response_model, 
+                        model = 'claude-3-5-haiku@20241022',
+                        max_tokens=8000):
+    PROJECT_ID=settings.VERTEXAI_PROJECT_ID
+    LOCATION=settings.VERTEXAI_LOCATION
+
+    vertexai.init(project=PROJECT_ID, location=LOCATION)
+
+    client = AnthropicVertex(region=LOCATION, project_id=PROJECT_ID)
+    llm = instructor.from_anthropic(client)
+    return llm.messages.create(
+        model=model,
+        messages=messages,
+        response_model=response_model,
+        max_tokens=max_tokens,
+        max_retries=Retrying(
+            stop=stop_after_attempt(5),
+            wait=wait_fixed(1),
+        )
+    )
+    
+def call_llm_gemini(messages, response_model, model = "gemini-2.0-flash-exp"):
+    PROJECT_ID=settings.VERTEXAI_PROJECT_ID
+    LOCATION=settings.VERTEXAI_LOCATION
+
+    vertexai.init(project=PROJECT_ID, location=LOCATION)
+
+    client = instructor.from_vertexai(
+        client=GenerativeModel(model),
+        mode=instructor.Mode.VERTEXAI_TOOLS,
+    )
+    return client.chat.completions.create(
+        messages=messages,
+        response_model=response_model
+    )
+    
+    
