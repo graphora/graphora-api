@@ -10,6 +10,9 @@ from .extraction_helpers import extract_knowledge_graph, extract_by_ontology
 from .kg_helpers import KnowledgeGraphManager
 from .extraction_helpers import extract_metadata
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
+
 class State(TypedDict):
   text: str
   chunks: List[Document]

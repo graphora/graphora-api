@@ -111,13 +111,13 @@ async def initialize_processing(
     """
     output = []
     for path in file_paths:
-      with open(path, 'rb') as f:
+      with open(path, 'r') as f:
           text = f.read()
       staging_id = f"Staging_{transform_id}"
-      ontology = ontology_cache[ontology_id]
-      state_input = {"text": text, "ontology_str": str(ontology), "ontology_obj": ontology}
-      result = app.invoke(state_input)
+      ontology_str, ontology = ontology_cache[ontology_id]
+      state_input = {"text": text, "ontology_str": ontology_str, "ontology_obj": ontology}
+      result = app().invoke(state_input)
       output.append((staging_id, result))
-      sanitise_and_ingest(ontology, result['metadata'], result['domain_graphs'], 
+      sanitise_and_ingest(ontology_str, result['metadata'], result['domain_graphs'], 
                           Neo4jStagingManager(staging_id, is_staging=True))
     return output

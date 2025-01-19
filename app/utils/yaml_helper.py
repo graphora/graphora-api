@@ -1,4 +1,5 @@
 import yaml
+from pydantic import BaseModel
 
 class KnowledgeGraphYAMLExporter:
    @staticmethod

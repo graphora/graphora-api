@@ -36,7 +36,7 @@ async def validate_ontology(request: OntologyRequest) -> OntologyResponse:
         ontology_id = str(uuid4())
         
         # Cache ontology for future use
-        ontology_cache[ontology_id] = ontology_dict
+        ontology_cache[ontology_id] = (request.text, ontology_dict)
         
         return OntologyResponse(
             success=True,
