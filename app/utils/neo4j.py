@@ -27,7 +27,7 @@ def run_cypher(query: str, **kwargs):
       return result
 
 
-def run_cypher_batch_staging(queries: List[str], **kwargs) -> List[str]:
+def run_cypher_batch(queries: List[str], **kwargs) -> List[str]:
   results = []
   for query in queries:
     print(query)

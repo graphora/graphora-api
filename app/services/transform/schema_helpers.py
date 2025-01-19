@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, create_model, field_validator, model_vali
 import yaml
 import threading
 import contextlib
+from app.schemas.transform import Metadata
 
 class GraphContext:
     """Thread-safe context manager for node validation"""

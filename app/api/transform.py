@@ -1,11 +1,11 @@
 from fastapi import APIRouter, File, UploadFile, HTTPException
 from typing import List
-from uuid import uuid4
 from app.schemas.transform import UploadResponse, FileValidationError
 from app.services.transform.transform import validate_file, save_files, initialize_processing
 from app.services.ontology_validator import OntologyValidationError
 from app.config import settings
 from datetime import datetime
+import traceback
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
 
@@ -64,6 +64,7 @@ async def upload_documents(
         )
         
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
