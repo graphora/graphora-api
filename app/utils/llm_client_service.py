@@ -29,7 +29,7 @@ def call_llm_deepseek(messages, response_model: Any,
     )
     return response
 
-def call_llm_anthropic(messages, response_model, 
+def call_llm_anthropic_(messages, response_model, 
                         model = 'claude-3-5-haiku@20241022',
                         max_tokens=8000):
     PROJECT_ID=settings.VERTEXAI_PROJECT_ID
@@ -50,7 +50,7 @@ def call_llm_anthropic(messages, response_model,
         )
     )
     
-def call_llm_gemini(messages, response_model, model = "gemini-2.0-flash-exp"):
+def call_llm_anthropic(messages, response_model, model = "gemini-2.0-flash-exp"):
     PROJECT_ID=settings.VERTEXAI_PROJECT_ID
     LOCATION=settings.VERTEXAI_LOCATION
 

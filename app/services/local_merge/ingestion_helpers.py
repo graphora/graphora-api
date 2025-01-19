@@ -1,7 +1,7 @@
 from collections import defaultdict
 from typing import Dict, List, Any
 import uuid
-from .schema_helpers import Neo4jStagingManager
+from app.services.local_merge.schema_helpers import Neo4jStagingManager
 from app.schemas.local import LocalNode, LocalEdge
 from app.utils.logger import logger
 

@@ -5,6 +5,7 @@ from app.schemas.transform import UploadResponse, FileValidationError
 from app.services.transform.transform import validate_file, save_files, initialize_processing
 from app.services.ontology_validator import OntologyValidationError
 from app.config import settings
+from datetime import datetime
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
 
@@ -35,7 +36,7 @@ async def upload_documents(
             await validate_file(file)
             
         # Generate transformation ID
-        transform_id = str(uuid4())
+        transform_id = f"{datetime.now().strftime('%Y%m%d%H%M%S')}"
         
         # Save files
         saved_files = await save_files(transform_id, files)

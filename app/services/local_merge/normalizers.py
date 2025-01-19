@@ -1,7 +1,7 @@
 from typing import Dict, List, Any, Union
 import re
 from datetime import datetime
-from schemas.local import LocalNode, LocalEdge
+from app.schemas.local import LocalNode, LocalEdge
 
 class PropertyNormalizer:
     def __init__(self):

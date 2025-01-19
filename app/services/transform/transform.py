@@ -2,20 +2,22 @@ import os
 import aiofiles
 from fastapi import UploadFile
 from typing import List
-import magic
 from pathlib import Path
-
 from app.schemas.transform import FileValidationError
 from app.config import settings
+from app.api.ontology import ontology_cache
+from app.services.transform.langraph import app
+from app.services.local_merge.ingestion_helpers import Neo4jStagingManager 
+from app.services.local_merge.sanitise_ingest import sanitise_and_ingest
 
 # Maximum file size (10MB)
 MAX_FILE_SIZE = 10 * 1024 * 1024
 
-# Allowed MIME types and their extensions
-ALLOWED_MIME_TYPES = {
-    'application/pdf': '.pdf',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-    'text/plain': '.txt'
+# Allowed file extensions and their MIME types
+ALLOWED_EXTENSIONS = {
+    '.pdf': 'application/pdf',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.txt': 'text/plain'
 }
 
 async def validate_file(file: UploadFile) -> None:
@@ -37,12 +39,22 @@ async def validate_file(file: UploadFile) -> None:
         # Reset file pointer for later use
         await file.seek(0)
         
-        # Check file type using python-magic
-        mime_type = magic.from_buffer(content, mime=True)
-        if mime_type not in ALLOWED_MIME_TYPES:
+        # Check file extension
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext not in ALLOWED_EXTENSIONS:
             raise FileValidationError(
-                f"File {file.filename} has invalid type. Allowed types: PDF, DOCX, TXT"
+                f"File {file.filename} has invalid extension. Allowed types: PDF, DOCX, TXT"
             )
+        
+        # Verify content type from file header matches extension
+        content_type = file.content_type
+        if content_type != ALLOWED_EXTENSIONS[file_ext]:
+            raise FileValidationError(
+                f"File {file.filename} content type {content_type} does not match its extension"
+            )
+            
+    except FileValidationError:
+        raise
     except Exception as e:
         raise FileValidationError(f"Error validating file {file.filename}: {str(e)}")
 
@@ -87,7 +99,8 @@ async def save_files(transform_id: str, files: List[UploadFile]) -> List[str]:
                 pass
         raise FileValidationError(f"Error saving files: {str(e)}")
 
-async def initialize_processing(transform_id: str, ontology_id: str, file_paths: List[str]) -> None:
+async def initialize_processing(
+    transform_id: str, ontology_id: str, file_paths: List[str]) -> None:
     """
     Initialize document processing
     
@@ -96,15 +109,15 @@ async def initialize_processing(transform_id: str, ontology_id: str, file_paths:
         ontology_id: Ontology ID to use for transformation
         file_paths: List of saved file paths
     """
-    from datetime import datetime
-    o = []
-    def run_pipeline(data, ontology, form10k):
-        output = []
-        for text in data:
-            staging_id = f"Staging_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            state_input = {"text": text, "ontology_str": ontology, "ontology_obj": form10k}
-            result = app.invoke(state_input)
-            output.append((staging_id, result))
-            o = output
-            sanitise_and_ingest(ontology, result['metadata'], result['domain_graphs'], Neo4jStagingManager(staging_id, is_staging=True))
-        return output
+    output = []
+    for path in file_paths:
+      with open(path, 'rb') as f:
+          text = f.read()
+      staging_id = f"Staging_{transform_id}"
+      ontology = ontology_cache[ontology_id]
+      state_input = {"text": text, "ontology_str": str(ontology), "ontology_obj": ontology}
+      result = app.invoke(state_input)
+      output.append((staging_id, result))
+      sanitise_and_ingest(ontology, result['metadata'], result['domain_graphs'], 
+                          Neo4jStagingManager(staging_id, is_staging=True))
+    return output

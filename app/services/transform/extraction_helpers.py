@@ -1,10 +1,10 @@
 from langchain_core.documents import Document
-from schemas.transform import KnowledgeGraph
-from utils.llm_client_service import call_llm, call_llm_anthropic
+from app.schemas.transform import KnowledgeGraph
+from app.utils.llm_client_service import call_llm, call_llm_anthropic
 from typing import List, Dict, Type
 from pydantic import BaseModel
-from utils.yaml_helper import KnowledgeGraphYAMLExporter
-from services.transform.schema_helpers import DynamicSchemaGenerator
+from app.utils.yaml_helper import KnowledgeGraphYAMLExporter
+from app.services.transform.schema_helpers import DynamicSchemaGenerator
 import json
 
 def extract_knowledge_graph(docs: List[Document], ontology: dict) -> List[KnowledgeGraph]:

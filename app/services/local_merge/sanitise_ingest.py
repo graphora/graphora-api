@@ -1,16 +1,15 @@
 import yaml
 from typing import List, Tuple, Dict, Type
 from pydantic import BaseModel
-from .schema_helpers import Neo4jStagingManager
-from .schema_helpers import Neo4jSchemaGenerator
-from .ingestion_helpers import Neo4jIngestionGenerator
-from utils.neo4j import run_cypher_batch_staging
-from .resolvers import resolve_with_bert
-from .normalizers import normalize_graph_data
+from app.services.local_merge.schema_helpers import Neo4jStagingManager, Neo4jSchemaGenerator
+from app.services.local_merge.ingestion_helpers import Neo4jIngestionGenerator
+from app.utils.neo4j import run_cypher_batch_staging
+from app.services.local_merge.resolvers import resolve_with_bert
+from app.services.local_merge.normalizers import normalize_graph_data
 from app.schemas.local import LocalNode, LocalEdge
 from app.utils.logger import logger
 import uuid
-from helpers import create_staging_from_extracted_data, create_staging_from_extracted_metadata, group_data_by_section
+from app.services.local_merge.helpers import create_staging_from_extracted_data, create_staging_from_extracted_metadata
 
 
 def sanitise(nodes: List[LocalNode], edges: List[LocalEdge]) -> Tuple[List[LocalNode], List[LocalEdge]]:

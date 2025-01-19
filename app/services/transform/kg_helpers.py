@@ -1,5 +1,5 @@
 from typing import List, Dict
-from schemas.transform import KnowledgeGraph, Node, Edge, Metadata
+from app.schemas.transform import KnowledgeGraph, Node, Edge, Metadata
 
 class KnowledgeGraphManager:
   def merge_graphs(self, graphs: List[KnowledgeGraph]) -> Dict[str, Dict[str, KnowledgeGraph]]:

@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, END
 from langchain_core.documents import Document
 from concurrent.futures import ThreadPoolExecutor
 from app.utils.logger import logger
-from schemas.transform import KnowledgeGraph
+from app.schemas.transform import KnowledgeGraph
 from .chunk import do_semantic_chunking
 from .extraction_helpers import extract_knowledge_graph, extract_by_ontology
 from .kg_helpers import KnowledgeGraphManager
