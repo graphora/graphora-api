@@ -1,7 +1,7 @@
 from typing import List, Tuple, Type
 from pydantic import BaseModel
-from schemas.local import LocalNode, LocalEdge
-from utils.yaml_helper import KnowledgeGraphYAMLExporter
+from app.schemas.local import LocalNode, LocalEdge
+from app.utils.yaml_helper import KnowledgeGraphYAMLExporter
 import yaml
 
 

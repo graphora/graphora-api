@@ -6,6 +6,7 @@ import json
 import unicodedata
 from typing import Dict, Any
 import logging
+from app.schemas.local import LocalNode, LocalEdge
 
 class BERTResolver:
     def __init__(self, model_name='sentence-transformers/all-MiniLM-L6-v2'):
