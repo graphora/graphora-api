@@ -1,17 +1,18 @@
-import os
+import traceback
 import aiofiles
-from fastapi import UploadFile
+from fastapi import UploadFile, HTTPException
 from typing import List
 from pathlib import Path
-from app.schemas.transform import FileValidationError
+from app.schemas.transform import FileValidationError, KnowledgeGraph, ChunkMetadata
 from app.config import settings
-from app.services.transform.langraph import app
+from app.services.transform.langraph import create_processing_chain
 from app.services.local_merge.ingestion_helpers import Neo4jStagingManager 
 from app.services.local_merge.sanitise_ingest import sanitise_and_ingest
 import logging
 from app.services.job_manager import get_job_manager
 from fastapi import FastAPI
-from app.api.ontology import ontology_cache
+from app.services.ontology_validator import parse_and_validate_yaml
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -104,64 +105,71 @@ async def save_files(transform_id: str, files: List[UploadFile]) -> List[str]:
             pass
         raise FileValidationError(f"Error saving files: {str(e)}")
 
-async def initialize_processing(transform_id: str, ontology_id: str, file_paths: List[str], app_instance: FastAPI) -> str:
-    """
-    Initialize document processing
+async def initialize_processing(transform_id: str, 
+                                ontology_id: str, 
+                                file_paths: List[str], 
+                                app_instance: FastAPI) -> None:
+    """Initialize and run document processing"""
     
-    Args:
-        transform_id: Unique transformation ID
-        ontology_id: Ontology ID to use for transformation
-        file_paths: List of saved file paths
-        app_instance: FastAPI app instance for job management
-        
-    Returns:
-        transform_id: The transformation ID
-    """
+    job_manager = get_job_manager(app_instance)
+    
     try:
-        output = []
-        total_files = len(file_paths)
-        job_manager = get_job_manager(app_instance)
+        # Get and validate ontology
+        try:
+            with open(f"{settings.ONTOLOGY_DIR}/{ontology_id}.yaml", 'r') as f:
+                ontology_yaml = f.read()
+            ontology_dict = parse_and_validate_yaml(ontology_yaml)
+            ontology_str = ontology_yaml
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Ontology {ontology_id} not found or invalid: {str(e)}"
+            )
         
+        # Create chain
+        chain = await create_processing_chain()
+        
+        total_files = len(file_paths)
         for idx, path in enumerate(file_paths, 1):
-            async with aiofiles.open(path, 'r') as f:
-                text = await f.read()
-            staging_id = f"Staging_{transform_id}"
-            ontology_str, ontology = ontology_cache[ontology_id]
-            state_input = {
-              "transform_id": transform_id,
-              "text": text, 
-              "ontology_str": ontology_str, 
-              "ontology_obj": ontology,
-              "app": app_instance
-            }
+            logger.info(f"Processing file {path}")
             
-            # Process file
-            chain = app()
-            try:
-                result = await chain.ainvoke(state_input)
-                await job_manager.update_progress(transform_id, 50.0)
+            # Read file
+            with open(path, 'r') as f:
+                text = f.read()
                 
-                if result.get('metadata') and result.get('domain_graphs'):
-                    output.append((staging_id, result))
-                    
-                    # Ingest results
-                    await sanitise_and_ingest(ontology_str, result['metadata'], result['domain_graphs'], 
-                                    Neo4jStagingManager(staging_id, is_staging=True),
-                                    transform_id,
-                                    app_instance)
-                else:
-                    logger.warning(f"Skipping file {path} due to missing metadata or domain graphs")
+            # Process file
+            try:
+                # Pass all required parameters for job status updates
+                state_input = {
+                    "transform_id": transform_id,
+                    "text": text, 
+                    "ontology_str": ontology_str,
+                    "ontology_obj": ontology_dict,
+                    "app": app_instance
+                }
+                
+                result = await chain.ainvoke(state_input)
+                
+                await sanitise_and_ingest(
+                    ontology_str, 
+                    result['metadata'],
+                    result['domain_graphs'],
+                    Neo4jStagingManager(f"Staging_{transform_id}", is_staging=True),
+                    transform_id,
+                    app_instance
+                )
                     
             except Exception as e:
-                logger.error(f"Error processing file {path}: {str(e)}")
-                continue
+              traceback.print_exc()
+              logger.error(f"Error processing file {path}: {str(e)}")
+              continue
             
-            # Update progress
+            # Update progress for this file
             progress = (idx / total_files) * 100
             await job_manager.update_progress(transform_id, progress)
             
-        return transform_id
-        
+        await job_manager.complete_job(transform_id)
     except Exception as e:
-        logger.error(f"Processing failed for transform_id {transform_id}: {str(e)}")
+        logger.error(f"Error in initialize_processing: {str(e)}")
+        await job_manager.fail_job(transform_id, str(e))
         raise

@@ -2,12 +2,9 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 class OntologyRequest(BaseModel):
-    text: str = Field(
-        ..., 
-        description="YAML string containing ontology definition"
-    )
+    """Request model for ontology validation"""
+    text: str = Field(..., description="Ontology definition in YAML format")
 
 class OntologyResponse(BaseModel):
-    success: bool
-    error: Optional[str] = None
-    uuid: Optional[str] = None
+    """Response model for ontology validation"""
+    id: str = Field(..., description="Unique ID for the validated ontology")

@@ -16,6 +16,7 @@ class JobStatus(BaseModel):
 
 class JobStatusResponse(BaseModel):
     """API response model for job status endpoint"""
+    id: str
     status: Literal['processing', 'completed', 'failed']
     progress: float = Field(
         default=0.0,
