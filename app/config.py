@@ -19,6 +19,11 @@ class Settings(BaseSettings):
         description="Directory for storing uploaded files"
     )
     
+    ONTOLOGY_DIR:str = Field(
+        default="/tmp/graphit/ontologies",
+        description="Directory for storing ontologies"
+    )
+    
     # Neo4j Settings
     NEO4J_URI: str = Field(
         default="bolt://localhost:7687",

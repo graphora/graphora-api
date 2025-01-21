@@ -46,3 +46,12 @@ class KnowledgeGraph(BaseModel):
   metadata: Metadata = Field(..., description="Metadata for the knowledge graph")
   nodes: List[Node] = Field(..., description="List of nodes in the knowledge graph")
   edges: List[Edge] = Field(..., description="List of edges in the knowledge graph")
+
+
+class ChunkMetadata(BaseModel):
+    """Metadata for a text chunk"""
+    source: str
+    content: str
+    chunk_size: int
+    chunk_overlap: int
+    properties: Dict[str, Any] = Field(default_factory=dict)

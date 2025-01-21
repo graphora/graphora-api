@@ -276,11 +276,11 @@ class BERTResolver:
                         similarity = self.compute_similarity(emb1, emb2)
                         threshold = self.get_dynamic_threshold(node1.properties, node2.properties)
 
-                        self.log_node_comparison(
-                            node1, node2, similarity,
-                            threshold,
-                            similarity >= threshold
-                        )
+                        # self.log_node_comparison(
+                        #     node1, node2, similarity,
+                        #     threshold,
+                        #     similarity >= threshold
+                        # )
 
                         if similarity >= threshold:
                             self.logger.info(
