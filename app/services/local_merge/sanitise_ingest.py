@@ -10,7 +10,9 @@ from app.schemas.local import LocalNode, LocalEdge
 from app.utils.logger import logger
 import uuid
 from app.services.local_merge.helpers import create_staging_from_extracted_data, create_staging_from_extracted_metadata
-
+from app.services.job_manager import JobManager
+from app.services.job_manager import get_job_manager
+from fastapi import FastAPI
 
 def sanitise(nodes: List[LocalNode], edges: List[LocalEdge]) -> Tuple[List[LocalNode], List[LocalEdge]]:
   normalized_nodes, normalized_edges = normalize_graph_data(nodes, edges)
@@ -94,10 +96,17 @@ def set_node_id(nodes_with_ids, resolved_nodes: List[LocalNode]):
 
     return resolved_nodes
 
-def sanitise_and_ingest(ontology: str, metadata: List[Type[BaseModel]],
-                        data: List[List[Type[BaseModel]]], staging: Neo4jStagingManager) -> str:
+async def sanitise_and_ingest(ontology: str, metadata: List[Type[BaseModel]],
+                        data: List[List[Type[BaseModel]]], 
+                        staging: Neo4jStagingManager,
+                        transform_id: str,
+                        app: FastAPI) -> str:
+    # Get job manager
+    job_manager = get_job_manager(app)
+    
     # Convert metadata to nodes and edges
     metadata_nodes, metadata_edges = create_staging_from_extracted_metadata(metadata)
+    await job_manager.update_progress(transform_id, 55.0)
 
     # Group data by section and process each section
     grouped_data = group_data_by_section(data)
@@ -115,6 +124,8 @@ def sanitise_and_ingest(ontology: str, metadata: List[Type[BaseModel]],
     # Combine metadata with section data
     all_nodes = metadata_nodes + section_nodes
     all_edges = metadata_edges + section_edges
+    
+    await job_manager.update_progress(transform_id, 60.0)
 
     # Create node mapping including all merged IDs
     node_map = {}
@@ -165,12 +176,17 @@ def sanitise_and_ingest(ontology: str, metadata: List[Type[BaseModel]],
                 seen_edge_sigs.add(edge_sig)
                 logger.info(f"Mapped edge: {source.id} -> {target.id} ({edge.relationship})")
 
+    await job_manager.update_progress(transform_id, 75.0)
+    
     # Ingest final data
     ingest(ontology, final_nodes, final_edges, staging)
+    
+    await job_manager.update_progress(transform_id, 90.0)
 
     # Create document relationships
     metadata_node = next((d for d in final_nodes if d.type_ == 'Metadata'), None)
     if metadata_node is not None:
         return create_document(ontology, metadata_node, final_nodes, staging)
 
+    await job_manager.update_progress(transform_id, 95.0)
     return None
