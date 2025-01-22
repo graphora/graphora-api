@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.ontology import router as ontology_router
 from app.api.transform import router as transform_router
+from app.api.graph import router as graph_router
 from app.config import settings
 from app.utils.logger import logger
 
@@ -40,6 +41,7 @@ app.add_middleware(
 # Add routes
 app.include_router(ontology_router)
 app.include_router(transform_router)
+app.include_router(graph_router)
 
 if __name__ == "__main__":
     import uvicorn
