@@ -18,7 +18,7 @@ class GraphService:
         Retrieve nodes by label and their relationships
         
         Args:
-            label: Node label to query
+            label: Node label to query (including batch prefix)
             limit: Maximum number of nodes to return
             skip: Number of nodes to skip (for pagination)
             
@@ -61,15 +61,23 @@ class GraphService:
                 seen_nodes = set()
                 seen_edges = set()
 
+                def get_actual_label(node_labels):
+                    """Get the actual node label, ignoring batch labels"""
+                    # Convert labels to list and remove the batch label
+                    labels = [l for l in node_labels if not l.startswith(label)]
+                    # Return the first non-batch label, or the first label if all are batch labels
+                    return labels[0] if labels else next(iter(node_labels))
+
                 # Process main nodes
                 for node in data["nodes"]:
                     node_id = str(node.id)
                     if node_id not in seen_nodes:
+                        actual_label = get_actual_label(node.labels)
                         nodes_list.append(Node(
                             id=node_id,
-                            label=label,
+                            label=actual_label,
                             properties=dict(node.items()),
-                            type=label
+                            type=actual_label
                         ))
                         seen_nodes.add(node_id)
 
@@ -78,11 +86,12 @@ class GraphService:
                     if node is not None:
                         node_id = str(node.id)
                         if node_id not in seen_nodes:
+                            actual_label = get_actual_label(node.labels)
                             nodes_list.append(Node(
                                 id=node_id,
-                                label=str(next(iter(node.labels))),
+                                label=actual_label,
                                 properties=dict(node.items()),
-                                type=str(next(iter(node.labels)))
+                                type=actual_label
                             ))
                             seen_nodes.add(node_id)
 
