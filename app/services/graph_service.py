@@ -188,27 +188,55 @@ class GraphService:
 
     def update_node(self, tx, node: NodeUpdate, transform_id: str):
         """Update an existing node"""
-        # Flatten properties
-        props = self._flatten_properties(node.properties)
-        # Build dynamic SET clause
-        set_clauses = [f"n.{key} = ${key}" for key in props.keys()]
-        set_clause = ", ".join(set_clauses)
+        # First get existing properties
+        result = tx.run(
+            f"""
+            MATCH (n:`{transform_id}` {{_uid_: $uid}})
+            RETURN n
+            """,
+            uid=node.id
+        ).single()
         
-        if not set_clause:
-            return  # No properties to update
+        if not result:
+            return
             
-        query = f"""
-        MATCH (n:`{transform_id}` {{_uid_: $uid}})
-        SET {set_clause}
-        """
+        existing_node = result['n']
+        existing_props = {k: v for k, v in dict(existing_node).items() 
+                        if not k.startswith('_') and k != 'type'}
         
-        # Prepare parameters
-        params = {
-            "uid": node.id,
-            **props
-        }
+        # Get new properties
+        new_props = self._flatten_properties(node.properties)
         
-        tx.run(query, params)
+        # Build REMOVE clause for properties not in new set
+        remove_props = set(existing_props.keys()) - set(new_props.keys())
+        remove_clause = ""
+        if remove_props:
+            remove_clause = "REMOVE " + ", ".join(f"n.{prop}" for prop in remove_props)
+        
+        # Build SET clause for new/updated properties
+        set_clauses = [f"n.{key} = ${key}" for key in new_props.keys()]
+        set_clause = ""
+        if set_clauses:
+            set_clause = "SET " + ", ".join(set_clauses)
+        
+        # Build and execute query
+        query_parts = [
+            f"MATCH (n:`{transform_id}` {{_uid_: $uid}})"
+        ]
+        if set_clause:
+            query_parts.append(set_clause)
+        if remove_clause:
+            query_parts.append(remove_clause)
+            
+        query = "\n".join(query_parts)
+        
+        # Execute update if we have changes
+        if set_clause or remove_clause:
+            tx.run(
+                query,
+                uid=node.id,
+                **new_props
+            )
 
     def delete_node(self, tx, node_id: str, transform_id: str):
         """Delete a node"""
@@ -250,28 +278,56 @@ class GraphService:
 
     def update_edge(self, tx, edge: EdgeUpdate, transform_id: str):
         """Update an existing edge"""
-        # Flatten properties
-        props = self._flatten_properties(edge.properties)
-        # Build dynamic SET clause
-        set_clauses = [f"r.{key} = ${key}" for key in props.keys()]
-        set_clause = ", ".join(set_clauses)
+        # First get existing properties
+        result = tx.run(
+            """
+            MATCH ()-[r]->()
+            WHERE r._uid_ = $uid
+            RETURN r
+            """,
+            uid=edge.id
+        ).single()
         
-        if not set_clause:
-            return  # No properties to update
+        if not result:
+            return
             
-        query = f"""
-        MATCH ()-[r]->()
-        WHERE r._uid_ = $uid
-        SET {set_clause}
-        """
+        existing_edge = result['r']
+        existing_props = {k: v for k, v in dict(existing_edge).items() 
+                        if not k.startswith('_') and k != 'type'}
         
-        # Prepare parameters
-        params = {
-            "uid": edge.id,
-            **props
-        }
+        # Get new properties
+        new_props = self._flatten_properties(edge.properties)
         
-        tx.run(query, params)
+        # Build REMOVE clause for properties not in new set
+        remove_props = set(existing_props.keys()) - set(new_props.keys())
+        remove_clause = ""
+        if remove_props:
+            remove_clause = "REMOVE " + ", ".join(f"r.{prop}" for prop in remove_props)
+        
+        # Build SET clause for new/updated properties
+        set_clauses = [f"r.{key} = ${key}" for key in new_props.keys()]
+        set_clause = ""
+        if set_clauses:
+            set_clause = "SET " + ", ".join(set_clauses)
+        
+        # Build and execute query
+        query_parts = [
+            "MATCH ()-[r]->() WHERE r._uid_ = $uid"
+        ]
+        if set_clause:
+            query_parts.append(set_clause)
+        if remove_clause:
+            query_parts.append(remove_clause)
+            
+        query = "\n".join(query_parts)
+        
+        # Execute update if we have changes
+        if set_clause or remove_clause:
+            tx.run(
+                query,
+                uid=edge.id,
+                **new_props
+            )
 
     def delete_edge(self, tx, edge_id: str):
         """Delete an edge"""

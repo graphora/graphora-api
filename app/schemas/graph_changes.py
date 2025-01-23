@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal, Union
 from uuid import UUID
 
 class NodeCreation(BaseModel):
@@ -12,7 +12,7 @@ class NodeCreation(BaseModel):
 class NodeUpdate(BaseModel):
     """Model for updating existing nodes"""
     id: str = Field(..., description="ID of node to update")
-    properties: Dict[str, Any] = Field(..., description="Updated properties")
+    properties: Dict[str, Optional[Any]] = Field(..., description="Updated properties. Set a property to None to delete it")
 
 class EdgeCreation(BaseModel):
     """Model for creating new edges"""
@@ -26,7 +26,7 @@ class EdgeCreation(BaseModel):
 class EdgeUpdate(BaseModel):
     """Model for updating existing edges"""
     id: str = Field(..., description="ID of edge to update")
-    properties: Dict[str, Any] = Field(..., description="Updated properties")
+    properties: Dict[str, Optional[Any]] = Field(..., description="Updated properties. Set a property to None to delete it")
 
 class NodeChanges(BaseModel):
     """Collection of node modifications"""
