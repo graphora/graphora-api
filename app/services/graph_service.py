@@ -155,11 +155,11 @@ class GraphService:
             # Skip null values and internal fields
             if value is not None and not key.startswith('_'):
                 # Add prop_prop_ prefix to avoid conflicts with reserved fields
-                prop_key = f"prop_{key}"
+                # prop_key = f"prop_{key}"
                 # Convert non-primitive types to string
                 if isinstance(value, (dict, list)):
                     value = str(value)
-                flattened[prop_key] = value
+                flattened[key] = value
         return flattened
 
     def create_node(self, tx, node: NodeCreation, transform_id: str):
