@@ -1,7 +1,13 @@
-from typing import Dict, List, Any, Tuple
+import traceback
+from typing import Dict, List, Any, Tuple, Optional
 from neo4j import GraphDatabase
 from app.schemas.graph import Node, Edge, GraphResponse
+from app.schemas.graph_changes import (
+    NodeCreation, NodeUpdate, EdgeCreation, EdgeUpdate,
+    NodeChanges, EdgeChanges, SaveGraphRequest, SaveGraphResponse, Message
+)
 from app.utils.logger import logger
+from uuid import uuid4
 
 class GraphService:
     def __init__(self, uri: str, user: str, password: str):
@@ -43,7 +49,7 @@ class GraphService:
                 # Now get the actual data with pagination
                 query = """
                 MATCH (n:`%s`)
-                WITH n ORDER BY n.id
+                WITH n ORDER BY n._uid_
                 SKIP $skip LIMIT $limit
                 OPTIONAL MATCH (n)-[r]-(m)
                 RETURN 
@@ -68,15 +74,32 @@ class GraphService:
                     # Return the first non-batch label, or the first label if all are batch labels
                     return labels[0] if labels else next(iter(node_labels))
 
+                def extract_properties(entity):
+                    """Extract properties from node/relationship, excluding special fields"""
+                    props = {}
+                    entity_dict = dict(entity)
+                    
+                    # Get all properties that start with prop_
+                    for key, value in entity_dict.items():
+                        if isinstance(value, str):
+                                try:
+                                    if value.startswith('[') or value.startswith('{'):
+                                        value = eval(value)
+                                except:
+                                    pass
+                        props[key] = value
+                    return props
+
                 # Process main nodes
                 for node in data["nodes"]:
-                    node_id = str(node.id)
-                    if node_id not in seen_nodes:
+                    node_id = node.get("_uid_")
+                    if node_id and node_id not in seen_nodes:
                         actual_label = get_actual_label(node.labels)
+                        node_props = extract_properties(node)
                         nodes_list.append(Node(
                             id=node_id,
                             label=actual_label,
-                            properties=dict(node.items()),
+                            properties=node_props,
                             type=actual_label
                         ))
                         seen_nodes.add(node_id)
@@ -84,13 +107,14 @@ class GraphService:
                 # Process connected nodes
                 for node in data["connected_nodes"]:
                     if node is not None:
-                        node_id = str(node.id)
-                        if node_id not in seen_nodes:
+                        node_id = node.get("_uid_")
+                        if node_id and node_id not in seen_nodes:
                             actual_label = get_actual_label(node.labels)
+                            node_props = extract_properties(node)
                             nodes_list.append(Node(
                                 id=node_id,
                                 label=actual_label,
-                                properties=dict(node.items()),
+                                properties=node_props,
                                 type=actual_label
                             ))
                             seen_nodes.add(node_id)
@@ -98,16 +122,20 @@ class GraphService:
                 # Process relationships
                 for rel in data["relationships"]:
                     if rel is not None:
-                        edge_id = str(rel.id)
+                        edge_id = rel.get("_uid_", str(rel.id))
                         if edge_id not in seen_edges:
-                            edges_list.append(Edge(
-                                id=edge_id,
-                                source=str(rel.start_node.id),
-                                target=str(rel.end_node.id),
-                                type=str(rel.type),
-                                properties=dict(rel.items())
-                            ))
-                            seen_edges.add(edge_id)
+                            source_id = rel.start_node.get("_uid_")
+                            target_id = rel.end_node.get("_uid_")
+                            if source_id and target_id:
+                                edge_props = extract_properties(rel)
+                                edges_list.append(Edge(
+                                    id=edge_id,
+                                    source=source_id,
+                                    target=target_id,
+                                    type=str(rel.type),
+                                    properties=edge_props
+                                ))
+                                seen_edges.add(edge_id)
 
                 return GraphResponse(
                     nodes=nodes_list,
@@ -119,6 +147,219 @@ class GraphService:
         except Exception as e:
             logger.error(f"Error retrieving graph data: {str(e)}")
             raise
+
+    def _flatten_properties(self, properties: Dict[str, Any]) -> Dict[str, Any]:
+        """Flatten properties for Neo4j storage"""
+        flattened = {}
+        for key, value in properties.items():
+            # Skip null values and internal fields
+            if value is not None and not key.startswith('_'):
+                # Add prop_prop_ prefix to avoid conflicts with reserved fields
+                prop_key = f"prop_{key}"
+                # Convert non-primitive types to string
+                if isinstance(value, (dict, list)):
+                    value = str(value)
+                flattened[prop_key] = value
+        return flattened
+
+    def create_node(self, tx, node: NodeCreation, transform_id: str):
+        """Create a new node"""
+        # Flatten properties
+        props = self._flatten_properties(node.properties)
+        # Build dynamic SET clause
+        set_clauses = [f"n.{key} = ${key}" for key in props.keys()]
+        set_clause = ", ".join(set_clauses)
+        
+        query = f"""
+        CREATE (n:`{transform_id}`:`{node.label}`)
+        SET n._uid_ = $uid, n.type = $type
+        """
+        if set_clause:
+            query += f", {set_clause}"
+
+        # Prepare parameters
+        params = {
+            "uid": str(uuid4()),
+            "type": node.type,
+            **props
+        }
+        
+        tx.run(query, params)
+
+    def update_node(self, tx, node: NodeUpdate, transform_id: str):
+        """Update an existing node"""
+        # Flatten properties
+        props = self._flatten_properties(node.properties)
+        # Build dynamic SET clause
+        set_clauses = [f"n.{key} = ${key}" for key in props.keys()]
+        set_clause = ", ".join(set_clauses)
+        
+        if not set_clause:
+            return  # No properties to update
+            
+        query = f"""
+        MATCH (n:`{transform_id}` {{_uid_: $uid}})
+        SET {set_clause}
+        """
+        
+        # Prepare parameters
+        params = {
+            "uid": node.id,
+            **props
+        }
+        
+        tx.run(query, params)
+
+    def delete_node(self, tx, node_id: str, transform_id: str):
+        """Delete a node"""
+        tx.run(
+            f"""
+            MATCH (n:`{transform_id}` {{_uid_: $id}})
+            DETACH DELETE n
+            """,
+            id=node_id
+        )
+
+    def create_edge(self, tx, edge: EdgeCreation, transform_id: str):
+        """Create a new edge"""
+        # Flatten properties
+        props = self._flatten_properties(edge.properties)
+        # Build dynamic SET clause
+        set_clauses = [f"r.{key} = ${key}" for key in props.keys()]
+        set_clauses.append("r._uid_ = $uid")
+        set_clauses.append("r.type = $type")
+        set_clause = ", ".join(set_clauses)
+        
+        query = f"""
+        MATCH (source:`{transform_id}` {{_uid_: $source_id}})
+        MATCH (target:`{transform_id}` {{_uid_: $target_id}})
+        CREATE (source)-[r:`{edge.type}`]->(target)
+        SET {set_clause}
+        """
+        
+        # Prepare parameters
+        params = {
+            "uid": str(uuid4()),
+            "source_id": edge.source,
+            "target_id": edge.target,
+            "type": edge.type,
+            **props
+        }
+        
+        tx.run(query, params)
+
+    def update_edge(self, tx, edge: EdgeUpdate, transform_id: str):
+        """Update an existing edge"""
+        # Flatten properties
+        props = self._flatten_properties(edge.properties)
+        # Build dynamic SET clause
+        set_clauses = [f"r.{key} = ${key}" for key in props.keys()]
+        set_clause = ", ".join(set_clauses)
+        
+        if not set_clause:
+            return  # No properties to update
+            
+        query = f"""
+        MATCH ()-[r]->()
+        WHERE r._uid_ = $uid
+        SET {set_clause}
+        """
+        
+        # Prepare parameters
+        params = {
+            "uid": edge.id,
+            **props
+        }
+        
+        tx.run(query, params)
+
+    def delete_edge(self, tx, edge_id: str):
+        """Delete an edge"""
+        tx.run(
+            """
+            MATCH ()-[r]->()
+            WHERE r._uid_ = $id
+            DELETE r
+            """,
+            id=edge_id
+        )
+
+    def save_graph_changes(self, transform_id: str, changes: SaveGraphRequest) -> SaveGraphResponse:
+        """Save graph changes in a single transaction"""
+        messages = []
+        
+        with self.driver.session() as session:
+            def inner_save(tx):
+                # Apply changes in order
+                # 1. Create new nodes
+                if changes.nodes:
+                    for node in changes.nodes.created:
+                        self.create_node(tx, node, transform_id)
+
+                    # 2. Update existing nodes
+                    for node in changes.nodes.updated:
+                        self.update_node(tx, node, transform_id)
+
+                # 3. Create new edges
+                if changes.edges:
+                    for edge in changes.edges.created:
+                        try:
+                            self.create_edge(tx, edge, transform_id)
+                        except Exception as e:
+                            messages.append(Message(
+                                type='warning',
+                                message=f"Failed to create edge {edge.id}: {str(e)}"
+                            ))
+
+                    # 4. Update existing edges
+                    for edge in changes.edges.updated:
+                        self.update_edge(tx, edge, transform_id)
+
+                    # 5. Delete edges
+                    for edge_id in changes.edges.deleted:
+                        self.delete_edge(tx, edge_id)
+
+                # 6. Delete nodes
+                if changes.nodes:
+                    for node_id in changes.nodes.deleted:
+                        self.delete_node(tx, node_id, transform_id)
+
+            try:
+                # Execute transaction
+                session.execute_write(inner_save)
+
+                # Get updated graph state
+                updated_graph = self.get_graph_by_label(transform_id)
+
+                # Convert Node and Edge objects to dictionaries
+                nodes_dict = [
+                    {
+                        "id": node.id,
+                        "label": node.label,
+                        "type": node.type,
+                        "properties": node.properties
+                    } for node in updated_graph.nodes
+                ]
+                
+                edges_dict = [
+                    {
+                        "id": edge.id,
+                        "source": edge.source,
+                        "target": edge.target,
+                        "type": edge.type,
+                        "properties": edge.properties
+                    } for edge in updated_graph.edges
+                ]
+
+                return SaveGraphResponse(
+                    data={"nodes": nodes_dict, "edges": edges_dict},
+                    messages=messages if messages else None
+                )
+
+            except Exception as e:
+                traceback.print_exc()
+                logger.error(f"Error saving graph changes: {str(e)}")
+                raise
 
     def __del__(self):
         """Cleanup"""

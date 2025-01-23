@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional
 from app.schemas.graph import GraphResponse
+from app.schemas.graph_changes import SaveGraphRequest, SaveGraphResponse
 from app.services.graph_service import GraphService
 from app.config import get_settings
 from app.utils.logger import logger
@@ -75,4 +76,39 @@ def get_graph_by_label(
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving graph data: {str(e)}"
+        )
+
+@router.put("/{transform_id}",
+         response_model=SaveGraphResponse,
+         description="Save graph changes in a single transaction")
+def save_graph_changes(
+    transform_id: str,
+    changes: SaveGraphRequest,
+    graph_service: GraphService = Depends(get_staging_graph_service)
+) -> SaveGraphResponse:
+    """
+    Save bulk modifications to the graph
+    
+    Parameters:
+    - transform_id: Transformation ID
+    - changes: Batch of modifications to apply
+    
+    Returns:
+    - Updated graph data
+    - New version
+    - Warning/info messages
+    """
+    try:
+        staging_label = f"Staging_{transform_id}"
+        return graph_service.save_graph_changes(staging_label, changes)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error saving graph changes: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error saving changes: {str(e)}"
         )
