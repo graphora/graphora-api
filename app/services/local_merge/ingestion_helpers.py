@@ -74,7 +74,8 @@ class Neo4jIngestionGenerator:
                     MATCH (source:{source_info[1]}:{staging_label}), (target:{target_info[1]}:{staging_label})
                     WHERE source._uid_ = '{source_info[0]}'
                     AND target._uid_ = '{target_info[0]}'
-                    MERGE (source)-[:{edge.relationship}]->(target);"""
+                    MERGE (source)-[r:{edge.relationship}]->(target)
+                    ON CREATE SET r.{self.UID_FIELD} = '{uuid.uuid4()}';"""
                     statements.append(stmt)
 
     return statements
@@ -164,7 +165,7 @@ class Neo4jIngestionGenerator:
 
       create_stmt = f"MERGE (source)-[r:{relationship}]->(target)"
 
-      set_stmts = []
+      set_stmts = [f"ON CREATE SET r.{self.UID_FIELD} = '{uuid.uuid4()}'"]
       if properties:
           for key, value in properties.items():
               if value is not None:
@@ -248,7 +249,8 @@ class Neo4jIngestionGenerator:
     MATCH (n:{doc_metadata.type_}{staging_label})
     WHERE {match_props}
     MERGE (d)-[r:HAS]->(n)
-    SET r.section = '{doc_metadata.type_}';
+    SET r.section = '{doc_metadata.type_}',
+    r.{self.UID_FIELD} = '{uuid.uuid4()}';
     """
     statements.append(rel_stmt)
     # Create relationships to sections
@@ -264,7 +266,8 @@ class Neo4jIngestionGenerator:
             MATCH (n:{node.type_}{staging_label})
             WHERE {match_props}
             MERGE (d)-[r:HAS]->(n)
-            SET r.section = '{node.type_}';
+            SET r.section = '{node.type_}',
+            r.{self.UID_FIELD} = '{uuid.uuid4()}';
             """
             statements.append(rel_stmt)
 
