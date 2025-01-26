@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.ontology import router as ontology_router
 from app.api.transform import router as transform_router
 from app.api.graph import router as graph_router
+from app.api.merge import router as merge_router  # Add merge import
 from app.config import settings
 from app.utils.logger import logger
 
@@ -42,6 +43,7 @@ app.add_middleware(
 app.include_router(ontology_router)
 app.include_router(transform_router)
 app.include_router(graph_router)
+app.include_router(merge_router)
 
 if __name__ == "__main__":
     import uvicorn
