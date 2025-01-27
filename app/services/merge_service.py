@@ -1,107 +1,248 @@
-from typing import Dict, Optional, Any
+from typing import Dict
 import asyncio
 import logging
-from uu import Error
-from uuid import uuid4
 
-from app.services.websocket_manager import WebSocketManager
-from app.schemas.merge_events import MergeAnswer
-from app.services.global_merge.langraph import ERPipeline 
-from app.services.global_merge.global_db_connector import DBConnector
-from app.services.global_merge.staging_extractor import get_subgraph
-from app.services.ontology_validator import parse_and_validate_yaml
+from app.services.global_merge.langraph import ERPipeline
 from app.services.global_merge.human_review import HumanReviewQueue
+from app.services.global_merge.staging_extractor import get_subgraph
+from app.services.global_merge.global_db_connector import DBConnector
+from app.services.websocket_manager import WebSocketManager
 from app.schemas.global_merge import ReviewStatus
+from app.schemas.merge_events import MergeAnswer
 from app.config import settings
+from app.services.ontology_validator import parse_and_validate_yaml
+import asyncio
+import logging
+from fastapi import WebSocket
+from typing import List
 
 logger = logging.getLogger(__name__)
 
 class MergeService:
-    _instance = None
-    _lock = asyncio.Lock()
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            # Initialize instance attributes
-            cls._instance.active_merges = {}
-            cls._instance.ws_managers = {}
-            cls._instance.session_states = {}
-        return cls._instance
-
+    """Service for handling graph merges"""
+    
     def __init__(self):
-        # Skip initialization if already done
-        if hasattr(self, 'initialized'):
-            return
-        self.initialized = True
+        logger.info("Initializing MergeService instance")
         self.active_merges: Dict[str, asyncio.Task] = {}
-        self.ws_managers: Dict[str, WebSocketManager] = {}
         self.session_states: Dict[str, Dict] = {}
-
-    def set_websocket_manager(self, manager: WebSocketManager, session_id: str):
-        """Set the WebSocket manager for this service"""
-        self.ws_managers[session_id] = manager
-        if session_id in self.session_states:
-            self.session_states[session_id]['ws_ready'].set()
+        self.ws_managers: Dict[str, WebSocketManager] = {}
 
     async def start_merge(self, session_id: str, transform_id: str):
         """Start a new merge process"""
-        # Cancel any existing merge for this session
-        if session_id in self.active_merges:
-            await self.cancel_merge(session_id)
-
+        logger.info(f"Starting merge for session {session_id} with transform {transform_id}")
+        
         # Initialize session state
         self.session_states[session_id] = {
-            'transform_id': transform_id,
-            'ws_ready': asyncio.Event()
+            'ws_ready': asyncio.Event(),
+            'status': 'initializing'
         }
+        
+        # Create a new task for the merge process
+        task = asyncio.create_task(
+            self._run_merge(session_id, transform_id)
+        )
+        self.active_merges[session_id] = task
+        
+        # Set up error handling
+        task.add_done_callback(lambda t: self._handle_task_completion(session_id, t))
 
-        # Create and store the merge task
-        merge_task = asyncio.create_task(self._run_merge(session_id, transform_id))
-        self.active_merges[session_id] = merge_task
+    def _handle_task_completion(self, session_id: str, task: asyncio.Task):
+        """Handle completion of a merge task"""
+        try:
+            task.result()  # This will raise any exception that occurred
+        except asyncio.CancelledError:
+            logger.info(f"Merge task cancelled for session {session_id}")
+        except Exception as e:
+            logger.error(f"Error in merge task for session {session_id}: {str(e)}")
+        finally:
+            self._cleanup_session(session_id)
+
+    def _cleanup_session(self, session_id: str):
+        """Clean up session resources"""
+        if session_id in self.active_merges:
+            del self.active_merges[session_id]
+        if session_id in self.session_states:
+            del self.session_states[session_id]
+        if session_id in self.ws_managers:
+            del self.ws_managers[session_id]
 
     async def cancel_merge(self, session_id: str):
         """Cancel an ongoing merge process"""
+        logger.info(f"Cancelling merge for session {session_id}")
+        
+        # Cancel the task if it exists
         if session_id in self.active_merges:
-            self.active_merges[session_id].cancel()
-            try:
-                await self.active_merges[session_id]
-            except asyncio.CancelledError:
-                pass
-            finally:
-                del self.active_merges[session_id]
-                if session_id in self.session_states:
-                    del self.session_states[session_id]
-                if session_id in self.ws_managers:
-                    del self.ws_managers[session_id]
+            task = self.active_merges[session_id]
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        
+        # Clean up session resources
+        self._cleanup_session(session_id)
+        
+        # Close WebSocket if it exists
+        if session_id in self.ws_managers:
+            await self.ws_managers[session_id].close()
 
     async def handle_answer(self, answer: MergeAnswer):
         """Handle an answer to a merge question"""
-        # Implementation needed
-        pass
+        logger.info(f"Received answer for session {answer.session_id}: {answer.selected_option}")
+        
+        if answer.session_id not in self.ws_managers:
+            logger.error(f"No WebSocket manager found for session {answer.session_id}")
+            return
+            
+        ws_manager = self.ws_managers[answer.session_id]
+        await ws_manager.handle_answer(answer)
+
+    async def handle_websocket_connection(self, session_id: str, websocket: WebSocket):
+        """Handle a new WebSocket connection"""
+        logger.info(f"New WebSocket connection for session {session_id}")
+        logger.debug(f"Current state - Sessions: {list(self.session_states.keys())}, Managers: {list(self.ws_managers.keys())}")
+        
+        # Create WebSocket manager if it doesn't exist
+        if session_id not in self.ws_managers:
+            self.ws_managers[session_id] = WebSocketManager()
+            
+        # Add the connection
+        self.ws_managers[session_id].add_connection(websocket)
+        
+        # Initialize session state
+        self.session_states[session_id] = {
+            'ws_ready': True,
+            'status': 'connected'
+        }
+        
+        logger.info(f"WebSocket marked as ready for session {session_id}")
+        logger.debug(f"Updated state - Sessions: {list(self.session_states.keys())}, Managers: {list(self.ws_managers.keys())}")
+        
+        try:
+            while True:
+                # Wait for messages from the client
+                message = await websocket.receive_json()
+                
+                # Handle different message types
+                if message.get("type") == "ANSWER":
+                    answer = MergeAnswer(**message.get("payload", {}))
+                    await self.handle_answer(answer)
+                    
+        except WebSocketDisconnect:
+            logger.info(f"WebSocket disconnected for session {session_id}")
+        except Exception as e:
+            logger.error(f"Error handling WebSocket connection: {str(e)}")
+            if websocket.client_state.CONNECTED:
+                await websocket.send_json({
+                    "type": "ERROR",
+                    "payload": {"message": str(e)}
+                })
+        finally:
+            # Clean up if this was the last connection
+            if session_id in self.ws_managers:
+                self.ws_managers[session_id].remove_connection(websocket)
+                if not self.ws_managers[session_id].active_connections:
+                    await self.cancel_merge(session_id)
+
+    def is_websocket_ready(self, session_id: str) -> bool:
+        """Check if WebSocket is ready for a session"""
+        in_states = session_id in self.session_states
+        in_managers = session_id in self.ws_managers
+        has_connections = in_managers and self.ws_managers[session_id].has_active_connections
+        is_ready = in_states and self.session_states[session_id].get('ws_ready', False)
+        
+        logger.info(f"WebSocket ready check for {session_id}:")
+        logger.info(f"- In session states: {in_states}")
+        logger.info(f"- In WS managers: {in_managers}")
+        logger.info(f"- Has active connections: {has_connections}")
+        logger.info(f"- Is marked ready: {is_ready}")
+        
+        return in_states and in_managers and has_connections and is_ready
+
+    def _format_node_details(self, node: Dict) -> str:
+        """Format node details in a user-friendly way"""
+        props = node.get('properties', {})
+        details = []
+        
+        if props.get('name'):
+            details.append(f"Name: {props['name']}")
+        if props.get('description'):
+            details.append(f"Description: {props['description']}")
+            
+        # Add other relevant properties
+        for key, value in props.items():
+            if key not in ['name', 'description', '_merged_ids'] and not key.startswith('_'):
+                details.append(f"{key.replace('_', ' ').title()}: {value}")
+                
+        return '\n'.join(details)
+
+    def _format_change_message(self, change: Dict) -> str:
+        """Format a single change in a user-friendly way"""
+        node = change.get('node', {})
+        change_type = change.get('type', '').upper()
+        node_type = node.get('labels', ['Unknown'])[0]
+        
+        icon = {
+            'CREATE': '➕',
+            'UPDATE': '✏️',
+            'DELETE': '🗑️'
+        }.get(change_type, '🔹')
+        
+        return f"{icon} {change_type} {node_type}:\n{self._format_node_details(node)}"
+
+    async def _handle_review(self, session_id: str, review, ws_manager, review_queue):
+        """Handle a single review"""
+        try:
+            # Assign review
+            await review_queue.assign_review(review.id, "system")
+            
+            # Format review message
+            if hasattr(review, 'changes') and isinstance(review.changes, list):
+                changes_text = "\n\n".join(self._format_change_message(change) for change in review.changes)
+                review_msg = f"📋 Please review the following changes:\n\n{changes_text}"
+            else:
+                node = review.staging_node
+                node_type = node.labels[0] if node.labels else "Unknown"
+                props = node.properties if hasattr(node, 'properties') else {}
+                review_msg = f"📋 Review changes for {node_type}:\n{self._format_node_details({'properties': props})}"
+            
+            # Send question
+            await ws_manager.send_question(
+                session_id,
+                question_id=review.id,
+                content=review_msg,
+                options=[
+                    {"id": "approved", "label": "✅ Approve Changes"},
+                    {"id": "rejected", "label": "❌ Reject Changes"},
+                    {"id": "modify", "label": "✏️ Modify Changes"}
+                ]
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing review {review.id}: {str(e)}")
+            await ws_manager.send_error(session_id, f"Error processing review: {str(e)}")
+            raise
 
     async def _run_merge(self, session_id: str, transform_id: str):
         """Run the merge process"""
         try:
-            # Wait for WebSocket connection to be ready
-            try:
-                await asyncio.wait_for(self.session_states[session_id]['ws_ready'].wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.error(f"WebSocket connection not ready for session {session_id}")
-                return
-            except KeyError:
-                logger.error(f"Session state not found for session {session_id}")
-                return
-
+            # Get WebSocket manager
             ws_manager = self.ws_managers.get(session_id)
             if not ws_manager:
-                raise RuntimeError("WebSocket manager not initialized")
+                logger.error(f"WebSocket manager not found for session {session_id}")
+                return
+
+            # Wait for WebSocket connection to be ready
+            if not self.is_websocket_ready(session_id):
+                logger.error(f"WebSocket connection not ready for session {session_id}")
+                return
 
             # Send initial progress
             await ws_manager.send_progress(
                 session_id,
                 progress=0,
-                current_step="Starting merge process"
+                current_step="Initializing merge process"
             )
             
             try:
@@ -122,9 +263,15 @@ class MergeService:
             # Initialize pipeline components
             prod_db_conn = DBConnector(settings.NEO4J_URI, settings.NEO4J_PASSWORD)
             review_queue = HumanReviewQueue()
-            pipeline = ERPipeline(prod_db_conn, review_queue, ontology_dict)
+            pipeline = ERPipeline(
+                prod_db_conn, 
+                review_queue, 
+                ontology_dict,
+                ws_manager,
+                session_id
+            )
             
-            # Get nodes from source graph using existing implementation
+            # Get nodes from source graph
             nodes, _ = get_subgraph(transform_id)
             if not nodes:
                 raise ValueError(f"No nodes found in graph {transform_id}")
@@ -153,29 +300,11 @@ class MergeService:
                 if session_id not in self.active_merges:
                     return
                     
-                # Assign the review to system first
-                await review_queue.assign_review(review.id, "system")
-                
-                await ws_manager.send_question(
-                    session_id,
-                    question_id=review.id,
-                    content=f"Review required for node {review.staging_node.id}",
-                    options=[
-                        {"id": "accept", "label": "Accept changes"},
-                        {"id": "reject", "label": "Reject changes"},
-                        {"id": "modify", "label": "Modify changes"}
-                    ]
-                )
-                
-                # For now, we'll auto-accept after a delay
-                # This should be replaced with actual user interaction handling
-                await asyncio.sleep(1)
-                await review_queue.submit_review(
-                    review.id,
-                    "system",
-                    ReviewStatus.APPROVED
-                )
-            
+                try:
+                    await self._handle_review(session_id, review, ws_manager, review_queue)
+                except Exception as e:
+                    logger.error(f"Error handling review: {str(e)}")
+                    continue
             # Final progress update
             await ws_manager.send_progress(
                 session_id,
@@ -200,3 +329,9 @@ class MergeService:
                 del self.active_merges[session_id]
                 if session_id in self.session_states:
                     del self.session_states[session_id]
+
+    async def set_websocket_manager(self, manager: WebSocketManager, session_id: str):
+        """Set the WebSocket manager for this service"""
+        self.ws_managers[session_id] = manager
+        if session_id in self.session_states:
+            self.session_states[session_id]['ws_ready'].set()

@@ -1,4 +1,3 @@
-
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Dict, Optional, Any
 from enum import Enum
@@ -31,17 +30,23 @@ class ReviewStatus(Enum):
     MODIFIED = "modified"
 
 class ReviewItem(BaseModel):
+    """Model for review queue items"""
     id: str  # Review item ID
     staging_node: DbNode
     prod_node_id: Optional[str]
     issues: List[str]
     status: ReviewStatus
     confidence: float
+    changes: List[Dict]
+    content: str
     assigned_to: Optional[str] = None
     reviewer_notes: Optional[str] = None
-    created_at: datetime = datetime.now()
-    updated_at: datetime = datetime.now()
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
 
+    model_config = {
+        "arbitrary_types_allowed": True
+    }
 
 class ResolutionStatus(str, Enum):
     NEW = "new"

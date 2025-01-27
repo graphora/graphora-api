@@ -7,39 +7,105 @@ from app.services.global_merge.agents.disambiguation import DisambiguationAgent
 from app.services.global_merge.agents.property_conflict import PropertyConflictAgent
 from app.services.global_merge.agents.human_review import HumanReviewAgent
 from app.services.global_merge.agents.graph_persistence import GraphPersistenceAgent
+from app.services.websocket_manager import WebSocketManager
 from app.config import settings
 from typing import List, Dict, Any, Callable, Awaitable, Union
 import asyncio
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 
 class ERPipeline:
     """Main Entity Resolution Pipeline"""
-
+    
     def __init__(self, prod_db: DBConnector, 
-                 review_queue: HumanReviewQueue, ontology: dict):
+                 review_queue: HumanReviewQueue, 
+                 ontology: dict,
+                 ws_manager: WebSocketManager = None,
+                 session_id: str = None):
         self.prod_db = prod_db
         self.review_queue = review_queue
         self.ontology = ontology
-
+        self.ws_manager = ws_manager
+        self.session_id = session_id
+        
         # Initialize agents
         self.disambiguation_agent = DisambiguationAgent(prod_db, review_queue, ontology)
         self.property_agent = PropertyConflictAgent(prod_db, review_queue)
         self.review_agent = HumanReviewAgent(review_queue)
-        self.persistence_agent = GraphPersistenceAgent(prod_db)
+        self.persistence_agent = GraphPersistenceAgent(prod_db, ws_manager, session_id)
+
+    def _format_node_details(self, node: Dict) -> str:
+        """Format node details in a user-friendly way"""
+        props = node.get('properties', {})
+        details = []
+        
+        if props.get('name'):
+            details.append(f"Name: {props['name']}")
+        if props.get('description'):
+            details.append(f"Description: {props['description']}")
+            
+        # Add other relevant properties
+        for key, value in props.items():
+            if key not in ['name', 'description', '_merged_ids'] and not key.startswith('_'):
+                details.append(f"{key.replace('_', ' ').title()}: {value}")
+                
+        return '\n'.join(details)
+
+    def _format_change_message(self, change: Dict) -> str:
+        """Format a single change in a user-friendly way"""
+        node = change.get('node', {})
+        change_type = change.get('type', '').upper()
+        node_type = node.get('labels', ['Unknown'])[0]
+        
+        icon = {
+            'CREATE': '➕',
+            'UPDATE': '✏️',
+            'DELETE': '🗑️'
+        }.get(change_type, '🔹')
+        
+        return f"{icon} {change_type} {node_type}:\n{self._format_node_details(node)}"
 
     async def process_nodes(self, nodes: List[DbNode]) -> ERState:
         """Process a batch of nodes through the pipeline"""
         try:
+            # Format initial changes for review
+            changes = []
+            for node in nodes:
+                changes.append({
+                    "type": "create",
+                    "node": {
+                        "id": node.id,
+                        "labels": node.labels,
+                        "properties": node.properties
+                    }
+                })
+            
+            # Format review message
+            changes_text = "\n\n".join(self._format_change_message(change) for change in changes)
+            review_msg = f"📋 Please review the following changes:\n\n{changes_text}"
+            
+            # Send initial review request
+            if self.ws_manager and self.session_id:
+                await self.ws_manager.send_question(
+                    self.session_id,
+                    str(uuid.uuid4()),
+                    content=review_msg,
+                    options=[
+                        {"id": "approved", "label": "✅ Approve Changes"},
+                        {"id": "rejected", "label": "❌ Reject Changes"}
+                    ]
+                )
+            
             # Initialize state
             state = ERState(staging_nodes=nodes)
             
             # Run disambiguation
             state = self.disambiguation_agent.run(state)
             
-            # Run property resolution
-            state = self.property_agent.run(state)
+            # Run property resolution (async)
+            state = await self.property_agent.run(state)
             
             # Run human review (async)
             state = await self.review_agent.run(state)
