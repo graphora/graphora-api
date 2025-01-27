@@ -9,17 +9,87 @@ class HumanReviewQueue:
         self.queue: Dict[str, ReviewItem] = {}
         self._lock = asyncio.Lock()
 
+    def _format_node_changes(self, node: Dict) -> str:
+        """Format node details in a user-friendly way"""
+        props = node.get('properties', {})
+        details = []
+        
+        if props.get('name'):
+            details.append(f"Name: {props['name']}")
+        if props.get('description'):
+            details.append(f"Description: {props['description']}")
+            
+        # Add other relevant properties
+        for key, value in props.items():
+            if key not in ['name', 'description', '_merged_ids'] and not key.startswith('_'):
+                details.append(f"{key.replace('_', ' ').title()}: {value}")
+                
+        return '\n'.join(details)
+
+    def _format_change_message(self, change: Dict) -> str:
+        """Format a single change in a user-friendly way"""
+        node = change.get('node', {})
+        change_type = change.get('type', '').upper()
+        node_type = node.get('labels', ['Unknown'])[0]
+        
+        icon = {
+            'CREATE': '➕',
+            'UPDATE': '✏️',
+            'DELETE': '🗑️'
+        }.get(change_type, '🔹')
+        
+        return f"{icon} {change_type} {node_type}:\n{self._format_node_changes(node)}"
+
     async def enqueue(self, resolution_result: NodeResolutionResult) -> str:
         """Add a new item to the review queue"""
         async with self._lock:
             review_id = str(uuid.uuid4())
+            
+            # Format changes for review
+            changes = []
+            
+            # Add staging node change
+            node_type = resolution_result.staging_node.labels[0] if resolution_result.staging_node.labels else "Unknown"
+            
+            if resolution_result.prod_node_id:
+                # This is an update
+                changes.append({
+                    "type": "update",
+                    "node": {
+                        "labels": resolution_result.staging_node.labels,
+                        "properties": resolution_result.staging_node.properties
+                    },
+                    "prod_id": resolution_result.prod_node_id
+                })
+            else:
+                # This is a create
+                changes.append({
+                    "type": "create",
+                    "node": {
+                        "labels": resolution_result.staging_node.labels,
+                        "properties": resolution_result.staging_node.properties
+                    }
+                })
+            
+            # Format review message
+            changes_text = "\n\n".join(self._format_change_message(change) for change in changes)
+            review_msg = f"📋 Please review the following changes:\n\n{changes_text}"
+            
+            if resolution_result.issues:
+                review_msg += "\n\n⚠️ Issues to review:\n" + "\n".join(f"- {issue}" for issue in resolution_result.issues)
+            
+            if resolution_result.confidence < 0.85:
+                review_msg += f"\n\n⚠️ Low confidence score: {resolution_result.confidence:.2f}"
+            
             review_item = ReviewItem(
                 id=review_id,
                 staging_node=resolution_result.staging_node,
                 prod_node_id=resolution_result.prod_node_id,
                 issues=resolution_result.issues,
                 status=ReviewStatus.PENDING,
-                confidence=resolution_result.confidence
+                confidence=resolution_result.confidence,
+                changes=changes,
+                content=review_msg
             )
             self.queue[review_id] = review_item
             return review_id

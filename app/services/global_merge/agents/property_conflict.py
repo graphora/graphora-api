@@ -54,10 +54,10 @@ class PropertyConflictAgent:
             print(f"Error checking conflicts: {str(e)}")
             return [f"Error checking conflicts: {str(e)}"]
 
-    def run(self, state: ERState) -> ERState:
-        """Check for property conflicts in matched nodes"""
-        print(f"Starting property conflict resolution for {len(state.processed_nodes)} nodes")
-
+    async def run(self, state: ERState) -> ERState:
+        """Run property conflict resolution"""
+        print(f"\nStarting property conflict resolution for {len(state.processed_nodes)} nodes")
+        
         processed_count = 0
         conflict_count = 0
         review_count = 0
@@ -77,7 +77,7 @@ class PropertyConflictAgent:
 
                         if result.confidence < 0.85:  # Configurable threshold
                             result.status = ResolutionStatus.NEEDS_REVIEW
-                            self.review_queue.enqueue(result)
+                            await self.review_queue.enqueue(result)
                             review_count += 1
 
                     processed_count += 1

@@ -1,86 +1,96 @@
-from typing import Dict, Set
 from fastapi import WebSocket
 import logging
 from datetime import datetime
+from typing import Dict, Set
 
 logger = logging.getLogger(__name__)
 
 class WebSocketManager:
     def __init__(self):
-        self.active_connections: Dict[str, Set[WebSocket]] = {}
-        
-    async def connect(self, websocket: WebSocket, session_id: str):
-        """Connect a new WebSocket client"""
-        await websocket.accept()
-        if session_id not in self.active_connections:
-            self.active_connections[session_id] = set()
-        self.active_connections[session_id].add(websocket)
-        logger.info(f"New WebSocket connection for session {session_id}")
-        
-    def disconnect(self, websocket: WebSocket, session_id: str):
-        """Disconnect a WebSocket client"""
-        if session_id in self.active_connections:
-            self.active_connections[session_id].discard(websocket)
-            if not self.active_connections[session_id]:
-                del self.active_connections[session_id]
-        logger.info(f"WebSocket disconnected for session {session_id}")
-        
-    async def broadcast_to_session(self, message: dict, session_id: str):
-        """Broadcast a message to all connections in a session"""
-        if session_id not in self.active_connections:
-            return
-            
-        # Add timestamp if not present
-        if 'timestamp' not in message:
-            message['timestamp'] = datetime.utcnow().isoformat()
-            
-        dead_connections = set()
-        for connection in self.active_connections[session_id]:
+        self.active_connections: Dict[int, WebSocket] = {}
+        self.pending_questions = {}
+        self.answers = {}
+
+    def add_connection(self, websocket: WebSocket):
+        """Add a WebSocket connection"""
+        self.active_connections[id(websocket)] = websocket
+        logger.debug(f"Added WebSocket connection. Active connections: {len(self.active_connections)}")
+
+    def remove_connection(self, websocket: WebSocket):
+        """Remove a WebSocket connection"""
+        if id(websocket) in self.active_connections:
+            del self.active_connections[id(websocket)]
+            logger.debug(f"Removed WebSocket connection. Active connections: {len(self.active_connections)}")
+
+    @property
+    def has_active_connections(self) -> bool:
+        """Check if there are any active connections"""
+        return len(self.active_connections) > 0
+
+    async def send_progress(self, session_id: str, progress: int, current_step: str):
+        """Send progress update to all connected clients"""
+        message = {
+            "type": "PROGRESS",
+            "payload": {
+                "progress": progress,
+                "currentStep": current_step
+            }
+        }
+        await self._broadcast(message)
+
+    async def send_question(self, session_id: str, question_id: str, content: str, options: list):
+        """Send a question to all connected clients"""
+        message = {
+            "type": "QUESTION",
+            "payload": {
+                "questionId": question_id,
+                "content": content,
+                "options": options
+            }
+        }
+        self.pending_questions[question_id] = True
+        await self._broadcast(message)
+
+    async def send_error(self, session_id: str, error_message: str):
+        """Send an error message to all connected clients"""
+        message = {
+            "type": "ERROR",
+            "payload": {
+                "message": error_message
+            }
+        }
+        await self._broadcast(message)
+
+    async def _broadcast(self, message):
+        """Send a message to all connected clients"""
+        for connection in self.active_connections.values():
             try:
                 await connection.send_json(message)
             except Exception as e:
-                logger.error(f"Error sending message: {str(e)}")
-                dead_connections.add(connection)
-                
-        # Clean up dead connections
-        for dead in dead_connections:
-            self.active_connections[session_id].discard(dead)
+                logger.error(f"Error broadcasting message: {str(e)}")
+
+    async def wait_for_answer(self, question_id: str, timeout: float = 30.0) -> str:
+        """Wait for an answer to a specific question"""
+        import asyncio
+        
+        start_time = datetime.now()
+        while (datetime.now() - start_time).total_seconds() < timeout:
+            if question_id in self.answers:
+                answer = self.answers[question_id]
+                del self.answers[question_id]
+                if question_id in self.pending_questions:
+                    del self.pending_questions[question_id]
+                return answer
+            await asyncio.sleep(0.1)
             
-    async def send_progress(self, session_id: str, progress: float, current_step: str, graph_data=None):
-        """Send a progress update event"""
-        await self.broadcast_to_session({
-            "type": "PROGRESS",
-            "payload": {
-                "data": {
-                    "progress": progress,
-                    "currentStep": current_step,
-                    "graphData": graph_data
-                }
-            }
-        }, session_id)
-        
-    async def send_question(self, session_id: str, question_id: str, content: str, 
-                          options: list, preview_graph_data=None):
-        """Send a question event"""
-        await self.broadcast_to_session({
-            "type": "QUESTION",
-            "payload": {
-                "data": {
-                    "questionId": question_id,
-                    "content": content,
-                    "options": options,
-                    "previewGraphData": preview_graph_data
-                }
-            }
-        }, session_id)
-        
-    async def send_error(self, session_id: str, error_message: str):
-        """Send an error event"""
-        await self.broadcast_to_session({
-            "type": "ERROR",
-            "payload": {
-                "data": {
-                    "message": error_message
-                }
-            }
-        }, session_id)
+        # If we timeout, clean up
+        if question_id in self.pending_questions:
+            del self.pending_questions[question_id]
+        return None
+
+    async def handle_answer(self, answer):
+        """Handle an answer from a client"""
+        logger.info(f"Received answer for question {answer.question_id}: {answer.selected_option}")
+        self.answers[answer.question_id] = answer.selected_option
+        if answer.question_id in self.pending_questions:
+            del self.pending_questions[answer.question_id]

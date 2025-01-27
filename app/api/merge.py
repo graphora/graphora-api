@@ -1,8 +1,9 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
+from starlette.websockets import WebSocketDisconnect as StarletteWebSocketDisconnect
 from typing import Dict, Any
-from uuid import uuid4
 import logging
 from pydantic import BaseModel
+import asyncio
 
 from app.services.websocket_manager import WebSocketManager
 from app.schemas.merge_events import MergeAnswer
@@ -10,8 +11,6 @@ from app.services.merge_service import MergeService
 from app.dependencies import get_merge_service
 
 router = APIRouter(prefix="/api/v1/merge", tags=["Merge"])
-ws_manager = WebSocketManager()
-
 logger = logging.getLogger(__name__)
 
 class StartMergeRequest(BaseModel):
@@ -21,36 +20,44 @@ class StartMergeRequest(BaseModel):
 async def merge_websocket(
     websocket: WebSocket,
     session_id: str,
-    transform_id: str | None = None,
     merge_service: MergeService = Depends(get_merge_service)
 ):
     """WebSocket endpoint for merge process"""
     try:
-        # Connect the WebSocket
-        await ws_manager.connect(websocket, session_id)
+        await websocket.accept()
+        logger.info(f"WebSocket connection accepted for session {session_id}")
+        await merge_service.handle_websocket_connection(session_id, websocket)
         
-        # Associate the WebSocket manager with the merge service
-        merge_service.set_websocket_manager(ws_manager, session_id)
-        
-        try:
-            while True:
-                # Wait for messages from the client
-                message = await websocket.receive_json()
-                
-                # Handle different message types
-                if message.get("type") == "ANSWER":
-                    answer = MergeAnswer(**message.get("payload", {}))
+        while True:
+            try:
+                data = await websocket.receive_json()
+                logger.debug(f"Received WebSocket message: {data}")
+                if data.get("type") == "ANSWER":
+                    answer = MergeAnswer(**data.get("payload", {}))
                     await merge_service.handle_answer(answer)
-                    
-        except WebSocketDisconnect:
-            logger.info(f"WebSocket disconnected for session {session_id}")
-        except Exception as e:
-            logger.error(f"Error in WebSocket connection: {str(e)}")
-            await ws_manager.send_error(session_id, str(e))
-            
+            except StarletteWebSocketDisconnect:
+                logger.info(f"WebSocket disconnected for session {session_id}")
+                break
+            except Exception as e:
+                logger.error(f"Error handling WebSocket message: {str(e)}")
+                if not websocket.client_state.DISCONNECTED:
+                    await websocket.send_json({
+                        "type": "ERROR",
+                        "payload": {"message": str(e)}
+                    })
+                break
+                
+    except StarletteWebSocketDisconnect:
+        logger.info(f"WebSocket disconnected during setup for session {session_id}")
+    except Exception as e:
+        logger.error(f"Error in WebSocket connection: {str(e)}")
     finally:
-        ws_manager.disconnect(websocket, session_id)
-        
+        logger.info(f"Cleaning up WebSocket for session {session_id}")
+        if session_id in merge_service.ws_managers:
+            merge_service.ws_managers[session_id].remove_connection(websocket)
+            if not merge_service.ws_managers[session_id].active_connections:
+                await merge_service.cancel_merge(session_id)
+
 @router.post("/{session_id}/start", response_model=Dict[str, str])
 async def start_merge(
     session_id: str,
@@ -58,8 +65,26 @@ async def start_merge(
     merge_service: MergeService = Depends(get_merge_service)
 ):
     """Start a new merge process"""
+    # Wait for WebSocket connection with retries
+    max_retries = 3
+    retry_delay = 1.0  # seconds
+    
+    for attempt in range(max_retries):
+        if merge_service.is_websocket_ready(session_id):
+            break
+            
+        if attempt < max_retries - 1:
+            logger.info(f"Waiting for WebSocket connection, attempt {attempt + 1}/{max_retries}")
+            await asyncio.sleep(retry_delay)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"WebSocket connection not established after {max_retries} attempts. Please ensure WebSocket is connected before starting merge."
+            )
+    
+    logger.info(f"Starting merge for session {session_id}")
     await merge_service.start_merge(session_id, f"Staging_{request.transform_id}")
-    return {"sessionId": session_id}
+    return {"sessionId": session_id, "status": "started"}
 
 @router.post("/{session_id}/cancel", response_model=Dict[str, str])
 async def cancel_merge(

@@ -1,19 +1,51 @@
 from app.schemas.global_merge import ERState, DbNode, DbEdge
 from app.services.global_merge.global_db_connector import DBConnector
+from app.services.websocket_manager import WebSocketManager
 import logging
 from typing import List, Dict, Any
 import uuid
-import asyncio
-import websockets
+import json
 
 logger = logging.getLogger(__name__)
 
 class GraphPersistenceAgent:
     """Agent for persisting merged nodes to the production graph"""
 
-    def __init__(self, prod_db: DBConnector):
+    def __init__(self, prod_db: DBConnector, ws_manager: WebSocketManager = None, session_id: str = None):
         self.prod_db = prod_db
-        self.websocket = None
+        self.ws_manager = ws_manager
+        self.session_id = session_id
+
+    def _format_node_details(self, node: Dict) -> str:
+        """Format node details in a user-friendly way"""
+        props = node.get('properties', {})
+        details = []
+        
+        if props.get('name'):
+            details.append(f"Name: {props['name']}")
+        if props.get('description'):
+            details.append(f"Description: {props['description']}")
+            
+        # Add other relevant properties
+        for key, value in props.items():
+            if key not in ['name', 'description', '_merged_ids'] and not key.startswith('_'):
+                details.append(f"{key.replace('_', ' ').title()}: {value}")
+                
+        return '\n'.join(details)
+
+    def _format_change_message(self, change: Dict) -> str:
+        """Format a single change in a user-friendly way"""
+        node = change.get('node', {})
+        change_type = change.get('type', '').upper()
+        node_type = node.get('labels', ['Unknown'])[0]
+        
+        icon = {
+            'CREATE': '➕',
+            'UPDATE': '✏️',
+            'DELETE': '🗑️'
+        }.get(change_type, '🔹')
+        
+        return f"{icon} {change_type} {node_type}:\n{self._format_node_details(node)}"
 
     async def run(self, state: ERState) -> ERState:
         """Run the persistence workflow"""
@@ -30,15 +62,28 @@ class GraphPersistenceAgent:
             for change in changes:
                 logger.info(f"- {change}")
             
-            # Send changes to WebSocket for user review
-            await self._send_changes_to_websocket(changes)
-            
-            # Wait for user confirmation
-            confirmation = await self._wait_for_user_confirmation()
-            
-            if confirmation != 'yes':
-                logger.info("User cancelled persistence")
-                return state
+            if self.ws_manager and self.session_id:
+                # Format review message
+                changes_text = "\n\n".join(self._format_change_message(change) for change in changes)
+                review_msg = f"📋 Please review the following changes:\n\n{changes_text}"
+                
+                # Send changes to WebSocket for user review
+                await self.ws_manager.send_question(
+                    self.session_id,
+                    question_id=str(uuid.uuid4()),
+                    content=review_msg,
+                    options=[
+                        {"id": "approved", "label": "✅ Approve Changes"},
+                        {"id": "rejected", "label": "❌ Reject Changes"}
+                    ]
+                )
+                
+                # Wait for user confirmation
+                confirmation = await self._wait_for_user_confirmation()
+                
+                if confirmation != 'approved':
+                    logger.info("User cancelled persistence")
+                    return state
             
             # Apply changes to production graph
             self._apply_changes(changes)
@@ -59,13 +104,13 @@ class GraphPersistenceAgent:
                 # New node to be created
                 changes.append({
                     'type': 'create',
-                    'node': result.staging_node
+                    'node': result.staging_node.model_dump()
                 })
             else:
                 # Existing node to be updated
                 changes.append({
                     'type': 'update',
-                    'node': result.staging_node,
+                    'node': result.staging_node.model_dump(),
                     'prod_id': result.prod_node_id
                 })
         
@@ -73,27 +118,37 @@ class GraphPersistenceAgent:
 
     async def _send_changes_to_websocket(self, changes: List[Dict[str, Any]]):
         """Send changes to WebSocket for user review"""
-        if not self.websocket:
-            self.websocket = await websockets.connect("ws://localhost:8765")
-        
-        await self.websocket.send(changes)
+        if not self.ws_manager or not self.session_id:
+            logger.warning("WebSocket manager or session_id not available, skipping user confirmation")
+            return
+
+        await self.ws_manager.send_question(
+            self.session_id,
+            question_id=str(uuid.uuid4()),
+            content=f"Review and confirm graph changes:\n{json.dumps(changes, indent=2)}",
+            options=[
+                {"id": "approved", "label": "Approve Changes"},
+                {"id": "rejected", "label": "Reject Changes"}
+            ]
+        )
 
     async def _wait_for_user_confirmation(self) -> str:
         """Wait for user confirmation via WebSocket"""
-        if not self.websocket:
-            self.websocket = await websockets.connect("ws://localhost:8765")
-        
-        confirmation = await self.websocket.recv()
-        return confirmation
+        if not self.ws_manager or not self.session_id:
+            logger.warning("WebSocket manager or session_id not available, skipping user confirmation")
+            return 'approved'  # Auto-approve if no WebSocket
+
+        response = await self.ws_manager.wait_for_response(self.session_id)
+        return response.get('selected_option', 'rejected')
 
     def _apply_changes(self, changes: List[Dict[str, Any]]):
         """Apply the collected changes to the production graph"""
         for change in changes:
             try:
                 if change['type'] == 'create':
-                    self._create_node(change['node'])
+                    self._create_node(DbNode(**change['node']))
                 elif change['type'] == 'update':
-                    self._update_node(change['node'], change['prod_id'])
+                    self._update_node(DbNode(**change['node']), change['prod_id'])
             except Exception as e:
                 logger.error(f"Error applying change {change}: {str(e)}")
                 raise
