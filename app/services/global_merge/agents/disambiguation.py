@@ -169,7 +169,9 @@ class DisambiguationAgent:
                         staging_node=node,
                         prod_node_id=None,
                         confidence=1.0,
-                        issues=[]
+                        issues=[],
+                        conflicts=[],
+                        suggested_resolution=None
                     )
                     state.new_nodes.append(node)
 
@@ -190,7 +192,9 @@ class DisambiguationAgent:
                             staging_node=node,
                             prod_node_id=best_match['id'],
                             confidence=similarity_score,
-                            issues=[]
+                            issues=[],
+                            conflicts=[],
+                            suggested_resolution=None
                         )
                         state.updated_nodes.append({
                             "staging": node,
@@ -199,6 +203,10 @@ class DisambiguationAgent:
 
                     else:
                         # Create conflict with suggestions
+                        suggestions = self._generate_suggestions(
+                            node, similar_nodes, similarity_score, differences
+                        )
+                        
                         conflict = NodeConflict(
                             conflict_type=(
                                 ConflictType.MULTIPLE_MATCHES if len(similar_nodes) > 1
@@ -210,9 +218,7 @@ class DisambiguationAgent:
                             description=self._get_conflict_description(
                                 similar_nodes, similarity_score, differences
                             ),
-                            suggestions=self._generate_suggestions(
-                                node, similar_nodes, similarity_score, differences
-                            ),
+                            suggestions=suggestions,
                             properties_affected=affected_props
                         )
 
@@ -222,7 +228,7 @@ class DisambiguationAgent:
                             prod_node_id=best_match['id'],
                             confidence=similarity_score,
                             conflicts=[conflict],
-                            suggested_resolution=conflict.suggestions[0] if conflict.suggestions else None
+                            suggested_resolution=suggestions[0] if suggestions else None
                         )
 
                         state.add_conflict(conflict)
