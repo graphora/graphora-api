@@ -95,7 +95,7 @@ async def cancel_merge(
     await merge_service.cancel_merge(session_id)
     return {"status": "cancelled"}
 
-@router.get("/merge/{session_id}/visualization")
+@router.get("/{session_id}/visualization")
 async def get_merge_visualization(session_id: str, merge_service: MergeService = Depends(get_merge_service)):
     """Get visualization data for merge changes and conflicts"""
     try:

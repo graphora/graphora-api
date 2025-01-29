@@ -1,4 +1,4 @@
-from app.schemas.global_merge import ERState, DbNode, DbEdge
+from app.schemas.global_merge import ERState, DbNode, DbEdge, ResolutionStatus
 from app.services.global_merge.global_db_connector import DBConnector
 from app.services.websocket_manager import WebSocketManager
 import logging

@@ -158,6 +158,84 @@ class ERState(BaseModel):
             "conflicts": [conflict.dict() for conflict in self.conflicts]
         }
 
+    def get_visualization_data_from_state(self) -> Dict:
+        """Get data for visualizing the merge state"""
+        nodes = []
+        edges = []
+        node_map = {}  # Keep track of node IDs we've added
+        
+        # Add staging nodes
+        for node in self.staging_nodes:
+            node_data = {
+                "id": node.id,
+                "labels": node.labels,
+                "properties": node.properties,
+                "type": "staging",
+                "status": "new"  # Default status
+            }
+            
+            # Update status based on resolution
+            for result in self.processed_nodes:
+                if result.staging_node.id == node.id:
+                    node_data["status"] = result.status.value
+                    if result.prod_node_id:
+                        # Add edge to production node
+                        edges.append({
+                            "source": node.id,
+                            "target": result.prod_node_id,
+                            "type": "resolution",
+                            "status": result.status.value
+                        })
+                    break
+            
+            nodes.append(node_data)
+            node_map[node.id] = True
+        
+        # Add production nodes that are involved in resolutions
+        for result in self.processed_nodes:
+            if result.prod_node_id and result.prod_node_id not in node_map:
+                # Get node data from updated_nodes if available
+                prod_node = None
+                for update in self.updated_nodes:
+                    if update["prod"]["id"] == result.prod_node_id:
+                        prod_node = update["prod"]
+                        break
+                
+                if prod_node:
+                    nodes.append({
+                        "id": prod_node["id"],
+                        "labels": prod_node["labels"],
+                        "properties": prod_node["properties"],
+                        "type": "production",
+                        "status": "existing"
+                    })
+                    node_map[prod_node["id"]] = True
+        
+        # Add conflict data
+        conflict_data = []
+        for conflict in self.conflicts:
+            conflict_data.append({
+                "id": conflict.staging_node_id,
+                "type": conflict.conflict_type.value,
+                "description": conflict.description,
+                "prod_nodes": conflict.prod_node_ids,
+                "properties_affected": conflict.properties_affected,
+                "suggestions": [
+                    {
+                        "type": s.suggestion_type,
+                        "description": s.description,
+                        "confidence": s.confidence,
+                        "properties": s.affected_properties
+                    } for s in conflict.suggestions
+                ]
+            })
+        
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "conflicts": conflict_data
+        }
+
     model_config = {
         "arbitrary_types_allowed": True
     }
