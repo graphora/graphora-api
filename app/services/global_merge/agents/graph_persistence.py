@@ -9,12 +9,13 @@ import json
 logger = logging.getLogger(__name__)
 
 class GraphPersistenceAgent:
-    """Agent for persisting merged nodes to the production graph"""
+    """Agent for persisting graph changes"""
 
     def __init__(self, prod_db: DBConnector, ws_manager: WebSocketManager = None, session_id: str = None):
         self.prod_db = prod_db
         self.ws_manager = ws_manager
         self.session_id = session_id
+        self.IGNORED_PROPERTIES = {'_merged_ids', '_uid_'}
 
     def _format_node_details(self, node: Dict) -> str:
         """Format node details in a user-friendly way"""
@@ -47,46 +48,136 @@ class GraphPersistenceAgent:
         
         return f"{icon} {change_type} {node_type}:\n{self._format_node_details(node)}"
 
+    def _get_prod_node(self, node_id: str) -> Dict:
+        """Get node from production by ID"""
+        query = """
+        MATCH (n) WHERE n._uid_ = $node_id
+        RETURN n
+        """
+        with self.prod_db.session() as session:
+            result = session.run(query, node_id=node_id)
+            record = result.single()
+            if record:
+                node = record["n"]
+                return {
+                    "id": node["_uid_"],
+                    "labels": list(node.labels),
+                    "properties": dict(node)
+                }
+        return None
+
+    def _format_changes(self, staging_node: Dict, prod_node: Dict = None) -> str:
+        """Format changes showing clear differences"""
+        node_type = staging_node['labels'][0]
+        staging_props = staging_node['properties']
+        
+        if not prod_node:  # New node
+            props_text = []
+            for key, value in staging_props.items():
+                if key not in self.IGNORED_PROPERTIES:
+                    props_text.append(f"  + {key}: {value}")
+            
+            return f"➕ NEW {node_type}:\n" + "\n".join(props_text)
+        
+        # Compare with existing node
+        prod_props = prod_node['properties']
+        changes = []
+        
+        # Find modified and new properties
+        for key, new_val in staging_props.items():
+            if key in self.IGNORED_PROPERTIES:
+                continue
+                
+            if key not in prod_props:
+                changes.append(f"  + Added: {key} = {new_val}")
+            elif prod_props[key] != new_val:
+                changes.append(f"  ~ Changed: {key}\n    From: {prod_props[key]}\n    To:   {new_val}")
+        
+        # Find removed properties
+        for key in prod_props:
+            if key not in staging_props and key not in self.IGNORED_PROPERTIES:
+                changes.append(f"  - Removed: {key} (was: {prod_props[key]})")
+        
+        if not changes:
+            return None
+            
+        return f"✏️ UPDATE {node_type}:\n" + "\n".join(changes)
+
     async def run(self, state: ERState) -> ERState:
-        """Run the persistence workflow"""
+        """Run persistence operations"""
         try:
-            # Collect changes to be made
-            changes = self._collect_changes(state)
-            
-            if not changes:
-                logger.info("No changes to persist")
-                return state
-                
-            # Log the changes for review
-            logger.info("Changes to be persisted:")
-            for change in changes:
-                logger.info(f"- {change}")
-            
-            if self.ws_manager and self.session_id:
-                # Format review message
-                changes_text = "\n\n".join(self._format_change_message(change) for change in changes)
-                review_msg = f"📋 Please review the following changes:\n\n{changes_text}"
-                
-                # Send changes to WebSocket for user review
-                await self.ws_manager.send_question(
-                    self.session_id,
-                    question_id=str(uuid.uuid4()),
-                    content=review_msg,
-                    options=[
-                        {"id": "approved", "label": "✅ Approve Changes"},
-                        {"id": "rejected", "label": "❌ Reject Changes"}
-                    ]
-                )
-                
-                # Wait for user confirmation
-                confirmation = await self._wait_for_user_confirmation()
-                
-                if confirmation != 'approved':
-                    logger.info("User cancelled persistence")
-                    return state
-            
-            # Apply changes to production graph
-            self._apply_changes(changes)
+            for result in state.processed_nodes:
+                if result.status == ResolutionStatus.NEEDS_REVIEW:
+                    node = result.staging_node
+                    node_type = node.labels[0] if node.labels else "Unknown"
+                    name = node.properties.get('name', 'Unnamed')
+                    
+                    # Get existing node if it exists
+                    prod_node = None
+                    if result.prod_node_id:
+                        prod_node = self._get_prod_node(result.prod_node_id)
+                    
+                    # Build a clear explanation of what needs review
+                    msg_parts = []
+                    
+                    # 1. Header explaining why we need review
+                    if any(issue.startswith("Multiple potential matches:") for issue in result.issues):
+                        msg_parts.extend([
+                            f"⚠️ Multiple Matching Nodes Found for {node_type}: {name}\n",
+                            "We found multiple existing nodes that could match this one. Please review the details:"
+                        ])
+                    elif any(issue.startswith("Low confidence match") for issue in result.issues):
+                        msg_parts.extend([
+                            f"⚠️ Uncertain Match for {node_type}: {name}\n",
+                            f"We found a potential match but we're not very confident (confidence: {result.confidence:.2f}).",
+                            "Please review if this is actually the same entity:"
+                        ])
+                    else:
+                        msg_parts.extend([
+                            f"⚠️ Property Conflicts in {node_type}: {name}\n",
+                            "The following properties have conflicts that need resolution:"
+                        ])
+                    
+                    # 2. Show the differences clearly
+                    if prod_node:
+                        msg_parts.append("\nExisting Node Properties:")
+                        for key, value in prod_node['properties'].items():
+                            if key not in self.IGNORED_PROPERTIES:
+                                msg_parts.append(f"  {key}: {value}")
+                    
+                    msg_parts.append("\nNew Node Properties:")
+                    for key, value in node.properties.items():
+                        if key not in self.IGNORED_PROPERTIES:
+                            msg_parts.append(f"  {key}: {value}")
+                    
+                    # 3. Highlight specific issues
+                    if result.issues:
+                        msg_parts.append("\nDetected Issues:")
+                        for issue in result.issues:
+                            if not issue.startswith("Multiple potential matches:"):  # Already shown in header
+                                msg_parts.append(f"- {issue}")
+                    
+                    # 4. Add clear instructions
+                    msg_parts.extend([
+                        "\nPlease review and choose:",
+                        "✅ Approve - Accept the new values",
+                        "❌ Reject - Keep the existing values",
+                        "✏️ Modify - Manually edit the values"
+                    ])
+                    
+                    review_msg = "\n".join(msg_parts)
+                    
+                    if self.ws_manager and self.session_id:
+                        await self.ws_manager.send_question(
+                            self.session_id,
+                            question_id=str(uuid.uuid4()),
+                            content=review_msg,
+                            options=[
+                                {"id": "approved", "label": "✅ Approve Changes"},
+                                {"id": "rejected", "label": "❌ Reject Changes"},
+                                {"id": "modify", "label": "✏️ Modify Changes"}
+                            ]
+                        )
             
             return state
             

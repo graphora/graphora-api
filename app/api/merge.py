@@ -94,3 +94,38 @@ async def cancel_merge(
     """Cancel an ongoing merge process"""
     await merge_service.cancel_merge(session_id)
     return {"status": "cancelled"}
+
+@router.get("/merge/{session_id}/visualization")
+async def get_merge_visualization(session_id: str, merge_service: MergeService = Depends(get_merge_service)):
+    """Get visualization data for merge changes and conflicts"""
+    try:
+        # Get the current state for this session
+        state = await merge_service.get_session_state(session_id)
+        if not state:
+            raise HTTPException(status_code=404, detail="Merge session not found")
+            
+        # Get visualization data
+        viz_data = state.get_visualization_data()
+        
+        return {
+            "status": "success",
+            "data": {
+                "nodes": viz_data["nodes"],
+                "edges": viz_data["edges"],
+                "conflicts": viz_data["conflicts"],
+                "summary": {
+                    "total_nodes": len(viz_data["nodes"]),
+                    "new_nodes": len(state.new_nodes),
+                    "updated_nodes": len(state.updated_nodes),
+                    "conflicts": len(state.conflicts),
+                    "status": {
+                        "new": len([n for n in state.processed_nodes if n.status == ResolutionStatus.NEW]),
+                        "resolved": len([n for n in state.processed_nodes if n.status == ResolutionStatus.RESOLVED]),
+                        "needs_review": len([n for n in state.processed_nodes if n.status == ResolutionStatus.NEEDS_REVIEW])
+                    }
+                }
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting merge visualization: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

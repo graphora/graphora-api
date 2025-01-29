@@ -70,34 +70,6 @@ class ERPipeline:
     async def process_nodes(self, nodes: List[DbNode]) -> ERState:
         """Process a batch of nodes through the pipeline"""
         try:
-            # Format initial changes for review
-            changes = []
-            for node in nodes:
-                changes.append({
-                    "type": "create",
-                    "node": {
-                        "id": node.id,
-                        "labels": node.labels,
-                        "properties": node.properties
-                    }
-                })
-            
-            # Format review message
-            changes_text = "\n\n".join(self._format_change_message(change) for change in changes)
-            review_msg = f"📋 Please review the following changes:\n\n{changes_text}"
-            
-            # Send initial review request
-            if self.ws_manager and self.session_id:
-                await self.ws_manager.send_question(
-                    self.session_id,
-                    str(uuid.uuid4()),
-                    content=review_msg,
-                    options=[
-                        {"id": "approved", "label": "✅ Approve Changes"},
-                        {"id": "rejected", "label": "❌ Reject Changes"}
-                    ]
-                )
-            
             # Initialize state
             state = ERState(staging_nodes=nodes)
             

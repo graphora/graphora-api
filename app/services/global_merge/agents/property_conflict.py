@@ -1,95 +1,109 @@
 from app.schemas.global_merge import DbNode, ResolutionStatus, ERState
 from typing import List, Dict
+import logging
+
+logger = logging.getLogger(__name__)
 
 class PropertyConflictAgent:
-    """Agent for detecting and resolving property conflicts"""
-
+    """Agent for handling property conflicts between staging and production nodes"""
+    
     def __init__(self, prod_db, review_queue):
         self.prod_db = prod_db
-        self.UID_FIELD = '_uid_'
         self.review_queue = review_queue
-        self.IGNORED_PROPERTIES = {'_merged_ids', self.UID_FIELD}
+        self.IGNORED_PROPERTIES = {'_merged_ids', '_uid_'}
 
-    def _filter_properties(self, properties: Dict) -> Dict:
-        """Filter out ignored properties"""
-        return {k: v for k, v in properties.items()
-                if k not in self.IGNORED_PROPERTIES}
-
-    def check_property_conflicts(self, staging_node: DbNode, prod_node_id: str) -> List[str]:
-        """Check for property conflicts between staging and production nodes"""
-        query = f"""
-        MATCH (n)
-        WHERE n.{self.UID_FIELD} = $prod_id
+    def _get_prod_node(self, node_id: str) -> Dict:
+        """Get node from production by ID"""
+        query = """
+        MATCH (n) WHERE n._uid_ = $node_id
         RETURN n
         """
+        with self.prod_db.session() as session:
+            result = session.run(query, node_id=node_id)
+            record = result.single()
+            if record:
+                node = record["n"]
+                return {
+                    "id": node["_uid_"],
+                    "labels": list(node.labels),
+                    "properties": dict(node)
+                }
+        return None
 
+    def _format_property_conflicts(self, staging_props: Dict, prod_props: Dict) -> List[Dict]:
+        """Format property conflicts in a user-friendly way"""
         conflicts = []
-        try:
-            with self.prod_db.session() as session:
-                result = session.run(query, prod_id=prod_node_id)
-                prod_node = result.single()
-                if prod_node:
-                    # Filter properties for both nodes
-                    prod_data = self._filter_properties(dict(prod_node["n"]))
-                    staging_data = self._filter_properties(staging_node.properties)
+        
+        # Compare properties and find differences
+        for key in set(staging_props) | set(prod_props):
+            if key in self.IGNORED_PROPERTIES:
+                continue
+                
+            staging_val = staging_props.get(key)
+            prod_val = prod_props.get(key)
+            
+            if staging_val != prod_val:
+                conflicts.append({
+                    "property": key,
+                    "staging_value": staging_val,
+                    "prod_value": prod_val,
+                    "change_type": "modified" if key in prod_props else "added"
+                })
+                
+        return conflicts
 
-                    # Compare filtered properties
-                    for key, value in staging_data.items():
-                        if key in prod_data and prod_data[key] != value:
-                            conflicts.append(
-                                f"Property conflict: {key} differs - "
-                                f"staging: {value}, prod: {prod_data[key]}"
-                            )
-
-                    # Check for label differences
-                    prod_labels = set(prod_node["n"].labels)
-                    staging_labels = set(staging_node.labels)
-                    if prod_labels != staging_labels:
-                        conflicts.append(
-                            f"Label mismatch: staging {staging_labels} vs prod {prod_labels}"
-                        )
-
-                return conflicts
-        except Exception as e:
-            print(f"Error checking conflicts: {str(e)}")
-            return [f"Error checking conflicts: {str(e)}"]
+    def _format_conflict_message(self, node: Dict, conflicts: List[Dict]) -> str:
+        """Format conflicts in a user-friendly message"""
+        node_type = node.get('labels', ['Unknown'])[0]
+        msg_parts = [f" Conflicts in {node_type}:"]
+        
+        # Add node identifier
+        if node.get('properties', {}).get('name'):
+            msg_parts.append(f"Name: {node['properties']['name']}")
+            
+        # Format each conflict
+        for conflict in conflicts:
+            prop_name = conflict['property'].replace('_', ' ').title()
+            if conflict['change_type'] == 'modified':
+                msg_parts.append(f"\n {prop_name}:")
+                msg_parts.append(f"  - Existing: {conflict['prod_value']}")
+                msg_parts.append(f"  - New: {conflict['staging_value']}")
+            else:  # added
+                msg_parts.append(f"\n New Property - {prop_name}:")
+                msg_parts.append(f"  - Value: {conflict['staging_value']}")
+                
+        return '\n'.join(msg_parts)
 
     async def run(self, state: ERState) -> ERState:
-        """Run property conflict resolution"""
-        print(f"\nStarting property conflict resolution for {len(state.processed_nodes)} nodes")
-        
-        processed_count = 0
-        conflict_count = 0
-        review_count = 0
-
-        for result in state.processed_nodes:
-            try:
-                if result.prod_node_id:  # Only check nodes with matches
-                    conflicts = self.check_property_conflicts(
-                        result.staging_node,
-                        result.prod_node_id
+        """Run property conflict checks"""
+        try:
+            for result in state.processed_nodes:
+                if result.status == ResolutionStatus.RESOLVED:
+                    # Get production node
+                    prod_node = self._get_prod_node(result.prod_node_id)
+                    if not prod_node:
+                        continue
+                        
+                    # Find and format conflicts
+                    conflicts = self._format_property_conflicts(
+                        result.staging_node.properties,
+                        prod_node['properties']
                     )
-
+                    
                     if conflicts:
-                        conflict_count += 1
-                        result.issues.extend(conflicts)
-                        result.confidence *= 0.8  # Reduce confidence
-
-                        if result.confidence < 0.85:  # Configurable threshold
-                            result.status = ResolutionStatus.NEEDS_REVIEW
-                            await self.review_queue.enqueue(result)
-                            review_count += 1
-
-                    processed_count += 1
-
-            except Exception as e:
-                error_msg = f"Error checking conflicts for node {result.staging_node.id}: {str(e)}"
-                print(error_msg)
-                state.errors.append(error_msg)
-
-        print("\nProperty conflict resolution complete:")
-        print(f"- Nodes processed: {processed_count}")
-        print(f"- Conflicts found: {conflict_count}")
-        print(f"- Sent for review: {review_count}")
-
-        return state
+                        # Create conflict message
+                        conflict_msg = self._format_conflict_message(
+                            {"labels": result.staging_node.labels, "properties": result.staging_node.properties},
+                            conflicts
+                        )
+                        
+                        # Add to review queue
+                        result.status = ResolutionStatus.NEEDS_REVIEW
+                        result.issues = [conflict_msg]
+                        await self.review_queue.enqueue(result)
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Error in property conflict agent: {str(e)}")
+            raise

@@ -1,12 +1,12 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Set
 from enum import Enum
 from datetime import datetime
 
 class DbNode(BaseModel):
     id: str
     labels: List[str]
-    properties: Dict
+    properties: Dict[str, Any]
 
     model_config = {
         "arbitrary_types_allowed": True
@@ -50,30 +50,113 @@ class ReviewItem(BaseModel):
 
 class ResolutionStatus(str, Enum):
     NEW = "new"
-    PENDING = "pending"
     RESOLVED = "resolved"
     NEEDS_REVIEW = "needs_review"
-    FAILED = "failed"
+    REJECTED = "rejected"
+
+class ConflictType(str, Enum):
+    MULTIPLE_MATCHES = "multiple_matches"
+    LOW_CONFIDENCE = "low_confidence"
+    PROPERTY_CONFLICT = "property_conflict"
+    RELATIONSHIP_CONFLICT = "relationship_conflict"
+
+class ConflictResolutionSuggestion(BaseModel):
+    suggestion_type: str  # e.g., "merge", "create_new", "update_existing"
+    description: str
+    confidence: float
+    affected_properties: List[str] = []
+
+class NodeConflict(BaseModel):
+    conflict_type: ConflictType
+    staging_node_id: str
+    prod_node_ids: List[str]
+    description: str
+    suggestions: List[ConflictResolutionSuggestion]
+    properties_affected: Dict[str, Dict[str, Any]] = {}  # property -> {staging: val, prod: val}
 
 class NodeResolutionResult(BaseModel):
     status: ResolutionStatus
     staging_node: DbNode
     prod_node_id: Optional[str]
     confidence: float
-    issues: List[str]
-    review_notes: Optional[str] = None
+    issues: List[str] = []
+    conflicts: List[NodeConflict] = []
+    suggested_resolution: Optional[ConflictResolutionSuggestion]
 
     model_config = {
         "arbitrary_types_allowed": True
     }
-    
+
 class ERState(BaseModel):
-    """State object for the ER pipeline"""
+    """State for the Entity Resolution pipeline"""
     staging_nodes: List[DbNode]
-    processed_nodes: List[NodeResolutionResult] = Field(default_factory=list)
+    processed_nodes: List[NodeResolutionResult] = []
     review_queue: List[ReviewItem] = Field(default_factory=list)
-    errors: List[str] = Field(default_factory=list)
+    errors: List[str] = []
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    # Track changes for visualization
+    new_nodes: List[DbNode] = []
+    updated_nodes: List[Dict] = []  # Contains both staging and prod versions
+    conflicts: List[NodeConflict] = []
+    
+    def add_conflict(self, conflict: NodeConflict):
+        """Add a conflict and update the node's status"""
+        self.conflicts.append(conflict)
+        # Update the corresponding node's status
+        for node in self.processed_nodes:
+            if node.staging_node.id == conflict.staging_node_id:
+                node.status = ResolutionStatus.NEEDS_REVIEW
+                node.conflicts.append(conflict)
+    
+    def get_visualization_data(self) -> Dict:
+        """Get data formatted for graph visualization"""
+        nodes = []
+        edges = []
+        
+        # Add all nodes
+        for result in self.processed_nodes:
+            node_data = {
+                "id": result.staging_node.id,
+                "labels": result.staging_node.labels,
+                "properties": result.staging_node.properties,
+                "status": result.status,
+                "type": "staging"
+            }
+            
+            if result.conflicts:
+                node_data["conflicts"] = [
+                    {
+                        "type": c.conflict_type,
+                        "description": c.description,
+                        "suggestions": [s.dict() for s in c.suggestions]
+                    }
+                    for c in result.conflicts
+                ]
+            
+            nodes.append(node_data)
+            
+            # Add production nodes if there are conflicts
+            if result.prod_node_id:
+                nodes.append({
+                    "id": result.prod_node_id,
+                    "type": "production",
+                    "status": "existing"
+                })
+                
+                # Add edge to show the relationship
+                edges.append({
+                    "source": result.staging_node.id,
+                    "target": result.prod_node_id,
+                    "type": "potential_match",
+                    "confidence": result.confidence
+                })
+        
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "conflicts": [conflict.dict() for conflict in self.conflicts]
+        }
 
     model_config = {
         "arbitrary_types_allowed": True
