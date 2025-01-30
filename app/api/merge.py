@@ -9,6 +9,7 @@ from app.services.websocket_manager import WebSocketManager
 from app.schemas.merge_events import MergeAnswer
 from app.services.merge_service import MergeService
 from app.dependencies import get_merge_service
+from app.schemas.global_merge import ResolutionStatus
 
 router = APIRouter(prefix="/api/v1/merge", tags=["Merge"])
 logger = logging.getLogger(__name__)
