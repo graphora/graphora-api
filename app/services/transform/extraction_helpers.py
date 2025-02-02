@@ -15,8 +15,8 @@ def extract_knowledge_graph(docs: List[Document], ontology: dict) -> List[Knowle
 
   for doc in docs:
     prompt = f"""
-    Help me understand the following by describing as a detailed knowledge graph.
-    For the section and subsection property inside metadata, please decide based on the below map of sections and subsections:
+    Extract the following as a detailed knowledge graph.
+    For the section and subsection property inside metadata field, please decide based on the below map of sections and subsections of the document:
     {str(section_map)}
 
     Text:
