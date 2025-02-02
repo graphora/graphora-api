@@ -113,49 +113,157 @@ class ERState(BaseModel):
         """Get data formatted for graph visualization"""
         nodes = []
         edges = []
+        node_map = {}  # Track processed nodes
         
-        # Add all nodes
-        for result in self.processed_nodes:
+        # Add staging nodes
+        for node in self.staging_nodes:
+            # Find resolution result for this node
+            resolution = next((r for r in self.processed_nodes if r.staging_node.id == node.id), None)
+            
+            # Determine node status
+            status = "new"  # Default for staging nodes
+            if resolution:
+                if resolution.prod_node_id:
+                    status = "both"  # Node exists in both staging and prod
+                if resolution.status == ResolutionStatus.NEEDS_REVIEW:
+                    status = "conflict"
+            
+            # Add node with required format
             node_data = {
-                "id": result.staging_node.id,
-                "labels": result.staging_node.labels,
-                "properties": result.staging_node.properties,
-                "status": result.status,
-                "type": "staging"
+                "id": node.id,
+                "labels": node.labels,
+                "properties": {
+                    **node.properties,
+                    "__status": status,
+                    "__type": node.labels[0] if node.labels else None
+                },
+                "status": status
             }
             
-            if result.conflicts:
-                node_data["conflicts"] = [
+            # Add conflicts if any
+            if resolution and resolution.conflicts:
+                node_data["properties"]["__conflicts"] = [
                     {
                         "type": c.conflict_type,
                         "description": c.description,
-                        "suggestions": [s.dict() for s in c.suggestions]
-                    }
-                    for c in result.conflicts
+                        "properties": c.properties_affected
+                    } for c in resolution.conflicts
                 ]
             
             nodes.append(node_data)
+            node_map[node.id] = True
             
-            # Add production nodes if there are conflicts
-            if result.prod_node_id:
-                nodes.append({
-                    "id": result.prod_node_id,
-                    "type": "production",
-                    "status": "existing"
-                })
+            # Add relationships from node properties
+            for prop_name, prop_value in node.properties.items():
+                # Skip non-relationship properties
+                if prop_name in ['name', 'type', 'labels', 'id', 'properties', 'relationships']:
+                    continue
+                    
+                # Handle both single ID and list of IDs
+                if isinstance(prop_value, str):
+                    edges.append({
+                        "source": node.id,
+                        "target": prop_value,
+                        "type": f"HAS_{prop_name.upper()}",
+                        "properties": {"__status": "new"},
+                        "status": "new"
+                    })
+                elif isinstance(prop_value, list):
+                    for target_id in prop_value:
+                        if isinstance(target_id, str):
+                            edges.append({
+                                "source": node.id,
+                                "target": target_id,
+                                "type": f"HAS_{prop_name.upper()}",
+                                "properties": {"__status": "new"},
+                                "status": "new"
+                            })
+        
+        # Add production nodes that are involved in resolutions
+        for result in self.processed_nodes:
+            if result.prod_node_id and result.prod_node_id not in node_map:
+                # Get node data from updated_nodes if available
+                prod_node = None
+                for update in self.updated_nodes:
+                    if update.get("prod", {}).get("id") == result.prod_node_id:
+                        prod_node = update["prod"]
+                        break
                 
-                # Add edge to show the relationship
+                if prod_node:
+                    nodes.append({
+                        "id": prod_node["id"],
+                        "labels": prod_node.get("labels", []),
+                        "properties": {
+                            **prod_node.get("properties", {}),
+                            "__status": "unchanged",
+                            "__type": prod_node.get("labels", [""])[0]
+                        },
+                        "status": "unchanged"
+                    })
+                    node_map[prod_node["id"]] = True
+        
+        # Add edges between staging and production nodes (resolution edges)
+        for result in self.processed_nodes:
+            if result.prod_node_id:
+                edge_status = "both" if result.status == ResolutionStatus.RESOLVED else "new"
                 edges.append({
                     "source": result.staging_node.id,
                     "target": result.prod_node_id,
-                    "type": "potential_match",
-                    "confidence": result.confidence
+                    "type": "resolution",
+                    "properties": {
+                        "__status": edge_status
+                    },
+                    "status": edge_status
                 })
+        
+        # Add explicit relationships from staging nodes
+        for node in self.staging_nodes:
+            if "relationships" in node.properties:
+                for rel in node.properties["relationships"]:
+                    if rel["source_id"] in node_map and rel["target_id"] in node_map:
+                        edges.append({
+                            "source": rel["source_id"],
+                            "target": rel["target_id"],
+                            "type": rel["type"],
+                            "properties": {
+                                **rel.get("properties", {}),
+                                "__status": "new"
+                            },
+                            "status": "new"
+                        })
+        
+        # Add existing relationships from production
+        for update in self.updated_nodes:
+            if "relationships" in update.get("prod", {}):
+                for rel in update["prod"]["relationships"]:
+                    if rel["source_id"] in node_map and rel["target_id"] in node_map:
+                        edges.append({
+                            "source": rel["source_id"],
+                            "target": rel["target_id"],
+                            "type": rel["type"],
+                            "properties": {
+                                **rel.get("properties", {}),
+                                "__status": "unchanged"
+                            },
+                            "status": "unchanged"
+                        })
         
         return {
             "nodes": nodes,
             "edges": edges,
-            "conflicts": [conflict.dict() for conflict in self.conflicts]
+            "conflicts": [
+                {
+                    "node_id": result.staging_node.id,
+                    "conflicts": [
+                        {
+                            "type": c.conflict_type,
+                            "description": c.description,
+                            "properties": c.properties_affected,
+                            "suggestions": [s.dict() for s in c.suggestions]
+                        } for c in result.conflicts
+                    ]
+                } for result in self.processed_nodes if result.conflicts
+            ]
         }
 
     def get_visualization_data_from_state(self) -> Dict:
