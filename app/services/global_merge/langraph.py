@@ -1,5 +1,5 @@
 from langgraph.graph import StateGraph, START
-from app.schemas.global_merge import ERState, DbNode
+from app.schemas.global_merge import ERState, DbNode, DbEdge
 from app.services.global_merge.staging_extractor import get_subgraph
 from app.services.global_merge.human_review import HumanReviewQueue
 from app.services.global_merge.global_db_connector import DBConnector
@@ -67,11 +67,11 @@ class ERPipeline:
         
         return f"{icon} {change_type} {node_type}:\n{self._format_node_details(node)}"
 
-    async def process_nodes(self, nodes: List[DbNode]) -> ERState:
+    async def process_nodes(self, nodes: List[DbNode], edges: List[DbEdge]) -> ERState:
         """Process a batch of nodes through the pipeline"""
         try:
             # Initialize state
-            state = ERState(staging_nodes=nodes)
+            state = ERState(staging_nodes=nodes, staging_edges=edges)
             
             # Run disambiguation
             state = self.disambiguation_agent.run(state)
@@ -96,6 +96,6 @@ async def run_pipeline(staging_label:str, ontology_dict: dict) -> ERState:
   review_queue = HumanReviewQueue()
   pipeline = ERPipeline(prod_db_conn, review_queue, ontology_dict)
 
-  nodes, _ = get_subgraph(staging_label)
+  nodes, edges = get_subgraph(staging_label)
 
-  return await pipeline.process_nodes(nodes)
+  return await pipeline.process_nodes(nodes, edges)

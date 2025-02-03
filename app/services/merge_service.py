@@ -56,6 +56,7 @@ class MergeService:
         # Initialize empty state with required fields
         empty_state = ERState(
             staging_nodes=[],  # Required field, initialize as empty list
+            staging_edges=[],
             processed_nodes=[],
             review_queue=[],
             errors=[],
@@ -89,36 +90,41 @@ class MergeService:
                 prod_db=prod_db_conn,
                 review_queue=review_queue,
                 ontology=ontology_dict,
-                ws_manager=self.ws_manager,
+                ws_manager=self.ws_managers.get(session_id),  # Use session-specific manager
                 session_id=session_id
             )
             
-            # Get nodes from staging
-            nodes, _ = get_subgraph(transform_id)
+            # Get nodes and edges from staging
+            nodes, edges = get_subgraph(transform_id)
             
-            # Update state with staging nodes
+            # Update state with staging nodes and edges
             state = self._active_sessions[session_id]
             state.staging_nodes = nodes
+            state.staging_edges = edges
+            
+            # Run pipeline
+            state = await pipeline.process_nodes(nodes, edges)
+            
+            # Update session state
             self._active_sessions[session_id] = state
             
-            # Process nodes and update state
-            state = await pipeline.process_nodes(nodes)
-            self._active_sessions[session_id] = state
-            
-            # Continue with existing websocket flow
+            # Update status and handle review process
+            self.session_states[session_id]['status'] = 'in_review'
             await self._handle_review_process(session_id, state)
             
         except Exception as e:
             logger.error(f"Error in merge process: {str(e)}")
+            if session_id in self.session_states:
+                self.session_states[session_id]['status'] = 'error'
+                self.session_states[session_id]['error'] = str(e)
             if session_id in self.ws_managers:
                 await self.ws_managers[session_id].send_error(session_id, str(e))
             raise
             
         finally:
+            # Cleanup
             if session_id in self.active_merges:
                 del self.active_merges[session_id]
-                if session_id in self.session_states:
-                    del self.session_states[session_id]
 
     async def cancel_merge(self, session_id: str):
         """Cancel an ongoing merge process"""
@@ -180,6 +186,7 @@ class MergeService:
         if session_id not in self._active_sessions:
             self._active_sessions[session_id] = ERState(
                 staging_nodes=[],
+                staging_edges=[],
                 processed_nodes=[],
                 review_queue=[],
                 errors=[],
