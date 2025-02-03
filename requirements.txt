@@ -17,6 +17,7 @@ python-docx>=1.1.2
 python-multipart>=0.0.20
 trafilatura>=2.0.0
 uvicorn>=0.34.0
+uvloop>=0.21.0
 flask-login>=0.6.3
 flask-wtf>=1.2.2
 langchain-community>=0.0.16

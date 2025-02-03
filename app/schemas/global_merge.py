@@ -135,7 +135,7 @@ class ERState(BaseModel):
             elif result.status == ResolutionStatus.SKIP:
                 status = "unchanged"
             else:
-                status = "unknown"
+                status = "needs_review"
                 
             # Create node data
             node_data = {
@@ -202,7 +202,7 @@ class ERState(BaseModel):
             if edge.source_id in node_map and edge.target_id in node_map:
                 # Get source node's status
                 source_node = next((r for r in self.processed_nodes if r.staging_node.id == edge.source_id), None)
-                edge_status = source_node.status.value if source_node else "unknown"
+                edge_status = source_node.status.value if source_node else "needs_review"
                 
                 edges.append({
                     "source": edge.source_id,
