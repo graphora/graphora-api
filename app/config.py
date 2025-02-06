@@ -90,6 +90,11 @@ class Settings(BaseSettings):
         description="Google VertexAI Project Location for LLM operations"
     )
     
+    MOCK_MODE: bool = Field(
+        default=False,
+        description="Enable mock mode for testing"
+    )
+    
     # Logging
     LOG_LEVEL: str = Field(
         default="INFO",

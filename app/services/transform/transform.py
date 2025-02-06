@@ -129,6 +129,11 @@ async def initialize_processing(transform_id: str,
         # Create chain
         chain = await create_processing_chain()
         
+        if settings.MOCK_MODE:
+            logger.info("Mock mode enabled, skipping document processing")
+            await job_manager.complete_job(transform_id)
+            return
+        
         total_files = len(file_paths)
         for idx, path in enumerate(file_paths, 1):
             logger.info(f"Processing file {path}")

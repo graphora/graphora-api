@@ -3,14 +3,14 @@ from typing import Optional
 from app.schemas.graph import GraphResponse
 from app.schemas.graph_changes import SaveGraphRequest, SaveGraphResponse
 from app.services.graph_service import GraphService
-from app.config import get_settings
+from app.config import settings
 from app.utils.logger import logger
+from app.utils.mock import transform_graph
 
 router = APIRouter(prefix="/api/v1/graph", tags=["Graph"])
 
 def get_staging_graph_service() -> GraphService:
     """Dependency to get graph service instance"""
-    settings = get_settings()
     service = GraphService(
         uri=settings.STAGING_NEO4J_URI,
         user=settings.STAGING_NEO4J_USER,
@@ -58,6 +58,9 @@ def get_graph_by_label(
                 status_code=400,
                 detail="Maximum limit is 10000 nodes"
             )
+        if settings.MOCK_MODE:
+            logger.info("Mock mode enabled, skipping document processing")
+            return transform_graph
 
         # Get graph data
         response = graph_service.get_graph_by_label(
@@ -100,6 +103,12 @@ def save_graph_changes(
     """
     try:
         staging_label = f"Staging_{transform_id}"
+        if settings.MOCK_MODE:
+            logger.info("Mock mode enabled, skipping document processing")
+            return SaveGraphResponse(
+                data=transform_graph,
+                messages=None
+            )
         return graph_service.save_graph_changes(staging_label, changes)
     except ValueError as e:
         raise HTTPException(
