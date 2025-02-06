@@ -4,12 +4,12 @@ from typing import Dict, Any
 import logging
 from pydantic import BaseModel
 import asyncio
-
-from app.services.websocket_manager import WebSocketManager
 from app.schemas.merge_events import MergeAnswer
 from app.services.merge_service import MergeService
 from app.dependencies import get_merge_service
 from app.schemas.global_merge import ResolutionStatus
+from app.config import settings
+from app.utils.mock import transform_id as mock_transform_id
 
 router = APIRouter(prefix="/api/v1/merge", tags=["Merge"])
 logger = logging.getLogger(__name__)
@@ -84,6 +84,9 @@ async def start_merge(
             )
     
     logger.info(f"Starting merge for session {session_id}")
+    if settings.MOCK_MODE:
+        logger.info("Mock mode enabled, skipping document processing")
+        request.transform_id = mock_transform_id
     await merge_service.start_merge(session_id, f"Staging_{request.transform_id}")
     return {"sessionId": session_id, "status": "started"}
 
