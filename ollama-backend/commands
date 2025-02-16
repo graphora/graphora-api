@@ -1,0 +1,31 @@
+gcloud config set project graphit-sandbox
+
+gcloud config set run/region asia-southeast1
+
+gcloud artifacts repositories create graphit \
+  --repository-format=docker \
+  --location=us-central1
+
+gcloud builds submit \                                                                                                                                                 
+   --tag us-central1-docker.pkg.dev/graphit-sandbox/graphit/ollama-codestral \
+   --machine-type e2-highcpu-32
+
+
+gcloud iam service-accounts create ollama \                                                                                                                            
+  --display-name="Service Account for Ollama Cloud Run service"
+
+gcloud beta run deploy ollama-codestral \                                                                                                                              
+  --image us-central1-docker.pkg.dev/graphit-sandbox/graphit/ollama-codestral \
+  --concurrency 10 \
+  --cpu 8 \
+  --set-env-vars OLLAMA_NUM_PARALLEL=10 \
+  --gpu 1 \
+  --gpu-type nvidia-l4 \
+  --max-instances 5 \
+  --memory 32Gi \
+  --no-allow-unauthenticated \
+  --no-cpu-throttling \
+  --service-account ollama@graphit-sandbox.iam.gserviceaccount.com \
+  --timeout=600
+
+gcloud run services proxy ollama-codestral --port=9090
