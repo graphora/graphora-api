@@ -60,6 +60,32 @@ class Settings(BaseSettings):
         description="Neo4j database name for staging"
     )
     
+    # Marker API Settings
+    MARKER_API_HOST: str = Field(
+        default="http://localhost:8000",
+        description="Marker API host URL"
+    )
+    MARKER_API_TIMEOUT: int = Field(
+        default=120,
+        description="Marker API request timeout in seconds"
+    )
+    MARKER_API_MAX_RETRIES: int = Field(
+        default=3,
+        description="Maximum retry attempts for Marker API"
+    )
+    MARKER_API_BACKOFF_FACTOR: float = Field(
+        default=0.5,
+        description="Exponential backoff factor for retries"
+    )
+    MARKER_API_USE_LLM: bool = Field(
+        default=False,
+        description="Whether to use LLM for PDF conversion"
+    )
+    MARKER_API_PAGINATE: bool = Field(
+        default=True,
+        description="Whether to paginate markdown output"
+    )
+
     # LLM Settings
     DEEPSEEK_API_KEY: Optional[str] = Field(
         default=None,

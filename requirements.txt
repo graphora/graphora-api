@@ -34,3 +34,5 @@ google-cloud-aiplatform==1.71.1
 vertexai==1.71.1
 aiofiles>=23.2.1
 httpx>=0.28.0
+prefect>=3.2.2
+python-magic>=0.4.27
