@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Literal, Any, Dict, List
+from enum import Enum
+from datetime import datetime
 
 class UploadResponse(BaseModel):
     id: str
@@ -55,3 +57,51 @@ class ChunkMetadata(BaseModel):
     chunk_size: int
     chunk_overlap: int
     properties: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DocumentType(str, Enum):
+    PDF = "pdf"
+    TXT = "txt"
+    DOCX = "docx"
+    MD = "md"
+
+class ProcessingPriority(str, Enum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+
+class TransformStatus(str, Enum):
+    PENDING = "pending"
+    VALIDATING = "validating"
+    UPLOADING = "uploading"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class DocumentMetadata(BaseModel):
+    source: str
+    document_type: DocumentType
+    tags: Optional[List[str]] = []
+    priority: Optional[ProcessingPriority] = ProcessingPriority.NORMAL
+
+class DocumentInfo(BaseModel):
+    filename: str
+    size: int
+    document_type: DocumentType
+    metadata: DocumentMetadata
+
+class TransformInitResponse(BaseModel):
+    id: str  # Prefect flow_id
+    upload_timestamp: datetime
+    status: TransformStatus
+    document_info: DocumentInfo
+
+class ValidationResult(BaseModel):
+    is_valid: bool
+    errors: Optional[List[str]] = None
+
+class StorageLocation(BaseModel):
+    transform_id: str
+    original_path: str
+    processed_path: Optional[str] = None
+    metadata_path: str
