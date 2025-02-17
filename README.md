@@ -40,6 +40,10 @@ A sophisticated document processing backend that leverages AI-powered intelligen
   ````bash
   uv venv
   ````
+- Install `libmagic`
+  ````bash
+  sudo apt-get install libmagic1
+  ````
 - ```bash
    uv pip install -r requirements.txt
    ```
