@@ -7,9 +7,92 @@ from tenacity import Retrying, stop_after_attempt, wait_fixed
 import vertexai
 from anthropic import AnthropicVertex
 from vertexai.generative_models import GenerativeModel
+from google.auth import default, transport
+from datetime import datetime, timedelta
+from mistralai_gcp import MistralGoogleCloud
+from mistralai_gcp.utils.retries import RetryConfig, BackoffStrategy
+import json
+
+class VertexAPIKey:
+    def __init__(self):
+        self.key = self.create_key()
+        self.create_time = datetime.now()
+    
+    def create_key(self):
+        credentials, _ = default()
+        auth_request = transport.requests.Request()
+        credentials.refresh(auth_request)
+        return credentials.token
+    
+    def get_key(self):
+        if datetime.now() - self.create_time > timedelta(minutes=50):
+            self.key = self.create_key()
+        return self.key
+
+vertex_key_mgr = VertexAPIKey()
 
 def call_llm(messages, response_model: Any):
-        return call_llm_anthropic(messages, response_model)
+        return call_llm_gemini(messages, response_model)
+    
+def call_llm_ollama(messages, response_model: Any, 
+                        model = 'codestral:22b'):
+    base_url = f"https://localhost:11434/v1"
+    base_client = OpenAI(api_key="ollama", base_url=base_url)
+    client = instructor.from_openai(base_client, mode=instructor.Mode.JSON)
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        response_model=response_model,
+        temperature=0,
+        max_tokens=8000,
+        max_retries=Retrying(
+            stop=stop_after_attempt(5),
+            wait=wait_fixed(1),
+        )
+    )
+    return response
+
+def call_llm_codestral(messages, response_model: Any, 
+                        model = 'codestral-2501'):
+    PROJECT_ID=settings.VERTEXAI_PROJECT_ID
+    LOCATION='us-central1'
+
+    client = MistralGoogleCloud(access_token=vertex_key_mgr.get_key(), 
+                                region=LOCATION, project_id=PROJECT_ID)
+    resp = client.chat.complete(
+        model=model,
+        messages=messages,
+        temperature=0,
+        response_format={"type": "json_object"},
+        timeout_ms=30000, 
+        retries=RetryConfig(
+            strategy="exponential", 
+            backoff=BackoffStrategy(initial_interval=1,
+                max_interval=2,
+                exponent=2,
+                max_elapsed_time=60), 
+            retry_connection_errors=True)
+    )
+    return json.loads(resp.choices[0].message.content)
+    
+def call_llm_llama(messages, response_model: Any, 
+                        model = 'meta/llama-3.3-70b-instruct-maas'):
+    LOCATION='us-central1'
+    base_url = f"https://{LOCATION}-aiplatform.googleapis.com/v1beta1/projects/{settings.VERTEXAI_PROJECT_ID}/locations/{LOCATION}/endpoints/openapi"
+    base_client = OpenAI(api_key=vertex_key_mgr.get_key(), base_url=base_url)
+    client = instructor.from_openai(base_client, mode=instructor.Mode.VERTEXAI_TOOLS)
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        response_model=response_model,
+        temperature=0,
+        max_tokens=8000,
+        max_retries=Retrying(
+            stop=stop_after_attempt(5),
+            wait=wait_fixed(1),
+        )
+    )
+    return response
     
 def call_llm_deepseek(messages, response_model: Any, 
                         model = 'deepseek-chat', max_tokens=8000):
@@ -20,6 +103,7 @@ def call_llm_deepseek(messages, response_model: Any,
         model=model,
         messages=messages,
         response_model=response_model,
+        temperature=0,
         max_tokens=max_tokens,
         max_retries=Retrying(
             stop=stop_after_attempt(5),
@@ -43,13 +127,14 @@ def call_llm_anthropic(messages, response_model,
         messages=messages,
         response_model=response_model,
         max_tokens=max_tokens,
+        temperature=0,
         max_retries=Retrying(
             stop=stop_after_attempt(5),
             wait=wait_fixed(1),
         )
     )
     
-def call_llm_gemini(messages, response_model, model = "gemini-2.0-flash-exp"):
+def call_llm_gemini(messages, response_model, model = "gemini-2.0-flash-lite-preview-02-05"):
     PROJECT_ID=settings.VERTEXAI_PROJECT_ID
     LOCATION=settings.VERTEXAI_LOCATION
 
@@ -61,7 +146,11 @@ def call_llm_gemini(messages, response_model, model = "gemini-2.0-flash-exp"):
     )
     return client.chat.completions.create(
         messages=messages,
-        response_model=response_model
+        response_model=response_model,
+        temperature=0,
+        max_retries=Retrying(
+            stop=stop_after_attempt(5),
+            wait=wait_fixed(1),
+        )
     )
-    
     
