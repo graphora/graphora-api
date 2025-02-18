@@ -158,6 +158,16 @@ class Settings(BaseSettings):
         description="Cache TTL in hours"
     )
     
+    # Prefect Settings
+    PREFECT_API_URL: str = Field(
+        default="http://127.0.0.1:4200/api",
+        description="Prefect API URL"
+    )
+    PREFECT_API_KEY: Optional[str] = Field(
+        default=None,
+        description="Prefect API key for authentication"
+    )
+    
     @property
     def REDIS_URL(self) -> str:
         """Construct Redis URL from components"""

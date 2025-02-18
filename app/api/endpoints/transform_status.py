@@ -1,6 +1,0 @@
-
-
-
-
-router = APIRouter()
-
