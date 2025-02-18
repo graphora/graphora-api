@@ -86,6 +86,32 @@ class Settings(BaseSettings):
         description="Whether to paginate markdown output"
     )
 
+    # Chunking Settings
+    MAX_CHUNK_SIZE: int = Field(
+        default=1000,
+        description="Maximum size of a text chunk"
+    )
+    MIN_CHUNK_SIZE: int = Field(
+        default=100,
+        description="Minimum size of a text chunk"
+    )
+    SEMANTIC_THRESHOLD: float = Field(
+        default=0.7,
+        description="Threshold for semantic similarity in chunking"
+    )
+    EMBEDDING_MODEL: str = Field(
+        default="sentence-transformers/all-mpnet-base-v2",
+        description="HuggingFace model for text embeddings"
+    )
+    CHUNKING_RETRIES: int = Field(
+        default=3,
+        description="Number of retries for chunking task"
+    )
+    RETRY_DELAY_SECONDS: int = Field(
+        default=30,
+        description="Delay between retries in seconds"
+    )
+
     # LLM Settings
     DEEPSEEK_API_KEY: Optional[str] = Field(
         default=None,

@@ -18,6 +18,8 @@ dependencies = [
     "uvicorn>=0.34.0",
     "flask-login>=0.6.3",
     "flask-wtf>=1.2.2",
+    "textstat>=0.7.3",
+    "psutil>=7.0.0",
     "langchain-community>=0.0.16",
 ]
 

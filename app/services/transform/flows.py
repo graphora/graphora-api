@@ -17,6 +17,7 @@ import aiofiles
 from fastapi import UploadFile
 from prefect.logging import get_run_logger
 from app.services.marker.tasks import convert_pdf_to_markdown
+from app.services.chunking.tasks import chunk_document, check_chunk_quality
 
 @task(
     name="document-validation",
@@ -77,45 +78,71 @@ async def document_transformation_flow(
         file_paths: List of paths to uploaded files
         metadata: List of document metadata
     """
-    flow_run = get_run_context().flow_run
     logger = get_run_logger()
     
     logger.info(f"Starting transformation flow {transform_id}")
     
     processed_paths = []
+    chunk_paths = []
     
     for file_path, doc_metadata in zip(file_paths, metadata):
-        # Validate document
-        validation_result = await validate_document(file_path)
-        if not validation_result.is_valid:
-            logger.error(f"Validation failed for {file_path}: {validation_result.errors}")
-            continue
-        
-        # Store document
-        storage_location = await store_document(
-            file_path,
-            transform_id,
-            doc_metadata
-        )
-        logger.info(f"Document stored at {storage_location.original_path}")
-        
-        # Convert PDF to markdown if needed
-        if file_path.suffix.lower() == '.pdf':
-            conversion_result = await convert_pdf_to_markdown(
-                file_path=file_path,
+        try:
+            # Validate document
+            validation_result = await validate_document(file_path)
+            if not validation_result.is_valid:
+                logger.error(f"Validation failed for {file_path}: {validation_result.errors}")
+                continue
+            
+            # Store document
+            storage_location = await store_document(
+                file_path,
+                transform_id,
+                doc_metadata
+            )
+            logger.info(f"Document stored at {storage_location.original_path}")
+            
+            # Convert PDF to markdown if needed
+            if file_path.suffix.lower() == '.pdf':
+                conversion_result = await convert_pdf_to_markdown(
+                    file_path=file_path,
+                    transform_id=transform_id
+                )
+                if conversion_result:
+                    processed_paths.extend(conversion_result.markdown_paths)
+                    logger.info(f"PDF converted to markdown: {conversion_result.markdown_paths}")
+            else:
+                # For non-PDF files, use the original path
+                processed_paths.append(str(file_path))
+                logger.info(f"Using original file: {file_path}")
+            
+            # Chunk document
+            doc_chunks = await chunk_document(
+                file_path=Path(processed_paths[-1]),
                 transform_id=transform_id
             )
-            if conversion_result:
-                processed_paths.extend(conversion_result.markdown_paths)
-                logger.info(f"PDF converted to markdown: {conversion_result.markdown_paths}")
-        else:
-            # For non-PDF files, use the original path
-            processed_paths.append(str(file_path))
-            logger.info(f"Using original file: {file_path}")
-        
-        # Future tasks will be added here:
-        # - Parse document
-        # - Chunk content
-        # - Extract information
-        # - Transform to graph
-        # - Load to database
+            if doc_chunks:
+                chunk_paths.extend(doc_chunks)
+                logger.info(f"Document chunked into {len(doc_chunks)} parts")
+                
+                # Verify chunk quality
+                quality_ok = await check_chunk_quality(doc_chunks, transform_id)
+                if not quality_ok:
+                    logger.warning(
+                        f"Chunk quality check failed",
+                        extra={"transform_id": transform_id}
+                    )
+            
+        except Exception as e:
+            logger.error(
+                f"Processing failed for file {file_path}",
+                extra={
+                    "transform_id": transform_id,
+                    "error": str(e)
+                }
+            )
+            continue
+    
+    # Future tasks will be added here:
+    # - Extract information
+    # - Transform to graph
+    # - Load to database
