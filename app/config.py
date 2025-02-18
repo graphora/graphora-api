@@ -130,6 +130,12 @@ class Settings(BaseSettings):
         description="Batch size for chunking"
     )
 
+    # Timing Settings
+    TIMING_WINDOW_HOURS: int = Field(
+        default=24,
+        description="Hours of timing data to keep for estimation"
+    )
+
     # Redis Cache Settings
     REDIS_HOST: str = Field(
         default="localhost",
