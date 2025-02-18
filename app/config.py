@@ -42,22 +42,32 @@ class Settings(BaseSettings):
         description="Neo4j database name"
     )
     
+    # Storage Settings
+    STORAGE_BATCH_SIZE: int = Field(
+        default=1000,
+        description="Batch size for storage operations"
+    )
+    STORAGE_RETRIES: int = Field(
+        default=3,
+        description="Number of retries for storage task"
+    )
+    
     # Staging Neo4j Settings
     STAGING_NEO4J_URI: str = Field(
         default="bolt://localhost:7687",
-        description="Neo4j database connection URI for staging"
+        description="Neo4j staging database URI"
     )
     STAGING_NEO4J_USER: str = Field(
         default="neo4j",
-        description="Neo4j database username for staging"
+        description="Neo4j staging database username"
     )
     STAGING_NEO4J_PASSWORD: str = Field(
-        default="password",
-        description="Neo4j database password for staging"
+        default="",
+        description="Neo4j staging database password"
     )
-    STAGING_NEO4J_DB: str = Field(
+    STAGING_NEO4J_DATABASE: str = Field(
         default="neo4j",
-        description="Neo4j database name for staging"
+        description="Neo4j staging database name"
     )
     
     # Marker API Settings

@@ -11,6 +11,8 @@ sentence_transformers
 sentence-transformers>=2.5.1
 psutil>=5.9.8
 neo4j>=5.27.0
+neo4j-driver>=5.3.0
+neo4j-python-driver>=5.3.0
 pandas>=2.2.2
 pydantic-settings>=2.7.0
 pydantic>=2.10.3
