@@ -167,6 +167,14 @@ class Settings(BaseSettings):
         default=None,
         description="Prefect API key for authentication"
     )
+    PREFECT_WORKPOOL_TRANSFORM: str = Field(
+        default="transform",
+        description="Prefect workpool for document transformation"
+    )
+    PREFECT_WORKPOOL_MERGE: str = Field(
+        default="merge",
+        description="Prefect workpool for document merging"
+    )
     
     @property
     def REDIS_URL(self) -> str:
