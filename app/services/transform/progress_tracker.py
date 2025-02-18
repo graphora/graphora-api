@@ -1,4 +1,4 @@
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 import json
 import psutil
@@ -33,7 +33,6 @@ class ProgressTracker:
             TransformationStage.UPLOAD,
             TransformationStage.PARSE,
             TransformationStage.CHUNK,
-            TransformationStage.EXTRACT,
             TransformationStage.TRANSFORM,
             TransformationStage.LOAD
         ]

@@ -8,7 +8,6 @@ class TransformationStage(str, Enum):
     UPLOAD = "upload"
     PARSE = "parse"
     CHUNK = "chunk"
-    EXTRACT = "extract"
     TRANSFORM = "transform"
     LOAD = "load"
 

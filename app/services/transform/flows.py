@@ -1,8 +1,9 @@
-from pathlib import Path
 from prefect import flow, task
 from prefect.context import get_run_context
 from datetime import datetime
-from typing import List
+from typing import List, Dict, Any
+from pathlib import Path
+
 from app.schemas.transform import (
     DocumentMetadata,
     ValidationResult,
@@ -11,59 +12,45 @@ from app.schemas.transform import (
 from app.services.transform.validators import FileValidator
 from app.services.transform.storage import DocumentStorage
 from app.config import settings
-import aiofiles
-from fastapi import UploadFile
 from prefect.logging import get_run_logger
 from app.services.marker.tasks import convert_pdf_to_markdown
 from app.services.chunking.tasks import chunk_document, check_chunk_quality
+from app.services.transform.tasks import construct_knowledge_graph
+from app.services.storage.tasks import store_knowledge_graph
 from app.services.transform.progress_tracker import ProgressTracker
 from app.services.transform.status_models import (
     TransformationStage,
     ErrorSummary
 )
+from app.utils.logger import logger
 
 progress_tracker = ProgressTracker()
 
 @task(
     name="document-validation",
-    retries=3,
-    retry_delay_seconds=60,
-    tags=["transform", "validation"]
+    retries=settings.CHUNKING_RETRIES,
+    retry_delay_seconds=settings.RETRY_DELAY_SECONDS
 )
-async def validate_document(file_path: Path) -> ValidationResult:
+async def validate_document(
+    file_path: str
+) -> ValidationResult:
     """Validate document before processing"""
     validator = FileValidator()
-    # Convert Path to UploadFile for validation
-    async with aiofiles.open(file_path, 'rb') as f:
-        content = await f.read()
-    
-    upload_file = UploadFile(
-        filename=file_path.name,
-        file=content
-    )
-    return await validator.validate(upload_file)
+    return await validator.validate_path(file_path)
 
 @task(
     name="document-storage",
-    retries=2,
-    retry_delay_seconds=30,
-    tags=["transform", "storage"]
+    retries=settings.STORAGE_RETRIES,
+    retry_delay_seconds=settings.RETRY_DELAY_SECONDS
 )
 async def store_document(
-    file_path: Path,
+    file_path: str,
     transform_id: str,
     metadata: DocumentMetadata
 ) -> StorageLocation:
-    """Store document and metadata"""
-    storage = DocumentStorage(Path(settings.UPLOAD_DIR))
-    async with aiofiles.open(file_path, 'rb') as f:
-        content = await f.read()
-    
-    upload_file = UploadFile(
-        filename=file_path.name,
-        file=content
-    )
-    return await storage.save_document(upload_file, transform_id, metadata)
+    """Store document in persistent storage"""
+    storage = DocumentStorage()
+    return await storage.store(file_path, transform_id, metadata)
 
 @flow(
     name="document-transformation",
@@ -73,19 +60,21 @@ async def store_document(
 )
 async def document_transformation_flow(
     transform_id: str,
-    file_paths: List[Path],
+    ontology_id: str,
+    file_paths: List[str],
     metadata: List[DocumentMetadata]
-) -> None:
+) -> Dict[str, Any]:
     """
-    Main document transformation flow
+    Main transformation flow
     
     Args:
-        transform_id: Unique transform ID
-        file_paths: List of paths to uploaded files
+        transform_id: Unique ID for this transformation
+        ontology_id: ID of the ontology to use
+        file_paths: List of paths to documents
         metadata: List of document metadata
     """
     logger = get_run_logger()
-    
+    print("Starting transformation flow")
     try:
         # Initialize progress tracking
         await progress_tracker.initialize_transform(transform_id)
@@ -99,7 +88,8 @@ async def document_transformation_flow(
         logger.info(f"Starting transformation flow {transform_id}")
         
         processed_paths = []
-        chunk_paths = []
+        doc_chunk_results = []
+        graphs = []
         
         for file_path, doc_metadata in zip(file_paths, metadata):
             try:
@@ -118,7 +108,7 @@ async def document_transformation_flow(
                 logger.info(f"Document stored at {storage_location.original_path}")
                 
                 # Convert PDF to markdown if needed
-                if file_path.suffix.lower() == '.pdf':
+                if Path(file_path).suffix.lower() == '.pdf':
                     conversion_result = await convert_pdf_to_markdown(
                         file_path=file_path,
                         transform_id=transform_id
@@ -131,23 +121,6 @@ async def document_transformation_flow(
                     processed_paths.append(str(file_path))
                     logger.info(f"Using original file: {file_path}")
                 
-                # Chunk document
-                doc_chunks = await chunk_document(
-                    file_path=Path(processed_paths[-1]),
-                    transform_id=transform_id
-                )
-                if doc_chunks:
-                    chunk_paths.extend(doc_chunks)
-                    logger.info(f"Document chunked into {len(doc_chunks)} parts")
-                    
-                    # Verify chunk quality
-                    quality_ok = await check_chunk_quality(doc_chunks, transform_id)
-                    if not quality_ok:
-                        logger.warning(
-                            f"Chunk quality check failed",
-                            extra={"transform_id": transform_id}
-                        )
-                
                 # Update progress
                 await progress_tracker.update_stage_progress(
                     transform_id,
@@ -155,7 +128,7 @@ async def document_transformation_flow(
                     len(processed_paths),
                     len(file_paths)
                 )
-            
+                
             except Exception as e:
                 logger.error(
                     f"Processing failed for file {file_path}",
@@ -171,10 +144,123 @@ async def document_transformation_flow(
             TransformationStage.PARSE
         )
         
-        # Future tasks will be added here:
-        # - Extract information
-        # - Transform to graph
-        # - Load to database
+        # Start CHUNK stage
+        await progress_tracker.start_stage(
+            transform_id,
+            TransformationStage.CHUNK
+        )
+        
+        # Chunk documents
+        for processed_path in processed_paths:
+            result, doc_chunks = await chunk_document(
+                file_path=Path(processed_path),
+                transform_id=transform_id
+            )
+            if doc_chunks:
+                doc_chunk_results.append((result, doc_chunks))
+                logger.info(f"Document chunked into {len(doc_chunks)} parts")
+                
+                # Verify chunk quality
+                quality_ok = await check_chunk_quality(doc_chunks, transform_id)
+                if not quality_ok:
+                    logger.warning(
+                        f"Chunk quality check failed",
+                        extra={"transform_id": transform_id}
+                    )
+            
+            # Update progress
+            await progress_tracker.update_stage_progress(
+                transform_id,
+                TransformationStage.CHUNK,
+                len(doc_chunk_results),
+                len(processed_paths) * settings.MAX_CHUNKS_PER_DOC
+            )
+        
+        await progress_tracker.complete_stage(
+            transform_id,
+            TransformationStage.CHUNK
+        )
+        
+        # Start TRANSFORM stage
+        await progress_tracker.start_stage(
+            transform_id,
+            TransformationStage.TRANSFORM
+        )
+        
+        # Construct knowledge graph
+        total_nodes = 0
+        total_relationships = 0
+        ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
+        for res in doc_chunk_results:
+            doc_chunks, graph = res
+            graph, metrics = await construct_knowledge_graph(
+                chunks=doc_chunks,
+                ontology_path=ontology_path,
+                transform_id=transform_id,
+                progress_callback=lambda i, t: progress_tracker.update_stage_progress(
+                    transform_id,
+                    TransformationStage.TRANSFORM,
+                    i,
+                    t
+                )
+            )
+            total_nodes = total_nodes + metrics.total_nodes
+            total_relationships = total_relationships + metrics.total_relationships
+            graphs.append(graph)
+        
+        await progress_tracker.complete_stage(
+            transform_id,
+            TransformationStage.TRANSFORM
+        )
+        
+        # Start LOAD stage
+        await progress_tracker.start_stage(
+            transform_id,
+            TransformationStage.LOAD
+        )
+        
+        # Store knowledge graph
+        nodes_stored = 0;
+        relationships_stored = 0;
+        storage_time = 0
+        storage_retries = 0
+        for graph in graphs:
+            storage_result = await store_knowledge_graph(
+                graph,
+                transform_id
+            )
+            nodes_stored = nodes_stored + storage_result.nodes_stored
+            relationships_stored = relationships_stored + storage_result.relationships_stored
+            storage_time = storage_time + storage_result.metrics.storage_time_ms
+            storage_retries = storage_retries + storage_result.metrics.retries
+        
+        # Update progress with storage metrics
+        await progress_tracker.update_stage_progress(
+            transform_id,
+            TransformationStage.LOAD,
+            nodes_stored + relationships_stored,
+            total_nodes + total_relationships,
+            metrics={
+                'nodes_stored': nodes_stored,
+                'relationships_stored': relationships_stored,
+                'storage_time_ms': storage_time,
+                'retries': storage_retries
+            }
+        )
+        
+        await progress_tracker.complete_stage(
+            transform_id,
+            TransformationStage.LOAD
+        )
+        
+        # Return flow results
+        return {
+            'transform_id': transform_id,
+            'chunks_processed': len(doc_chunk_results),
+            'nodes_created': nodes_stored,
+            'relationships_created': relationships_stored,
+            'processing_time_ms': storage_time
+        }
         
     except Exception as e:
         logger.error(f"Transform failed: {str(e)}")
@@ -187,7 +273,9 @@ async def document_transformation_flow(
             'check_chunk_quality': TransformationStage.CHUNK,
             'convert_pdf_to_markdown': TransformationStage.PARSE,
             'store_document': TransformationStage.PARSE,
-            'validate_document': TransformationStage.PARSE
+            'validate_document': TransformationStage.PARSE,
+            'construct_knowledge_graph': TransformationStage.TRANSFORM,
+            'store_knowledge_graph': TransformationStage.LOAD
         }
         current_stage = stage_map.get(
             current_task,
