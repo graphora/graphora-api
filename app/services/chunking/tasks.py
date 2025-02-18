@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from prefect import task, get_run_logger
 import json
 import aiofiles
@@ -87,7 +87,7 @@ def log_chunking_metrics(metrics: dict, transform_id: str) -> None:
 async def chunk_document(
     file_path: Path,
     transform_id: str
-) -> Optional[List[Path]]:
+) -> Optional[Tuple[ChunkingResult, List[Path]]]:
     """
     Chunk document into semantically meaningful parts
     
@@ -136,7 +136,7 @@ async def chunk_document(
             }
         )
         
-        return chunk_paths
+        return (result, chunk_paths)
         
     except Exception as e:
         logger.error(

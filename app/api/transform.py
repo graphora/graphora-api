@@ -96,6 +96,7 @@ async def upload_documents(
         background_tasks.add_task(
             document_transformation_flow,
             transform_id=transform_id,
+            ontology_id=ontology_id,
             file_paths=file_paths,
             metadata=doc_metadata
         )
