@@ -8,6 +8,8 @@ langchain_huggingface
 langchain-community
 langchain_experimental
 sentence_transformers
+sentence-transformers>=2.5.1
+psutil>=5.9.8
 neo4j>=5.27.0
 pandas>=2.2.2
 pydantic-settings>=2.7.0
@@ -36,3 +38,5 @@ aiofiles>=23.2.1
 httpx>=0.28.0
 prefect>=3.2.2
 python-magic>=0.4.27
+textstat>=0.7.3
+psutil>=7.0.0
