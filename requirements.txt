@@ -32,11 +32,13 @@ google-generativeai==0.8.3
 googleapis-common-protos==1.66.0
 anthropic[vertex]>=0.43.1
 google-genai
+vertexai>=1.71.1
 google-cloud-aiplatform==1.71.1
-vertexai==1.71.1
 aiofiles>=23.2.1
 httpx>=0.28.0
 prefect>=3.2.2
 python-magic>=0.4.27
 textstat>=0.7.3
+pyyaml>=6.0.1
 psutil>=7.0.0
+redis>=5.0.1

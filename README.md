@@ -48,6 +48,15 @@ A sophisticated document processing backend that leverages AI-powered intelligen
    uv pip install -r requirements.txt
    ```
 
+### Running Tests
+
+```bash
+# On macOS
+brew install redis
+
+# Start Redis
+brew services start redis
+```
 
 
 ### Running the Project

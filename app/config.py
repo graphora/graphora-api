@@ -111,6 +111,42 @@ class Settings(BaseSettings):
         default=30,
         description="Delay between retries in seconds"
     )
+    EXTRACTION_RETRIES: int = Field(
+        default=3,
+        description="Number of retries for extraction task"
+    )
+    CHUNK_BATCH_SIZE: int = Field(
+        default=5,
+        description="Batch size for chunking"
+    )
+
+    # Redis Cache Settings
+    REDIS_HOST: str = Field(
+        default="localhost",
+        description="Redis host"
+    )
+    REDIS_PORT: int = Field(
+        default=6379,
+        description="Redis port"
+    )
+    REDIS_DB: int = Field(
+        default=0,
+        description="Redis database number"
+    )
+    REDIS_PASSWORD: Optional[str] = Field(
+        default=None,
+        description="Redis password"
+    )
+    CACHE_TTL_HOURS: int = Field(
+        default=24,
+        description="Cache TTL in hours"
+    )
+    
+    @property
+    def REDIS_URL(self) -> str:
+        """Construct Redis URL from components"""
+        auth = f":{self.REDIS_PASSWORD}@" if self.REDIS_PASSWORD else ""
+        return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
     # LLM Settings
     DEEPSEEK_API_KEY: Optional[str] = Field(
@@ -140,6 +176,16 @@ class Settings(BaseSettings):
     VERTEXAI_LOCATION: Optional[str] = Field(
         default='us-east5',
         description="Google VertexAI Project Location for LLM operations"
+    )
+    
+    # GCP Settings
+    GCP_PROJECT_ID: str = Field(
+        default="",
+        description="Google Cloud Project ID"
+    )
+    GCP_LOCATION: str = Field(
+        default="us-central1",
+        description="Google Cloud region"
     )
     
     MOCK_MODE: bool = Field(
