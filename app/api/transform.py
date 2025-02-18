@@ -1,7 +1,5 @@
-from fastapi import APIRouter, UploadFile, File, BackgroundTasks, Request, HTTPException
+from fastapi import APIRouter, File, UploadFile, HTTPException, Request, BackgroundTasks
 from typing import List
-from datetime import datetime, timezone
-from pathlib import Path
 import aiofiles
 import uuid
 from fastapi.responses import JSONResponse
@@ -13,14 +11,45 @@ from app.schemas.transform import (
     DocumentType,
     TransformStatus
 )
-from app.services.transform.flows import document_transformation_flow
 from app.services.transform.validators import FileValidator
-from app.services.transform.progress_tracker import ProgressTracker
+from app.services.transform.flows import document_transformation_flow
 from app.services.transform.status_models import DetailedTransformStatus
 from app.config import settings
+from pathlib import Path
+from datetime import datetime, timezone
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
-progress_tracker = ProgressTracker()
+
+async def run_transform_flow(
+    transform_id: str,
+    ontology_id: str,
+    file_paths: List[Path],
+    metadata: List[DocumentMetadata]
+):
+    """Run the transform flow asynchronously"""
+    try:
+        # Convert Path objects to strings
+        file_paths_str = [str(path) for path in file_paths]
+        
+        # Deploy and run flow
+        name=f"transform-{transform_id}"
+        deployment = await document_transformation_flow.with_options(name=name).deploy(
+            name=name,
+            work_pool_name=settings.PREFECT_WORKPOOL_TRANSFORM
+        )
+        flow_run = await deployment.create_flow_run(
+            parameters={
+                "transform_id": transform_id,
+                "ontology_id": ontology_id,
+                "file_paths": file_paths_str,
+                "metadata": metadata
+            }
+        )
+        await flow_run.start()
+        logger.info(f"Started flow run with ID: {flow_run.id}")
+    except Exception as e:
+        logger.error(f"Failed to start flow run: {str(e)}")
+        raise
 
 @router.post("/transform/{ontology_id}/upload", response_model=TransformInitResponse)
 async def upload_documents(
@@ -94,7 +123,7 @@ async def upload_documents(
         
         # Start Prefect flow in background
         background_tasks.add_task(
-            document_transformation_flow,
+            run_transform_flow,
             transform_id=transform_id,
             ontology_id=ontology_id,
             file_paths=file_paths,
@@ -109,6 +138,7 @@ async def upload_documents(
         )
         
     except Exception as e:
+        logger.error(f"Upload failed: {str(e)}")
         # Clean up temp directory on error
         if temp_dir.exists():
             for file in temp_dir.glob("*"):

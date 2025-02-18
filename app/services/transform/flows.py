@@ -56,7 +56,10 @@ async def store_document(
     name="document-transformation",
     description="Transform document to knowledge graph",
     version="1.0.0",
-    log_prints=True
+    log_prints=True,
+    persist_result=True,
+    retries=2,
+    retry_delay_seconds=30
 )
 async def document_transformation_flow(
     transform_id: str,
@@ -74,6 +77,7 @@ async def document_transformation_flow(
         metadata: List of document metadata
     """
     logger = get_run_logger()
+    logger.info(f"Starting transformation flow with ID: {transform_id}")
     print("Starting transformation flow")
     try:
         # Initialize progress tracking
