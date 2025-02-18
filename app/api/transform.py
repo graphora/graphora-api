@@ -5,7 +5,7 @@ from pathlib import Path
 import aiofiles
 import uuid
 from fastapi.responses import JSONResponse
-
+from app.utils.logger import logger
 from app.schemas.transform import (
     TransformInitResponse,
     DocumentMetadata,
@@ -50,12 +50,15 @@ async def upload_documents(
         temp_dir = Path(settings.UPLOAD_DIR) / transform_id
         temp_dir.mkdir(parents=True, exist_ok=True)
         
+        logger.info(f"Created transform TMP directory {temp_dir}")
+        
         file_paths = []
         doc_metadata = []
         
         for file in files:
             # Validate file
             validation_result = await validator.validate(file)
+            logger.info(f"Validated file {file.filename}: {validation_result}")
             if not validation_result.is_valid:
                 raise HTTPException(
                     status_code=400,
@@ -70,6 +73,7 @@ async def upload_documents(
                 await f.write(content)
             
             file_paths.append(temp_path)
+            logger.info(f"File saved to TMP directory {temp_path}")
             
             # Create metadata
             metadata = DocumentMetadata(
@@ -78,6 +82,7 @@ async def upload_documents(
                 tags=[ontology_id]
             )
             doc_metadata.append(metadata)
+            logger.info(f"Created document metadata {metadata}")
             
             # Create document info for response
             doc_info = DocumentInfo(
@@ -134,7 +139,7 @@ async def get_transform_status(
         HTTPException: If transform not found or other error
     """
     try:
-        # Get status
+        # Get status)
         status = await progress_tracker.get_detailed_status(transform_id)
         
         if not status:

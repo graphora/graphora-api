@@ -7,15 +7,16 @@ from app.api.graph import router as graph_router
 from app.api.merge import router as merge_router  # Add merge import
 from app.config import settings
 from app.utils.logger import logger
+from app.services.transform.prefect_client import configure_prefect
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Graphit API")
     # Add any additional startup tasks here
+    configure_prefect()
     
     yield  # Server is running
-    
     # Shutdown
     logger.info("Shutting down Graphit API")
     # Add any cleanup tasks here
@@ -44,6 +45,11 @@ app.include_router(ontology_router)
 app.include_router(transform_router)
 app.include_router(graph_router)
 app.include_router(merge_router)
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy"}
 
 if __name__ == "__main__":
     import uvicorn
