@@ -1,67 +1,109 @@
-import json
-import aiofiles
 from pathlib import Path
+import aiofiles
+import json
 from fastapi import UploadFile
-from typing import Optional
+from typing import Optional, Union
 from app.schemas.transform import StorageLocation, DocumentMetadata
+from prefect.filesystems import LocalFileSystem
+from app.config import settings
+import shutil
+import os
 
 class DocumentStorage:
-    def __init__(self, base_path: Path):
-        """
-        Initialize document storage with base path
-        
-        Directory structure:
-        base_path/
-          ├── uploads/
-          │   └── {transform_id}/
-          │       ├── original/
-          │       ├── processed/
-          │       └── metadata.json
-        """
+    def __init__(self, base_path: Union[str, Path]):
+        """Initialize document storage with base path"""
         self.base_path = Path(base_path)
-        self.uploads_dir = self.base_path / "uploads"
-        self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        self.base_path.mkdir(parents=True, exist_ok=True)
     
     async def save_document(
         self,
-        file: UploadFile,
+        file: Union[str, Path],
         transform_id: str,
         metadata: DocumentMetadata
     ) -> StorageLocation:
         """
-        Save uploaded document and its metadata
+        Save document and metadata to storage
         
         Args:
-            file: FastAPI UploadFile object
+            file: File path as string or Path object
             transform_id: Unique transform ID
             metadata: Document metadata
             
         Returns:
-            StorageLocation with paths to saved files
+            StorageLocation with paths to stored files
         """
-        # Create transform directory structure
-        transform_dir = self.uploads_dir / transform_id
-        original_dir = transform_dir / "original"
-        processed_dir = transform_dir / "processed"
+        try:
+            # Create transform directory
+            transform_dir = self.base_path / transform_id
+            transform_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Get source file path
+            source_path = Path(file).resolve()
+            if not source_path.exists():
+                raise FileNotFoundError(f"Source file not found: {source_path}")
+            
+            # Create destination path
+            dest_path = (transform_dir / source_path.name).resolve()
+            
+            # Only copy if source and destination are different
+            if source_path != dest_path:
+                shutil.copy2(source_path, dest_path)
+            
+            # Save metadata
+            metadata_path = transform_dir / f"{source_path.name}.metadata.json"
+            async with aiofiles.open(metadata_path, 'w') as f:
+                await f.write(metadata.model_dump_json())
+            
+            return StorageLocation(
+                transform_id=transform_id,
+                original_path=str(dest_path),
+                processed_path=None,  # Will be set during processing
+                metadata_path=str(metadata_path)
+            )
+            
+        except Exception as e:
+            # Clean up on error
+            if 'transform_dir' in locals() and transform_dir.exists():
+                shutil.rmtree(transform_dir)
+            raise Exception(f"Failed to save document: {str(e)}")
+    
+    async def get_document(
+        self,
+        transform_id: str,
+        filename: str
+    ) -> Optional[StorageLocation]:
+        """
+        Get document and metadata from storage
         
-        for dir_path in [transform_dir, original_dir, processed_dir]:
-            dir_path.mkdir(parents=True, exist_ok=True)
+        Args:
+            transform_id: Unique transform ID
+            filename: Name of document file
+            
+        Returns:
+            StorageLocation if found, None otherwise
+        """
+        transform_dir = self.base_path / transform_id
+        if not transform_dir.exists():
+            return None
         
-        # Save original file
-        original_path = original_dir / file.filename
-        async with aiofiles.open(original_path, 'wb') as f:
-            content = await file.read()
-            await file.seek(0)
-            await f.write(content)
+        doc_path = transform_dir / filename
+        metadata_path = transform_dir / f"{filename}.metadata.json"
         
-        # Save metadata
-        metadata_path = transform_dir / "metadata.json"
-        async with aiofiles.open(metadata_path, 'w') as f:
-            await f.write(metadata.model_dump_json(indent=2))
+        if not doc_path.exists() or not metadata_path.exists():
+            return None
         
         return StorageLocation(
             transform_id=transform_id,
-            original_path=str(original_path),
-            processed_path=None,  # Will be set during processing
+            original_path=str(doc_path),
+            processed_path=None,
             metadata_path=str(metadata_path)
         )
+
+def get_flow_storage():
+    """Get local filesystem storage for Prefect flows"""
+    storage_path = Path(settings.UPLOAD_DIR) / "prefect" / "flows"
+    storage_path.mkdir(parents=True, exist_ok=True)
+    
+    return LocalFileSystem(
+        basepath=str(storage_path),
+    )

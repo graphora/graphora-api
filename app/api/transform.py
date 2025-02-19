@@ -14,9 +14,11 @@ from app.schemas.transform import (
 from app.services.transform.validators import FileValidator
 from app.services.transform.flows import document_transformation_flow
 from app.services.transform.status_models import DetailedTransformStatus
+from app.services.transform.storage import get_flow_storage
 from app.config import settings
 from pathlib import Path
 from datetime import datetime, timezone
+import asyncio
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
 
@@ -31,22 +33,16 @@ async def run_transform_flow(
         # Convert Path objects to strings
         file_paths_str = [str(path) for path in file_paths]
         
-        # Deploy and run flow
-        name=f"transform-{transform_id}"
-        deployment = await document_transformation_flow.with_options(name=name).deploy(
-            name=name,
-            work_pool_name=settings.PREFECT_WORKPOOL_TRANSFORM
+        # Run the flow
+        flow_state = await document_transformation_flow(
+            transform_id=transform_id,
+            ontology_id=ontology_id,
+            file_paths=file_paths_str,
+            metadata=metadata
         )
-        flow_run = await deployment.create_flow_run(
-            parameters={
-                "transform_id": transform_id,
-                "ontology_id": ontology_id,
-                "file_paths": file_paths_str,
-                "metadata": metadata
-            }
-        )
-        await flow_run.start()
-        logger.info(f"Started flow run with ID: {flow_run.id}")
+        
+        logger.info(f"Started flow run with state: {flow_state}")
+            
     except Exception as e:
         logger.error(f"Failed to start flow run: {str(e)}")
         raise
