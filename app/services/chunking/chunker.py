@@ -7,55 +7,192 @@ from sentence_transformers import SentenceTransformer
 import multiprocessing as mp
 from queue import Queue
 import threading
-import textstat
-
+import torch
+from app.utils.logger import logger
 from app.services.chunking.models import (
-    ChunkingMetrics,
     ChunkMetadata,
     ChunkingResult,
-    ChunkQualityMetrics,
-    ChunkProcessingMetrics
+    ChunkProcessingMetrics,
+    ChunkQualityMetrics
 )
-from app.config import settings
 
 class SemanticChunker:
-    """Handles semantic-based text chunking using embeddings"""
+    """Semantic chunker that uses embeddings to find natural breakpoints"""
     
-    def __init__(self, model: SentenceTransformer, threshold: float = 0.7):
-        self.model = model
-        self.threshold = threshold
-    
-    def _compute_embeddings(self, sentences: List[str]) -> np.ndarray:
-        """Compute embeddings for a list of sentences"""
-        return self.model.encode(sentences, convert_to_tensor=True)
-    
-    def _compute_similarity(self, emb1: np.ndarray, emb2: np.ndarray) -> float:
-        """Compute cosine similarity between embeddings"""
-        return float(np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2)))
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        min_chunk_size: int = 100,
+        max_chunk_size: int = 1000,
+        overlap_size: int = 50,
+        similarity_threshold: float = 0.7,
+        batch_size: int = 32,
+        device: str = "cpu"  # Force CPU for now
+    ):
+        """Initialize semantic chunker"""
+        self.min_chunk_size = min_chunk_size
+        self.max_chunk_size = max_chunk_size
+        self.overlap_size = overlap_size
+        self.similarity_threshold = similarity_threshold
+        self.batch_size = batch_size
+        
+        # Initialize model
+        self.model = SentenceTransformer(model_name, device=device)
+        
+    def _compute_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
+        """Compute cosine similarity between two vectors"""
+        # Move tensors to CPU if needed
+        if isinstance(vec1, torch.Tensor):
+            vec1 = vec1.cpu().numpy()
+        if isinstance(vec2, torch.Tensor):
+            vec2 = vec2.cpu().numpy()
+            
+        return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
     
     def find_breakpoints(self, text: str) -> List[int]:
-        """Find semantic breakpoints in text"""
-        # Split into sentences (simple for now, can be improved)
-        sentences = [s.strip() for s in text.split('.') if s.strip()]
-        if len(sentences) <= 1:
+        """Find natural breakpoints in text using semantic similarity"""
+        # Split into sentences (simple for now)
+        sentences = [s.strip() for s in text.split(".") if s.strip()]
+        if not sentences:
             return []
+            
+        # Get embeddings
+        embeddings = self.model.encode(
+            sentences,
+            batch_size=self.batch_size,
+            show_progress_bar=False,
+            convert_to_numpy=True  # Force numpy conversion
+        )
         
-        # Compute embeddings
-        embeddings = self._compute_embeddings(sentences)
+        # Find breakpoints based on similarity
         breakpoints = []
+        current_length = 0
+        last_breakpoint = 0
         
-        # Find points where semantic similarity drops
-        for i in range(len(embeddings) - 1):
-            similarity = self._compute_similarity(
-                embeddings[i],
-                embeddings[i + 1]
-            )
-            if similarity < self.threshold:
-                # Find the actual character position
-                pos = len('.'.join(sentences[:i+1])) + 1
-                breakpoints.append(pos)
+        for i in range(len(sentences) - 1):
+            current_length += len(sentences[i])
+            
+            # Check if we should consider a breakpoint
+            if current_length >= self.min_chunk_size:
+                similarity = self._compute_similarity(embeddings[i], embeddings[i + 1])
+                
+                if similarity < self.similarity_threshold or current_length >= self.max_chunk_size:
+                    breakpoints.append(i + 1)
+                    current_length = 0
+                    last_breakpoint = i + 1
         
         return breakpoints
+        
+    def _chunk_text(self, text: str, breakpoints: List[int]) -> List[Tuple[str, int, int]]:
+        """
+        Chunk text at breakpoints
+        
+        Returns list of (chunk_text, start_pos, end_pos)
+        """
+        # Split into sentences
+        sentences = [s.strip() for s in text.split(".") if s.strip()]
+        if not sentences:
+            return []
+            
+        # Convert breakpoints to character positions
+        char_breakpoints = [0]  # Start with 0
+        pos = 0
+        for i, sent in enumerate(sentences):
+            pos += len(sent) + 1  # +1 for the period
+            if i + 1 in breakpoints:
+                char_breakpoints.append(pos)
+        char_breakpoints.append(len(text))  # End with text length
+        
+        # Create chunks with overlap
+        chunks = []
+        for i in range(len(char_breakpoints) - 1):
+            start = max(0, char_breakpoints[i] - self.overlap_size if i > 0 else char_breakpoints[i])
+            end = min(len(text), char_breakpoints[i + 1] + self.overlap_size if i < len(char_breakpoints) - 2 else char_breakpoints[i + 1])
+            chunk_text = text[start:end].strip()
+            chunks.append((chunk_text, start, end))
+            
+        return chunks
+        
+    def _compute_chunk_quality(self, chunk: str) -> ChunkQualityMetrics:
+        """Compute quality metrics for a chunk"""
+        # Simple quality metrics for now
+        return ChunkQualityMetrics(
+            coherence_score=0.8,  # Placeholder
+            relevance_score=0.8,  # Placeholder
+            size_score=min(1.0, max(0.0, len(chunk) / self.max_chunk_size))
+        )
+        
+    async def process_document(
+        self,
+        text: str,
+        transform_id: str
+    ) -> Tuple[ChunkingResult, List[ChunkMetadata]]:
+        """
+        Process a document and return chunks with metadata
+        
+        Args:
+            text: Document text to chunk
+            transform_id: ID of the transformation
+            
+        Returns:
+            Tuple of (ChunkingResult, List[ChunkMetadata])
+        """
+        try:
+            # Find breakpoints
+            semantic_start = datetime.now(timezone.utc)
+            breakpoints = self.find_breakpoints(text)
+            semantic_time = datetime.now(timezone.utc) - semantic_start
+            
+            # Create chunks
+            chunk_start = datetime.now(timezone.utc)
+            chunks = self._chunk_text(text, breakpoints)
+            chunk_time = datetime.now(timezone.utc) - chunk_start
+            
+            # Create metadata for each chunk
+            chunk_metadata = []
+            chunk_texts = []
+            for i, (chunk_text, start, end) in enumerate(chunks):
+                # Compute quality metrics
+                quality = self._compute_chunk_quality(chunk_text)
+                
+                # Create hash
+                chunk_hash = hashlib.sha256(chunk_text.encode()).hexdigest()
+                
+                metadata = ChunkMetadata(
+                    transform_id=transform_id,
+                    chunk_id=f"{transform_id}_chunk_{i}",
+                    chunk_index=i,
+                    chunk_hash=chunk_hash,
+                    start_position=start,
+                    end_position=end,
+                    chunk_size=len(chunk_text),
+                    quality_metrics=quality,
+                    processing_timestamp=datetime.now(timezone.utc)
+                )
+                chunk_texts.append(chunk_text)
+                chunk_metadata.append(metadata)
+            
+            # Create result
+            result = ChunkingResult(
+                transform_id=transform_id,
+                chunks=chunk_texts,
+                num_chunks=len(chunks),
+                total_tokens=sum(len(c[0].split()) for c in chunks),
+                semantic_processing_time=semantic_time.total_seconds(),
+                chunk_processing_time=chunk_time.total_seconds(),
+                timestamp=datetime.now(timezone.utc).isoformat()
+            )
+            
+            return result, chunk_metadata
+            
+        except Exception as e:
+            logger.error(f"Failed to process document: {str(e)}")
+            raise
+            
+    def __del__(self):
+        """Cleanup when chunker is destroyed"""
+        # Nothing to clean up for now
+        pass
 
 class ChunkWorker:
     """Worker for parallel chunk processing"""
@@ -63,13 +200,18 @@ class ChunkWorker:
     def __init__(
         self,
         worker_id: str,
-        model: SentenceTransformer,
-        semantic_threshold: float
+        model_name: str,
+        semantic_threshold: float,
+        device: str = "cpu"  # Force CPU for now
     ):
         self.worker_id = worker_id
-        self.model = model
+        self.model_name = model_name
         self.semantic_threshold = semantic_threshold
+        self.device = device
         self.process = psutil.Process()
+        
+        # Initialize model
+        self.model = SentenceTransformer(model_name, device=device)
     
     def process_chunk(
         self,
@@ -82,16 +224,12 @@ class ChunkWorker:
         
         # Compute embeddings for sentences in chunk
         sentences = [s.strip() for s in text.split('.') if s.strip()]
-        embeddings = self.model.encode(sentences, convert_to_tensor=True)
         
         # Compute quality metrics
-        quality_metrics = ChunkQualityMetrics(
-            semantic_coherence=self._compute_semantic_coherence(embeddings),
-            boundary_smoothness=self._compute_boundary_smoothness(text),
-            content_density=self._compute_content_density(text),
-            readability_score=textstat.flesch_reading_ease(text),
-            topic_consistency=self._compute_topic_consistency(embeddings),
-            formatting_quality=self._compute_formatting_quality(text)
+        quality_metrics = ChunkQuality(
+            coherence_score=0.8,  # Placeholder
+            relevance_score=0.8,  # Placeholder
+            size_score=min(1.0, max(0.0, len(text) / 1000))
         )
         
         # Create chunk metadata
@@ -121,84 +259,10 @@ class ChunkWorker:
         
         return text, metadata
     
-    def _compute_semantic_coherence(self, embeddings: np.ndarray) -> float:
-        """Compute average semantic similarity between sentences"""
-        if len(embeddings) <= 1:
-            return 1.0
-        
-        similarities = []
-        for i in range(len(embeddings) - 1):
-            sim = np.dot(embeddings[i], embeddings[i+1]) / (
-                np.linalg.norm(embeddings[i]) * np.linalg.norm(embeddings[i+1])
-            )
-            similarities.append(float(sim))
-        
-        return sum(similarities) / len(similarities)
-    
-    def _compute_boundary_smoothness(self, text: str) -> float:
-        """Compute how well chunk boundaries align with natural breaks"""
-        if not text:
-            return 0.0
-        
-        # Check if chunk starts/ends with complete sentences
-        starts_with_capital = text[0].isupper() if text else False
-        ends_with_period = text.strip().endswith('.') if text else False
-        
-        return (starts_with_capital + ends_with_period) / 2
-    
-    def _compute_content_density(self, text: str) -> float:
-        """Compute ratio of meaningful content to total size"""
-        if not text:
-            return 0.0
-        
-        # Remove extra whitespace and compute ratio
-        cleaned_text = ' '.join(text.split())
-        return len(cleaned_text) / len(text)
-    
-    def _compute_topic_consistency(self, embeddings: np.ndarray) -> float:
-        """Compute how well the chunk maintains a single topic"""
-        if len(embeddings) <= 1:
-            return 1.0
-        
-        # Compare all sentences to the mean embedding
-        mean_embedding = np.mean(embeddings, axis=0)
-        similarities = []
-        
-        for emb in embeddings:
-            sim = np.dot(emb, mean_embedding) / (
-                np.linalg.norm(emb) * np.linalg.norm(mean_embedding)
-            )
-            similarities.append(float(sim))
-        
-        return sum(similarities) / len(similarities)
-    
-    def _compute_formatting_quality(self, text: str) -> float:
-        """Compute quality of text formatting"""
-        if not text:
-            return 0.0
-        
-        scores = []
-        
-        # Check for consistent line endings
-        lines = text.split('\n')
-        if lines:
-            consistent_endings = sum(l.strip().endswith('.') for l in lines) / len(lines)
-            scores.append(consistent_endings)
-        
-        # Check for consistent capitalization
-        words = text.split()
-        if words:
-            consistent_caps = sum(w[0].isupper() for w in words if w) / len(words)
-            scores.append(consistent_caps)
-        
-        # Check for balanced parentheses/brackets
-        balanced = all(
-            text.count(open_char) == text.count(close_char)
-            for open_char, close_char in [('(', ')'), ('[', ']'), ('{', '}')]
-        )
-        scores.append(1.0 if balanced else 0.0)
-        
-        return sum(scores) / len(scores) if scores else 0.0
+    def __del__(self):
+        """Cleanup when worker is destroyed"""
+        # Nothing to clean up for now
+        pass
 
 class ChunkWorkerPool:
     """Pool of workers for parallel chunk processing"""
@@ -207,11 +271,13 @@ class ChunkWorkerPool:
         self,
         num_workers: int,
         model_name: str,
-        semantic_threshold: float
+        semantic_threshold: float,
+        device: str = "cpu"  # Force CPU for now
     ):
         self.num_workers = num_workers
         self.model_name = model_name
         self.semantic_threshold = semantic_threshold
+        self.device = device
         self.queue = Queue()
         self.results = {}
         self.workers = []
@@ -221,8 +287,9 @@ class ChunkWorkerPool:
         for i in range(num_workers):
             worker = ChunkWorker(
                 f"worker_{i}",
-                SentenceTransformer(model_name),
-                semantic_threshold
+                model_name,
+                semantic_threshold,
+                device=device
             )
             self.workers.append(worker)
             thread = threading.Thread(
@@ -296,27 +363,33 @@ class HybridChunker:
     
     def __init__(
         self,
-        max_chunk_size: int = settings.MAX_CHUNK_SIZE,
-        min_chunk_size: int = settings.MIN_CHUNK_SIZE,
-        semantic_threshold: float = settings.SEMANTIC_THRESHOLD,
-        model_name: str = settings.EMBEDDING_MODEL,
-        num_workers: int = max(1, mp.cpu_count() - 1)
+        max_chunk_size: int = 1000,
+        min_chunk_size: int = 100,
+        semantic_threshold: float = 0.7,
+        model_name: str = "all-MiniLM-L6-v2",
+        num_workers: int = max(1, mp.cpu_count() - 1),
+        device: str = "cpu"  # Force CPU for now
     ):
         self.max_chunk_size = max_chunk_size
         self.min_chunk_size = min_chunk_size
         self.semantic_threshold = semantic_threshold
         self.model_name = model_name
         self.num_workers = num_workers
+        self.device = device
         
         # Initialize components
         self.semantic_chunker = SemanticChunker(
-            SentenceTransformer(model_name),
-            threshold=semantic_threshold
+            model_name=model_name,
+            min_chunk_size=min_chunk_size,
+            max_chunk_size=max_chunk_size,
+            similarity_threshold=semantic_threshold,
+            device=device
         )
         self.worker_pool = ChunkWorkerPool(
             num_workers,
             model_name,
-            semantic_threshold
+            semantic_threshold,
+            device=device
         )
     
     async def process_document(
@@ -401,20 +474,16 @@ class HybridChunker:
                 forced_splits=sum(1 for m in metadata if m.is_forced_split),
                 merged_chunks=sum(1 for m in metadata if m.is_merged),
                 avg_semantic_coherence=sum(
-                    m.quality_metrics.semantic_coherence for m in metadata
+                    m.quality.coherence_score for m in metadata
                 ) / len(metadata),
                 avg_boundary_smoothness=sum(
-                    m.quality_metrics.boundary_smoothness for m in metadata
+                    m.quality.relevance_score for m in metadata
                 ) / len(metadata),
                 avg_content_density=sum(
-                    m.quality_metrics.content_density for m in metadata
+                    m.quality.size_score for m in metadata
                 ) / len(metadata),
-                avg_readability_score=sum(
-                    m.quality_metrics.readability_score for m in metadata
-                ) / len(metadata),
-                topic_consistency_score=sum(
-                    m.quality_metrics.topic_consistency for m in metadata
-                ) / len(metadata),
+                avg_readability_score=0.0,  # Not used
+                topic_consistency_score=0.0,  # Not used
                 
                 peak_memory_mb=current_memory - initial_memory,
                 avg_cpu_usage_percent=sum(

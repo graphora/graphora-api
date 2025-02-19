@@ -1,20 +1,20 @@
-from typing import List, Tuple
+from typing import List, Callable, Tuple, Optional
 from pathlib import Path
 from prefect import task, get_run_logger
 import yaml
-import json
-import asyncio
-
-from app.services.transform.graph_builder import (
-    ModelGenerator,
-    KnowledgeGraphBuilder
-)
+import traceback
 from app.services.transform.models import (
     KnowledgeGraph,
     ExtractionMetrics,
     OntologyDefinition
 )
+from app.services.transform.graph_builder import (
+    OntologyParser,
+    KnowledgeGraphBuilder
+)
+from app.services.llm.client import LLMClient
 from app.config import settings
+from app.utils.logger import logger
 
 def log_extraction_metrics(metrics: ExtractionMetrics, transform_id: str) -> None:
     """Log extraction metrics to Prefect"""
@@ -76,111 +76,42 @@ async def load_and_validate_ontology(
         raise ValueError(f"Invalid ontology file: {str(e)}")
 
 @task(
-    name="knowledge-graph-construction",
-    retries=settings.EXTRACTION_RETRIES,
-    retry_delay_seconds=settings.RETRY_DELAY_SECONDS,
-    tags=["processing", "knowledge-graph"]
+    name="ontology-extraction",
+    retries=settings.TRANSFORM_RETRIES,
+    retry_delay_seconds=settings.RETRY_DELAY_SECONDS
 )
 async def construct_knowledge_graph(
     chunks: List[str],
     ontology_path: Path,
     transform_id: str,
-    chunk_batch_size: int = settings.CHUNK_BATCH_SIZE
-) -> Tuple[KnowledgeGraph, ExtractionMetrics]:
-    """
-    Construct knowledge graph from document chunks
-    
-    Args:
-        chunks: List of text chunks to process
-        ontology_path: Path to ontology YAML file
-        transform_id: Transform ID for tracking
-        chunk_batch_size: Number of chunks to process in parallel
-        
-    Returns:
-        Tuple of (KnowledgeGraph, ExtractionMetrics)
-    """
+    progress_callback: Optional[Callable[[int, int], None]] = None
+) -> Tuple[Optional[KnowledgeGraph], Optional[ExtractionMetrics]]:
+    """Construct knowledge graph from chunks using ontology"""
     logger = get_run_logger()
     
     try:
+        logger.info(f"Processing {len(chunks)} chunks for transform {transform_id}")
+        
         # Load and validate ontology
-        ontology = await load_and_validate_ontology(ontology_path)
-        logger.info(
-            f"Loaded ontology with {len(ontology.entities)} entities"
-        )
+        parser = OntologyParser(ontology_path)
+        parser.validate()
         
-        # Generate models
-        model_gen = ModelGenerator(yaml.dump(ontology.model_dump()))
-        models = model_gen.generate_models()
-        logger.info(f"Generated {len(models)} Pydantic models")
+        # Initialize builder
+        builder = KnowledgeGraphBuilder(parser)
         
-        # Initialize graph builder
-        builder = KnowledgeGraphBuilder(models)
-        builder.graph.metrics.total_chunks = len(chunks)
-        
-        # Process chunks in batches
-        for i in range(0, len(chunks), chunk_batch_size):
-            batch = chunks[i:i + chunk_batch_size]
-            
-            # Process batch in parallel
-            tasks = [
-                builder.process_chunk(
-                    chunk,
-                    f"chunk_{i+j}"
-                )
-                for j, chunk in enumerate(batch)
-            ]
-            
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # Add successful extractions to graph
-            for result in results:
-                if isinstance(result, list):  # Successful extraction
-                    builder.add_nodes_to_graph(result)
-                else:  # Exception occurred
-                    logger.error(
-                        f"Chunk processing failed: {str(result)}"
-                    )
-        
-        # Finalize graph
-        final_graph = builder.finalize_graph()
+        # Process chunks
+        graph, metrics = await builder.process_chunks(chunks, progress_callback)
         
         # Log metrics
-        log_extraction_metrics(final_graph.metrics, transform_id)
-        
-        # Save graph state
-        graph_path = (
-            Path(settings.UPLOAD_DIR) / 
-            transform_id / 
-            "knowledge_graph.json"
-        )
-        graph_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(graph_path, "w") as f:
-            json.dump({
-                "nodes": {
-                    node_id: node.model_dump()
-                    for node_id, node in final_graph.nodes.items()
-                },
-                "relationships": [
-                    rel.model_dump() for rel in final_graph.relationships
-                ],
-                "metrics": final_graph.metrics.model_dump()
-            }, f, indent=2, default=str)
-        
         logger.info(
-            f"Knowledge graph saved to {graph_path}",
-            extra={
-                "transform_id": transform_id,
-                "node_count": len(final_graph.nodes),
-                "relationship_count": len(final_graph.relationships)
-            }
+            f"Extraction completed: "
+            f"{metrics.new_nodes} new nodes, {metrics.merged_nodes} merged nodes, "
+            f"{metrics.total_relationships} relationships"
         )
         
-        return final_graph, final_graph.metrics
+        return graph, metrics
         
     except Exception as e:
-        logger.error(
-            f"Graph construction failed: {str(e)}",
-            extra={"transform_id": transform_id}
-        )
-        raise
+        logger.error(f"Knowledge graph extraction failed: {str(e)}")
+        traceback.print_exc()
+        return None, None

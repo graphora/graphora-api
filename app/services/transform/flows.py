@@ -1,11 +1,11 @@
 from prefect import flow, task
 from prefect.context import get_run_context
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 import aiofiles
 from fastapi import UploadFile
-
+from app.utils.logger import logger
 from app.schemas.transform import (
     DocumentMetadata,
     ValidationResult,
@@ -24,7 +24,6 @@ from app.services.transform.status_models import (
     TransformationStage,
     ErrorSummary
 )
-from app.utils.logger import logger
 
 progress_tracker = ProgressTracker()
 
@@ -66,6 +65,19 @@ async def store_document(
     storage = DocumentStorage(base_path=settings.UPLOAD_DIR)
     return await storage.save_document(file_path, transform_id, metadata)
 
+async def update_stage_progress(transform_id: str, stage: TransformationStage, 
+                                items_processed: int, items_total: int):
+    """Update progress for transformation stage"""
+    try:
+        await progress_tracker.update_stage_progress(
+            transform_id,
+            stage,
+            items_processed,
+            items_total
+        )
+    except Exception as e:
+        logger.error(f"Failed to update progress: {str(e)}")
+
 @flow(
     name="document-transformation",
     description="Transform document to knowledge graph",
@@ -88,9 +100,7 @@ async def document_transformation_flow(
         file_paths: List of paths to documents
         metadata: List of document metadata
     """
-    logger = get_run_logger()
     logger.info(f"Starting transformation flow with ID: {transform_id}")
-    print("Starting transformation flow")
     try:
         # Initialize progress tracking
         await progress_tracker.initialize_transform(transform_id)
@@ -138,12 +148,8 @@ async def document_transformation_flow(
                     logger.info(f"Using original file: {file_path}")
                 
                 # Update progress
-                await progress_tracker.update_stage_progress(
-                    transform_id,
-                    TransformationStage.PARSE,
-                    len(processed_paths),
-                    len(file_paths)
-                )
+                await update_stage_progress(transform_id, TransformationStage.PARSE, 
+                                            len(processed_paths), len(file_paths))
                 
             except Exception as e:
                 logger.error(
@@ -177,7 +183,7 @@ async def document_transformation_flow(
                 logger.info(f"Document chunked into {len(doc_chunks)} parts")
                 
                 # Verify chunk quality
-                quality_ok = await check_chunk_quality(doc_chunks, transform_id)
+                quality_ok = await check_chunk_quality(doc_chunks)
                 if not quality_ok:
                     logger.warning(
                         f"Chunk quality check failed",
@@ -185,12 +191,8 @@ async def document_transformation_flow(
                     )
             
             # Update progress
-            await progress_tracker.update_stage_progress(
-                transform_id,
-                TransformationStage.CHUNK,
-                len(doc_chunk_results),
-                len(processed_paths) * settings.MAX_CHUNKS_PER_DOC
-            )
+            await update_stage_progress(transform_id, TransformationStage.CHUNK, 
+                                        len(doc_chunk_results), len(processed_paths))
         
         await progress_tracker.complete_stage(
             transform_id,
@@ -203,31 +205,33 @@ async def document_transformation_flow(
             TransformationStage.TRANSFORM
         )
         
-        # Construct knowledge graph
+        # Initialize metrics
         total_nodes = 0
         total_relationships = 0
         ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
+        
+        # Process each document
+        print(doc_chunk_results)
         for res in doc_chunk_results:
-            doc_chunks, graph = res
-            graph, metrics = await construct_knowledge_graph(
-                chunks=doc_chunks,
-                ontology_path=ontology_path,
-                transform_id=transform_id,
-                progress_callback=lambda i, t: progress_tracker.update_stage_progress(
-                    transform_id,
-                    TransformationStage.TRANSFORM,
-                    i,
-                    t
+            result, graph = res
+            if result and result.chunks:
+                graph, metrics = await construct_knowledge_graph(
+                    chunks=result.chunks,
+                    ontology_path=ontology_path,
+                    transform_id=transform_id,
+                    progress_callback=lambda i, t: update_stage_progress(transform_id, TransformationStage.TRANSFORM, i, t)
                 )
-            )
-            total_nodes = total_nodes + metrics.total_nodes
-            total_relationships = total_relationships + metrics.total_relationships
-            graphs.append(graph)
+                
+                if graph and metrics:
+                    total_nodes += metrics.total_nodes
+                    total_relationships += metrics.total_relationships
         
         await progress_tracker.complete_stage(
             transform_id,
             TransformationStage.TRANSFORM
         )
+        
+        print(graphs)
         
         # Start LOAD stage
         await progress_tracker.start_stage(
@@ -251,18 +255,9 @@ async def document_transformation_flow(
             storage_retries = storage_retries + storage_result.metrics.retries
         
         # Update progress with storage metrics
-        await progress_tracker.update_stage_progress(
-            transform_id,
-            TransformationStage.LOAD,
-            nodes_stored + relationships_stored,
-            total_nodes + total_relationships,
-            metrics={
-                'nodes_stored': nodes_stored,
-                'relationships_stored': relationships_stored,
-                'storage_time_ms': storage_time,
-                'retries': storage_retries
-            }
-        )
+        await update_stage_progress(transform_id, TransformationStage.LOAD, 
+                                    (nodes_stored + relationships_stored), 
+                                    (total_nodes + total_relationships))
         
         await progress_tracker.complete_stage(
             transform_id,
@@ -272,14 +267,18 @@ async def document_transformation_flow(
         # Return flow results
         return {
             'transform_id': transform_id,
-            'chunks_processed': len(doc_chunk_results),
-            'nodes_created': nodes_stored,
-            'relationships_created': relationships_stored,
-            'processing_time_ms': storage_time
+            'total_nodes': total_nodes,
+            'total_relationships': total_relationships
         }
         
     except Exception as e:
         logger.error(f"Transform failed: {str(e)}")
+        return {
+            'transform_id': transform_id,
+            'error': str(e),
+            'total_nodes': 0,
+            'total_relationships': 0
+        }
         
         # Get current stage from context
         context = get_run_context()

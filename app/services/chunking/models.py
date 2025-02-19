@@ -1,15 +1,13 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 class ChunkQualityMetrics(BaseModel):
-    """Enhanced quality metrics for chunks"""
-    semantic_coherence: float  # Average semantic similarity within chunk
-    boundary_smoothness: float  # How well chunk boundaries align with natural breaks
-    content_density: float  # Ratio of meaningful content to total size
-    readability_score: float  # Measure of chunk readability
-    topic_consistency: float  # How well the chunk maintains a single topic
-    formatting_quality: float  # Quality of text formatting and structure
+    """Quality metrics for a document chunk"""
+    chunk_id: Optional[str] = None
+    coherence_score: float = 0.0
+    relevance_score: float = 0.0
+    size_score: float = 0.0
 
 class ChunkProcessingMetrics(BaseModel):
     """Metrics for parallel processing"""
@@ -23,10 +21,10 @@ class ChunkProcessingMetrics(BaseModel):
 
 class ChunkMetadata(BaseModel):
     """Metadata for a single chunk"""
-    chunk_id: str
-    start_pos: int
-    end_pos: int
-    content_hash: str
+    chunk_id: Optional[str] = None
+    start_pos: int = 0  # Default to start of document
+    end_pos: int = 0    # Default to start of document
+    content_hash: str = ""  # Default empty hash
     semantic_score: Optional[float] = None
     is_forced_split: bool = False
     is_merged: bool = False
@@ -74,8 +72,8 @@ class ChunkingMetrics(BaseModel):
 class ChunkingResult(BaseModel):
     """Result of document chunking process"""
     transform_id: str
-    chunks: List[str]
-    chunk_metadata: List[ChunkMetadata]
-    metrics: Dict[str, Any]
-    timestamp: str
+    chunks: List[str] = Field(default_factory=list)  # Default empty list
+    chunk_metadata: List[ChunkMetadata] = Field(default_factory=list)  # Default empty list
+    metrics: Dict[str, Any] = Field(default_factory=dict)  # Default empty dict
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())  # Default to current ISO timestamp
     worker_metrics: Optional[List[ChunkProcessingMetrics]] = None

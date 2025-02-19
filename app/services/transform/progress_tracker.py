@@ -57,7 +57,7 @@ class ProgressTracker:
         """Get current resource usage metrics"""
         process = psutil.Process()
         memory_info = process.memory_info()
-        
+        print(memory_info)
         return {
             'cpu_usage_percent': process.cpu_percent(),
             'memory_usage_mb': memory_info.rss / 1024 / 1024,

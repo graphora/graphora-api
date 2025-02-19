@@ -105,6 +105,10 @@ class Settings(BaseSettings):
         default=100,
         description="Minimum size of a text chunk"
     )
+    MAX_CHUNKS_PER_DOC: int = Field(
+        default=100,
+        description="Maximum number of chunks per document"
+    )
     SEMANTIC_THRESHOLD: float = Field(
         default=0.7,
         description="Threshold for semantic similarity in chunking"
@@ -116,6 +120,10 @@ class Settings(BaseSettings):
     CHUNKING_RETRIES: int = Field(
         default=3,
         description="Number of retries for chunking task"
+    )
+    TRANSFORM_RETRIES: int = Field(
+        default=3,
+        description="Number of retries for transformation task"
     )
     RETRY_DELAY_SECONDS: int = Field(
         default=30,
