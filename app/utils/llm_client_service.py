@@ -1,6 +1,7 @@
 from typing import Any
 from openai import OpenAI
 import instructor
+from pydantic import BaseModel
 from app.config import settings
 from openai import OpenAI
 from tenacity import Retrying, stop_after_attempt, wait_fixed
@@ -12,6 +13,8 @@ from datetime import datetime, timedelta
 from mistralai_gcp import MistralGoogleCloud
 from mistralai_gcp.utils.retries import RetryConfig, BackoffStrategy
 import json
+from google import genai
+from typing import Type
 
 class VertexAPIKey:
     def __init__(self):
@@ -30,6 +33,32 @@ class VertexAPIKey:
         return self.key
 
 vertex_key_mgr = VertexAPIKey()
+
+def extract(prompt: str, response_model: Type[BaseModel]) -> Any:
+    """Extract structured information using LLM"""
+    client = genai.Client(
+        vertexai=True, 
+        project=settings.VERTEXAI_PROJECT_ID, 
+        location=settings.VERTEXAI_LOCATION,
+    )
+    
+    # Call model with structured output
+    response = client.models.generate_content(
+        model='gemini-2.0-flash-lite-preview-02-05',
+        contents=prompt,
+        config={
+            'response_mime_type': 'application/json',
+            'response_schema': response_model,
+            'temperature': 0,
+        }
+    )
+    
+    # Parse and validate response
+    try:
+        result = response.parsed
+        return result
+    except Exception as e:
+        raise ValueError(f"Failed to parse LLM response: {str(e)}")
 
 def call_llm(messages, response_model: Any):
         return call_llm_gemini(messages, response_model)
