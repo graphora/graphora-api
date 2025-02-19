@@ -3,6 +3,8 @@ from prefect.context import get_run_context
 from datetime import datetime
 from typing import List, Dict, Any
 from pathlib import Path
+import aiofiles
+from fastapi import UploadFile
 
 from app.schemas.transform import (
     DocumentMetadata,
@@ -36,7 +38,19 @@ async def validate_document(
 ) -> ValidationResult:
     """Validate document before processing"""
     validator = FileValidator()
-    return await validator.validate_path(file_path)
+    
+    # Create UploadFile from file path
+    path = Path(file_path)
+    async with aiofiles.open(path, 'rb') as f:
+        content = await f.read()
+        
+    upload_file = UploadFile(
+        filename=path.name,
+        file=None
+    )
+    upload_file._file = content
+    
+    return await validator.validate(upload_file)
 
 @task(
     name="document-storage",
@@ -49,15 +63,13 @@ async def store_document(
     metadata: DocumentMetadata
 ) -> StorageLocation:
     """Store document in persistent storage"""
-    storage = DocumentStorage()
-    return await storage.store(file_path, transform_id, metadata)
+    storage = DocumentStorage(base_path=settings.UPLOAD_DIR)
+    return await storage.save_document(file_path, transform_id, metadata)
 
 @flow(
     name="document-transformation",
     description="Transform document to knowledge graph",
     version="1.0.0",
-    log_prints=True,
-    persist_result=True,
     retries=2,
     retry_delay_seconds=30
 )

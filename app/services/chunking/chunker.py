@@ -1,11 +1,9 @@
 import hashlib
 from datetime import datetime, timezone
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple
 import psutil
 import numpy as np
 from sentence_transformers import SentenceTransformer
-import asyncio
-from concurrent.futures import ProcessPoolExecutor
 import multiprocessing as mp
 from queue import Queue
 import threading
