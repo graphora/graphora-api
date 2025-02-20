@@ -220,10 +220,10 @@ async def document_transformation_flow(
                     transform_id=transform_id,
                     progress_callback=lambda i, t: update_stage_progress(transform_id, TransformationStage.TRANSFORM, i, t)
                 )
-                print(graph, metrics)
                 if graph and metrics:
                     total_nodes += metrics.total_nodes
                     total_relationships += metrics.total_relationships
+                graphs.append(graph)
         
         await progress_tracker.complete_stage(
             transform_id,
@@ -239,8 +239,8 @@ async def document_transformation_flow(
         )
         
         # Store knowledge graph
-        nodes_stored = 0;
-        relationships_stored = 0;
+        nodes_stored = 0
+        relationships_stored = 0
         storage_time = 0
         storage_retries = 0
         for graph in graphs:
@@ -308,11 +308,5 @@ async def document_transformation_flow(
             current_stage,
             error
         )
-        # return {
-        #     'transform_id': transform_id,
-        #     'error': str(e),
-        #     'total_nodes': 0,
-        #     'total_relationships': 0
-        # }
         
         raise

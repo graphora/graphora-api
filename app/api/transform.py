@@ -12,13 +12,12 @@ from app.schemas.transform import (
     TransformStatus
 )
 from app.services.transform.validators import FileValidator
-from app.services.transform.flows import document_transformation_flow
+from app.services.transform.flows import document_transformation_flow, progress_tracker
 from app.services.transform.status_models import DetailedTransformStatus
 from app.services.transform.storage import get_flow_storage
 from app.config import settings
 from pathlib import Path
 from datetime import datetime, timezone
-import asyncio
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
 

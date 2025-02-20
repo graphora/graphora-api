@@ -1,8 +1,11 @@
 from abc import ABC, abstractmethod
+import traceback
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from neo4j import GraphDatabase
 import json
+
+from pydantic import BaseModel
 
 from app.services.storage.models import (
     StorageCheckpoint,
@@ -12,6 +15,7 @@ from app.services.storage.models import (
     TransformationResult
 )
 from app.config import settings
+from app.services.transform.models import BaseNode, RelationshipInstance
 
 class GraphStorageInterface(ABC):
     """Abstract interface for graph storage"""
@@ -85,76 +89,91 @@ class Neo4jStorage(GraphStorageInterface):
                 session.run("RETURN 1")
                 
         except Exception as e:
+            traceback.print_exc()
             raise DatabaseError(f"Failed to connect to Neo4j: {str(e)}")
     
-    def _build_node_query(self, node: Dict, transform_id: str) -> Tuple[str, Dict]:
+    def _build_node_query(self, node: BaseNode, transform_id: str) -> Tuple[str, Dict]:
         """Build Cypher query for node creation"""
-        labels = [node['type']]
+        labels = [node.type]
         
         # Extract properties excluding metadata
-        properties = {
-            k: v for k, v in node.items()
-            if k not in ['type', 'provenance'] and v is not None
-        }
+        properties = {}
+        if hasattr(node, 'properties') and node.properties:
+            properties = {
+                k: v for k, v in node.properties.items()
+                if v is not None
+            }
         
-        # Add transform_id and provenance
+        # Add transform ID and provenance
         properties['transform_id'] = transform_id
-        if 'provenance' in node:
-            properties['provenance'] = json.dumps(node['provenance'])
+        if hasattr(node, 'provenance') and node.provenance:
+            properties['provenance'] = json.dumps(node.provenance.model_dump())
         
         return (
             f"MERGE (n:{':'.join(labels)} {{id: $id}}) "
-            f"ON CREATE SET n = $properties "
-            f"ON MATCH SET n += $properties"
-        ), properties
+            "SET n += $properties "
+            "RETURN n",
+            {"id": node.id, "properties": properties}
+        )
     
     def _build_relationship_query(
         self,
-        relationship: Dict,
+        relationship: RelationshipInstance,
         transform_id: str
     ) -> Tuple[str, Dict]:
         """Build Cypher query for relationship creation"""
-        properties = relationship.get('properties', {})
-        properties['transform_id'] = transform_id
+        properties = {}
+        if hasattr(relationship, 'properties') and relationship.properties:
+            properties = {
+                k: v for k, v in relationship.properties.items()
+                if v is not None
+            }
         
+        properties['transform_id'] = transform_id
+        if hasattr(relationship, 'provenance') and relationship.provenance:
+            properties['provenance'] = json.dumps(relationship.provenance.model_dump())
+        
+        # Note: relationship type must be directly in query string, not a parameter
         return (
-            "MATCH (source) WHERE source.id = $source_id "
-            "MATCH (target) WHERE target.id = $target_id "
-            "MERGE (source)-[r:$relationship_type]->(target) "
-            "ON CREATE SET r = $properties "
-            "ON MATCH SET r += $properties"
-        ), properties
+            f"MATCH (source {{id: $source_id}}), (target {{id: $target_id}}) "
+            f"MERGE (source)-[r:{relationship.type}]->(target) "
+            "SET r += $properties "
+            "RETURN r",
+            {
+                "source_id": relationship.source_id,
+                "target_id": relationship.target_id,
+                "properties": properties
+            }
+        )
     
     async def store_nodes(
         self,
-        nodes: List[Dict],
+        nodes: List[BaseNode],
         batch_index: int,
         transform_id: str
     ) -> StorageBatchResult:
-        """Store nodes in batch"""
+        """Store a batch of nodes in Neo4j"""
         start_time = datetime.now()
+        processed = 0
+        warnings = []
         
         try:
             with self.driver.session(database=self.database) as session:
-                processed = 0
-                warnings = []
-                
-                # Process each node
                 for node in nodes:
                     try:
-                        query, properties = self._build_node_query(
+                        query, parameters = self._build_node_query(
                             node,
                             transform_id
                         )
                         session.run(
                             query,
-                            id=node['id'],
-                            properties=properties
+                            **parameters
                         )
                         processed += 1
                     except Exception as e:
+                        traceback.print_exc()
                         warnings.append(
-                            f"Failed to store node {node.get('id')}: {str(e)}"
+                            f"Failed to store node {node.id}: {str(e)}"
                         )
                 
                 processing_time = (
@@ -173,10 +192,11 @@ class Neo4jStorage(GraphStorageInterface):
             processing_time = (
                 datetime.now() - start_time
             ).total_seconds() * 1000
+            traceback.print_exc()
             
             return StorageBatchResult(
                 batch_index=batch_index,
-                items_processed=0,
+                items_processed=processed,
                 processing_time_ms=processing_time,
                 success=False,
                 error=str(e)
@@ -184,34 +204,30 @@ class Neo4jStorage(GraphStorageInterface):
     
     async def store_relationships(
         self,
-        relationships: List[Dict],
+        relationships: List[RelationshipInstance],
         batch_index: int,
         transform_id: str
     ) -> StorageBatchResult:
-        """Store relationships in batch"""
+        """Store a batch of relationships in Neo4j"""
         start_time = datetime.now()
+        processed = 0
+        warnings = []
         
         try:
             with self.driver.session(database=self.database) as session:
-                processed = 0
-                warnings = []
-                
-                # Process each relationship
                 for rel in relationships:
                     try:
-                        query, properties = self._build_relationship_query(
+                        query, parameters = self._build_relationship_query(
                             rel,
                             transform_id
                         )
                         session.run(
                             query,
-                            source_id=rel['source_id'],
-                            target_id=rel['target_id'],
-                            relationship_type=rel['relationship_type'],
-                            properties=properties
+                            **parameters
                         )
                         processed += 1
                     except Exception as e:
+                        traceback.print_exc()
                         warnings.append(
                             f"Failed to store relationship: {str(e)}"
                         )
@@ -229,6 +245,7 @@ class Neo4jStorage(GraphStorageInterface):
                 )
                 
         except Exception as e:
+            traceback.print_exc()
             processing_time = (
                 datetime.now() - start_time
             ).total_seconds() * 1000
@@ -298,6 +315,7 @@ class Neo4jStorage(GraphStorageInterface):
                 )
                 
         except Exception as e:
+            traceback.print_exc()
             raise DatabaseError(
                 f"Failed to get transformation data: {str(e)}"
             )
@@ -330,6 +348,7 @@ class Neo4jStorage(GraphStorageInterface):
                 return None
                 
         except Exception as e:
+            traceback.print_exc()
             raise DatabaseError(f"Failed to get storage status: {str(e)}")
     
     async def update_checkpoint(
@@ -354,6 +373,7 @@ class Neo4jStorage(GraphStorageInterface):
                 )
                 
         except Exception as e:
+            traceback.print_exc()
             raise DatabaseError(
                 f"Failed to update checkpoint: {str(e)}"
             )
