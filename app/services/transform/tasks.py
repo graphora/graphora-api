@@ -5,7 +5,7 @@ from prefect import task, get_run_logger
 import yaml
 import traceback
 from app.services.transform.models import (
-    KnowledgeGraph,
+    DocumentKnowledgeGraph,
     ExtractionMetrics,
     OntologyDefinition
 )
@@ -13,9 +13,7 @@ from app.services.transform.graph_builder import (
     OntologyParser,
     KnowledgeGraphBuilder
 )
-from app.services.llm.client import LLMClient
 from app.config import settings
-from app.utils.logger import logger
 
 def log_extraction_metrics(metrics: ExtractionMetrics, transform_id: str) -> None:
     """Log extraction metrics to Prefect"""
@@ -86,7 +84,7 @@ async def construct_knowledge_graph(
     ontology_path: Union[str, Path],
     transform_id: str,
     progress_callback: Optional[Callable[[int, int], None]] = None
-) -> Tuple[Optional[BaseModel], Optional[ExtractionMetrics]]:
+) -> Tuple[Optional[DocumentKnowledgeGraph], Optional[ExtractionMetrics]]:
     """Construct knowledge graph from chunks using ontology"""
     logger = get_run_logger()
     

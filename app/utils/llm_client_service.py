@@ -54,9 +54,6 @@ def extract(prompt: str, response_model: Type[BaseModel]) -> Type[BaseModel]:
     # Parse and validate response
     try:
         result = response.parsed
-        print("***** LLM Response: *****")
-        print(result)
-        print("***** LLM Response ENDS: *****")
         return result
     except Exception as e:
         raise ValueError(f"Failed to parse LLM response: {str(e)}")
@@ -83,9 +80,6 @@ def generate_text(prompt: str, json_response: bool = True) -> Optional[Dict]:
     )
     # Parse and validate response
     try:
-        print("***** JSON Response: *****")
-        print(json.loads(response.text))
-        print("***** JSON Response ENDS: *****")
         result = json.loads(response.text) if json_response else response.text
         return result
     except Exception as e:

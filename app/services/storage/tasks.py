@@ -2,7 +2,7 @@ from typing import List
 from datetime import datetime
 import psutil
 from prefect import task, get_run_logger
-
+import traceback
 from app.services.storage.interface import Neo4jStorage
 from app.services.storage.models import (
     StorageResult,
@@ -10,7 +10,7 @@ from app.services.storage.models import (
     StorageMetrics,
     StorageError
 )
-from app.services.transform.models import KnowledgeGraph
+from app.services.transform.models import DocumentKnowledgeGraph
 from app.config import settings
 
 def chunk_list(items: List, size: int) -> List[List]:
@@ -59,7 +59,7 @@ def log_storage_metrics(metrics: StorageMetrics, transform_id: str) -> None:
     persist_result=True
 )
 async def store_knowledge_graph(
-    graph: KnowledgeGraph,
+    graph: DocumentKnowledgeGraph,
     transform_id: str,
     checkpoint_size: int = settings.STORAGE_BATCH_SIZE
 ) -> StorageResult:
@@ -107,7 +107,6 @@ async def store_knowledge_graph(
                 f"Processing nodes from index {start_from}",
                 extra={"transform_id": transform_id}
             )
-            
             node_batches = chunk_list(
                 nodes[start_from:],
                 checkpoint_size
@@ -158,6 +157,7 @@ async def store_knowledge_graph(
                     )
                     
                 except Exception as e:
+                    traceback.print_exc()
                     result.metrics.add_error(
                         str(e),
                         batch_idx,
@@ -234,6 +234,7 @@ async def store_knowledge_graph(
                     )
                     
                 except Exception as e:
+                    traceback.print_exc()
                     result.metrics.add_error(
                         str(e),
                         batch_idx,
@@ -271,6 +272,7 @@ async def store_knowledge_graph(
         return result
         
     except Exception as e:
+        traceback.print_exc()
         logger.error(
             f"Storage failed: {str(e)}",
             extra={"transform_id": transform_id}

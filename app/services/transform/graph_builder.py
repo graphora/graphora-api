@@ -13,6 +13,7 @@ from app.services.transform.models import (
     NodeProvenance,
     RelationshipInstance,
     KnowledgeGraph,
+    DocumentKnowledgeGraph,
     ExtractionMetrics
 )
 from app.services.llm.client import LLMClient
@@ -244,46 +245,46 @@ class KnowledgeGraphBuilder:
         
         # Relationship registry for deduplication (source_id -> target_id -> rel_type -> rel_id)
         self.relationship_registry = {}
-    
-    def _generate_node_key(self, entity_type: str, properties: Dict[str, Any]) -> str:
-        """
-        Generate a deterministic key for node based on unique properties.
-        Improved to handle case insensitivity and normalize text values.
-        """
-        # Get entity definition
-        entity_def = self.ontology_parser.parsed_ontology.get('entities', {}).get(entity_type, {})
         
-        # Find unique properties 
-        unique_props = []
-        for prop_name, prop_def in entity_def.get('properties', {}).items():
-            if prop_def.get('unique', False) and prop_name in properties and properties[prop_name] is not None:
-                # Normalize string values: lowercase and strip whitespace
-                value = properties[prop_name]
-                if isinstance(value, str):
-                    value = value.lower().strip()
-                unique_props.append((prop_name, value))
+    async def build_graph_from_chunks(
+        self,
+        chunks: List[str],
+        transform_id: str,
+        concurrency: int = 5,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> DocumentKnowledgeGraph:
+        """Process all chunks and build unified graph"""
+        chunk_results = []
         
-        if unique_props:
-            # Sort by property name for deterministic key
-            sorted_props = sorted(unique_props)
-            return f"{entity_type}:" + ":".join(f"{k}={v}" for k, v in sorted_props)
-        else:
-            # If no unique properties, use all non-None properties with normalization
-            non_empty_props = []
-            for k, v in properties.items():
-                if v is not None:
-                    # Normalize string values
-                    if isinstance(v, str):
-                        v = v.lower().strip()
-                    non_empty_props.append((k, v))
+        # Process chunks with controlled concurrency
+        semaphore = asyncio.Semaphore(concurrency)
+        
+        async def process_with_semaphore(chunk: str, idx: int):
+            async with semaphore:
+                result = await self.process_chunk(chunk, f"{transform_id}_chunk_{idx}")
+                if progress_callback:
+                    try:
+                        await progress_callback(idx + 1, len(chunks))
+                    except:
+                        # Handle synchronous callback
+                        progress_callback(idx + 1, len(chunks))
+                return result
+        
+        # Process all chunks concurrently with controlled parallelism
+        tasks = [
+            process_with_semaphore(chunk, idx)
+            for idx, chunk in enumerate(chunks)
+        ]
+        chunk_results = await asyncio.gather(*tasks)
+        chunk_results = [r for r in chunk_results if r is not None]
+        
+        # Merge all extraction results
+        for result in chunk_results:
+            self.add_extraction_result(result)
             
-            if non_empty_props:
-                sorted_props = sorted(non_empty_props)
-                return f"{entity_type}:" + ":".join(f"{k}={v}" for k, v in sorted_props)
-            else:
-                # Last resort: use a random UUID
-                return f"{entity_type}:uuid={uuid.uuid4()}"
-  
+        # Finalize the graph
+        return await self.finalize_graph()
+    
     async def process_chunk(
         self,
         chunk: str,
@@ -332,9 +333,7 @@ class KnowledgeGraphBuilder:
                 
                 # Try multiple serialization methods
                 try:
-                    if hasattr(item, 'dict'):  # Pydantic v1
-                        item_dict = item.dict()
-                    elif hasattr(item, 'model_dump'):  # Pydantic v2
+                    if hasattr(item, 'model_dump'):  # Pydantic v2
                         item_dict = item.model_dump()
                     else:
                         # Fallback to dict attrs
@@ -576,12 +575,51 @@ class KnowledgeGraphBuilder:
             traceback.print_exc()
             return None
     
+    def _generate_node_key(self, entity_type: str, properties: Dict[str, Any]) -> str:
+        """
+        Generate a deterministic key for node based on unique properties.
+        Improved to handle case insensitivity and normalize text values.
+        """
+        # Get entity definition
+        entity_def = self.ontology_parser.parsed_ontology.get('entities', {}).get(entity_type, {})
+        
+        # Find unique properties 
+        unique_props = []
+        for prop_name, prop_def in entity_def.get('properties', {}).items():
+            if prop_def.get('unique', False) and prop_name in properties and properties[prop_name] is not None:
+                # Normalize string values: lowercase and strip whitespace
+                value = properties[prop_name]
+                if isinstance(value, str):
+                    value = value.lower().strip()
+                unique_props.append((prop_name, value))
+        
+        if unique_props:
+            # Sort by property name for deterministic key
+            sorted_props = sorted(unique_props)
+            return f"{entity_type}:" + ":".join(f"{k}={v}" for k, v in sorted_props)
+        else:
+            # If no unique properties, use all non-None properties with normalization
+            non_empty_props = []
+            for k, v in properties.items():
+                if v is not None:
+                    # Normalize string values
+                    if isinstance(v, str):
+                        v = v.lower().strip()
+                    non_empty_props.append((k, v))
+            
+            if non_empty_props:
+                sorted_props = sorted(non_empty_props)
+                return f"{entity_type}:" + ":".join(f"{k}={v}" for k, v in sorted_props)
+            else:
+                # Last resort: use a random UUID
+                return f"{entity_type}:uuid={uuid.uuid4()}"
+    
     
     async def process_chunks(
         self,
         chunks: List[str],
         progress_callback: Optional[Callable[[int, int], None]] = None
-    ) -> Tuple[BaseModel, ExtractionMetrics]:
+    ) -> Tuple[DocumentKnowledgeGraph, ExtractionMetrics]:
         """Process multiple chunks and build knowledge graph with unified approach"""
         
         # Initialize metrics
@@ -623,6 +661,7 @@ class KnowledgeGraphBuilder:
         total_raw_nodes = sum(len(result['nodes']) for result in all_chunk_results)
         self.metrics.merged_nodes = total_raw_nodes - total_nodes
         self.metrics.new_nodes = total_nodes
+        self.metrics.total_nodes = total_nodes
         
         # Count relationships
         total_relationships = sum(
@@ -792,45 +831,6 @@ class KnowledgeGraphBuilder:
             
         return merged_rel
     
-    async def build_graph_from_chunks(
-        self,
-        chunks: List[str],
-        transform_id: str,
-        concurrency: int = 5,
-        progress_callback: Optional[Callable[[int, int], None]] = None
-    ) -> BaseModel:
-        """Process all chunks and build unified graph"""
-        chunk_results = []
-        
-        # Process chunks with controlled concurrency
-        semaphore = asyncio.Semaphore(concurrency)
-        
-        async def process_with_semaphore(chunk: str, idx: int):
-            async with semaphore:
-                result = await self.process_chunk(chunk, f"{transform_id}_chunk_{idx}")
-                if progress_callback:
-                    try:
-                        await progress_callback(idx + 1, len(chunks))
-                    except:
-                        # Handle synchronous callback
-                        progress_callback(idx + 1, len(chunks))
-                return result
-        
-        # Process all chunks concurrently with controlled parallelism
-        tasks = [
-            process_with_semaphore(chunk, idx)
-            for idx, chunk in enumerate(chunks)
-        ]
-        chunk_results = await asyncio.gather(*tasks)
-        chunk_results = [r for r in chunk_results if r is not None]
-        
-        # Merge all extraction results
-        for result in chunk_results:
-            self.add_extraction_result(result)
-            
-        # Finalize the graph
-        return await self.finalize_graph()
-    
     def add_extraction_result(self, result: Dict[str, Any]) -> None:
         """Add extraction result to graph with node merging and RDF context update"""
         # Add all nodes with merging
@@ -921,7 +921,7 @@ class KnowledgeGraphBuilder:
         # If relationship not found, append it
         rel_list.append(relationship)
     
-    async def finalize_graph(self) -> KnowledgeGraph:
+    async def finalize_graph(self) -> DocumentKnowledgeGraph:
         """Validate and finalize the graph"""
         # Prune orphaned nodes (empty nodes not in relationships)
         self._prune_orphaned_nodes()
@@ -1045,7 +1045,7 @@ class KnowledgeGraphBuilder:
         Only keeps properties that are defined in the ontology for this entity type.
         """
         # Get entity definition from ontology
-        entity_def = self.ontology_parser.parsed_ontology.get('entities', {}).get(entity_type, {})
+        entity_def = self.ontology_parser.parsed_ontology.get('entities', {}).get(entity_type)
         if not entity_def:
             return {}
             
@@ -1309,254 +1309,58 @@ class KnowledgeGraphBuilder:
         
         return unified_graph
         
-        
-    def _merge_nodes_by_ontology(self, entity_type: str, nodes: List[BaseNode]) -> List[BaseNode]:
+    async def post_process_graph(self, graph: KnowledgeGraph) -> DocumentKnowledgeGraph:
         """
-        Merge nodes based on ontology-defined properties.
-        Improved to handle case insensitivity and perform smarter merging.
+        Apply post-processing to improve graph quality and convert to DocumentKnowledgeGraph format.
+        This helps ensure consistency in naming, capitalization, and property values.
         """
-        if not nodes:
-            return []
+        # Create DocumentKnowledgeGraph
+        doc_graph = DocumentKnowledgeGraph(
+            extraction_timestamp=graph.extraction_timestamp,
+            tokens_used=graph.tokens_used,
+            confidence_score=graph.confidence_score,
+            metrics=self.metrics
+        )
+        
+        # Collect all nodes from entity lists
+        for field_name in dir(graph):
+            if field_name.endswith('_list') and not field_name.startswith('_'):
+                entity_list = getattr(graph, field_name)
+                if isinstance(entity_list, list):
+                    doc_graph.nodes.extend(entity_list)
+        
+        # Collect all relationships
+        for field_name in dir(graph):
+            if '_' in field_name and not field_name.endswith('_list') and not field_name.startswith('_'):
+                rel_list = getattr(graph, field_name)
+                if isinstance(rel_list, list):
+                    doc_graph.relationships.extend(rel_list)
+        
+        # Standardize entity values
+        entity_groups = {}
+        for node in doc_graph.nodes:
+            entity_type = node.__class__.__name__
+            if entity_type not in entity_groups:
+                entity_groups[entity_type] = []
+            entity_groups[entity_type].append(node.model_dump())
             
-        # Get unique properties from ontology
-        entity_def = self.ontology_parser.parsed_ontology.get('entities', {}).get(entity_type, {})
-        unique_props = []
-        
-        for prop_name, prop_def in entity_def.get('properties', {}).items():
-            if prop_def.get('unique', False):
-                unique_props.append(prop_name)
-        
-        # Also consider name properties as potentially unique for deduplication
-        name_props = []
-        for prop_name in entity_def.get('properties', {}):
-            if prop_name.lower() in ['name', 'title', 'label']:
-                name_props.append(prop_name)
-        
-        # Combine unique and name properties for better deduplication
-        dedup_props = list(set(unique_props + name_props))
-        
-        # Group nodes by their identifying properties
-        node_groups = {}
-        
-        for node in nodes:
-            # Generate key based on unique properties with normalization
-            key_parts = []
+        # Process each entity group
+        for entity_type, entities in entity_groups.items():
+            await self._standardize_entity_group(entity_type, entities)
             
-            # Try using ontology-defined unique properties first
-            for prop in dedup_props:
-                if prop in node.properties and node.properties[prop] is not None:
-                    # Normalize for comparison (lowercase and strip for strings)
-                    value = node.properties[prop]
-                    if isinstance(value, str):
-                        value = value.lower().strip()
-                    key_parts.append(f"{prop}:{value}")
-            
-            if not key_parts and node.properties:
-                # Fallback: use all non-empty properties with normalization
-                for k, v in node.properties.items():
-                    if v is not None:
-                        if isinstance(v, str):
-                            v = v.lower().strip()
-                        key_parts.append(f"{k}:{v}")
-            
-            if key_parts:
-                group_key = "|".join(sorted(key_parts))
-            else:
-                group_key = f"id:{node.id}"
-            
-            if group_key not in node_groups:
-                node_groups[group_key] = []
-            node_groups[group_key].append(node)
+        # Enhance property consistency
+        self._enhance_property_consistency(doc_graph)
         
-        # Merge nodes in each group
-        merged_nodes = []
+        # Validate relationship consistency
+        self._validate_relationship_consistency(doc_graph)
         
-        for group_key, group_nodes in node_groups.items():
-            if not group_nodes:
-                continue
-                
-            if len(group_nodes) == 1:
-                merged_nodes.append(group_nodes[0])
-                continue
-                
-            # Sort by confidence, property completeness, and chunk coverage
-            sorted_nodes = sorted(
-                group_nodes,
-                key=lambda n: (
-                    n.provenance.confidence_score if n.provenance else 0,
-                    sum(1 for p in n.properties.values() if p is not None),
-                    len(n.provenance.chunk_ids if n.provenance else [])
-                ),
-                reverse=True
-            )
-            
-            # Use highest quality node as base
-            best_node = copy.deepcopy(sorted_nodes[0])
-            
-            # Merge in properties from other nodes
-            for other in sorted_nodes[1:]:
-                # Merge provenance with confidence score handling
-                if best_node.provenance and other.provenance:
-                    # Combine chunk IDs
-                    best_node.provenance.chunk_ids.extend(other.provenance.chunk_ids)
-                    best_node.provenance.chunk_ids = list(set(best_node.provenance.chunk_ids))
-                    
-                    # Take higher confidence score
-                    if (other.provenance.confidence_score and 
-                        (not best_node.provenance.confidence_score or 
-                        other.provenance.confidence_score > best_node.provenance.confidence_score)):
-                        best_node.provenance.confidence_score = other.provenance.confidence_score
-                
-                # Fill in missing properties and prefer non-null values
-                for prop, value in other.properties.items():
-                    # Skip null values
-                    if value is None:
-                        continue
-                        
-                    # For string properties, prefer longer/more detailed values
-                    if isinstance(value, str) and prop in best_node.properties:
-                        # Use proper capitalization from the highest confidence node
-                        best_value = best_node.properties[prop]
-                        if best_value is None or (isinstance(best_value, str) and len(value) > len(best_value)):
-                            best_node.properties[prop] = value
-                    # Otherwise just fill in missing properties
-                    elif prop not in best_node.properties or best_node.properties[prop] is None:
-                        best_node.properties[prop] = value
-            
-            # Ensure consistent capitalization for name-like properties
-            for prop in name_props:
-                if prop in best_node.properties and isinstance(best_node.properties[prop], str):
-                    # Use title case for names and titles
-                    best_node.properties[prop] = self._normalize_entity_name(best_node.properties[prop])
-            
-            merged_nodes.append(best_node)
+        # Enhance relationship confidence
+        self._enhance_relationship_confidence(doc_graph)
         
-        return merged_nodes
-    
-    def _normalize_entity_name(self, name: str) -> str:
-        """
-        Normalize entity names for consistent capitalization.
-        Handles business terms, acronyms, and common patterns.
-        """
-        if not name:
-            return name
-            
-        # Preserve common acronyms
-        acronym_pattern = re.compile(r'\b[A-Z]{2,}\b')
-        acronyms = acronym_pattern.findall(name)
+        self.metrics.total_nodes = len(doc_graph.nodes)
+        self.metrics.total_relationships = len(doc_graph.relationships)
         
-        # Convert to title case first
-        name = name.title()
-        
-        # Restore acronyms
-        for acronym in acronyms:
-            name = re.sub(r'\b' + acronym.title() + r'\b', acronym, name)
-        
-        # Handle common lowercase words (like articles and prepositions)
-        for word in ['And', 'Of', 'The', 'In', 'On', 'For', 'With', 'To', 'By']:
-            name = re.sub(r'\b' + word + r'\b', word.lower(), name)
-        
-        return name
-    
-    async def post_process_graph(self, graph: KnowledgeGraph) -> KnowledgeGraph:
-        """
-        Apply post-processing to improve graph quality using LLM validation
-        This helps ensure consistency in naming, capitalization, and property values
-        """
-        # 1. Create consistency groups for similar entities
-        # Group entities of the same type with similar names
-        consistency_groups = {}
-        
-        for entity_type in self.entity_models.keys():
-            entity_list_field = f"{entity_type}_list"
-            if not hasattr(graph, entity_list_field):
-                continue
-                
-            entity_list = getattr(graph, entity_list_field)
-            
-            # Skip if no entities
-            if not entity_list:
-                continue
-                
-            # Group by normalized names
-            groups_by_name = {}
-            for entity in entity_list:
-                # Get entity name if available
-                entity_name = None
-                for name_field in ['name', 'title', 'label']:
-                    if name_field in entity.properties and entity.properties[name_field]:
-                        entity_name = str(entity.properties[name_field])
-                        break
-                        
-                if not entity_name:
-                    continue
-                    
-                # Normalize for grouping
-                norm_name = entity_name.lower().strip()
-                
-                # Handle fuzzy matching by checking similarity
-                matched = False
-                for existing_name in list(groups_by_name.keys()):
-                    # Simple similarity: check if one is contained in the other
-                    # or if they share significant words
-                    if (norm_name in existing_name or 
-                        existing_name in norm_name or
-                        self._calculate_word_overlap(norm_name, existing_name) > 0.7):
-                        groups_by_name[existing_name].append(entity)
-                        matched = True
-                        break
-                        
-                if not matched:
-                    groups_by_name[norm_name] = [entity]
-                    
-            # Store groups with multiple entities for consistency check
-            for name, entities in groups_by_name.items():
-                if len(entities) > 1:
-                    group_key = f"{entity_type}:{name}"
-                    consistency_groups[group_key] = entities
-        
-        # 2. Apply LLM-based standardization to groups that need it
-        for group_key, entities in consistency_groups.items():
-            entity_type, _ = group_key.split(':', 1)
-            
-            # Skip small groups
-            if len(entities) < 2:
-                continue
-                
-            # Prepare entity data for LLM
-            entity_data = []
-            for idx, entity in enumerate(entities):
-                entity_data.append({
-                    'id': entity.id,
-                    'index': idx,
-                    'properties': entity.properties,
-                    'confidence': entity.provenance.confidence_score if hasattr(entity, 'provenance') else 0.0
-                })
-                
-            # Call LLM to standardize properties
-            try:
-                standardized = await self._standardize_entity_group(entity_type, entity_data)
-                if standardized and 'standardized_properties' in standardized:
-                    # Apply standardized properties back to entities
-                    standard_props = standardized['standardized_properties']
-                    for entity in entities:
-                        # Update properties while preserving entity-specific ones
-                        for prop, value in standard_props.items():
-                            if value is not None:
-                                entity.properties[prop] = value
-            except Exception as e:
-                logger.warning(f"Error in LLM standardization for {group_key}: {str(e)}")
-        
-        # 3. Enhance property consistency
-        await self._enhance_property_consistency(graph)
-        
-        # 4. Enhance relationship confidence scores 
-        self._enhance_relationship_confidence(graph)
-        
-        # 5. Validate and ensure relationship consistency
-        self._validate_relationship_consistency(graph)
-        
-        return graph
+        return doc_graph
 
     async def _standardize_entity_group(self, entity_type: str, entity_data: List[Dict]) -> Optional[Dict]:
         """
@@ -1599,146 +1403,96 @@ class KnowledgeGraphBuilder:
             traceback.print_exc()
             return None
 
-    async def _enhance_property_consistency(self, graph: KnowledgeGraph) -> None:
+    def _enhance_property_consistency(self, graph: DocumentKnowledgeGraph) -> None:
         """
         Enhance property naming consistency across entity types.
         This uses the ontology definitions to ensure property names match expectations.
         """
-        # Get expected property names from ontology
-        property_standards = {}
         ontology = self.ontology_parser.parsed_ontology
         
-        for entity_type, entity_def in ontology.get('entities', {}).items():
-            property_standards[entity_type] = {}
-            for prop_name, prop_def in entity_def.get('properties', {}).items():
-                # Store canonical property name
-                property_standards[entity_type][prop_name.lower()] = prop_name
-        
-        # For each entity type
-        for entity_type in self.entity_models.keys():
-            entity_list_field = f"{entity_type}_list"
-            if not hasattr(graph, entity_list_field):
-                continue
-                
-            # Skip if no property standards for this type
-            if entity_type not in property_standards:
-                continue
-                
-            entity_list = getattr(graph, entity_list_field)
-            type_standards = property_standards[entity_type]
+        # Process all nodes
+        for node in graph.nodes:
+            entity_type = node.__class__.__name__
+            entity_def = ontology.get('entities', {}).get(entity_type, {})
+            property_defs = entity_def.get('properties', {})
             
-            # For each entity, standardize property names
-            for entity in entity_list:
-                if not hasattr(entity, 'properties') or not entity.properties:
-                    continue
-                    
-                standardized_props = {}
-                for prop, value in entity.properties.items():
-                    # Skip null values
-                    if value is None:
-                        continue
-                        
-                    # Check if we have a canonical name for this property
-                    canonical_name = type_standards.get(prop.lower())
-                    if canonical_name:
-                        standardized_props[canonical_name] = value
-                    else:
-                        # Keep original if no standard defined
-                        standardized_props[prop] = value
-                        
-                # Update properties
-                entity.properties = standardized_props
-
-    def _validate_relationship_consistency(self, graph: KnowledgeGraph) -> None:
+            if not hasattr(node, 'properties'):
+                continue
+                
+            # Normalize property names based on ontology
+            normalized_props = {}
+            for prop_name, value in node.properties.items():
+                # Find matching ontology property
+                matched_prop = None
+                for onto_prop, prop_def in property_defs.items():
+                    if onto_prop.lower() == prop_name.lower():
+                        matched_prop = onto_prop
+                        break
+                
+                # Use ontology name if found, otherwise keep original
+                final_name = matched_prop if matched_prop else prop_name
+                normalized_props[final_name] = value
+                
+            node.properties = normalized_props
+    
+    def _validate_relationship_consistency(self, graph: DocumentKnowledgeGraph) -> None:
         """
         Ensure relationships are consistent with ontology definitions.
         """
         ontology = self.ontology_parser.parsed_ontology
+        valid_edges = []
         
-        # For each relationship field in graph
-        for field_name in dir(graph):
-            if field_name.endswith('_list') or not '_' in field_name or field_name.startswith('_'):
+        for edge in graph.relationships:
+            if not hasattr(edge, 'source_type') or not hasattr(edge, 'type'):
                 continue
                 
-            # Try to parse relationship field
-            try:
-                # Extract source type and relationship type from field name
-                parts = field_name.split('_', 1)
-                if len(parts) != 2:
-                    continue
-                    
-                source_type, rel_type = parts
-                
-                # Check if this is a valid relationship in ontology
-                entity_def = ontology.get('entities', {}).get(source_type, {})
-                rel_def = entity_def.get('relationships', {}).get(rel_type)
-                
-                if not rel_def:
-                    continue  # Not defined in ontology
-                    
-                target_type = rel_def.get('target')
-                if not target_type:
-                    continue
-                    
-                # Get relationships
-                rel_list = getattr(graph, field_name)
-                if not isinstance(rel_list, list):
-                    continue
-                    
-                valid_rels = []
-                for rel in rel_list:
-                    # Validate relationship with ontology
-                    if (hasattr(rel, 'source_type') and hasattr(rel, 'target_type') and
-                        rel.source_type == source_type and rel.target_type == target_type):
-                        valid_rels.append(rel)
-                        
-                # Update with valid relationships
-                setattr(graph, field_name, valid_rels)
-                
-            except Exception as e:
-                logger.warning(f"Error validating relationship {field_name}: {str(e)}")
-                continue
-
-    def _enhance_relationship_confidence(self, graph: KnowledgeGraph) -> None:
+            # Check if relationship type is valid in ontology
+            source_type = edge.source_type
+            rel_type = edge.type
+            
+            entity_def = ontology.get('entities', {}).get(source_type, {})
+            rel_def = entity_def.get('relationships', {}).get(rel_type)
+            
+            if rel_def and rel_def.get('target') == edge.target_type:
+                valid_edges.append(edge)
+        
+        # Update edges with only valid relationships
+        graph.relationships = valid_edges
+    
+    def _enhance_relationship_confidence(self, graph: DocumentKnowledgeGraph) -> None:
         """
         Enhance relationship confidence scores based on connected entities.
         """
-        for field_name in dir(graph):
-            if field_name.endswith('_list') or not '_' in field_name or field_name.startswith('_'):
+        for edge in graph.relationships:
+            if not hasattr(edge, 'provenance') or not edge.provenance:
                 continue
                 
-            rel_list = getattr(graph, field_name)
-            if not isinstance(rel_list, list):
+            # Skip if already has good confidence
+            if edge.provenance.confidence_score and edge.provenance.confidence_score > 0.5:
                 continue
                 
-            for rel in rel_list:
-                if not hasattr(rel, 'provenance') or not rel.provenance:
-                    continue
+            # Find source and target entities
+            source_entity = None
+            target_entity = None
+            
+            for node in graph.nodes:
+                if node.id == edge.source_id:
+                    source_entity = node
+                elif node.id == edge.target_id:
+                    target_entity = node
                     
-                # Skip if already has good confidence
-                if rel.provenance.confidence_score and rel.provenance.confidence_score > 0.5:
-                    continue
-                    
-                # Find source and target entities
-                source_entity = self._find_node_by_id(rel.source_type, rel.source_id)
-                target_entity = self._find_node_by_id(rel.target_type, rel.target_id)
+                if source_entity and target_entity:
+                    break
+            
+            if not source_entity or not target_entity:
+                continue
                 
-                if not source_entity or not target_entity:
-                    continue
-                    
-                # Calculate new confidence from entities
-                source_conf = (source_entity.provenance.confidence_score 
-                            if hasattr(source_entity, 'provenance') else 0.0)
-                target_conf = (target_entity.provenance.confidence_score 
-                            if hasattr(target_entity, 'provenance') else 0.0)
-                            
-                # Use average of entity confidence scores
-                if source_conf > 0 or target_conf > 0:
-                    entity_conf = (source_conf + target_conf) / 2
-                    # Update relationship confidence (weighted average with original)
-                    original_conf = rel.provenance.confidence_score or 0.0
-                    new_conf = (original_conf + entity_conf * 2) / 3  # Weight entity confidence higher
-                    rel.provenance.confidence_score = new_conf
+            # Calculate confidence based on entity confidence
+            source_conf = source_entity.provenance.confidence_score if hasattr(source_entity, 'provenance') else 0.0
+            target_conf = target_entity.provenance.confidence_score if hasattr(target_entity, 'provenance') else 0.0
+            
+            # Average of entity confidences
+            edge.provenance.confidence_score = (source_conf + target_conf) / 2
 
     def _resolve_node_reference(self, node_id: str, entity_type: str, node_registry: Dict) -> Optional[str]:
         """Resolve node ID to canonical ID if found in registry"""

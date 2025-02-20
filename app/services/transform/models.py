@@ -87,7 +87,7 @@ class ExtractionMetrics(BaseModel):
     failed_chunks: int = 0
     new_nodes: int = 0
     merged_nodes: int = 0
-    total_nodes: int = new_nodes + merged_nodes
+    total_nodes: int = 0
     total_relationships: int = 0
     invalid_relationships: int = 0
     total_tokens: int = 0
@@ -149,6 +149,11 @@ class KnowledgeGraph(BaseModel):
     
     class Config:
         arbitrary_types_allowed = True
+        
+class DocumentKnowledgeGraph(KnowledgeGraph):
+    """Generic Knowledge Graph for storing extracted information"""
+    nodes: List[BaseNode] = Field(default_factory=list)
+    relationships: List[RelationshipInstance] = Field(default_factory=list)
 
 class OntologyBasedExtractionModels:
     class PropertyType(str, Enum):
