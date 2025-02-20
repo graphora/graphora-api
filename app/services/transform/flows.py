@@ -102,8 +102,6 @@ async def document_transformation_flow(
     """
     logger.info(f"Starting transformation flow with ID: {transform_id}")
     try:
-        # Initialize progress tracking
-        await progress_tracker.initialize_transform(transform_id)
         
         # Start PARSE stage
         await progress_tracker.start_stage(

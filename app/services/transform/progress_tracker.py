@@ -323,6 +323,10 @@ class ProgressTracker:
             )
             status.start_stage(stage)
             
+            prefect_status = await self._get_prefect_status(transform_id)
+            if prefect_status:
+                status.overall_status = TransformStatus(prefect_status)
+            
             # Store updated status
             self.redis.set(
                 self._get_redis_key(transform_id, "status"),
@@ -351,7 +355,8 @@ class ProgressTracker:
                 status_data
             )
             status.complete_stage(stage)
-            
+            if stage == TransformationStage.LOAD:
+                status.overall_status = TransformStatus.COMPLETED
             # Store updated status
             self.redis.set(
                 self._get_redis_key(transform_id, "status"),
@@ -381,6 +386,7 @@ class ProgressTracker:
                 status_data
             )
             status.fail_stage(stage, error)
+            status.overall_status = TransformStatus.FAILED
             
             # Store updated status
             self.redis.set(

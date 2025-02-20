@@ -98,18 +98,17 @@ async def construct_knowledge_graph(
         builder = KnowledgeGraphBuilder(parser)
         
         # Process chunks with controlled concurrency
-        if len(chunks) > settings.EXTRACTION_LARGE_DOCUMENT_THRESHOLD:
-            logger.info(f"Large document detected, using parallel processing with concurrency {settings.EXTRACTION_CONCURRENCY}")
-            graph = await builder.build_graph_from_chunks(
-                chunks=chunks,
-                transform_id=transform_id, 
-                concurrency=settings.EXTRACTION_CONCURRENCY,
-                progress_callback=progress_callback
-            )
-            metrics = builder.metrics
-        else:
-            # Use sequential processing for smaller documents
-            graph, metrics = await builder.process_chunks(chunks, progress_callback)
+        concurrency=settings.EXTRACTION_CONCURRENCY
+        if len(chunks) < concurrency:
+            concurrency = len(chunks)
+        logger.info(f"Large document detected, using parallel processing with concurrency {settings.EXTRACTION_CONCURRENCY}")
+        graph = await builder.build_graph_from_chunks(
+            chunks=chunks,
+            transform_id=transform_id, 
+            concurrency=concurrency,
+            progress_callback=progress_callback
+        )
+        metrics = builder.metrics
         
         # Finalize metrics
         if metrics:
