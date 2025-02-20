@@ -3,10 +3,11 @@ import yaml
 import copy
 import asyncio
 import uuid
+import json
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import BaseModel, create_model, Field
-import traceback
 from app.services.transform.models import (
     BaseNode,
     NodeProvenance,
@@ -229,6 +230,8 @@ class KnowledgeGraphBuilder:
         self.pydantic_cls = self.ontology_parser.build_graph_model()
         self.graph = self.pydantic_cls()
         self.metrics = ExtractionMetrics(start_time=datetime.now())
+        self.extracted_triples = []
+        self.entity_registry = {}
         self.llm_client = LLMClient()
         
         # Store entity and relationship models for easier access
@@ -243,7 +246,10 @@ class KnowledgeGraphBuilder:
         self.relationship_registry = {}
     
     def _generate_node_key(self, entity_type: str, properties: Dict[str, Any]) -> str:
-        """Generate a deterministic key for node based on unique properties"""
+        """
+        Generate a deterministic key for node based on unique properties.
+        Improved to handle case insensitivity and normalize text values.
+        """
         # Get entity definition
         entity_def = self.ontology_parser.parsed_ontology.get('entities', {}).get(entity_type, {})
         
@@ -251,17 +257,29 @@ class KnowledgeGraphBuilder:
         unique_props = []
         for prop_name, prop_def in entity_def.get('properties', {}).items():
             if prop_def.get('unique', False) and prop_name in properties and properties[prop_name] is not None:
-                unique_props.append((prop_name, properties[prop_name]))
+                # Normalize string values: lowercase and strip whitespace
+                value = properties[prop_name]
+                if isinstance(value, str):
+                    value = value.lower().strip()
+                unique_props.append((prop_name, value))
         
         if unique_props:
             # Sort by property name for deterministic key
             sorted_props = sorted(unique_props)
             return f"{entity_type}:" + ":".join(f"{k}={v}" for k, v in sorted_props)
         else:
-            # If no unique properties, use all non-None properties
-            non_empty_props = sorted([(k, v) for k, v in properties.items() if v is not None])
+            # If no unique properties, use all non-None properties with normalization
+            non_empty_props = []
+            for k, v in properties.items():
+                if v is not None:
+                    # Normalize string values
+                    if isinstance(v, str):
+                        v = v.lower().strip()
+                    non_empty_props.append((k, v))
+            
             if non_empty_props:
-                return f"{entity_type}:" + ":".join(f"{k}={v}" for k, v in non_empty_props)
+                sorted_props = sorted(non_empty_props)
+                return f"{entity_type}:" + ":".join(f"{k}={v}" for k, v in sorted_props)
             else:
                 # Last resort: use a random UUID
                 return f"{entity_type}:uuid={uuid.uuid4()}"
@@ -271,14 +289,18 @@ class KnowledgeGraphBuilder:
         chunk: str,
         chunk_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Process single chunk with LLM extraction"""
+        """Process single chunk with LLM extraction using RDF context"""
         start_time = datetime.now()
         
         try:
-            # Call LLM for extraction of whole ontology
+            # Generate RDF context from previously extracted entities and relationships
+            context = self._generate_rdf_context()
+            
+            # Call LLM for extraction of whole ontology with context
             extraction_result = await self.llm_client.extract_from_chunk(
                 chunk=chunk,
-                response_model=self.pydantic_cls
+                response_model=self.pydantic_cls,
+                context=context
             )
             
             # Initialize token usage and confidence if not set
@@ -437,6 +459,7 @@ class KnowledgeGraphBuilder:
                     if not target_type:
                         logger.warning(f"Skipping relationship {rel_type} - cannot determine target type")
                         continue
+                    
                     target_raw_props = extract_properties(rel_item.target)
                     
                     # Get source and target properties
@@ -445,28 +468,6 @@ class KnowledgeGraphBuilder:
                     
                     if not (self._is_node_valuable(source_type, source_props) or 
                             self._is_node_valuable(target_type, target_props)):
-                        continue
-                    
-                    # Get target type
-                    target_type = None
-                    # From ontology definition
-                    if source_type in self.ontology_parser.parsed_ontology.get('entities', {}):
-                        relationships_def = self.ontology_parser.parsed_ontology['entities'][source_type].get('relationships', {})
-                        if rel_type in relationships_def:
-                            target_type = relationships_def[rel_type].get('target')
-                    
-                    # From relationship model
-                    if not target_type and source_type in self.relationship_models:
-                        rel_model = self.relationship_models[source_type].get(rel_type)
-                        if rel_model and hasattr(rel_model, '_target_type'):
-                            target_type = rel_model._target_type
-                    
-                    # From target class
-                    if not target_type and hasattr(rel_item.target, '__class__'):
-                        target_type = rel_item.target.__class__.__name__
-                    
-                    # Skip if we can't determine target type
-                    if not target_type:
                         continue
                     
                     # Generate node keys
@@ -542,6 +543,7 @@ class KnowledgeGraphBuilder:
                     )
                     relationships.append(rel)
             
+                
             # Track metrics
             self.metrics.track_extraction(
                 chunk_id=chunk_id,
@@ -550,7 +552,8 @@ class KnowledgeGraphBuilder:
                 entity_count=len(nodes)
             )
             
-            return {
+            # Prepare result
+            result = {
                 'chunk_id': chunk_id,
                 'nodes': nodes,
                 'relationships': relationships,
@@ -558,9 +561,14 @@ class KnowledgeGraphBuilder:
                     'tokens_used': extraction_result.tokens_used,
                     'confidence_score': extraction_result.confidence_score,
                     'extraction_timestamp': getattr(extraction_result, 'extraction_timestamp', 
-                                                  datetime.now(timezone.utc).isoformat())
+                                                datetime.now(timezone.utc).isoformat())
                 }
             }
+            
+            # Update RDF triples for future context
+            self._update_extracted_triples(result)
+            
+            return result
                 
         except Exception as e:
             self.metrics.record_failure(chunk_id, str(e))
@@ -574,7 +582,7 @@ class KnowledgeGraphBuilder:
         chunks: List[str],
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> Tuple[BaseModel, ExtractionMetrics]:
-        """Process multiple chunks and build knowledge graph"""
+        """Process multiple chunks and build knowledge graph with unified approach"""
         
         # Initialize metrics
         self.metrics.total_chunks = len(chunks)
@@ -582,14 +590,19 @@ class KnowledgeGraphBuilder:
         self.metrics.merged_nodes = 0
         self.metrics.total_relationships = 0
         
+        # Store all chunk results for unified processing
+        all_chunk_results = []
+        
         # Process each chunk
         for i, chunk in enumerate(chunks):
             chunk_id = f"chunk_{i}"
             result = await self.process_chunk(chunk, chunk_id)
             
             if result:
-                # Add extracted information to the graph
-                self.add_extraction_result(result)
+                all_chunk_results.append(result)
+                
+                # Update RDF context for next chunk
+                self._update_extracted_triples(result)
                     
             # Update progress
             if progress_callback:
@@ -599,8 +612,28 @@ class KnowledgeGraphBuilder:
                     # Handle synchronous callback
                     progress_callback(i + 1, len(chunks))
         
-        # Finalize the graph
-        final_graph = self.finalize_graph()
+        # Instead of adding results one by one, build unified graph
+        self.graph = self.build_unified_graph(all_chunk_results)
+        
+        # Set merged node metrics
+        total_nodes = sum(
+            len(getattr(self.graph, f"{entity_type}_list", []))
+            for entity_type in self.entity_models.keys()
+        )
+        total_raw_nodes = sum(len(result['nodes']) for result in all_chunk_results)
+        self.metrics.merged_nodes = total_raw_nodes - total_nodes
+        self.metrics.new_nodes = total_nodes
+        
+        # Count relationships
+        total_relationships = sum(
+            len(getattr(self.graph, field_name, []))
+            for field_name in dir(self.graph)
+            if not field_name.endswith('_list') and not field_name.startswith('_') and '_' in field_name
+        )
+        self.metrics.total_relationships = total_relationships
+        
+        # Finalize graph (validate relationships, etc.)
+        final_graph = await self.finalize_graph()
         
         return final_graph, self.metrics
     
@@ -775,9 +808,6 @@ class KnowledgeGraphBuilder:
         async def process_with_semaphore(chunk: str, idx: int):
             async with semaphore:
                 result = await self.process_chunk(chunk, f"{transform_id}_chunk_{idx}")
-                print("***** Processed Chunk Result: *****")
-                print(result)
-                print("***** Processed Chunk Result ENDS *****")
                 if progress_callback:
                     try:
                         await progress_callback(idx + 1, len(chunks))
@@ -799,75 +829,33 @@ class KnowledgeGraphBuilder:
             self.add_extraction_result(result)
             
         # Finalize the graph
-        return self.finalize_graph()
+        return await self.finalize_graph()
     
     def add_extraction_result(self, result: Dict[str, Any]) -> None:
-        """Add extraction result to graph with intelligent node merging and relationship deduplication"""
-        # Initialize node and relationship registries if not exists
-        for entity_type in self.entity_models:
-            if entity_type not in self.node_registry:
-                self.node_registry[entity_type] = {}
-        
-        # Track nodes used in relationships
-        nodes_in_relationships = set()
-        for rel in result['relationships']:
-            nodes_in_relationships.add((rel.source_type, rel.source_id))
-            nodes_in_relationships.add((rel.target_type, rel.target_id))
-        
-        # Process nodes
+        """Add extraction result to graph with node merging and RDF context update"""
+        # Add all nodes with merging
         for node in result['nodes']:
-            # Filter properties by ontology
-            if hasattr(node, 'properties') and node.properties:
-                node.properties = self._filter_properties_by_ontology(node.type, node.properties)
-                
-            # Skip empty nodes not referenced in relationships
-            if not self._is_node_valuable(node.type, node.properties) and (node.type, node.id) not in nodes_in_relationships:
-                continue
-                
-            # Generate node key
-            node_key = self._generate_node_key(node.type, node.properties)
+            matching_node = self._find_matching_node(node)
             
-            # Check if node already exists
-            if node.type in self.node_registry and node_key in self.node_registry[node.type]:
-                existing_id = self.node_registry[node.type][node_key]
-                # Find the existing node
-                existing_node = self._find_node_by_id(node.type, existing_id)
-                if existing_node:
-                    # Merge with existing node
-                    merged_node = self._merge_nodes(existing_node, node)
-                    self._update_node_in_graph(merged_node)
-                    self.metrics.merged_nodes += 1
-                else:
-                    # Registry contains ID but node not found, add as new
-                    self._add_node_to_graph(node)
-                    self.node_registry[node.type][node_key] = node.id
-                    self.metrics.new_nodes += 1
+            if matching_node:
+                # Merge with existing node
+                merged_node = self.merge_nodes(matching_node, node)
+                self._update_node_in_graph(merged_node)
+                self.metrics.merged_nodes += 1
             else:
-                # New node
+                # Add as new node
                 self._add_node_to_graph(node)
-                if node.type not in self.node_registry:
-                    self.node_registry[node.type] = {}
-                self.node_registry[node.type][node_key] = node.id
                 self.metrics.new_nodes += 1
         
-        # Process relationships
+        # Add all relationships
         for rel in result['relationships']:
-            # Skip if source or target doesn't exist
-            if not self._node_exists(rel.source_type, rel.source_id) or not self._node_exists(rel.target_type, rel.target_id):
-                continue
+            self._add_relationship_to_graph(rel)
+            self.metrics.total_relationships += 1
             
-            # Check for duplicate relationship
-            rel_key = (rel.source_id, rel.target_id, rel.type)
-            if rel_key not in self.relationship_registry:
-                self._add_relationship_to_graph(rel)
-                self.relationship_registry[rel_key] = rel.id
-                self.metrics.total_relationships += 1
-            else:
-                # Merge with existing relationship
-                existing_rel = self._find_relationship_by_id(rel.source_type, rel.type, self.relationship_registry[rel_key])
-                if existing_rel:
-                    merged_rel = self._merge_relationships(existing_rel, rel)
-                    self._update_relationship_in_graph(merged_rel)
+        # Update RDF triples with merged results
+        # This ensures that future extractions will have context
+        # about our current state of the graph
+        self._update_final_triples()
     
     def _add_node_to_graph(self, node: BaseNode) -> None:
         """Add a node to the appropriate list in the graph"""
@@ -933,7 +921,7 @@ class KnowledgeGraphBuilder:
         # If relationship not found, append it
         rel_list.append(relationship)
     
-    def finalize_graph(self) -> KnowledgeGraph:
+    async def finalize_graph(self) -> KnowledgeGraph:
         """Validate and finalize the graph"""
         # Prune orphaned nodes (empty nodes not in relationships)
         self._prune_orphaned_nodes()
@@ -945,7 +933,7 @@ class KnowledgeGraphBuilder:
         self.graph.tokens_used = self.metrics.total_tokens
         self.graph.confidence_score = self._calculate_average_confidence()
         self.graph.extraction_timestamp = datetime.now(timezone.utc).isoformat()
-        
+        self.graph = await self.post_process_graph(self.graph)
         return self.graph
     
     def _prune_orphaned_nodes(self) -> None:
@@ -1084,3 +1072,1118 @@ class KnowledgeGraphBuilder:
         
         # Node is valuable if it has any ontology-defined properties with non-null values
         return len(filtered_props) > 0
+    
+    def _generate_rdf_context(self, max_triples: int = 100) -> str:
+        """
+        Generate RDF-style context from previously extracted entities and relationships
+        Limited to most recent/relevant triples to avoid context overload
+        """
+        if not hasattr(self, 'extracted_triples'):
+            self.extracted_triples = []
+            
+        if not self.extracted_triples:
+            return ""
+        
+        # If we have too many triples, prioritize most recent extractions
+        context_triples = self.extracted_triples
+        if len(context_triples) > max_triples:
+            context_triples = context_triples[-max_triples:]
+        
+        # Format as RDF-style triples
+        context = "# Previously extracted entities and relationships:\n"
+        context += "\n".join(context_triples)
+        return context
+
+    def _create_safe_property_value(self, value) -> str:
+        """Create a safely quoted string value for RDF triples"""
+        # Convert to string and escape quotes
+        safe_value = str(value)
+        # Replace double quotes with single quotes
+        safe_value = safe_value.replace('"', "'")
+        return f"\"{safe_value}\""
+
+    def _update_extracted_triples(self, result: Dict[str, Any]) -> None:
+        """Update RDF triple context from extraction result"""
+        if not hasattr(self, 'extracted_triples'):
+            self.extracted_triples = []
+            
+        # Process nodes first
+        for node in result.get('nodes', []):
+            entity_type = node.type
+            entity_id = node.id
+            
+            # Generate triples for entity properties
+            for prop_name, prop_value in node.properties.items():
+                if prop_value is not None:
+                    # Format as: <entity_type>(<entity_id>) <property> <value>
+                    safe_value = self._create_safe_property_value(prop_value)
+                    triple = f"{entity_type}({entity_id}) hasProperty:{prop_name} {safe_value}"
+                    self.extracted_triples.append(triple)
+        
+        # Process relationships
+        for rel in result.get('relationships', []):
+            source_type = rel.source_type
+            source_id = rel.source_id
+            target_type = rel.target_type
+            target_id = rel.target_id
+            rel_type = rel.type
+            
+            # Format as: <source_type>(<source_id>) <relationship> <target_type>(<target_id>)
+            triple = f"{source_type}({source_id}) {rel_type} {target_type}({target_id})"
+            self.extracted_triples.append(triple)
+            
+            # Add relationship properties if any
+            if hasattr(rel, 'properties') and rel.properties:
+                for prop_name, prop_value in rel.properties.items():
+                    if prop_value is not None:
+                        # Format as: Relationship(<rel_id>) <property> <value>
+                        safe_value = self._create_safe_property_value(prop_value)
+                        rel_triple = f"Relationship({rel.id}) hasProperty:{prop_name} {safe_value}"
+                        self.extracted_triples.append(rel_triple)
+                        
+    def _update_final_triples(self):
+        """Update RDF triples based on the final state of the graph"""
+        # Clear existing triples to rebuild from current graph state
+        self.extracted_triples = []
+        
+        # Process all entity types in the graph
+        for entity_type in self.entity_models.keys():
+            entity_list_field = f"{entity_type}_list"
+            if not hasattr(self.graph, entity_list_field):
+                continue
+                
+            entity_list = getattr(self.graph, entity_list_field)
+            if not isinstance(entity_list, list):
+                continue
+                
+            # Add triples for each entity
+            for node in entity_list:
+                if not hasattr(node, 'id') or not hasattr(node, 'properties'):
+                    continue
+                    
+                entity_id = node.id
+                
+                # Generate triples for entity properties
+                for prop_name, prop_value in node.properties.items():
+                    if prop_value is not None:
+                        # Format as: <entity_type>(<entity_id>) <property> <value>
+                        # Use safe string replacement
+                        value_str = str(prop_value).replace('"', r'\"')
+                        triple = f"{entity_type}({entity_id}) hasProperty:{prop_name} \"{value_str}\""
+                        self.extracted_triples.append(triple)
+        
+        # Process all relationship types
+        for field_name in dir(self.graph):
+            if field_name.endswith('_list') or field_name.startswith('_') or '_' not in field_name:
+                continue
+                
+            rel_list = getattr(self.graph, field_name)
+            if not isinstance(rel_list, list):
+                continue
+                
+            # Parse relationship field
+            parts = field_name.split('_', 1)
+            if len(parts) != 2:
+                continue
+                
+            source_type, rel_type = parts
+            
+            # Add triples for each relationship
+            for rel in rel_list:
+                if not hasattr(rel, 'source_id') or not hasattr(rel, 'target_id'):
+                    continue
+                    
+                source_id = rel.source_id
+                target_id = rel.target_id
+                target_type = rel.target_type
+                
+                # Format as: <source_type>(<source_id>) <relationship> <target_type>(<target_id>)
+                triple = f"{source_type}({source_id}) {rel_type} {target_type}({target_id})"
+                self.extracted_triples.append(triple)
+                
+                # Add relationship properties if any
+                if hasattr(rel, 'properties') and rel.properties:
+                    for prop_name, prop_value in rel.properties.items():
+                        if prop_value is not None:
+                            # Format as: Relationship(<rel_id>) <property> <value>
+                            value_str = str(prop_value).replace('"', r'\"')
+                            rel_triple = f"Relationship({rel.id}) hasProperty:{prop_name} \"{value_str}\""
+                            self.extracted_triples.append(rel_triple)
+        
+        # Limit total number of triples to avoid context explosion
+        max_triples = 500  # Adjust based on your model's context window
+        if len(self.extracted_triples) > max_triples:
+            # Prioritize:
+            # 1. Entity identity triples (name properties)
+            # 2. Relationship triples
+            # 3. Other property triples
+            
+            # First, collect identity triples (nodes with name properties)
+            identity_triples = [t for t in self.extracted_triples if "hasProperty:name" in t]
+            
+            # Then, relationship triples (not property triples)
+            relationship_triples = [t for t in self.extracted_triples 
+                                if not t.startswith("Relationship") and 
+                                    not "hasProperty:" in t]
+            
+            # Finally, other property triples
+            other_triples = [t for t in self.extracted_triples
+                        if t not in identity_triples and 
+                            t not in relationship_triples]
+            
+            # Combine with priorities
+            self.extracted_triples = (
+                identity_triples + 
+                relationship_triples + 
+                other_triples
+            )[:max_triples]
+            
+    def build_unified_graph(self, chunk_results: List[Dict[str, Any]]) -> KnowledgeGraph:
+        """
+        Build a unified knowledge graph from all chunk results
+        using ontology definitions for better coherence and quality
+        """
+        # Create fresh graph instance
+        unified_graph = self.pydantic_cls()
+        
+        # 1. First pass: collect and merge all nodes by entity type
+        for entity_type in self.entity_models.keys():
+            # Get all nodes of this type across all chunks
+            all_nodes_of_type = []
+            for result in chunk_results:
+                for node in result.get('nodes', []):
+                    if node.type == entity_type:
+                        # Filter out empty nodes first
+                        if self._is_node_valuable(entity_type, node.properties):
+                            all_nodes_of_type.append(node)
+            
+            if not all_nodes_of_type:
+                continue
+                
+            # Apply improved node merging with normalization
+            merged_nodes = self._merge_nodes_by_ontology(entity_type, all_nodes_of_type)
+            
+            # Add to unified graph
+            setattr(unified_graph, f"{entity_type}_list", merged_nodes)
+        
+        # Store temporary reference to graph for relationship processing
+        self.graph = unified_graph
+        
+        # 2. Process relationships with inference capabilities
+        processed_relationships = self._process_relationships_with_inference(chunk_results)
+        
+        # 3. Group relationships by type and add to graph
+        relationship_groups = {}
+        for rel in processed_relationships:
+            group_key = f"{rel.source_type}_{rel.type}"
+            if group_key not in relationship_groups:
+                relationship_groups[group_key] = []
+            relationship_groups[group_key].append(rel)
+        
+        # Add processed relationships to graph
+        for group_key, rels in relationship_groups.items():
+            setattr(unified_graph, group_key, rels)
+        
+        # 4. Calculate and set graph-level metrics
+        tokens_used = sum(
+            result.get('metrics', {}).get('tokens_used', 0) 
+            for result in chunk_results if result
+        )
+        
+        # Calculate average confidence from all entities
+        confidence_values = []
+        for entity_type in self.entity_models.keys():
+            entity_list_field = f"{entity_type}_list"
+            if hasattr(unified_graph, entity_list_field):
+                entity_list = getattr(unified_graph, entity_list_field)
+                for entity in entity_list:
+                    if hasattr(entity, 'provenance') and entity.provenance and entity.provenance.confidence_score:
+                        confidence_values.append(entity.provenance.confidence_score)
+        
+        avg_confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
+        
+        # Set graph metrics
+        unified_graph.tokens_used = tokens_used
+        unified_graph.confidence_score = avg_confidence
+        unified_graph.extraction_timestamp = datetime.now(timezone.utc).isoformat()
+        
+        return unified_graph
+        
+        
+    def _merge_nodes_by_ontology(self, entity_type: str, nodes: List[BaseNode]) -> List[BaseNode]:
+        """
+        Merge nodes based on ontology-defined properties.
+        Improved to handle case insensitivity and perform smarter merging.
+        """
+        if not nodes:
+            return []
+            
+        # Get unique properties from ontology
+        entity_def = self.ontology_parser.parsed_ontology.get('entities', {}).get(entity_type, {})
+        unique_props = []
+        
+        for prop_name, prop_def in entity_def.get('properties', {}).items():
+            if prop_def.get('unique', False):
+                unique_props.append(prop_name)
+        
+        # Also consider name properties as potentially unique for deduplication
+        name_props = []
+        for prop_name in entity_def.get('properties', {}):
+            if prop_name.lower() in ['name', 'title', 'label']:
+                name_props.append(prop_name)
+        
+        # Combine unique and name properties for better deduplication
+        dedup_props = list(set(unique_props + name_props))
+        
+        # Group nodes by their identifying properties
+        node_groups = {}
+        
+        for node in nodes:
+            # Generate key based on unique properties with normalization
+            key_parts = []
+            
+            # Try using ontology-defined unique properties first
+            for prop in dedup_props:
+                if prop in node.properties and node.properties[prop] is not None:
+                    # Normalize for comparison (lowercase and strip for strings)
+                    value = node.properties[prop]
+                    if isinstance(value, str):
+                        value = value.lower().strip()
+                    key_parts.append(f"{prop}:{value}")
+            
+            if not key_parts and node.properties:
+                # Fallback: use all non-empty properties with normalization
+                for k, v in node.properties.items():
+                    if v is not None:
+                        if isinstance(v, str):
+                            v = v.lower().strip()
+                        key_parts.append(f"{k}:{v}")
+            
+            if key_parts:
+                group_key = "|".join(sorted(key_parts))
+            else:
+                group_key = f"id:{node.id}"
+            
+            if group_key not in node_groups:
+                node_groups[group_key] = []
+            node_groups[group_key].append(node)
+        
+        # Merge nodes in each group
+        merged_nodes = []
+        
+        for group_key, group_nodes in node_groups.items():
+            if not group_nodes:
+                continue
+                
+            if len(group_nodes) == 1:
+                merged_nodes.append(group_nodes[0])
+                continue
+                
+            # Sort by confidence, property completeness, and chunk coverage
+            sorted_nodes = sorted(
+                group_nodes,
+                key=lambda n: (
+                    n.provenance.confidence_score if n.provenance else 0,
+                    sum(1 for p in n.properties.values() if p is not None),
+                    len(n.provenance.chunk_ids if n.provenance else [])
+                ),
+                reverse=True
+            )
+            
+            # Use highest quality node as base
+            best_node = copy.deepcopy(sorted_nodes[0])
+            
+            # Merge in properties from other nodes
+            for other in sorted_nodes[1:]:
+                # Merge provenance with confidence score handling
+                if best_node.provenance and other.provenance:
+                    # Combine chunk IDs
+                    best_node.provenance.chunk_ids.extend(other.provenance.chunk_ids)
+                    best_node.provenance.chunk_ids = list(set(best_node.provenance.chunk_ids))
+                    
+                    # Take higher confidence score
+                    if (other.provenance.confidence_score and 
+                        (not best_node.provenance.confidence_score or 
+                        other.provenance.confidence_score > best_node.provenance.confidence_score)):
+                        best_node.provenance.confidence_score = other.provenance.confidence_score
+                
+                # Fill in missing properties and prefer non-null values
+                for prop, value in other.properties.items():
+                    # Skip null values
+                    if value is None:
+                        continue
+                        
+                    # For string properties, prefer longer/more detailed values
+                    if isinstance(value, str) and prop in best_node.properties:
+                        # Use proper capitalization from the highest confidence node
+                        best_value = best_node.properties[prop]
+                        if best_value is None or (isinstance(best_value, str) and len(value) > len(best_value)):
+                            best_node.properties[prop] = value
+                    # Otherwise just fill in missing properties
+                    elif prop not in best_node.properties or best_node.properties[prop] is None:
+                        best_node.properties[prop] = value
+            
+            # Ensure consistent capitalization for name-like properties
+            for prop in name_props:
+                if prop in best_node.properties and isinstance(best_node.properties[prop], str):
+                    # Use title case for names and titles
+                    best_node.properties[prop] = self._normalize_entity_name(best_node.properties[prop])
+            
+            merged_nodes.append(best_node)
+        
+        return merged_nodes
+    
+    def _normalize_entity_name(self, name: str) -> str:
+        """
+        Normalize entity names for consistent capitalization.
+        Handles business terms, acronyms, and common patterns.
+        """
+        if not name:
+            return name
+            
+        # Preserve common acronyms
+        acronym_pattern = re.compile(r'\b[A-Z]{2,}\b')
+        acronyms = acronym_pattern.findall(name)
+        
+        # Convert to title case first
+        name = name.title()
+        
+        # Restore acronyms
+        for acronym in acronyms:
+            name = re.sub(r'\b' + acronym.title() + r'\b', acronym, name)
+        
+        # Handle common lowercase words (like articles and prepositions)
+        for word in ['And', 'Of', 'The', 'In', 'On', 'For', 'With', 'To', 'By']:
+            name = re.sub(r'\b' + word + r'\b', word.lower(), name)
+        
+        return name
+    
+    async def post_process_graph(self, graph: KnowledgeGraph) -> KnowledgeGraph:
+        """
+        Apply post-processing to improve graph quality using LLM validation
+        This helps ensure consistency in naming, capitalization, and property values
+        """
+        # 1. Create consistency groups for similar entities
+        # Group entities of the same type with similar names
+        consistency_groups = {}
+        
+        for entity_type in self.entity_models.keys():
+            entity_list_field = f"{entity_type}_list"
+            if not hasattr(graph, entity_list_field):
+                continue
+                
+            entity_list = getattr(graph, entity_list_field)
+            
+            # Skip if no entities
+            if not entity_list:
+                continue
+                
+            # Group by normalized names
+            groups_by_name = {}
+            for entity in entity_list:
+                # Get entity name if available
+                entity_name = None
+                for name_field in ['name', 'title', 'label']:
+                    if name_field in entity.properties and entity.properties[name_field]:
+                        entity_name = str(entity.properties[name_field])
+                        break
+                        
+                if not entity_name:
+                    continue
+                    
+                # Normalize for grouping
+                norm_name = entity_name.lower().strip()
+                
+                # Handle fuzzy matching by checking similarity
+                matched = False
+                for existing_name in list(groups_by_name.keys()):
+                    # Simple similarity: check if one is contained in the other
+                    # or if they share significant words
+                    if (norm_name in existing_name or 
+                        existing_name in norm_name or
+                        self._calculate_word_overlap(norm_name, existing_name) > 0.7):
+                        groups_by_name[existing_name].append(entity)
+                        matched = True
+                        break
+                        
+                if not matched:
+                    groups_by_name[norm_name] = [entity]
+                    
+            # Store groups with multiple entities for consistency check
+            for name, entities in groups_by_name.items():
+                if len(entities) > 1:
+                    group_key = f"{entity_type}:{name}"
+                    consistency_groups[group_key] = entities
+        
+        # 2. Apply LLM-based standardization to groups that need it
+        for group_key, entities in consistency_groups.items():
+            entity_type, _ = group_key.split(':', 1)
+            
+            # Skip small groups
+            if len(entities) < 2:
+                continue
+                
+            # Prepare entity data for LLM
+            entity_data = []
+            for idx, entity in enumerate(entities):
+                entity_data.append({
+                    'id': entity.id,
+                    'index': idx,
+                    'properties': entity.properties,
+                    'confidence': entity.provenance.confidence_score if hasattr(entity, 'provenance') else 0.0
+                })
+                
+            # Call LLM to standardize properties
+            try:
+                standardized = await self._standardize_entity_group(entity_type, entity_data)
+                if standardized and 'standardized_properties' in standardized:
+                    # Apply standardized properties back to entities
+                    standard_props = standardized['standardized_properties']
+                    for entity in entities:
+                        # Update properties while preserving entity-specific ones
+                        for prop, value in standard_props.items():
+                            if value is not None:
+                                entity.properties[prop] = value
+            except Exception as e:
+                logger.warning(f"Error in LLM standardization for {group_key}: {str(e)}")
+        
+        # 3. Enhance property consistency
+        await self._enhance_property_consistency(graph)
+        
+        # 4. Enhance relationship confidence scores 
+        self._enhance_relationship_confidence(graph)
+        
+        # 5. Validate and ensure relationship consistency
+        self._validate_relationship_consistency(graph)
+        
+        return graph
+
+    async def _standardize_entity_group(self, entity_type: str, entity_data: List[Dict]) -> Optional[Dict]:
+        """
+        Use LLM to standardize property values across similar entities
+        """
+        if not entity_data:
+            return None
+            
+        # Sort by confidence score to prioritize high-confidence entities
+        sorted_entities = sorted(entity_data, key=lambda e: e.get('confidence', 0), reverse=True)
+        
+        # Create prompt for LLM standardization
+        # This doesn't use any hardcoded schema - works with any entity type
+        prompt = f"""
+        You are processing a group of similar {entity_type} entities that should be standardized.
+        Below are the properties of these entities:
+        
+        {json.dumps(sorted_entities, indent=2)}
+        
+        Please standardize the properties by:
+        1. Using the most accurate/complete value for each property
+        2. Fixing capitalization and formatting inconsistencies 
+        3. Using proper business terminology
+        
+        Return only a JSON object with the standardized properties:
+        {{
+        "standardized_properties": {{
+            "property1": "standardized value",
+            "property2": "standardized value"
+        }}
+        }}
+        """
+        
+        # Call LLM for standardization
+        try:
+            result = await self.llm_client.generate_text(prompt=prompt, json_response=True)
+            return result
+        except Exception as e:
+            logger.warning(f"Error in LLM standardization: {str(e)}")
+            traceback.print_exc()
+            return None
+
+    async def _enhance_property_consistency(self, graph: KnowledgeGraph) -> None:
+        """
+        Enhance property naming consistency across entity types.
+        This uses the ontology definitions to ensure property names match expectations.
+        """
+        # Get expected property names from ontology
+        property_standards = {}
+        ontology = self.ontology_parser.parsed_ontology
+        
+        for entity_type, entity_def in ontology.get('entities', {}).items():
+            property_standards[entity_type] = {}
+            for prop_name, prop_def in entity_def.get('properties', {}).items():
+                # Store canonical property name
+                property_standards[entity_type][prop_name.lower()] = prop_name
+        
+        # For each entity type
+        for entity_type in self.entity_models.keys():
+            entity_list_field = f"{entity_type}_list"
+            if not hasattr(graph, entity_list_field):
+                continue
+                
+            # Skip if no property standards for this type
+            if entity_type not in property_standards:
+                continue
+                
+            entity_list = getattr(graph, entity_list_field)
+            type_standards = property_standards[entity_type]
+            
+            # For each entity, standardize property names
+            for entity in entity_list:
+                if not hasattr(entity, 'properties') or not entity.properties:
+                    continue
+                    
+                standardized_props = {}
+                for prop, value in entity.properties.items():
+                    # Skip null values
+                    if value is None:
+                        continue
+                        
+                    # Check if we have a canonical name for this property
+                    canonical_name = type_standards.get(prop.lower())
+                    if canonical_name:
+                        standardized_props[canonical_name] = value
+                    else:
+                        # Keep original if no standard defined
+                        standardized_props[prop] = value
+                        
+                # Update properties
+                entity.properties = standardized_props
+
+    def _validate_relationship_consistency(self, graph: KnowledgeGraph) -> None:
+        """
+        Ensure relationships are consistent with ontology definitions.
+        """
+        ontology = self.ontology_parser.parsed_ontology
+        
+        # For each relationship field in graph
+        for field_name in dir(graph):
+            if field_name.endswith('_list') or not '_' in field_name or field_name.startswith('_'):
+                continue
+                
+            # Try to parse relationship field
+            try:
+                # Extract source type and relationship type from field name
+                parts = field_name.split('_', 1)
+                if len(parts) != 2:
+                    continue
+                    
+                source_type, rel_type = parts
+                
+                # Check if this is a valid relationship in ontology
+                entity_def = ontology.get('entities', {}).get(source_type, {})
+                rel_def = entity_def.get('relationships', {}).get(rel_type)
+                
+                if not rel_def:
+                    continue  # Not defined in ontology
+                    
+                target_type = rel_def.get('target')
+                if not target_type:
+                    continue
+                    
+                # Get relationships
+                rel_list = getattr(graph, field_name)
+                if not isinstance(rel_list, list):
+                    continue
+                    
+                valid_rels = []
+                for rel in rel_list:
+                    # Validate relationship with ontology
+                    if (hasattr(rel, 'source_type') and hasattr(rel, 'target_type') and
+                        rel.source_type == source_type and rel.target_type == target_type):
+                        valid_rels.append(rel)
+                        
+                # Update with valid relationships
+                setattr(graph, field_name, valid_rels)
+                
+            except Exception as e:
+                logger.warning(f"Error validating relationship {field_name}: {str(e)}")
+                continue
+
+    def _enhance_relationship_confidence(self, graph: KnowledgeGraph) -> None:
+        """
+        Enhance relationship confidence scores based on connected entities.
+        """
+        for field_name in dir(graph):
+            if field_name.endswith('_list') or not '_' in field_name or field_name.startswith('_'):
+                continue
+                
+            rel_list = getattr(graph, field_name)
+            if not isinstance(rel_list, list):
+                continue
+                
+            for rel in rel_list:
+                if not hasattr(rel, 'provenance') or not rel.provenance:
+                    continue
+                    
+                # Skip if already has good confidence
+                if rel.provenance.confidence_score and rel.provenance.confidence_score > 0.5:
+                    continue
+                    
+                # Find source and target entities
+                source_entity = self._find_node_by_id(rel.source_type, rel.source_id)
+                target_entity = self._find_node_by_id(rel.target_type, rel.target_id)
+                
+                if not source_entity or not target_entity:
+                    continue
+                    
+                # Calculate new confidence from entities
+                source_conf = (source_entity.provenance.confidence_score 
+                            if hasattr(source_entity, 'provenance') else 0.0)
+                target_conf = (target_entity.provenance.confidence_score 
+                            if hasattr(target_entity, 'provenance') else 0.0)
+                            
+                # Use average of entity confidence scores
+                if source_conf > 0 or target_conf > 0:
+                    entity_conf = (source_conf + target_conf) / 2
+                    # Update relationship confidence (weighted average with original)
+                    original_conf = rel.provenance.confidence_score or 0.0
+                    new_conf = (original_conf + entity_conf * 2) / 3  # Weight entity confidence higher
+                    rel.provenance.confidence_score = new_conf
+
+    def _resolve_node_reference(self, node_id: str, entity_type: str, node_registry: Dict) -> Optional[str]:
+        """Resolve node ID to canonical ID if found in registry"""
+        # Direct match in registry values
+        for registry_values in node_registry.get(entity_type, {}).values():
+            if registry_values == node_id:
+                return node_id
+                
+        # Try to find node and generate key
+        entity_list_field = f"{entity_type}_list"
+        if not hasattr(self.graph, entity_list_field):
+            return node_id
+            
+        node_list = getattr(self.graph, entity_list_field)
+        for node in node_list:
+            if node.id == node_id:
+                key = self._generate_node_key(entity_type, node.properties)
+                if key in node_registry.get(entity_type, {}):
+                    return node_registry[entity_type][key]
+        
+        return node_id
+    
+    def _process_relationships_with_inference(self, chunk_results: List[Dict[str, Any]]) -> List[RelationshipInstance]:
+        """
+        Process relationships with inference capabilities to improve completeness.
+        This function analyzes extracted relationships and infers missing connections.
+        """
+        # Collect all relationships from chunks
+        all_relationships = []
+        for result in chunk_results:
+            if 'relationships' in result:
+                all_relationships.extend(result['relationships'])
+        
+        # Build entity lookup tables for faster access
+        entity_by_id = {}
+        entity_by_type_name = {}
+        
+        for entity_type in self.entity_models.keys():
+            entity_list_field = f"{entity_type}_list"
+            if not hasattr(self.graph, entity_list_field):
+                continue
+                
+            for node in getattr(self.graph, entity_list_field):
+                # Store by ID
+                entity_by_id[node.id] = node
+                
+                # Store by type and name (if available)
+                name_props = ['name', 'title', 'label']
+                for prop in name_props:
+                    if prop in node.properties and node.properties[prop]:
+                        normalized_name = str(node.properties[prop]).lower().strip()
+                        key = f"{node.type}:{normalized_name}"
+                        entity_by_type_name[key] = node
+        
+        # Process and validate relationships
+        processed_relationships = []
+        seen_relationship_keys = set()
+        
+        for relationship in all_relationships:
+            # Skip if missing essential fields
+            if not (hasattr(relationship, 'source_id') and 
+                    hasattr(relationship, 'target_id') and
+                    hasattr(relationship, 'source_type') and
+                    hasattr(relationship, 'target_type') and
+                    hasattr(relationship, 'type')):
+                continue
+                
+            source_id = relationship.source_id
+            target_id = relationship.target_id
+            source_type = relationship.source_type
+            target_type = relationship.target_type
+            rel_type = relationship.type
+            
+            # Resolve source and target entities
+            source_entity = entity_by_id.get(source_id)
+            target_entity = entity_by_id.get(target_id)
+            
+            # If entities not found, try to resolve through inference
+            if not source_entity and hasattr(relationship, 'source') and hasattr(relationship.source, 'properties'):
+                source_entity = self._infer_entity_from_properties(relationship.source, source_type, entity_by_type_name)
+                if source_entity:
+                    source_id = source_entity.id
+                    
+            if not target_entity and hasattr(relationship, 'target') and hasattr(relationship.target, 'properties'):
+                target_entity = self._infer_entity_from_properties(relationship.target, target_type, entity_by_type_name)
+                if target_entity:
+                    target_id = target_entity.id
+            
+            # Skip if we couldn't resolve both entities
+            if not source_entity or not target_entity:
+                continue
+                
+            # Create a unique key for deduplication
+            rel_key = f"{source_id}:{target_id}:{rel_type}"
+            if rel_key in seen_relationship_keys:
+                continue
+                
+            seen_relationship_keys.add(rel_key)
+            
+            # Create relationship instance
+            rel_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, rel_key))
+            rel_properties = {}
+            if hasattr(relationship, 'properties') and relationship.properties:
+                rel_properties = relationship.properties
+                
+            rel_confidence = 0.0
+            rel_chunks = []
+            
+            # Determine confidence from source entities or relationship
+            if hasattr(relationship, 'provenance') and relationship.provenance:
+                rel_confidence = relationship.provenance.confidence_score or 0.0
+                if hasattr(relationship.provenance, 'chunk_ids'):
+                    rel_chunks = relationship.provenance.chunk_ids
+            
+            # If relationship has no confidence, derive from connected entities
+            if rel_confidence == 0.0:
+                source_confidence = (source_entity.provenance.confidence_score 
+                                    if hasattr(source_entity, 'provenance') and source_entity.provenance else 0.0)
+                target_confidence = (target_entity.provenance.confidence_score 
+                                    if hasattr(target_entity, 'provenance') and target_entity.provenance else 0.0)
+                
+                # Average of source and target confidences
+                if source_confidence > 0 or target_confidence > 0:
+                    total = source_confidence + target_confidence
+                    divisor = (1 if source_confidence > 0 else 0) + (1 if target_confidence > 0 else 0)
+                    rel_confidence = total / divisor if divisor > 0 else 0.0
+            
+            # Combine chunk ids from entities if relationship doesn't have any
+            if not rel_chunks:
+                source_chunks = (source_entity.provenance.chunk_ids 
+                                if hasattr(source_entity, 'provenance') and source_entity.provenance else [])
+                target_chunks = (target_entity.provenance.chunk_ids 
+                                if hasattr(target_entity, 'provenance') and target_entity.provenance else [])
+                rel_chunks = list(set(source_chunks + target_chunks))
+            
+            # Create final relationship
+            processed_rel = RelationshipInstance(
+                id=rel_id,
+                type=rel_type,
+                source_id=source_id,
+                target_id=target_id,
+                source_type=source_type,
+                target_type=target_type,
+                properties=rel_properties,
+                provenance=NodeProvenance(
+                    chunk_ids=rel_chunks,
+                    extraction_timestamp=datetime.now(timezone.utc).isoformat(),
+                    confidence_score=rel_confidence
+                )
+            )
+            
+            processed_relationships.append(processed_rel)
+        
+        # Dynamically infer relationships based on ontology definitions
+        inferred_relationships = self._infer_missing_relationships(entity_by_id)
+        for inferred_rel in inferred_relationships:
+            rel_key = f"{inferred_rel.source_id}:{inferred_rel.target_id}:{inferred_rel.type}"
+            if rel_key not in seen_relationship_keys:
+                seen_relationship_keys.add(rel_key)
+                processed_relationships.append(inferred_rel)
+        
+        return processed_relationships
+
+    def _infer_entity_from_properties(self, entity, entity_type, entity_lookup):
+        """
+        Infer entity from properties when direct ID lookup fails.
+        Uses name matching with normalization for better accuracy.
+        """
+        if not hasattr(entity, 'properties') or not entity.properties:
+            return None
+        
+        # Try to find by name properties
+        name_props = ['name', 'title', 'label']
+        for prop in name_props:
+            if prop in entity.properties and entity.properties[prop]:
+                normalized_name = str(entity.properties[prop]).lower().strip()
+                lookup_key = f"{entity_type}:{normalized_name}"
+                if lookup_key in entity_lookup:
+                    return entity_lookup[lookup_key]
+        
+        # If no match by name, try other significant properties
+        # This is a simplified approach - could be extended with more sophisticated matching
+        for prop, value in entity.properties.items():
+            if value and isinstance(value, str) and len(value) > 3:  # Only consider meaningful string values
+                normalized_value = value.lower().strip()
+                for key, candidate in entity_lookup.items():
+                    if key.startswith(f"{entity_type}:"):
+                        # Check if this value appears in any of the stored entity's properties
+                        for _, candidate_value in candidate.properties.items():
+                            if (isinstance(candidate_value, str) and 
+                                normalized_value in candidate_value.lower()):
+                                return candidate
+        
+        return None
+
+    def _infer_missing_relationships(self, entity_by_id):
+        """
+        Dynamically infer missing relationships based on ontology definitions and content analysis.
+        Uses the ontology to determine valid relationship types without hardcoding.
+        """
+        inferred_relationships = []
+        
+        # Group entities by type for easier access
+        entities_by_type = {}
+        for entity_id, entity in entity_by_id.items():
+            entity_type = entity.type
+            if entity_type not in entities_by_type:
+                entities_by_type[entity_type] = []
+            entities_by_type[entity_type].append(entity)
+        
+        # Get relationship types from ontology
+        ontology = self.ontology_parser.parsed_ontology
+        
+        # For each entity type in the ontology, check its possible relationships
+        for source_type, entity_def in ontology.get('entities', {}).items():
+            # Skip if we don't have entities of this type
+            if source_type not in entities_by_type:
+                continue
+                
+            relationships = entity_def.get('relationships', {})
+            for rel_type, rel_def in relationships.items():
+                target_type = rel_def.get('target')
+                
+                # Skip if we don't have target entities
+                if not target_type or target_type not in entities_by_type:
+                    continue
+                    
+                # For each source entity, analyze which target entities it might relate to
+                for source_entity in entities_by_type[source_type]:
+                    # Skip entities without properties
+                    if not hasattr(source_entity, 'properties') or not source_entity.properties:
+                        continue
+                        
+                    source_id = source_entity.id
+                    source_text = self._get_entity_text(source_entity)
+                    
+                    # Check which target entities might be related based on textual similarity
+                    for target_entity in entities_by_type[target_type]:
+                        target_id = target_entity.id
+                        
+                        # Skip if no properties
+                        if not hasattr(target_entity, 'properties') or not target_entity.properties:
+                            continue
+                            
+                        # Skip if relationship already exists
+                        rel_key = f"{source_id}:{target_id}:{rel_type}"
+                        rel_field = f"{source_type}_{rel_type}"
+                        
+                        existing_connection = False
+                        if hasattr(self.graph, rel_field):
+                            rel_list = getattr(self.graph, rel_field)
+                            for rel in rel_list:
+                                if rel.source_id == source_id and rel.target_id == target_id:
+                                    existing_connection = True
+                                    break
+                                    
+                        if existing_connection:
+                            continue
+                            
+                        # Determine if relationship should be inferred
+                        should_infer = False
+                        inference_confidence = 0.0
+                        
+                        # Method 1: Textual similarity
+                        target_text = self._get_entity_text(target_entity)
+                        text_overlap = self._calculate_text_overlap(source_text, target_text)
+                        
+                        # If significant overlap, infer relationship
+                        if text_overlap > 0.3:  # Threshold can be tuned
+                            should_infer = True
+                            inference_confidence = min(0.7, text_overlap)  # Cap confidence
+                        
+                        # Method 2: Property matching (for relationships that connect related entities)
+                        property_match = self._check_property_matches(source_entity, target_entity)
+                        if property_match > 0:
+                            should_infer = True
+                            inference_confidence = max(inference_confidence, min(0.8, property_match))
+                        
+                        # Create relationship if inference criteria met
+                        if should_infer:
+                            rel_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, rel_key))
+                            
+                            # Combine confidence and chunk information
+                            source_confidence = source_entity.provenance.confidence_score if hasattr(source_entity, 'provenance') else 0.0
+                            target_confidence = target_entity.provenance.confidence_score if hasattr(target_entity, 'provenance') else 0.0
+                            
+                            # Base confidence on entity confidence and inference confidence
+                            entity_confidence = (source_confidence + target_confidence) / 2 if (source_confidence or target_confidence) else 0.0
+                            combined_confidence = (entity_confidence + inference_confidence) / 2
+                            
+                            # Combine chunks
+                            source_chunks = source_entity.provenance.chunk_ids if hasattr(source_entity, 'provenance') else []
+                            target_chunks = target_entity.provenance.chunk_ids if hasattr(target_entity, 'provenance') else []
+                            combined_chunks = list(set(source_chunks + target_chunks))
+                            
+                            new_rel = RelationshipInstance(
+                                id=rel_id,
+                                type=rel_type,
+                                source_id=source_id,
+                                target_id=target_id,
+                                source_type=source_type,
+                                target_type=target_type,
+                                properties={},
+                                provenance=NodeProvenance(
+                                    chunk_ids=combined_chunks,
+                                    extraction_timestamp=datetime.now(timezone.utc).isoformat(),
+                                    confidence_score=combined_confidence
+                                )
+                            )
+                            
+                            inferred_relationships.append(new_rel)
+        
+        return inferred_relationships
+
+    def _get_entity_text(self, entity):
+        """
+        Get all textual content from an entity for analysis.
+        Combines name, description, and other text fields.
+        """
+        if not hasattr(entity, 'properties') or not entity.properties:
+            return ""
+            
+        text_parts = []
+        
+        # Try different property names that might contain useful text
+        text_field_patterns = [
+            # Name-like fields
+            'name', 'title', 'label', 'id', 'identifier',
+            # Description-like fields
+            'description', 'details', 'info', 'text', 'summary', 'overview',
+            'content', 'notes', 'remarks', 'comment', 'about',
+            # Type-specific fields
+            'category', 'type', 'classification', 'group', 'class',
+            'field', 'industry', 'sector', 'domain', 'area'
+        ]
+        
+        for field in entity.properties:
+            # Check if this property might contain text
+            if any(pattern in field.lower() for pattern in text_field_patterns):
+                value = entity.properties[field]
+                if value and isinstance(value, str):
+                    text_parts.append(value)
+                    
+        # If no matching fields found, use all string properties
+        if not text_parts:
+            for field, value in entity.properties.items():
+                if value and isinstance(value, str):
+                    text_parts.append(value)
+                    
+        return " ".join(text_parts)
+
+    def _calculate_text_overlap(self, text1, text2):
+        """
+        Calculate text similarity based on word overlap.
+        Returns a score between 0 and 1.
+        """
+        if not text1 or not text2:
+            return 0.0
+            
+        # Normalize texts
+        text1 = text1.lower()
+        text2 = text2.lower()
+        
+        # Tokenize into words (simple approach)
+        words1 = set(w for w in text1.split() if len(w) > 3)  # Skip short words
+        words2 = set(w for w in text2.split() if len(w) > 3)
+        
+        # Skip if either set is empty
+        if not words1 or not words2:
+            return 0.0
+            
+        # Calculate Jaccard similarity
+        intersection = len(words1.intersection(words2))
+        union = len(words1.union(words2))
+        
+        return intersection / union if union > 0 else 0.0
+
+    def _calculate_word_overlap(self, text1, text2):
+        """
+        Calculate word overlap between two texts.
+        Used for fuzzy entity matching.
+        """
+        if not text1 or not text2:
+            return 0.0
+            
+        words1 = set(text1.split())
+        words2 = set(text2.split())
+        
+        if not words1 or not words2:
+            return 0.0
+            
+        # For short texts, require higher overlap
+        min_word_count = min(len(words1), len(words2))
+        if min_word_count <= 2:
+            # For very short texts (1-2 words), require exact match
+            return 1.0 if words1 == words2 else 0.0
+            
+        intersection = len(words1.intersection(words2))
+        # Use smaller set as denominator for better matching of substrings
+        return intersection / min_word_count
+
+    def _check_property_matches(self, entity1, entity2):
+        """
+        Check how many properties match between two entities.
+        Returns a score between 0 and 1 representing match quality.
+        """
+        if (not hasattr(entity1, 'properties') or not entity1.properties or
+            not hasattr(entity2, 'properties') or not entity2.properties):
+            return 0.0
+            
+        # Count matching properties
+        matches = 0
+        total_comparable = 0
+        
+        for prop1, value1 in entity1.properties.items():
+            if value1 is None:
+                continue
+                
+            # Only compare string and numeric properties
+            if not isinstance(value1, (str, int, float)):
+                continue
+                
+            total_comparable += 1
+            
+            # Check if property exists in entity2
+            if prop1 in entity2.properties:
+                value2 = entity2.properties[prop1]
+                
+                # Skip None values
+                if value2 is None:
+                    continue
+                    
+                # For strings, check normalized equality
+                if isinstance(value1, str) and isinstance(value2, str):
+                    if value1.lower().strip() == value2.lower().strip():
+                        matches += 1
+                    # Partial match for longer strings
+                    elif len(value1) > 10 and len(value2) > 10:
+                        # Check if one is substring of other
+                        if value1.lower() in value2.lower() or value2.lower() in value1.lower():
+                            matches += 0.5
+                # For numbers, check equality
+                elif isinstance(value1, (int, float)) and isinstance(value2, (int, float)):
+                    if value1 == value2:
+                        matches += 1
+        
+        # Calculate matching score
+        return matches / total_comparable if total_comparable > 0 else 0.0

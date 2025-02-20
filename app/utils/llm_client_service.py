@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Dict, Optional
 from openai import OpenAI
 import instructor
 from pydantic import BaseModel
@@ -57,6 +57,36 @@ def extract(prompt: str, response_model: Type[BaseModel]) -> Type[BaseModel]:
         print("***** LLM Response: *****")
         print(result)
         print("***** LLM Response ENDS: *****")
+        return result
+    except Exception as e:
+        raise ValueError(f"Failed to parse LLM response: {str(e)}")
+    
+def generate_text(prompt: str, json_response: bool = True) -> Optional[Dict]:
+    """Generate text using LLM"""
+    client = genai.Client(
+        vertexai=True, 
+        project=settings.VERTEXAI_PROJECT_ID, 
+        location=settings.VERTEXAI_LOCATION,
+    )
+    # Call model with structured output
+    if json_response:
+        config = {
+            'response_mime_type': 'application/json',
+            'temperature': 0,
+        }
+    else:
+        config = None
+    response = client.models.generate_content(
+        model='gemini-2.0-flash-lite-preview-02-05',
+        contents=prompt,
+        config=config,
+    )
+    # Parse and validate response
+    try:
+        print("***** JSON Response: *****")
+        print(json.loads(response.text))
+        print("***** JSON Response ENDS: *****")
+        result = json.loads(response.text) if json_response else response.text
         return result
     except Exception as e:
         raise ValueError(f"Failed to parse LLM response: {str(e)}")
