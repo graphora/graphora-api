@@ -4,6 +4,8 @@ import json
 import psutil
 import redis
 from prefect import get_client
+import platform
+import time
 
 from app.services.transform.status_models import (
     TransformationStage,
@@ -54,19 +56,61 @@ class ProgressTracker:
             return None
     
     def _get_resource_metrics(self) -> Dict[str, float]:
-        """Get current resource usage metrics"""
+        """Get current resource usage metrics in a cross-platform compatible way"""
         process = psutil.Process()
         memory_info = process.memory_info()
-        print(memory_info)
-        return {
+        
+        # Base metrics available on all platforms
+        metrics = {
             'cpu_usage_percent': process.cpu_percent(),
             'memory_usage_mb': memory_info.rss / 1024 / 1024,
-            'peak_memory_mb': memory_info.peak_wset / 1024 / 1024,
             'disk_usage_mb': 0.0,  # TODO: Implement if needed
             'processing_time_ms': 0.0,  # Set by caller
             'llm_tokens_used': 0,  # Set by caller
             'api_calls_made': 0  # Set by caller
         }
+        
+        # Platform-specific peak memory tracking
+        system = platform.system()
+        if system == 'Windows':
+            # Windows-specific peak memory attribute
+            if hasattr(memory_info, 'peak_wset'):
+                metrics['peak_memory_mb'] = memory_info.peak_wset / 1024 / 1024
+            else:
+                metrics['peak_memory_mb'] = metrics['memory_usage_mb']
+        elif system == 'Linux':
+            # On Linux, read from /proc/[pid]/status for peak memory
+            try:
+                with open(f'/proc/{process.pid}/status', 'r') as f:
+                    for line in f:
+                        if line.startswith('VmHWM:'):  # "High Water Mark"
+                            peak_kb = float(line.split()[1])
+                            metrics['peak_memory_mb'] = peak_kb / 1024
+                            break
+                    else:
+                        # If VmHWM not found, use current memory as fallback
+                        metrics['peak_memory_mb'] = metrics['memory_usage_mb']
+            except (IOError, ValueError):
+                metrics['peak_memory_mb'] = metrics['memory_usage_mb']
+        elif system == 'Darwin':  # macOS
+            # macOS doesn't provide peak memory usage through standard interfaces
+            # Use current memory as an approximation, or maintain your own high watermark
+            try:
+                # Try to use ru_maxrss from resource module as alternative
+                import resource
+                rusage = resource.getrusage(resource.RUSAGE_SELF)
+                # On macOS, ru_maxrss is in bytes
+                metrics['peak_memory_mb'] = rusage.ru_maxrss / 1024 / 1024
+            except (ImportError, AttributeError):
+                metrics['peak_memory_mb'] = metrics['memory_usage_mb']
+        else:
+            # Other platforms - use current memory as fallback
+            metrics['peak_memory_mb'] = metrics['memory_usage_mb']
+        
+        # Add process uptime
+        metrics['process_uptime_seconds'] = time.time() - process.create_time()
+        
+        return metrics
     
     async def initialize_transform(
         self,

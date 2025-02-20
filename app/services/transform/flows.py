@@ -211,7 +211,6 @@ async def document_transformation_flow(
         ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
         
         # Process each document
-        print(doc_chunk_results)
         for res in doc_chunk_results:
             result, graph = res
             if result and result.chunks:
@@ -221,7 +220,7 @@ async def document_transformation_flow(
                     transform_id=transform_id,
                     progress_callback=lambda i, t: update_stage_progress(transform_id, TransformationStage.TRANSFORM, i, t)
                 )
-                
+                print(graph, metrics)
                 if graph and metrics:
                     total_nodes += metrics.total_nodes
                     total_relationships += metrics.total_relationships
@@ -273,12 +272,6 @@ async def document_transformation_flow(
         
     except Exception as e:
         logger.error(f"Transform failed: {str(e)}")
-        return {
-            'transform_id': transform_id,
-            'error': str(e),
-            'total_nodes': 0,
-            'total_relationships': 0
-        }
         
         # Get current stage from context
         context = get_run_context()
@@ -315,5 +308,11 @@ async def document_transformation_flow(
             current_stage,
             error
         )
+        # return {
+        #     'transform_id': transform_id,
+        #     'error': str(e),
+        #     'total_nodes': 0,
+        #     'total_relationships': 0
+        # }
         
         raise

@@ -1,4 +1,5 @@
-from typing import List, Callable, Tuple, Optional
+from typing import List, Callable, Tuple, Optional, Union
+from pydantic import BaseModel
 from pathlib import Path
 from prefect import task, get_run_logger
 import yaml
@@ -82,10 +83,10 @@ async def load_and_validate_ontology(
 )
 async def construct_knowledge_graph(
     chunks: List[str],
-    ontology_path: Path,
+    ontology_path: Union[str, Path],
     transform_id: str,
     progress_callback: Optional[Callable[[int, int], None]] = None
-) -> Tuple[Optional[KnowledgeGraph], Optional[ExtractionMetrics]]:
+) -> Tuple[Optional[BaseModel], Optional[ExtractionMetrics]]:
     """Construct knowledge graph from chunks using ontology"""
     logger = get_run_logger()
     
@@ -94,20 +95,35 @@ async def construct_knowledge_graph(
         
         # Load and validate ontology
         parser = OntologyParser(ontology_path)
-        parser.validate()
         
         # Initialize builder
         builder = KnowledgeGraphBuilder(parser)
         
-        # Process chunks
-        graph, metrics = await builder.process_chunks(chunks, progress_callback)
+        # Process chunks with controlled concurrency
+        if len(chunks) > settings.EXTRACTION_LARGE_DOCUMENT_THRESHOLD:
+            logger.info(f"Large document detected, using parallel processing with concurrency {settings.EXTRACTION_CONCURRENCY}")
+            graph = await builder.build_graph_from_chunks(
+                chunks=chunks,
+                transform_id=transform_id, 
+                concurrency=settings.EXTRACTION_CONCURRENCY,
+                progress_callback=progress_callback
+            )
+            metrics = builder.metrics
+        else:
+            # Use sequential processing for smaller documents
+            graph, metrics = await builder.process_chunks(chunks, progress_callback)
         
-        # Log metrics
-        logger.info(
-            f"Extraction completed: "
-            f"{metrics.new_nodes} new nodes, {metrics.merged_nodes} merged nodes, "
-            f"{metrics.total_relationships} relationships"
-        )
+        # Finalize metrics
+        if metrics:
+            metrics.finalize()
+            
+            # Log metrics
+            logger.info(
+                f"Extraction completed: "
+                f"{metrics.new_nodes} new nodes, {metrics.merged_nodes} merged nodes, "
+                f"{metrics.total_relationships} relationships, "
+                f"{metrics.failed_chunks}/{metrics.total_chunks} chunks failed"
+            )
         
         return graph, metrics
         

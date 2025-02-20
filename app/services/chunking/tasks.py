@@ -1,7 +1,7 @@
 from typing import List, Tuple
 import aiofiles
 from app.services.chunking.chunker import (
-    SemanticChunker as DocumentChunker,
+    DocumentChunker,
     ChunkingError
 )
 from app.services.chunking.models import (
@@ -33,13 +33,7 @@ async def chunk_document(
     """
     try:
         # Initialize chunker with CPU device
-        chunker = DocumentChunker(
-            max_chunk_size=settings.MAX_CHUNK_SIZE,
-            min_chunk_size=settings.MIN_CHUNK_SIZE,
-            similarity_threshold=settings.SEMANTIC_THRESHOLD,
-            model_name=settings.EMBEDDING_MODEL,
-            device="cpu"  # Force CPU
-        )
+        chunker = DocumentChunker()
         
         # Read file content
         async with aiofiles.open(file_path, 'r') as f:
