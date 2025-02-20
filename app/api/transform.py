@@ -11,10 +11,12 @@ from app.schemas.transform import (
     DocumentType,
     TransformStatus
 )
+from app.services.transform.status_models import (
+    TransformationStage
+)
 from app.services.transform.validators import FileValidator
 from app.services.transform.flows import document_transformation_flow, progress_tracker
 from app.services.transform.status_models import DetailedTransformStatus
-from app.services.transform.storage import get_flow_storage
 from app.config import settings
 from pathlib import Path
 from datetime import datetime, timezone
@@ -69,6 +71,9 @@ async def upload_documents(
         # Generate transform ID
         transform_id = f"transform_{uuid.uuid4().hex}"
         
+        # Initialize progress tracking
+        await progress_tracker.initialize_transform(transform_id)
+        
         # Validate files
         validator = FileValidator()
         temp_dir = Path(settings.UPLOAD_DIR) / transform_id
@@ -115,6 +120,11 @@ async def upload_documents(
                 document_type=metadata.document_type,
                 metadata=metadata
             )
+        
+        await progress_tracker.complete_stage(
+            transform_id,
+            TransformationStage.UPLOAD
+        )
         
         # Start Prefect flow in background
         background_tasks.add_task(
