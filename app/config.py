@@ -102,7 +102,7 @@ class Settings(BaseSettings):
         description="Maximum size of a text chunk"
     )
     MIN_CHUNK_SIZE: int = Field(
-        default=100,
+        default=1500,
         description="Minimum size of a text chunk"
     )
     MAX_CHUNKS_PER_DOC: int = Field(
@@ -128,6 +128,14 @@ class Settings(BaseSettings):
     RETRY_DELAY_SECONDS: int = Field(
         default=30,
         description="Delay between retries in seconds"
+    )
+    EXTRACTION_LARGE_DOCUMENT_THRESHOLD: int = Field(
+        default=5,
+        description="Threshold for large document for parallel processing"
+    )
+    EXTRACTION_CONCURRENCY: int = Field(
+        default=5,
+        description="Concurrency for extraction"
     )
     EXTRACTION_RETRIES: int = Field(
         default=3,

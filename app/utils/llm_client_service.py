@@ -34,14 +34,13 @@ class VertexAPIKey:
 
 vertex_key_mgr = VertexAPIKey()
 
-def extract(prompt: str, response_model: Type[BaseModel]) -> Any:
+def extract(prompt: str, response_model: Type[BaseModel]) -> Type[BaseModel]:
     """Extract structured information using LLM"""
     client = genai.Client(
         vertexai=True, 
         project=settings.VERTEXAI_PROJECT_ID, 
         location=settings.VERTEXAI_LOCATION,
     )
-    
     # Call model with structured output
     response = client.models.generate_content(
         model='gemini-2.0-flash-lite-preview-02-05',
@@ -52,10 +51,12 @@ def extract(prompt: str, response_model: Type[BaseModel]) -> Any:
             'temperature': 0,
         }
     )
-    
     # Parse and validate response
     try:
         result = response.parsed
+        print("***** LLM Response: *****")
+        print(result)
+        print("***** LLM Response ENDS: *****")
         return result
     except Exception as e:
         raise ValueError(f"Failed to parse LLM response: {str(e)}")
