@@ -6,6 +6,7 @@ from app.services.graph_service import GraphService
 from app.config import settings
 from app.utils.logger import logger
 from app.utils.mock import transform_graph
+import traceback
 
 router = APIRouter(prefix="/api/v1/graph", tags=["Graph"])
 
@@ -21,17 +22,17 @@ def get_staging_graph_service() -> GraphService:
     finally:
         service.close()
 
-@router.get("/{label}",
+@router.get("/{transform_id}",
          response_model=GraphResponse,
-         description="Retrieve nodes by label and their relationships")
-def get_graph_by_label(
-    label: str,
+         description="Retrieve nodes by transform ID and their relationships")
+def get_graph_by_transform_id(
+    transform_id: str,
     limit: Optional[int] = 1000,
     skip: Optional[int] = 0,
     graph_service: GraphService = Depends(get_staging_graph_service)
 ) -> GraphResponse:
     """
-    Retrieve nodes by label and their relationships
+    Retrieve nodes by transform ID and their relationships
     
     Parameters:
     - label: Node label to query
@@ -63,18 +64,19 @@ def get_graph_by_label(
             return transform_graph
 
         # Get graph data
-        response = graph_service.get_graph_by_label(
-            label=f"Staging_{label}",
+        response = graph_service.get_graph_by_transform_id(
+            transform_id=transform_id,
             limit=limit,
             skip=skip
         )
         
         if not response.nodes:
-            logger.warning(f"No nodes found with label: {label}")
+            logger.warning(f"No nodes found with transform_id: {transform_id}")
             
         return response
         
     except Exception as e:
+        traceback.print_exc()
         logger.error(f"Error retrieving graph data: {str(e)}")
         raise HTTPException(
             status_code=500,
@@ -102,14 +104,13 @@ def save_graph_changes(
     - Warning/info messages
     """
     try:
-        staging_label = f"Staging_{transform_id}"
         if settings.MOCK_MODE:
             logger.info("Mock mode enabled, skipping document processing")
             return SaveGraphResponse(
                 data=transform_graph,
                 messages=None
             )
-        return graph_service.save_graph_changes(staging_label, changes)
+        return graph_service.save_graph_changes(transform_id, changes)
     except ValueError as e:
         raise HTTPException(
             status_code=409,

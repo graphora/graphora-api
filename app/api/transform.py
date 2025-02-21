@@ -2,6 +2,7 @@ from fastapi import APIRouter, File, UploadFile, HTTPException, Request, Backgro
 from typing import List
 import aiofiles
 import uuid
+import traceback
 from fastapi.responses import JSONResponse
 from app.utils.logger import logger
 from app.schemas.transform import (
@@ -191,8 +192,10 @@ async def get_transform_status(
         return status
         
     except HTTPException:
+        traceback.print_exc()
         raise
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get transform status: {str(e)}"
