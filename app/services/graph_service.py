@@ -1,10 +1,10 @@
 import traceback
-from typing import Dict, List, Any, Tuple, Optional
+from typing import Dict, Any
 from neo4j import GraphDatabase
 from app.schemas.graph import Node, Edge, GraphResponse
 from app.schemas.graph_changes import (
     NodeCreation, NodeUpdate, EdgeCreation, EdgeUpdate,
-    NodeChanges, EdgeChanges, SaveGraphRequest, SaveGraphResponse, Message
+    SaveGraphRequest, SaveGraphResponse, Message
 )
 from app.utils.logger import logger
 from uuid import uuid4
@@ -19,12 +19,12 @@ class GraphService:
         if self.driver:
             self.driver.close()
 
-    def get_graph_by_label(self, label: str, limit: int = 1000, skip: int = 0) -> GraphResponse:
+    def get_graph_by_transform_id(self, transform_id: str, limit: int = 1000, skip: int = 0) -> GraphResponse:
         """
-        Retrieve nodes by label and their relationships
+        Retrieve nodes by transform ID and their relationships
         
         Args:
-            label: Node label to query (including batch prefix)
+            transform_id: ID of the transform
             limit: Maximum number of nodes to return
             skip: Number of nodes to skip (for pagination)
             
@@ -33,12 +33,13 @@ class GraphService:
         """
         try:
             # First get total counts
-            count_query = """
-            MATCH (n:`%s`)
+            count_query = f"""
+            MATCH (n)
+            WHERE n.transform_id = '{transform_id}'
             WITH count(n) as node_count
-            OPTIONAL MATCH (n:`%s`)-[r]-()
+            OPTIONAL MATCH (n)-[r]-()
             RETURN node_count, count(DISTINCT r) as edge_count
-            """ % (label, label)
+            """
 
             with self.driver.session() as session:
                 count_result = session.run(count_query)
@@ -47,18 +48,19 @@ class GraphService:
                 total_edges = count_data["edge_count"]
 
                 # Now get the actual data with pagination
-                query = """
-                MATCH (n:`%s`)
-                WITH n ORDER BY n._uid_
-                SKIP $skip LIMIT $limit
+                query = f"""
+                MATCH (n)
+                WHERE n.transform_id = '{transform_id}'
+                WITH n ORDER BY n.id
+                SKIP {skip} LIMIT {limit}
                 OPTIONAL MATCH (n)-[r]-(m)
                 RETURN 
                     collect(DISTINCT n) as nodes,
                     collect(DISTINCT r) as relationships,
                     collect(DISTINCT m) as connected_nodes
-                """ % label
+                """
 
-                result = session.run(query, {"limit": limit, "skip": skip})
+                result = session.run(query)
                 data = result.single()
 
                 # Transform results
@@ -68,11 +70,7 @@ class GraphService:
                 seen_edges = set()
 
                 def get_actual_label(node_labels):
-                    """Get the actual node label, ignoring batch labels"""
-                    # Convert labels to list and remove the batch label
-                    labels = [l for l in node_labels if not l.startswith(label)]
-                    # Return the first non-batch label, or the first label if all are batch labels
-                    return labels[0] if labels else next(iter(node_labels))
+                    return list(node_labels)[0]
 
                 def extract_properties(entity):
                     """Extract properties from node/relationship, excluding special fields"""
@@ -92,7 +90,7 @@ class GraphService:
 
                 # Process main nodes
                 for node in data["nodes"]:
-                    node_id = node.get("_uid_")
+                    node_id = node.get("id")
                     if node_id and node_id not in seen_nodes:
                         actual_label = get_actual_label(node.labels)
                         node_props = extract_properties(node)
@@ -107,7 +105,7 @@ class GraphService:
                 # Process connected nodes
                 for node in data["connected_nodes"]:
                     if node is not None:
-                        node_id = node.get("_uid_")
+                        node_id = node.get("id")
                         if node_id and node_id not in seen_nodes:
                             actual_label = get_actual_label(node.labels)
                             node_props = extract_properties(node)
@@ -122,10 +120,10 @@ class GraphService:
                 # Process relationships
                 for rel in data["relationships"]:
                     if rel is not None:
-                        edge_id = rel.get("_uid_", str(rel.id))
+                        edge_id = rel.get("id", str(rel.id))
                         if edge_id not in seen_edges:
-                            source_id = rel.start_node.get("_uid_")
-                            target_id = rel.end_node.get("_uid_")
+                            source_id = rel.start_node.get("id")
+                            target_id = rel.end_node.get("id")
                             if source_id and target_id:
                                 edge_props = extract_properties(rel)
                                 edges_list.append(Edge(
@@ -153,7 +151,7 @@ class GraphService:
         flattened = {}
         for key, value in properties.items():
             # Skip null values and internal fields
-            if value is not None and not key.startswith('_'):
+            if value is not None and not key.startswith('_') and key != 'id':
                 # Add prop_prop_ prefix to avoid conflicts with reserved fields
                 # prop_key = f"prop_{key}"
                 # Convert non-primitive types to string
@@ -172,14 +170,14 @@ class GraphService:
         
         query = f"""
         CREATE (n:`{transform_id}`:`{node.label}`)
-        SET n._uid_ = $uid, n.type = $type
+        SET n.id = $id, n.type = $type
         """
         if set_clause:
             query += f", {set_clause}"
 
         # Prepare parameters
         params = {
-            "uid": str(uuid4()),
+            "id": str(uuid4()),
             "type": node.type,
             **props
         }
@@ -191,10 +189,12 @@ class GraphService:
         # First get existing properties
         result = tx.run(
             f"""
-            MATCH (n:`{transform_id}` {{_uid_: $uid}})
+            MATCH (n)
+            WHERE n.transform_id = "{transform_id}" AND
+            n.id = $id
             RETURN n
             """,
-            uid=node.id
+            id=node.id
         ).single()
         
         if not result:
@@ -202,7 +202,7 @@ class GraphService:
             
         existing_node = result['n']
         existing_props = {k: v for k, v in dict(existing_node).items() 
-                        if not k.startswith('_') and k != 'type'}
+                        if not k.startswith('_') and k != 'type' and k != 'id'}
         
         # Get new properties
         new_props = self._flatten_properties(node.properties)
@@ -221,7 +221,10 @@ class GraphService:
         
         # Build and execute query
         query_parts = [
-            f"MATCH (n:`{transform_id}` {{_uid_: $uid}})"
+            f"""MATCH (n)
+            WHERE n.transform_id = "{transform_id}" AND
+            n.id = $id
+            """
         ]
         if set_clause:
             query_parts.append(set_clause)
@@ -231,10 +234,11 @@ class GraphService:
         query = "\n".join(query_parts)
         
         # Execute update if we have changes
+        print(new_props)
         if set_clause or remove_clause:
             tx.run(
                 query,
-                uid=node.id,
+                id=node.id,
                 **new_props
             )
 
@@ -242,7 +246,9 @@ class GraphService:
         """Delete a node"""
         tx.run(
             f"""
-            MATCH (n:`{transform_id}` {{_uid_: $id}})
+            MATCH (n)
+            WHERE n.transform_id = "{transform_id}" AND
+            n.id = $id
             DETACH DELETE n
             """,
             id=node_id
@@ -254,20 +260,20 @@ class GraphService:
         props = self._flatten_properties(edge.properties)
         # Build dynamic SET clause
         set_clauses = [f"r.{key} = ${key}" for key in props.keys()]
-        set_clauses.append("r._uid_ = $uid")
+        set_clauses.append("r.id = $id")
         set_clauses.append("r.type = $type")
         set_clause = ", ".join(set_clauses)
         
         query = f"""
-        MATCH (source:`{transform_id}` {{_uid_: $source_id}})
-        MATCH (target:`{transform_id}` {{_uid_: $target_id}})
+        MATCH (source:`{transform_id}` {{id: $source_id}})
+        MATCH (target:`{transform_id}` {{id: $target_id}})
         CREATE (source)-[r:`{edge.type}`]->(target)
         SET {set_clause}
         """
         
         # Prepare parameters
         params = {
-            "uid": str(uuid4()),
+            "id": str(uuid4()),
             "source_id": edge.source,
             "target_id": edge.target,
             "type": edge.type,
@@ -282,10 +288,10 @@ class GraphService:
         result = tx.run(
             """
             MATCH ()-[r]->()
-            WHERE r._uid_ = $uid
+            WHERE r.id = $id
             RETURN r
             """,
-            uid=edge.id
+            id=edge.id
         ).single()
         
         if not result:
@@ -293,7 +299,7 @@ class GraphService:
             
         existing_edge = result['r']
         existing_props = {k: v for k, v in dict(existing_edge).items() 
-                        if not k.startswith('_') and k != 'type'}
+                        if not k.startswith('_') and k != 'type' and k != 'id'}
         
         # Get new properties
         new_props = self._flatten_properties(edge.properties)
@@ -312,7 +318,7 @@ class GraphService:
         
         # Build and execute query
         query_parts = [
-            "MATCH ()-[r]->() WHERE r._uid_ = $uid"
+            "MATCH ()-[r]->() WHERE r.id = $id"
         ]
         if set_clause:
             query_parts.append(set_clause)
@@ -325,7 +331,7 @@ class GraphService:
         if set_clause or remove_clause:
             tx.run(
                 query,
-                uid=edge.id,
+                id=edge.id,
                 **new_props
             )
 
@@ -334,7 +340,7 @@ class GraphService:
         tx.run(
             """
             MATCH ()-[r]->()
-            WHERE r._uid_ = $id
+            WHERE r.id = $id
             DELETE r
             """,
             id=edge_id
@@ -385,7 +391,7 @@ class GraphService:
                 session.execute_write(inner_save)
 
                 # Get updated graph state
-                updated_graph = self.get_graph_by_label(transform_id)
+                updated_graph = self.get_graph_by_transform_id(transform_id)
 
                 # Convert Node and Edge objects to dictionaries
                 nodes_dict = [
