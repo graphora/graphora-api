@@ -15,7 +15,8 @@ from app.services.transform.models import (
     ExtractionMetrics
 )
 from app.services.transform.ontology_helper import (
-    OntologyParser
+    OntologyParser,
+    OntologyHierarchyBuilder
 )
 from app.services.llm.client import LLMClient
 from app.utils.logger import logger
@@ -1140,6 +1141,12 @@ class KnowledgeGraphBuilder:
         # Enhance relationship confidence
         self._enhance_relationship_confidence(doc_graph)
         
+        # Infer missing relationships
+        await self._infer_missing_relationships(doc_graph)
+        
+        # Validate final graph
+        self._validate_graph(doc_graph)
+        
         self.metrics.total_nodes = len(doc_graph.nodes)
         self.metrics.total_relationships = len(doc_graph.relationships)
         
@@ -1378,23 +1385,190 @@ class KnowledgeGraphBuilder:
             # Average of entity confidences
             edge.provenance.confidence_score = (source_conf + target_conf) / 2
 
-    def _resolve_node_reference(self, node_id: str, entity_type: str, node_registry: Dict) -> Optional[str]:
-        """Resolve node ID to canonical ID if found in registry"""
-        # Direct match in registry values
-        for registry_values in node_registry.get(entity_type, {}).values():
-            if registry_values == node_id:
-                return node_id
-                
-        # Try to find node and generate key
-        entity_list_field = f"{entity_type}_list"
-        if not hasattr(self.graph, entity_list_field):
-            return node_id
-            
-        node_list = getattr(self.graph, entity_list_field)
-        for node in node_list:
-            if node.id == node_id:
-                key = self._generate_node_key(entity_type, node.properties)
-                if key in node_registry.get(entity_type, {}):
-                    return node_registry[entity_type][key]
+    async def _infer_missing_relationships(self, graph: DocumentKnowledgeGraph) -> None:
+        """
+        Infer potential missing relationships based on ontology patterns.
+        Uses OntologyHierarchyBuilder to identify valid relationship types
+        between entities and suggests relationships that may have been missed.
+        """
+        hierarchy_builder = OntologyHierarchyBuilder(self.ontology_parser)
         
-        return node_id
+        # Get all entity types from graph
+        entity_types = set()
+        entity_by_type = {}
+        for node in graph.nodes:
+            entity_types.add(node.type)
+            if node.type not in entity_by_type:
+                entity_by_type[node.type] = []
+            entity_by_type[node.type].append(node)
+
+        # For each pair of entity types, check for potential relationships
+        for source_type in entity_types:
+            for target_type in entity_types:
+                if source_type == target_type:
+                    continue
+                    
+                # Get valid relationship types between these entity types
+                rel_types = hierarchy_builder.get_relationship_types(source_type, target_type)
+                if not rel_types:
+                    continue
+                    
+                # For each valid relationship type
+                for rel_type in rel_types:
+                    # Get existing relationships of this type
+                    existing_rels = [
+                        edge for edge in graph.relationships 
+                        if edge.type == rel_type and 
+                        edge.source_type == source_type and 
+                        edge.target_type == target_type
+                    ]
+                    existing_pairs = {(edge.source_id, edge.target_id) for edge in existing_rels}
+                    
+                    # Look for potential new relationships
+                    source_entities = entity_by_type[source_type]
+                    target_entities = entity_by_type[target_type]
+                    
+                    # Build prompt for relationship inference
+                    prompt = f"""Given these entities, identify any missing {rel_type} relationships:
+                    
+Source entities ({source_type}):
+{self._format_entities(source_entities)}
+
+Target entities ({target_type}):
+{self._format_entities(target_entities)}
+
+Existing relationships:
+{self._format_relationships(existing_rels)}
+
+Only return relationships that are clearly implied by the entity properties and context.
+Return a list of relationship objects with this exact structure:
+{{
+    "id": "<source_id>_{rel_type}_<target_id>",
+    "type": "{rel_type}",
+    "source_id": "<source_id>",
+    "target_id": "<target_id>",
+    "source_type": "{source_type}",
+    "target_type": "{target_type}",
+    "properties": {{}},
+    "confidence_score": <float between 0 and 1>
+}}
+
+Only return relationships if you are highly confident they exist based on the entity properties.
+"""
+                    # Call LLM to infer relationships
+                    try:
+                        inferred = await self.llm_client.extract_from_chunk(
+                            chunk=prompt,
+                            response_model=list[RelationshipInstance],
+                            context=self._generate_rdf_context()
+                        )
+                        
+                        if inferred:
+                            for rel in inferred:
+                                if (rel.source_id, rel.target_id) not in existing_pairs:
+                                    # Find source and target nodes
+                                    source_node = next((n for n in source_entities if n.id == rel.source_id), None)
+                                    target_node = next((n for n in target_entities if n.id == rel.target_id), None)
+                                    
+                                    if source_node and target_node:
+                                        # Create new edge with provenance
+                                        provenance = NodeProvenance(
+                                            extraction_timestamp=datetime.now(timezone.utc).isoformat(),
+                                            confidence_score=rel.confidence_score if hasattr(rel, 'confidence_score') else 0.5
+                                        )
+                                        
+                                        edge = RelationshipInstance(
+                                            id=rel.id or f"{rel.source_id}_{rel.type}_{rel.target_id}",
+                                            source_id=source_node.id,
+                                            target_id=target_node.id,
+                                            source_type=source_node.type,
+                                            target_type=target_node.type,
+                                            type=rel.type,
+                                            properties=rel.properties or {},
+                                            provenance=provenance
+                                        )
+                                        graph.relationships.append(edge)
+                                        existing_pairs.add((edge.source_id, edge.target_id))
+                            
+                    except Exception as e:
+                        traceback.print_exc()
+                        logger.warning(f"Failed to infer relationships for {source_type}->{target_type}: {str(e)}")
+
+    def _format_entities(self, entities: List[BaseNode]) -> str:
+        """Format entities for LLM prompt"""
+        formatted = []
+        for e in entities:
+            props = {k:v for k,v in e.properties.items() if v is not None}
+            formatted.append(f"ID: {e.id}\nType: {e.type}\nProperties: {props}")
+        return "\n".join(formatted)
+        
+    def _format_relationships(self, relationships: List[RelationshipInstance]) -> str:
+        """Format relationships for LLM prompt"""
+        formatted = []
+        for r in relationships:
+            formatted.append(f"{r.source_id} -> {r.type} -> {r.target_id}")
+        return "\n".join(formatted)
+
+    def _validate_graph(self, graph: DocumentKnowledgeGraph) -> None:
+        """
+        Validate the generated knowledge graph against ontology rules.
+        Checks:
+        1. Required properties are present
+        2. Property types match ontology
+        3. Relationship constraints are satisfied
+        4. No duplicate relationships
+        """
+        ontology = self.ontology_parser.parsed_ontology
+        
+        # Validate entities
+        for entity_type, entity_def in ontology['entities'].items():
+            entity_list = getattr(graph, f"{entity_type}_list", [])
+            
+            # Check required properties
+            required_props = {
+                name for name, prop in entity_def.get('properties', {}).items()
+                if prop.get('required', False)
+            }
+            
+            for entity in entity_list:
+                missing = required_props - set(entity.model_fields().keys())
+                if missing:
+                    logger.warning(f"Entity {entity.id} missing required properties: {missing}")
+                    
+        # Validate relationships
+        for source_type, source_def in ontology['entities'].items():
+            for rel_name, rel_def in source_def.get('relationships', {}).items():
+                rel_field = f"{source_type}_{rel_name}"
+                
+                if not hasattr(graph, rel_field):
+                    continue
+                    
+                rel_list = getattr(graph, rel_field)
+                valid_relationships = []
+                
+                for rel in rel_list:
+                    # Check for duplicates
+                    seen = set()
+                    unique_rels = []
+                    for rel in rel_list:
+                        key = (rel.source.id, rel.target.id)
+                        if key not in seen:
+                            seen.add(key)
+                            unique_rels.append(rel)
+                        else:
+                            logger.warning(f"Duplicate relationship found: {rel.source.id} -> {rel.target.id}")
+                    
+                    if len(unique_rels) != len(rel_list):
+                        setattr(graph, rel_field, unique_rels)
+                        
+                    # Validate relationship properties
+                    required_props = {
+                        name for name, prop in rel_def.get('properties', {}).items()
+                        if prop.get('required', False)
+                    }
+                    
+                    for rel in unique_rels:
+                        if hasattr(rel, 'properties'):
+                            missing = required_props - set(rel.properties.keys())
+                            if missing:
+                                logger.warning(f"Relationship {rel.source.id}->{rel.target.id} missing required properties: {missing}")

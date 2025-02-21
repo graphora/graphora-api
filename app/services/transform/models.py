@@ -76,8 +76,7 @@ class RelationshipInstance(BaseModel):
     properties: Dict[str, Any] = Field(default_factory=dict)
     provenance: Optional[NodeProvenance] = None
     confidence_score: Optional[float] = None
-    
-    
+     
 class ExtractionMetrics(BaseModel):
     """Metrics for the extraction process"""
     start_time: datetime
