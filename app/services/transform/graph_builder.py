@@ -256,26 +256,43 @@ class KnowledgeGraphBuilder:
         """Process all chunks and build unified graph"""
         chunk_results = []
         
+        # Create event loop if not already running
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
         # Process chunks with controlled concurrency
         semaphore = asyncio.Semaphore(concurrency)
         
         async def process_with_semaphore(chunk: str, idx: int):
             async with semaphore:
-                result = await self.process_chunk(chunk, f"{transform_id}_chunk_{idx}")
-                if progress_callback:
-                    try:
-                        await progress_callback(idx + 1, len(chunks))
-                    except:
-                        # Handle synchronous callback
-                        progress_callback(idx + 1, len(chunks))
-                return result
+                try:
+                    print(f"Processing chunk {idx + 1} / {len(chunks)}")
+                    result = await self.process_chunk(chunk, f"{transform_id}_chunk_{idx}")
+                    if progress_callback:
+                        try:
+                            if asyncio.iscoroutinefunction(progress_callback):
+                                await progress_callback(idx + 1, len(chunks))
+                            else:
+                                # Handle synchronous callback
+                                progress_callback(idx + 1, len(chunks))
+                        except Exception as e:
+                            logger.warning(f"Progress callback failed: {str(e)}")
+                    return result
+                except Exception as e:
+                    logger.error(f"Chunk processing failed for idx {idx}: {str(e)}")
+                    return None
+        
+        # Create processing tasks
+        tasks = []
+        for idx, chunk in enumerate(chunks):
+            task = asyncio.create_task(process_with_semaphore(chunk, idx))
+            tasks.append(task)
         
         # Process all chunks concurrently with controlled parallelism
-        tasks = [
-            process_with_semaphore(chunk, idx)
-            for idx, chunk in enumerate(chunks)
-        ]
-        chunk_results = await asyncio.gather(*tasks)
+        chunk_results = await asyncio.gather(*tasks, return_exceptions=False)
         chunk_results = [r for r in chunk_results if r is not None]
         
         # Merge all extraction results
@@ -618,6 +635,7 @@ class KnowledgeGraphBuilder:
     def _find_node_by_id(self, entity_type: str, node_id: str) -> Optional[BaseNode]:
         """Find a node by ID in the graph"""
         entity_list_field = f"{entity_type}_list"
+        
         if not hasattr(self.graph, entity_list_field):
             return None
             
@@ -878,7 +896,7 @@ class KnowledgeGraphBuilder:
     def _prune_orphaned_nodes(self) -> None:
         """Remove nodes with no ontology-defined properties that aren't referenced in any relationship"""
         # Build set of node IDs used in relationships
-        nodes_in_relationships = set()
+        nodes_in_relationships = []
         
         # Check all relationship fields
         for field_name in dir(self.graph):
@@ -890,8 +908,8 @@ class KnowledgeGraphBuilder:
                 continue
                 
             for rel in rel_list:
-                nodes_in_relationships.add((rel.source_type, rel.source_id))
-                nodes_in_relationships.add((rel.target_type, rel.target_id))
+                nodes_in_relationships.append((rel.source_type, rel.source_id))
+                nodes_in_relationships.append((rel.target_type, rel.target_id))
         
         # Prune nodes
         for entity_type in self.entity_models:
@@ -1113,41 +1131,39 @@ class KnowledgeGraphBuilder:
         
         # Process all relationship types
         for field_name in dir(self.graph):
-            if field_name.endswith('_list') or field_name.startswith('_') or '_' not in field_name:
-                continue
-                
-            rel_list = getattr(self.graph, field_name)
-            if not isinstance(rel_list, list):
-                continue
-                
-            # Parse relationship field
-            parts = field_name.split('_', 1)
-            if len(parts) != 2:
-                continue
-                
-            source_type, rel_type = parts
-            
-            # Add triples for each relationship
-            for rel in rel_list:
-                if not hasattr(rel, 'source_id') or not hasattr(rel, 'target_id'):
+            if '_' in field_name and not field_name.endswith('_list') and not field_name.startswith('_'):
+                rel_list = getattr(self.graph, field_name)
+                if not isinstance(rel_list, list):
                     continue
+                
+                # Parse relationship field
+                parts = field_name.split('_', 1)
+                if len(parts) != 2:
+                    continue
+                
+                source_type, rel_type = parts
+                
+                # Add triples for each relationship
+                for rel in rel_list:
+                    if not hasattr(rel, 'source_id') or not hasattr(rel, 'target_id'):
+                        continue
+                        
+                    source_id = rel.source_id
+                    target_id = rel.target_id
+                    target_type = rel.target_type
                     
-                source_id = rel.source_id
-                target_id = rel.target_id
-                target_type = rel.target_type
-                
-                # Format as: <source_type>(<source_id>) <relationship> <target_type>(<target_id>)
-                triple = f"{source_type}({source_id}) {rel_type} {target_type}({target_id})"
-                self.extracted_triples.append(triple)
-                
-                # Add relationship properties if any
-                if hasattr(rel, 'properties') and rel.properties:
-                    for prop_name, prop_value in rel.properties.items():
-                        if prop_value is not None:
-                            # Format as: Relationship(<rel_id>) <property> <value>
-                            value_str = str(prop_value).replace('"', r'\"')
-                            rel_triple = f"Relationship({rel.id}) hasProperty:{prop_name} \"{value_str}\""
-                            self.extracted_triples.append(rel_triple)
+                    # Format as: <source_type>(<source_id>) <relationship> <target_type>(<target_id>)
+                    triple = f"{source_type}({source_id}) {rel_type} {target_type}({target_id})"
+                    self.extracted_triples.append(triple)
+                    
+                    # Add relationship properties if any
+                    if hasattr(rel, 'properties') and rel.properties:
+                        for prop_name, prop_value in rel.properties.items():
+                            if prop_value is not None:
+                                # Format as: Relationship(<rel_id>) <property> <value>
+                                value_str = str(prop_value).replace('"', r'\"')
+                                rel_triple = f"Relationship({rel.id}) hasProperty:{prop_name} \"{value_str}\""
+                                self.extracted_triples.append(rel_triple)
         
         # Limit total number of triples to avoid context explosion
         max_triples = 500  # Adjust based on your model's context window
@@ -1181,6 +1197,7 @@ class KnowledgeGraphBuilder:
         """
         Apply post-processing to improve graph quality and convert to DocumentKnowledgeGraph format.
         This helps ensure consistency in naming, capitalization, and property values.
+        Includes entity resolution using LLM.
         """
         # Create DocumentKnowledgeGraph
         doc_graph = DocumentKnowledgeGraph(
@@ -1203,7 +1220,66 @@ class KnowledgeGraphBuilder:
                 rel_list = getattr(graph, field_name)
                 if isinstance(rel_list, list):
                     doc_graph.relationships.extend(rel_list)
+
+        # Group nodes by entity type for resolution
+        entity_groups = {}
+        for node in doc_graph.nodes:
+            entity_type = node.type
+            if entity_type not in entity_groups:
+                entity_groups[entity_type] = []
+            entity_groups[entity_type].append(node)
+
+        # Process each entity type group for resolution
+        merged_nodes = {}  # old_id -> new_id mapping
+        final_nodes = []
         
+        for entity_type, nodes in entity_groups.items():
+            if len(nodes) <= 1:
+                final_nodes.extend(nodes)
+                continue
+                
+            # Perform entity resolution for this group
+            resolved_groups = await self._resolve_entity_group(entity_type, nodes)
+            
+            # Process resolved groups
+            for group in resolved_groups:
+                if len(group) == 1:
+                    # Single node, no merging needed
+                    final_nodes.append(group[0])
+                    continue
+                    
+                # Sort by confidence score to use highest confidence node as base
+                sorted_nodes = sorted(group, 
+                                    key=lambda x: x.provenance.confidence_score if hasattr(x, 'provenance') and x.provenance else 0, 
+                                    reverse=True)
+                
+                # Use highest confidence node as base and merge others into it
+                base_node = sorted_nodes[0]
+                for other_node in sorted_nodes[1:]:
+                    merged_nodes[other_node.id] = base_node.id
+                    # Merge properties and provenance
+                    base_node = self._merge_nodes(base_node, other_node)
+                
+                final_nodes.append(base_node)
+
+        # Update relationships with merged node IDs
+        final_relationships = []
+        for rel in doc_graph.relationships:
+            # Check if source or target nodes were merged
+            source_id = merged_nodes.get(rel.source_id, rel.source_id)
+            target_id = merged_nodes.get(rel.target_id, rel.target_id)
+            
+            # Skip if either node was dropped
+            if source_id and target_id:
+                rel.source_id = source_id
+                rel.target_id = target_id
+                final_relationships.append(rel)
+
+        # Update graph with resolved entities
+        doc_graph.nodes = final_nodes
+        doc_graph.relationships = final_relationships
+            
+        # Continue with existing post-processing steps
         # Standardize entity values
         entity_groups = {}
         for node in doc_graph.nodes:
@@ -1229,6 +1305,107 @@ class KnowledgeGraphBuilder:
         self.metrics.total_relationships = len(doc_graph.relationships)
         
         return doc_graph
+
+    async def _resolve_entity_group(self, entity_type: str, nodes: List[BaseNode]) -> List[List[BaseNode]]:
+        """
+        Use LLM to identify and group matching entities that should be merged.
+        Returns list of groups, where each group contains matching nodes.
+        """
+        if len(nodes) <= 1:
+            return [[nodes[0]]] if nodes else []
+
+        # Convert nodes to simple dict representation for LLM
+        node_dicts = []
+        for idx, node in enumerate(nodes):
+            node_dict = {
+                "id": node.id,
+                "index": idx,  # Keep track of original position
+                "properties": node.properties,
+                "confidence": node.provenance.confidence_score if hasattr(node, 'provenance') and node.provenance else None
+            }
+            node_dicts.append(node_dict)
+            
+        node_dicts_str = json.dumps(node_dicts, indent=2)
+
+        # Create prompt for LLM entity resolution
+        prompt = f"""
+        You are performing entity resolution on a group of {entity_type} entities.
+        Your task is to identify which entities refer to the same real-world entity and should be merged.
+        
+        Entities:
+        {node_dicts_str}
+        
+        Use these guidelines for matching:
+        1. Compare all properties to determine if entities match
+        2. Handle variations in naming, formatting, and completeness
+        3. Consider similarity in key identifying properties
+        4. Be conservative - only match if reasonably confident (>80% sure)
+        5. Consider property values that are similar but not exactly matching
+        6. Look for complementary information across entities
+        
+        Return a JSON array of arrays, where each inner array contains indices of matching entities:
+        {{
+            "matching_groups": [
+                [0, 2, 5],  # Example: entities 0, 2, and 5 match
+                [1, 4],     # Example: entities 1 and 4 match
+                [3],        # Example: entity 3 has no matches
+                [6]         # Example: entity 6 has no matches
+            ],
+            "confidence_scores": [
+                0.95,  # Confidence for first group
+                0.85,  # Confidence for second group
+                1.0,   # Single entity groups always have 1.0 confidence
+                1.0
+            ]
+        }}
+
+        Also provide brief explanations for why you grouped entities together:
+        {{
+            "explanations": {{
+                "group_0": "These entities share the same name with minor variations and have overlapping properties",
+                "group_1": "These entities have matching identifiers and complementary information"
+            }}
+        }}
+        """
+
+        try:
+            # Call LLM for entity resolution
+            print(f"Resolving `{entity_type}` entities")
+            result = await self.llm_client.generate_text(prompt=prompt, json_response=True)
+            
+            if not result or 'matching_groups' not in result:
+                # Fallback: treat each node as separate group
+                return [[node] for node in nodes]
+            
+            # Convert index groups back to node groups
+            resolved_groups = []
+            for idx, index_group in enumerate(result['matching_groups']):
+                node_group = []
+                for idx in index_group:
+                    if 0 <= idx < len(nodes):  # Validate index
+                        node_group.append(nodes[idx])
+                if node_group:  # Only add non-empty groups
+                    resolved_groups.append(node_group)
+                    
+                    # Log explanation if available
+                    if 'explanations' in result and f'group_{idx}' in result['explanations']:
+                        logger.info(f"Entity resolution group {idx}: {result['explanations'][f'group_{idx}']}")
+            
+            # Check if any nodes were missed (safeguard)
+            included_nodes = [node for group in resolved_groups for node in group]
+            missed_nodes = [node for node in nodes if node not in included_nodes]
+            
+            # Add missed nodes as single-node groups
+            for node in missed_nodes:
+                resolved_groups.append([node])
+            
+            return resolved_groups
+            
+        except Exception as e:
+            traceback.print_exc()
+            logger.warning(f"Error in LLM entity resolution: {str(e)}")
+            # Fallback: treat each node as separate group
+            return [[node] for node in nodes]
 
     async def _standardize_entity_group(self, entity_type: str, entity_data: List[Dict]) -> Optional[Dict]:
         """

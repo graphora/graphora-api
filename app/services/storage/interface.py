@@ -5,8 +5,6 @@ from datetime import datetime
 from neo4j import GraphDatabase
 import json
 
-from pydantic import BaseModel
-
 from app.services.storage.models import (
     StorageCheckpoint,
     StorageStage,
@@ -110,7 +108,7 @@ class Neo4jStorage(GraphStorageInterface):
             properties['provenance'] = json.dumps(node.provenance.model_dump())
         
         return (
-            f"MERGE (n:{':'.join(labels)} {{id: $id}}) "
+            f"CREATE (n:{':'.join(labels)} {{id: $id}}) "
             "SET n += $properties "
             "RETURN n",
             {"id": node.id, "properties": properties}
@@ -362,7 +360,7 @@ class Neo4jStorage(GraphStorageInterface):
             with self.driver.session(database=self.database) as session:
                 session.run(
                     """
-                    MERGE (c:Checkpoint {transform_id: $transform_id})
+                    CREATE (c:Checkpoint {transform_id: $transform_id})
                     SET c.last_processed_index = $last_index,
                         c.stage = $stage,
                         c.timestamp = datetime()
