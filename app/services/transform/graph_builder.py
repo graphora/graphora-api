@@ -6,8 +6,6 @@ import uuid
 import json
 import traceback
 from datetime import datetime, timezone
-from pathlib import Path
-from pydantic import BaseModel, create_model, Field
 from app.services.transform.models import (
     BaseNode,
     NodeProvenance,
@@ -16,209 +14,14 @@ from app.services.transform.models import (
     DocumentKnowledgeGraph,
     ExtractionMetrics
 )
+from app.services.transform.ontology_helper import (
+    OntologyParser
+)
 from app.services.llm.client import LLMClient
 from app.utils.logger import logger
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
-
-class OntologyParser:
-    """Parser for YAML ontology definitions"""
-    
-    def __init__(self, yaml_path: Union[str, Path]):
-        """Initialize parser with YAML ontology"""
-        # Load YAML content
-        if isinstance(yaml_path, Path):
-            with open(yaml_path) as f:
-                yaml_content = f.read()
-        else:
-            yaml_content = yaml_path
-            
-        self.parsed_ontology = yaml.safe_load(yaml_content)
-        self.validate_ontology_structure()
-        
-    def validate_ontology_structure(self) -> None:
-        """Validate ontology has required structure"""
-        required_keys = ['version', 'entities']
-        if not all(key in self.parsed_ontology for key in required_keys):
-            raise ValueError(f"Ontology missing required keys: {required_keys}")
-            
-        # Validate each entity has properties
-        # for entity, definition in self.parsed_ontology['entities'].items():
-        #     if 'properties' not in definition:
-        #         raise ValueError(f"Entity {entity} missing 'properties' definition")
-    
-    def build_graph_model(self) -> Type[BaseModel]:
-        """
-        Build a complete Pydantic model structure from a YAML ontology definition.
-        Returns a KnowledgeGraph class that can be used as a response_model.
-        """
-        # Parse YAML
-        ontology = self.parsed_ontology
-        entities = ontology.get('entities', {})
-        
-        # Dictionary to store all dynamically created models
-        entity_models = {}
-        relationship_models = {}
-        
-        # First create all entity models
-        for entity_name, entity_def in entities.items():
-            # Create the base properties
-            props = entity_def.get('properties', {})
-            field_definitions = {}
-            
-            for prop_name, prop_def in props.items():
-                field_type = self._get_field_type(prop_def.get('type', 'str'))
-                
-                is_required = prop_def.get('required', False)
-                is_unique = prop_def.get('unique', False)
-                is_indexed = prop_def.get('index', False)
-                
-                # Set default only if not required
-                default_value = None if not is_required else ...
-                
-                field_definitions[prop_name] = (
-                    Optional[field_type] if not is_required else field_type,
-                    Field(
-                        default=default_value,
-                        description=prop_def.get('description', ''),
-                        title=prop_name
-                    )
-                )
-            
-            # Create entity model
-            entity_model = create_model(
-                entity_name,
-                __base__=BaseModel,
-                __domain__="graphit",
-                **field_definitions
-            )
-            
-            # Store model
-            entity_models[entity_name] = entity_model
-            globals()[entity_name] = entity_model
-        
-        # Then create relationship models
-        for entity_name, entity_def in entities.items():
-            relationships = entity_def.get('relationships', {})
-            entity_relationship_models = {}
-            
-            for rel_name, rel_def in relationships.items():
-                target_name = rel_def.get('target')
-                target_model = entity_models.get(target_name)
-                
-                if not target_model:
-                    continue
-                    
-                # Handle relationship properties
-                rel_props = rel_def.get('properties', {})
-                rel_field_defs = {}
-                
-                for prop_name, prop_def in rel_props.items():
-                    field_type = self._get_field_type(prop_def.get('type', 'str'))
-                    is_required = prop_def.get('required', False)
-                    is_unique = prop_def.get('unique', False)
-                    
-                    default_value = None if not is_required else ...
-                    
-                    rel_field_defs[prop_name] = (
-                        Optional[field_type] if not is_required else field_type,
-                        Field(
-                            default=default_value,
-                            description=prop_def.get('description', ''),
-                            title=prop_name
-                        )
-                    )
-                
-                # Create relationship property model if needed
-                if rel_field_defs:
-                    rel_property_model_name = f"{entity_name}_{rel_name}_Properties"
-                    rel_property_model = create_model(
-                        rel_property_model_name,
-                        __base__=BaseModel,
-                        **rel_field_defs
-                    )
-                    globals()[rel_property_model_name] = rel_property_model
-                else:
-                    rel_property_model = None
-                
-                # Create relationship model
-                rel_model_name = f"{entity_name}_{rel_name}_Relationship"
-                
-                if rel_property_model:
-                    # With properties
-                    rel_model = create_model(
-                        rel_model_name,
-                        __base__=BaseModel,
-                        __domain__="graphit",
-                        source=(entity_models[entity_name], ...),
-                        target=(target_model, ...),
-                        properties=(Optional[rel_property_model], None)
-                    )
-                else:
-                    # Without properties
-                    rel_model = create_model(
-                        rel_model_name,
-                        __base__=BaseModel,
-                        __domain__="graphit",
-                        source=(entity_models[entity_name], ...),
-                        target=(target_model, ...)
-                    )
-                    
-                globals()[rel_model_name] = rel_model
-                entity_relationship_models[rel_name] = rel_model
-            
-            if entity_relationship_models:
-                relationship_models[entity_name] = entity_relationship_models
-        
-        # Now create the KnowledgeGraph model that includes all entities and relationships
-        kg_fields = {
-            "extraction_timestamp": (str, Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())),
-            "tokens_used": (Optional[int], None),
-            "confidence_score": (Optional[float], None)
-        }
-        
-        # Add fields for each entity type (list of that entity)
-        for entity_name, entity_model in entity_models.items():
-            kg_fields[entity_name+"_list"] = (
-                List[entity_model],
-                Field(default_factory=list, description=f"List of {entity_name} entities")
-            )
-        
-        # Add fields for relationships
-        for source_name, rels in relationship_models.items():
-            for rel_name, rel_model in rels.items():
-                field_name = f"{source_name}_{rel_name}"
-                kg_fields[field_name] = (
-                    List[rel_model],
-                    Field(default_factory=list, description=f"Relationships of type {rel_name} from {source_name}")
-                )
-        
-        # Create the KnowledgeGraph model
-        KnowledgeGraph = create_model(
-            "KnowledgeGraph",
-            __base__=BaseModel,
-            __domain__="graphit",
-            **kg_fields
-        )
-        
-        # Attach metadata to help with serialization/deserialization
-        KnowledgeGraph.__entity_models__ = entity_models
-        KnowledgeGraph.__relationship_models__ = relationship_models
-        
-        return KnowledgeGraph
-
-    def _get_field_type(self, type_str: str) -> Type:
-        """Convert string type to actual Python type."""
-        type_mapping = {
-            'str': str,
-            'int': int,
-            'float': float,
-            'bool': bool,
-            'list': List[Any],
-            'dict': Dict[str, Any],
-        }
-        return type_mapping.get(type_str, str)
 
 class KnowledgeGraphBuilder:
     """Builds unified knowledge graph from document chunks"""
@@ -251,49 +54,43 @@ class KnowledgeGraphBuilder:
         chunks: List[str],
         transform_id: str,
         concurrency: int = 5,
+        window_size: int = 3,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> DocumentKnowledgeGraph:
-        """Process all chunks and build unified graph"""
+        """Process all chunks and build unified graph with sliding window context"""
         chunk_results = []
         
-        # Create event loop if not already running
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        # Process chunks with controlled concurrency
-        semaphore = asyncio.Semaphore(concurrency)
-        
-        async def process_with_semaphore(chunk: str, idx: int):
-            async with semaphore:
-                try:
-                    print(f"Processing chunk {idx + 1} / {len(chunks)}")
-                    result = await self.process_chunk(chunk, f"{transform_id}_chunk_{idx}")
-                    if progress_callback:
-                        try:
-                            if asyncio.iscoroutinefunction(progress_callback):
-                                await progress_callback(idx + 1, len(chunks))
-                            else:
-                                # Handle synchronous callback
-                                progress_callback(idx + 1, len(chunks))
-                        except Exception as e:
-                            logger.warning(f"Progress callback failed: {str(e)}")
-                    return result
-                except Exception as e:
-                    logger.error(f"Chunk processing failed for idx {idx}: {str(e)}")
-                    return None
-        
-        # Create processing tasks
-        tasks = []
+        # Process chunks sequentially with sliding window context
         for idx, chunk in enumerate(chunks):
-            task = asyncio.create_task(process_with_semaphore(chunk, idx))
-            tasks.append(task)
-        
-        # Process all chunks concurrently with controlled parallelism
-        chunk_results = await asyncio.gather(*tasks, return_exceptions=False)
-        chunk_results = [r for r in chunk_results if r is not None]
+            # Get window of surrounding chunks for context
+            window_start = max(0, idx - window_size)
+            window_end = min(len(chunks), idx + window_size + 1)
+            context_chunks = chunks[window_start:idx] + chunks[idx+1:window_end]
+            
+            try:
+                print(f"Processing chunk {idx + 1} / {len(chunks)}")
+                result = await self.process_chunk(
+                    chunk=chunk,
+                    chunk_id=f"{transform_id}_chunk_{idx}",
+                    context_chunks=context_chunks
+                )
+                
+                if result:
+                    chunk_results.append(result)
+                    
+                if progress_callback:
+                    try:
+                        if asyncio.iscoroutinefunction(progress_callback):
+                            await progress_callback(idx + 1, len(chunks))
+                        else:
+                            # Handle synchronous callback
+                            progress_callback(idx + 1, len(chunks))
+                    except Exception as e:
+                        logger.warning(f"Progress callback failed: {str(e)}")
+                        
+            except Exception as e:
+                logger.error(f"Chunk processing failed for idx {idx}: {str(e)}")
+                continue
         
         # Merge all extraction results
         for result in chunk_results:
@@ -305,7 +102,8 @@ class KnowledgeGraphBuilder:
     async def process_chunk(
         self,
         chunk: str,
-        chunk_id: str
+        chunk_id: str,
+        context_chunks: List[str] = []
     ) -> Optional[Dict[str, Any]]:
         """Process single chunk with LLM extraction using RDF context"""
         start_time = datetime.now()
@@ -313,6 +111,12 @@ class KnowledgeGraphBuilder:
         try:
             # Generate RDF context from previously extracted entities and relationships
             context = self._generate_rdf_context()
+            
+            # Add context from surrounding chunks
+            if context_chunks:
+                context += "\n# Context from surrounding chunks:\n"
+                for ctx_chunk in context_chunks:
+                    context += ctx_chunk + "\n"
             
             # Call LLM for extraction of whole ontology with context
             extraction_result = await self.llm_client.extract_from_chunk(
@@ -1032,8 +836,9 @@ class KnowledgeGraphBuilder:
     
     def _generate_rdf_context(self, max_triples: int = 100) -> str:
         """
-        Generate RDF-style context from previously extracted entities and relationships
-        Limited to most recent/relevant triples to avoid context overload
+        Generate RDF-style context from previously extracted entities and relationships.
+        Limited to most recent/relevant triples to avoid context overload.
+        Includes entity summaries and relationship patterns.
         """
         if not hasattr(self, 'extracted_triples'):
             self.extracted_triples = []
@@ -1041,15 +846,49 @@ class KnowledgeGraphBuilder:
         if not self.extracted_triples:
             return ""
         
-        # If we have too many triples, prioritize most recent extractions
-        context_triples = self.extracted_triples
-        if len(context_triples) > max_triples:
-            context_triples = context_triples[-max_triples:]
+        # Build context sections
+        context_parts = []
         
-        # Format as RDF-style triples
-        context = "# Previously extracted entities and relationships:\n"
-        context += "\n".join(context_triples)
-        return context
+        # 1. Entity summaries
+        entity_summaries = {}
+        for triple in self.extracted_triples:
+            if triple.startswith("<"):  # Entity triple
+                entity_type = triple.split()[0].strip("<>")
+                if entity_type not in entity_summaries:
+                    entity_summaries[entity_type] = []
+                entity_summaries[entity_type].append(triple)
+        
+        if entity_summaries:
+            context_parts.append("# Entity summaries by type:")
+            for entity_type, triples in entity_summaries.items():
+                context_parts.append(f"\n## {entity_type}:")
+                # Take most recent entities of each type
+                recent_triples = triples[-5:]  # Keep last 5 entities of each type
+                context_parts.extend(recent_triples)
+        
+        # 2. Relationship patterns
+        relationship_patterns = {}
+        for triple in self.extracted_triples:
+            if " -> " in triple:  # Relationship triple
+                rel_type = triple.split("->")[1].strip().split()[0]
+                if rel_type not in relationship_patterns:
+                    relationship_patterns[rel_type] = []
+                relationship_patterns[rel_type].append(triple)
+        
+        if relationship_patterns:
+            context_parts.append("\n# Recent relationship patterns:")
+            for rel_type, triples in relationship_patterns.items():
+                context_parts.append(f"\n## {rel_type}:")
+                # Take most recent relationships of each type
+                recent_triples = triples[-3:]  # Keep last 3 relationships of each type
+                context_parts.extend(recent_triples)
+        
+        # 3. Most recent extractions
+        context_parts.append("\n# Most recent extractions:")
+        recent_triples = self.extracted_triples[-max_triples:]
+        context_parts.extend(recent_triples)
+        
+        return "\n".join(context_parts)
 
     def _create_safe_property_value(self, value) -> str:
         """Create a safely quoted string value for RDF triples"""
