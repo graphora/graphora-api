@@ -1306,13 +1306,12 @@ class KnowledgeGraphBuilder:
             entity_type = node.__class__.__name__
             entity_def = ontology.get('entities', {}).get(entity_type, {})
             property_defs = entity_def.get('properties', {})
-            
-            if not hasattr(node, 'properties'):
+            if not property_defs:
                 continue
                 
             # Normalize property names based on ontology
             normalized_props = {}
-            for prop_name, value in node.properties.items():
+            for prop_name, prop_value in node.properties.items():
                 # Find matching ontology property
                 matched_prop = None
                 for onto_prop, prop_def in property_defs.items():
@@ -1322,7 +1321,7 @@ class KnowledgeGraphBuilder:
                 
                 # Use ontology name if found, otherwise keep original
                 final_name = matched_prop if matched_prop else prop_name
-                normalized_props[final_name] = value
+                normalized_props[final_name] = prop_value
                 
             node.properties = normalized_props
     
@@ -1387,22 +1386,20 @@ class KnowledgeGraphBuilder:
 
     async def _infer_missing_relationships(self, graph: DocumentKnowledgeGraph) -> None:
         """
-        Infer potential missing relationships based on ontology patterns.
-        Uses OntologyHierarchyBuilder to identify valid relationship types
-        between entities and suggests relationships that may have been missed.
+        Infer potential missing relationships for dangling subgraphs.
+        Only attempts to connect subgraphs that should be connected according to ontology.
         """
-        hierarchy_builder = OntologyHierarchyBuilder(self.ontology_parser)
+        # Find dangling subgraphs
+        dangling_nodes = self._find_dangling_subgraphs(graph)
+        if not dangling_nodes:
+            return
+            
+        print(f"Found dangling nodes of types: {list(dangling_nodes.keys())}")
         
-        # Get all entity types from graph
-        entity_types = set()
-        entity_by_type = {}
-        for node in graph.nodes:
-            entity_types.add(node.type)
-            if node.type not in entity_by_type:
-                entity_by_type[node.type] = []
-            entity_by_type[node.type].append(node)
-
-        # For each pair of entity types, check for potential relationships
+        hierarchy_builder = OntologyHierarchyBuilder(self.ontology_parser)
+        entity_types = set(dangling_nodes.keys())
+        
+        # For each pair of entity types with dangling nodes
         for source_type in entity_types:
             for target_type in entity_types:
                 if source_type == target_type:
@@ -1424,12 +1421,14 @@ class KnowledgeGraphBuilder:
                     ]
                     existing_pairs = {(edge.source_id, edge.target_id) for edge in existing_rels}
                     
-                    # Look for potential new relationships
-                    source_entities = entity_by_type[source_type]
-                    target_entities = entity_by_type[target_type]
+                    # Look for potential new relationships between dangling nodes
+                    source_entities = dangling_nodes[source_type]
+                    target_entities = dangling_nodes[target_type]
+                    
+                    print(f"Attempting to infer {rel_type} relationships between {len(source_entities)} {source_type} nodes and {len(target_entities)} {target_type} nodes")
                     
                     # Build prompt for relationship inference
-                    prompt = f"""Given these entities, identify any missing {rel_type} relationships:
+                    prompt = f"""Given these potentially disconnected entities, identify any missing {rel_type} relationships that would connect them:
                     
 Source entities ({source_type}):
 {self._format_entities(source_entities)}
@@ -1457,6 +1456,7 @@ Only return relationships if you are highly confident they exist based on the en
 """
                     # Call LLM to infer relationships
                     try:
+                        print(f"Inferring {rel_type} relationships between {source_type} and {target_type}")
                         inferred = await self.llm_client.extract_from_chunk(
                             chunk=prompt,
                             response_model=list[RelationshipInstance],
@@ -1464,6 +1464,7 @@ Only return relationships if you are highly confident they exist based on the en
                         )
                         
                         if inferred:
+                            print(f"Inferred {len(inferred)} new relationships")
                             for rel in inferred:
                                 if (rel.source_id, rel.target_id) not in existing_pairs:
                                     # Find source and target nodes
@@ -1493,6 +1494,78 @@ Only return relationships if you are highly confident they exist based on the en
                     except Exception as e:
                         traceback.print_exc()
                         logger.warning(f"Failed to infer relationships for {source_type}->{target_type}: {str(e)}")
+
+    def _find_dangling_subgraphs(self, graph: DocumentKnowledgeGraph) -> Dict[str, List[BaseNode]]:
+        """
+        Find nodes that are part of disconnected subgraphs.
+        Returns a dict mapping entity type to list of nodes that are disconnected
+        from the main graph but should be connected according to ontology.
+        """
+        # Build adjacency map
+        adj_map = {}
+        for rel in graph.relationships:
+            if rel.source_id not in adj_map:
+                adj_map[rel.source_id] = set()
+            if rel.target_id not in adj_map:
+                adj_map[rel.target_id] = set()
+            adj_map[rel.source_id].add(rel.target_id)
+            adj_map[rel.target_id].add(rel.source_id)
+            
+        # Find connected components using DFS
+        visited = set()
+        components = []
+        
+        def dfs(node_id: str, component: set):
+            visited.add(node_id)
+            component.add(node_id)
+            for neighbor in adj_map.get(node_id, []):
+                if neighbor not in visited:
+                    dfs(neighbor, component)
+        
+        # Run DFS from each unvisited node
+        for node in graph.nodes:
+            if node.id not in visited:
+                component = set()
+                dfs(node.id, component)
+                components.append(component)
+                
+        # If we have only one component, no dangling subgraphs
+        if len(components) <= 1:
+            return {}
+            
+        # Group nodes by type within each component
+        component_nodes = {}
+        for i, component in enumerate(components):
+            component_nodes[i] = {}
+            for node_id in component:
+                node = next(n for n in graph.nodes if n.id == node_id)
+                if node.type not in component_nodes[i]:
+                    component_nodes[i][node.type] = []
+                component_nodes[i][node.type].append(node)
+                
+        # Find entity types that should be connected according to ontology
+        hierarchy_builder = OntologyHierarchyBuilder(self.ontology_parser)
+        dangling_nodes = {}
+        
+        # For each pair of components
+        for i in range(len(components)):
+            for j in range(i + 1, len(components)):
+                # For each entity type in component i
+                for type_i, nodes_i in component_nodes[i].items():
+                    # For each entity type in component j
+                    for type_j, nodes_j in component_nodes[j].items():
+                        # Check if these types should have relationships
+                        rel_types = hierarchy_builder.get_relationship_types(type_i, type_j)
+                        if rel_types:
+                            # These components should be connected
+                            if type_i not in dangling_nodes:
+                                dangling_nodes[type_i] = []
+                            if type_j not in dangling_nodes:
+                                dangling_nodes[type_j] = []
+                            dangling_nodes[type_i].extend(nodes_i)
+                            dangling_nodes[type_j].extend(nodes_j)
+                            
+        return dangling_nodes
 
     def _format_entities(self, entities: List[BaseNode]) -> str:
         """Format entities for LLM prompt"""
