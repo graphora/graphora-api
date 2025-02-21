@@ -34,7 +34,7 @@ Format the output as a JSON object with the following structure:
 5. No additional properties. Just the specified fields.
 
 When extracting new information, maintain consistency with these previously identified entities. 
-These were identified from the previous tex chunks of the same doc.
+These were identified from the previous text chunks of the same doc.
 ```
 {context}
 ```

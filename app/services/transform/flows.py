@@ -1,9 +1,10 @@
 from prefect import flow, task
 from prefect.context import get_run_context
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from pathlib import Path
 import aiofiles
+import asyncio
 from fastapi import UploadFile
 from app.utils.logger import logger
 from app.schemas.transform import (
@@ -216,7 +217,9 @@ async def document_transformation_flow(
                     chunks=result.chunks,
                     ontology_path=ontology_path,
                     transform_id=transform_id,
-                    progress_callback=lambda i, t: update_stage_progress(transform_id, TransformationStage.TRANSFORM, i, t)
+                    progress_callback=lambda i, t: asyncio.create_task(
+                        update_stage_progress(transform_id, TransformationStage.TRANSFORM, i, t)
+                        )
                 )
                 if graph and metrics:
                     total_nodes += metrics.total_nodes
