@@ -11,13 +11,13 @@ class ConversionMetadata(BaseModel):
 
 class MarkerResponse(BaseModel):
     status: str
-    markdown_content: List[str]  # One entry per page if paginated
+    markdown_content: str
     conversion_metadata: ConversionMetadata
 
 class ConversionResult(BaseModel):
     transform_id: str
     original_path: str
-    markdown_paths: List[str]
+    markdown_path: str
     metadata: ConversionMetadata
     status: str
     error: Optional[str] = None

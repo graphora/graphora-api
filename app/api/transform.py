@@ -68,6 +68,7 @@ async def upload_documents(
     Returns:
         TransformInitResponse with Prefect flow_id for tracking progress
     """
+    temp_dir = Path(settings.UPLOAD_DIR)
     try:
         # Generate transform ID
         transform_id = f"transform_{uuid.uuid4().hex}"
@@ -145,6 +146,7 @@ async def upload_documents(
         
     except Exception as e:
         logger.error(f"Upload failed: {str(e)}")
+        traceback.print_exc()
         # Clean up temp directory on error
         if temp_dir.exists():
             for file in temp_dir.glob("*"):

@@ -135,15 +135,15 @@ async def document_transformation_flow(
                 # Convert PDF to markdown if needed
                 if Path(file_path).suffix.lower() == '.pdf':
                     conversion_result = await convert_pdf_to_markdown(
-                        file_path=file_path,
+                        file_path=Path(file_path),
                         transform_id=transform_id
                     )
                     if conversion_result:
-                        processed_paths.extend(conversion_result.markdown_paths)
-                        logger.info(f"PDF converted to markdown: {conversion_result.markdown_paths}")
+                        processed_paths.append(conversion_result.markdown_path)
+                        logger.info(f"PDF converted to markdown: {conversion_result.markdown_path}")
                 else:
                     # For non-PDF files, use the original path
-                    processed_paths.append(str(file_path))
+                    processed_paths.append(file_path)
                     logger.info(f"Using original file: {file_path}")
                 
                 # Update progress
