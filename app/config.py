@@ -76,7 +76,7 @@ class Settings(BaseSettings):
         description="Marker API host URL"
     )
     MARKER_API_TIMEOUT: int = Field(
-        default=120,
+        default=270,  # 4.5 minutes to allow for some buffer before task timeout
         description="Marker API request timeout in seconds"
     )
     MARKER_API_MAX_RETRIES: int = Field(

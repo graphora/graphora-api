@@ -1,4 +1,5 @@
 from pathlib import Path
+import traceback
 import aiofiles
 from datetime import datetime
 from prefect import task, get_run_logger
@@ -22,9 +23,7 @@ class ConversionStorage:
           └── {transform_id}/
               ├── original.pdf
               ├── markdown/
-              │   ├── page_1.md
-              │   ├── page_2.md
-              │   └── ...
+              │   └── markdown.md
               └── conversion_metadata.json
         """
         self.base_path = Path(base_path)
@@ -40,14 +39,10 @@ class ConversionStorage:
         markdown_dir = transform_dir / "markdown"
         markdown_dir.mkdir(parents=True, exist_ok=True)
         
-        markdown_paths = []
-        
         # Save each page as separate markdown file
-        for i, content in enumerate(result.markdown_content, 1):
-            page_path = markdown_dir / f"page_{i}.md"
-            async with aiofiles.open(page_path, "w") as f:
-                await f.write(content)
-            markdown_paths.append(str(page_path))
+        md_path = markdown_dir / f"markdown.md"
+        async with aiofiles.open(md_path, "w") as f:
+            await f.write(result.markdown_content)
         
         # Save conversion metadata
         metadata_path = transform_dir / "conversion_metadata.json"
@@ -57,7 +52,7 @@ class ConversionStorage:
         return ConversionResult(
             transform_id=transform_id,
             original_path=str(original_path),
-            markdown_paths=markdown_paths,
+            markdown_path=str(md_path),
             metadata=result.conversion_metadata,
             status="success"
         )
@@ -95,7 +90,6 @@ async def handle_conversion_error(
     name="pdf-markdown-conversion",
     retries=3,
     retry_delay_seconds=30,
-    timeout_seconds=300,  # 5 minutes max
     tags=["marker-api"]
 )
 async def convert_pdf_to_markdown(
@@ -127,6 +121,7 @@ async def convert_pdf_to_markdown(
             max_retries=settings.MARKER_API_MAX_RETRIES,
             backoff_factor=settings.MARKER_API_BACKOFF_FACTOR
         )
+        print(client)
         
         # Track conversion start
         logger.info(f"Starting PDF conversion for {transform_id}")
@@ -147,6 +142,7 @@ async def convert_pdf_to_markdown(
         )
         
     except Exception as e:
+        traceback.print_exc()
         await handle_conversion_error(e, transform_id, 0)
         raise ConversionError(f"Failed to convert PDF: {str(e)}")
 
@@ -179,6 +175,7 @@ async def check_marker_api_health() -> None:
             )
             
     except Exception as e:
+        traceback.print_exc()
         logger.error(
             f"Marker API health check failed: {str(e)}",
             extra={"alert": "api_down"}
