@@ -166,7 +166,7 @@ class OntologyParser:
         # Add fields for each entity type (list of that entity)
         for entity_name, entity_model in entity_models.items():
             kg_fields[entity_name+"_list"] = (
-                List[entity_model],
+                Optional[List[entity_model]],
                 Field(default_factory=list, description=f"List of {entity_name} entities")
             )
         
@@ -175,7 +175,7 @@ class OntologyParser:
             for rel_name, rel_model in rels.items():
                 field_name = f"{source_name}_{rel_name}"
                 kg_fields[field_name] = (
-                    List[rel_model],
+                    Optional[List[rel_model]],
                     Field(default_factory=list, description=f"Relationships of type {rel_name} from {source_name}")
                 )
         

@@ -45,8 +45,9 @@ A sophisticated document processing backend that leverages AI-powered intelligen
   sudo apt-get install libmagic1
   ````
 - ```bash
-   uv pip install -r requirements.txt
+   uv sync
    ```
+- [Setup BAML](https://docs.boundaryml.com/guide/installation-language/python)
 
 ### Running Tests
 

@@ -1,53 +1,60 @@
-from typing import Any, Type, Optional
+from typing import Any, List, Type, Optional
+from app.baml_client.type_builder import TypeBuilder
 from pydantic import BaseModel
-from app.utils.llm_client_service import extract, generate_text
+from app.baml_client import b
+from app.baml_client.types import RelationshipInference, ResolvedEntities, StandardisedProperties
+from app.utils.parse_pydantic_schema import build_from_pydantic
+from app.utils.llm_client_service import generate_text
+from app.baml_client import reset_baml_env_vars
+import os
+import dotenv
+
+dotenv.load_dotenv()
+reset_baml_env_vars(dict(os.environ))
 
 class LLMClient:
     """Client for LLM-based extraction"""
-    async def generate_text(
-        self,
-        prompt: str,
-        json_response: bool = True
-    ) -> Any:
-        result = generate_text(prompt, json_response)
-        return result   
-
     async def extract_from_chunk(
         self,
         chunk: str,
         response_model: Type[BaseModel],
-        context: Optional[str] = None
-    ) -> Any:
+        context: str = ""
+    ) -> BaseModel:
         """Extract entities and relationships from text chunk"""
+        tb = TypeBuilder()
+        res = build_from_pydantic(response_model, tb)
+        tb.DynamicContainer.add_property("data", res)
+        result = b.ExtractChunk(chunk, context, {"tb": tb})
+        return response_model.model_validate(result.data)
+    
+    async def infer_relationship(
+        self,
+        rel_type: str,
+        source_type: str = "",
+        source_entities: str = "",
+        target_type: str = "",
+        target_entities: str = "",
+        existing_rels: str = ""
+    ) -> List[RelationshipInference]:
+        return b.InferRelationship(rel_type=rel_type,
+            source_type=source_type,
+            source_entities=source_entities,
+            target_type=target_type,
+            target_entities=target_entities,
+            existing_rels=existing_rels)
         
-        # Build prompt
-        prompt = f"""Extract structured information from the text chunk according to the ontology specification.
+    async def standardise_properties(
+        self,
+        entity_group_type: str,
+        entities_json: str
+    ) -> List[StandardisedProperties]:
+        return b.StandardiseProperties(entity_group_type=entity_group_type,
+            entities_json=entities_json)
         
-Format the output as a JSON object with the following structure:
-1. For each entity type, include a list field named "<entity_type>_list" containing all instances
-2. For each relationship type, include a list field named "<source>_<relationship>_<target>" containing all instances
-3. Include metadata fields:
-   - extraction_timestamp: Current timestamp
-   - tokens_used: Number of tokens used (if available)
-   - confidence_score: Overall confidence in extraction (0.0 to 1.0)
-4. Omit optional fields if information is not clearly present
-5. No additional properties. Just the specified fields.
-
-When extracting new information, maintain consistency with these previously identified entities. 
-These were identified from the previous text chunks of the same doc.
-```
-{context}
-```
-
-Chunk to process:
-{chunk}
-
-Remember:
-- Only extract information that is explicitly present in the text
-- Set confidence scores based on certainty of extraction
-- Include all required fields for each entity/relationship
-- Omit optional fields if information is not clearly present
-"""
-        # Call LLM with structured output
-        result = extract(prompt, response_model)
-        return result   
+    async def resolve_entities(
+        self,
+        entity_type: str,
+        node_dicts_str: str
+    ) -> List[ResolvedEntities]:
+        return b.ResolveEntities(entity_type=entity_type,
+            node_dicts_str=node_dicts_str)
