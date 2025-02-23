@@ -1,5 +1,4 @@
-from typing import Dict, List, Any, Type, Tuple, Optional, Callable, Union
-import yaml
+from typing import Dict, List, Any, Optional, Callable
 import copy
 import asyncio
 import uuid
@@ -1127,13 +1126,17 @@ class KnowledgeGraphBuilder:
             if entity_type not in entity_groups:
                 entity_groups[entity_type] = []
             entity_groups[entity_type].append(node.model_dump())
-            
-        # Process each entity group
-        for entity_type, entities in entity_groups.items():
-            await self._standardize_entity_group(entity_type, entities)
-            
+        
         # Enhance property consistency
         self._enhance_property_consistency(doc_graph)
+            
+        # Process each entity group
+        await asyncio.gather(
+            *[
+                self._standardize_entity_group(entity_type, entities)
+                for entity_type, entities in entity_groups.items()
+            ]
+        )
         
         # Validate relationship consistency
         self._validate_relationship_consistency(doc_graph)
@@ -1162,10 +1165,9 @@ class KnowledgeGraphBuilder:
 
         # Convert nodes to simple dict representation for LLM
         node_dicts = []
-        for idx, node in enumerate(nodes):
+        for node in nodes:
             node_dict = {
                 "id": node.id,
-                "index": idx,  # Keep track of original position
                 "properties": node.properties,
                 "confidence": node.provenance.confidence_score if hasattr(node, 'provenance') and node.provenance else None
             }
@@ -1173,69 +1175,32 @@ class KnowledgeGraphBuilder:
             
         node_dicts_str = json.dumps(node_dicts, indent=2)
 
-        # Create prompt for LLM entity resolution
-        prompt = f"""
-        You are performing entity resolution on a group of {entity_type} entities.
-        Your task is to identify which entities refer to the same real-world entity and should be merged.
-        
-        Entities:
-        {node_dicts_str}
-        
-        Use these guidelines for matching:
-        1. Compare all properties to determine if entities match
-        2. Handle variations in naming, formatting, and completeness
-        3. Consider similarity in key identifying properties
-        4. Be conservative - only match if reasonably confident (>80% sure)
-        5. Consider property values that are similar but not exactly matching
-        6. Look for complementary information across entities
-        
-        Return a JSON array of arrays, where each inner array contains indices of matching entities:
-        {{
-            "matching_groups": [
-                [0, 2, 5],  # Example: entities 0, 2, and 5 match
-                [1, 4],     # Example: entities 1 and 4 match
-                [3],        # Example: entity 3 has no matches
-                [6]         # Example: entity 6 has no matches
-            ],
-            "confidence_scores": [
-                0.95,  # Confidence for first group
-                0.85,  # Confidence for second group
-                1.0,   # Single entity groups always have 1.0 confidence
-                1.0
-            ]
-        }}
-
-        Also provide brief explanations for why you grouped entities together:
-        {{
-            "explanations": {{
-                "group_0": "These entities share the same name with minor variations and have overlapping properties",
-                "group_1": "These entities have matching identifiers and complementary information"
-            }}
-        }}
-        """
-
         try:
             # Call LLM for entity resolution
             print(f"Resolving `{entity_type}` entities")
-            result = await self.llm_client.generate_text(prompt=prompt, json_response=True)
+            results = await self.llm_client.resolve_entities(
+                entity_type=entity_type, node_dicts_str=node_dicts_str)
             
-            if not result or 'matching_groups' not in result:
+            if not results or len(results) == 0:
                 # Fallback: treat each node as separate group
                 return [[node] for node in nodes]
             
             # Convert index groups back to node groups
             resolved_groups = []
-            for idx, index_group in enumerate(result['matching_groups']):
+            node_map = {node.id: node for node in nodes}
+            for result in results:
+                if result.matching_ids is None or len(result.matching_ids) == 0:
+                    continue
                 node_group = []
-                for idx in index_group:
-                    if 0 <= idx < len(nodes):  # Validate index
-                        node_group.append(nodes[idx])
+                for matching_node_id in result.matching_ids:
+                    if matching_node_id in node_map:
+                        node_group.append(node_map[matching_node_id])
                 if node_group:  # Only add non-empty groups
                     resolved_groups.append(node_group)
                     
                     # Log explanation if available
-                    if 'explanations' in result and f'group_{idx}' in result['explanations']:
-                        logger.info(f"Entity resolution group {idx}: {result['explanations'][f'group_{idx}']}")
+                    if result.explanations:
+                        logger.info(f"Entity resolution group {node_group[0].type}: {result.explanations}")
             
             # Check if any nodes were missed (safeguard)
             included_nodes = [node for group in resolved_groups for node in group]
@@ -1253,7 +1218,7 @@ class KnowledgeGraphBuilder:
             # Fallback: treat each node as separate group
             return [[node] for node in nodes]
 
-    async def _standardize_entity_group(self, entity_type: str, entity_data: List[Dict]) -> Optional[Dict]:
+    async def _standardize_entity_group(self, entity_type: str, entity_data: List[Dict]) -> Optional[List[Dict]]:
         """
         Use LLM to standardize property values across similar entities
         """
@@ -1263,37 +1228,25 @@ class KnowledgeGraphBuilder:
         # Sort by confidence score to prioritize high-confidence entities
         sorted_entities = sorted(entity_data, key=lambda e: e.get('confidence', 0), reverse=True)
         
-        # Create prompt for LLM standardization
-        # This doesn't use any hardcoded schema - works with any entity type
-        prompt = f"""
-        You are processing a group of similar {entity_type} entities that should be standardized.
-        Below are the properties of these entities:
-        
-        {json.dumps(sorted_entities, indent=2)}
-        
-        Please standardize the properties by:
-        1. Using the most accurate/complete value for each property
-        2. Fixing capitalization and formatting inconsistencies 
-        3. Using proper business terminology
-        
-        Return only a JSON object with the standardized properties:
-        {{
-        "standardized_properties": {{
-            "property1": "standardized value",
-            "property2": "standardized value"
-        }}
-        }}
-        """
-        
         # Call LLM for standardization
         try:
-            result = await self.llm_client.generate_text(prompt=prompt, json_response=True)
-            return result
+            results = await self.llm_client.standardise_properties(
+                entity_group_type=entity_type, 
+                entities_json=json.dumps(sorted_entities, indent=2))
+            if not results:
+                entity_map = { entity.get('id'): entity for entity in entity_data }
+                for result in results:
+                    std_props = result.properties
+                    entity_map[result.entity_id].update(std_props)
+                return list(entity_map.values())
+                    
+            return entity_data
+            
         except Exception as e:
             logger.warning(f"Error in LLM standardization: {str(e)}")
             traceback.print_exc()
             return None
-
+    
     def _enhance_property_consistency(self, graph: DocumentKnowledgeGraph) -> None:
         """
         Enhance property naming consistency across entity types.
@@ -1427,40 +1380,16 @@ class KnowledgeGraphBuilder:
                     
                     print(f"Attempting to infer {rel_type} relationships between {len(source_entities)} {source_type} nodes and {len(target_entities)} {target_type} nodes")
                     
-                    # Build prompt for relationship inference
-                    prompt = f"""Given these potentially disconnected entities, identify any missing {rel_type} relationships that would connect them:
-                    
-Source entities ({source_type}):
-{self._format_entities(source_entities)}
-
-Target entities ({target_type}):
-{self._format_entities(target_entities)}
-
-Existing relationships:
-{self._format_relationships(existing_rels)}
-
-Only return relationships that are clearly implied by the entity properties and context.
-Return a list of relationship objects with this exact structure:
-{{
-    "id": "<source_id>_{rel_type}_<target_id>",
-    "type": "{rel_type}",
-    "source_id": "<source_id>",
-    "target_id": "<target_id>",
-    "source_type": "{source_type}",
-    "target_type": "{target_type}",
-    "properties": {{}},
-    "confidence_score": <float between 0 and 1>
-}}
-
-Only return relationships if you are highly confident they exist based on the entity properties.
-"""
                     # Call LLM to infer relationships
                     try:
                         print(f"Inferring {rel_type} relationships between {source_type} and {target_type}")
-                        inferred = await self.llm_client.extract_from_chunk(
-                            chunk=prompt,
-                            response_model=list[RelationshipInstance],
-                            context=self._generate_rdf_context()
+                        inferred = await self.llm_client.infer_relationship(
+                            rel_type=rel_type,
+                            source_type=source_type,
+                            source_entities=self._format_entities(source_entities),
+                            target_type=target_type,
+                            target_entities=self._format_entities(target_entities),
+                            existing_rels=self._format_relationships(existing_rels)
                         )
                         
                         if inferred:
