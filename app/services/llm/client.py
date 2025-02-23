@@ -1,19 +1,30 @@
-from typing import Any, List, Type, Optional
+from functools import lru_cache
+from typing import List, Type
+
 from app.baml_client.type_builder import TypeBuilder
 from pydantic import BaseModel
 from app.baml_client import b
 from app.baml_client.types import RelationshipInference, ResolvedEntities, StandardisedProperties
 from app.utils.parse_pydantic_schema import build_from_pydantic
-from app.utils.llm_client_service import generate_text
 from app.baml_client import reset_baml_env_vars
+from app.config import settings
 import os
 import dotenv
+from aiocache import cached, Cache
+import hashlib
 
 dotenv.load_dotenv()
 reset_baml_env_vars(dict(os.environ))
 
+
+def md5(text: str) -> str:
+    return hashlib.md5(text.encode()).hexdigest()
+
 class LLMClient:
     """Client for LLM-based extraction"""
+    
+    @cached(ttl=86400, 
+        key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['chunk'])+':'+str(kwargs['response_model'])}")
     async def extract_from_chunk(
         self,
         chunk: str,
@@ -27,6 +38,8 @@ class LLMClient:
         result = b.ExtractChunk(chunk, context, {"tb": tb})
         return response_model.model_validate(result.data)
     
+    @cached(ttl=86400, 
+        key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['rel_type']+':'+kwargs['source_type']+':'+kwargs['source_entities']+':'+kwargs['target_type']+':'+kwargs['target_entities'])}")
     async def infer_relationship(
         self,
         rel_type: str,
@@ -42,7 +55,9 @@ class LLMClient:
             target_type=target_type,
             target_entities=target_entities,
             existing_rels=existing_rels)
-        
+    
+    @cached(ttl=86400, 
+        key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['entity_group_type']+':'+kwargs['entities_json'])}")
     async def standardise_properties(
         self,
         entity_group_type: str,
@@ -50,7 +65,9 @@ class LLMClient:
     ) -> List[StandardisedProperties]:
         return b.StandardiseProperties(entity_group_type=entity_group_type,
             entities_json=entities_json)
-        
+    
+    @cached(ttl=86400, 
+        key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['entity_type']+':'+kwargs['node_dicts_str'])}")
     async def resolve_entities(
         self,
         entity_type: str,
