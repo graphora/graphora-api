@@ -4,8 +4,8 @@ client<llm> VertexAI {
   provider vertex-ai
   options {
     model gemini-2.0-flash-lite-preview-02-05
-    location us-central1
-    project_id graphit-sandbox
+    location env.VERTEXAI_LOCATION
+    project_id env.VERTEXAI_PROJECT_ID
 
     generationConfig {
       temperature 0

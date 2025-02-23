@@ -41,6 +41,7 @@ dependencies = [
     "google-genai>=1.2.0",
     "aiofiles>=23.2.1",
     "aiohttp>=3.11.12",
+    "aiocache>=0.12.3",
     "httpx>=0.28.0",
     "python-magic>=0.4.27",
     "textstat>=0.7.3",
