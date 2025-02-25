@@ -1,16 +1,19 @@
 from abc import ABC, abstractmethod
 import traceback
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime
 from neo4j import GraphDatabase
 import json
+import uuid
 
 from app.services.storage.models import (
+    StorageBatchResult,
     StorageCheckpoint,
     StorageStage,
-    StorageBatchResult,
     DatabaseError,
-    TransformationResult
+    TransformationResult,
+    Node,
+    Edge
 )
 from app.config import settings
 from app.services.transform.models import BaseNode, RelationshipInstance
@@ -62,6 +65,98 @@ class GraphStorageInterface(ABC):
         transform_id: str
     ) -> TransformationResult:
         """Get all nodes and relationships for a transformation"""
+        pass
+    
+    @abstractmethod
+    async def get_nodes_by_property(
+        self,
+        property_name: str,
+        property_value: Any
+    ) -> List[Node]:
+        """Get all nodes with the specified property value"""
+        pass
+    
+    @abstractmethod
+    async def get_relationships_between_nodes(
+        self,
+        node_ids: List[str]
+    ) -> List[Edge]:
+        """Get all relationships between the specified nodes"""
+        pass
+        
+    @abstractmethod
+    async def find_nodes_by_property_value(
+        self,
+        label: str,
+        property_name: str,
+        property_value: Any,
+        exact_match: bool = True
+    ) -> List[Node]:
+        """
+        Find nodes with matching property value.
+        
+        Args:
+            label: Node label to filter by
+            property_name: Name of the property to match
+            property_value: Value to match against
+            exact_match: If True, requires exact value match. If False, allows partial matches
+            
+        Returns:
+            List of matching nodes
+        """
+        pass
+        
+    @abstractmethod
+    async def find_similar_nodes(
+        self,
+        label: str,
+        properties: Dict[str, Any],
+        similarity_threshold: float = 0.7,
+        max_results: int = 10,
+        include_relationships: bool = True
+    ) -> List[Node]:
+        """
+        Find nodes with similar properties using fuzzy matching.
+        
+        Args:
+            label: Node label to filter by
+            properties: Properties to compare for similarity
+            similarity_threshold: Minimum similarity score (0-1) to include in results
+            max_results: Maximum number of similar nodes to return
+            include_relationships: Whether to include relationship patterns in similarity calculation
+            
+        Returns:
+            List of similar nodes sorted by similarity score (highest first)
+        """
+        pass
+        
+    @abstractmethod
+    async def create_node(
+        self,
+        label: str,
+        properties: Dict[str, Any]
+    ) -> Node:
+        """Create a new node"""
+        pass
+        
+    @abstractmethod
+    async def update_node(
+        self,
+        node_id: str,
+        properties: Dict[str, Any]
+    ) -> Node:
+        """Update an existing node"""
+        pass
+        
+    @abstractmethod
+    async def create_relationship(
+        self,
+        source_id: str,
+        target_id: str,
+        rel_type: str,
+        properties: Dict[str, Any] = None
+    ) -> Edge:
+        """Create a relationship between nodes"""
         pass
 
 class Neo4jStorage(GraphStorageInterface):
@@ -375,6 +470,260 @@ class Neo4jStorage(GraphStorageInterface):
             raise DatabaseError(
                 f"Failed to update checkpoint: {str(e)}"
             )
+    
+    async def get_nodes_by_property(
+        self,
+        property_name: str,
+        property_value: Any
+    ) -> List[Node]:
+        """Get all nodes with the specified property value"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                query = f"""
+                    MATCH (n)
+                    WHERE n.{property_name} = $value
+                    RETURN n
+                """
+                result = session.run(query, value=property_value)
+                return [self._node_from_record(record['n']) for record in result]
+        except Exception as e:
+            traceback.print_exc()
+            raise DatabaseError(f"Failed to get nodes by property: {str(e)}")
+            
+    async def get_relationships_between_nodes(
+        self,
+        node_ids: List[str]
+    ) -> List[Edge]:
+        """Get all relationships between the specified nodes"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                query = """
+                    MATCH (n)-[r]-(m)
+                    WHERE n.id IN $node_ids AND m.id IN $node_ids
+                    RETURN r, n, m
+                """
+                result = session.run(query, node_ids=node_ids)
+                return [self._edge_from_record(record) for record in result]
+        except Exception as e:
+            traceback.print_exc()
+            raise DatabaseError(f"Failed to get relationships: {str(e)}")
+            
+    async def find_nodes_by_property_value(
+        self,
+        label: str,
+        property_name: str,
+        property_value: Any,
+        exact_match: bool = True
+    ) -> List[Node]:
+        """Find nodes with the specified label and property value"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                if exact_match:
+                    query = f"""
+                        MATCH (n:{label})
+                        WHERE n.{property_name} = $value
+                        RETURN n
+                    """
+                else:
+                    query = f"""
+                        MATCH (n:{label})
+                        WHERE n.{property_name} CONTAINS $value
+                        RETURN n
+                    """
+                result = session.run(query, value=property_value)
+                return [self._node_from_record(record['n']) for record in result]
+        except Exception as e:
+            traceback.print_exc()
+            raise DatabaseError(f"Failed to find nodes: {str(e)}")
+            
+    async def find_similar_nodes(
+        self,
+        label: str,
+        properties: Dict[str, Any],
+        similarity_threshold: float = 0.7,
+        max_results: int = 10,
+        include_relationships: bool = True
+    ) -> List[Node]:
+        """Find nodes with similar properties using fuzzy matching"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                # Build dynamic property matching based on type
+                property_matches = []
+                relationship_matches = []
+                params = {}
+                
+                for idx, (key, value) in enumerate(properties.items()):
+                    param_key = f"value{idx}"
+                    params[param_key] = value
+                    
+                    if isinstance(value, str):
+                        # Use Levenshtein for string properties
+                        property_matches.append(
+                            f"apoc.text.levenshteinSimilarity(n.{key}, ${param_key})"
+                        )
+                    else:
+                        # Exact match for non-string properties
+                        property_matches.append(
+                            f"CASE WHEN n.{key} = ${param_key} THEN 1.0 ELSE 0.0 END"
+                        )
+                
+                # Include relationship patterns if requested
+                relationship_score = ""
+                if include_relationships and properties.get("id"):
+                    relationship_score = """
+                    , size([
+                        (n)-[r]->(m) WHERE type(r) IN 
+                        [(source)-[sr]->() WHERE id(source) = $source_id | type(sr)]
+                    ]) * 1.0 / 
+                    CASE 
+                        WHEN size([(source)-[sr]->() WHERE id(source) = $source_id | type(sr)]) > 0 
+                        THEN size([(source)-[sr]->() WHERE id(source) = $source_id | type(sr)])
+                        ELSE 1 
+                    END as relationship_score
+                    """
+                    params["source_id"] = properties["id"]
+                
+                # Calculate weighted similarity score
+                query = f"""
+                    MATCH (n:{label})
+                    WITH n
+                    {relationship_score}
+                    WITH n,
+                         CASE 
+                            WHEN size([{', '.join(property_matches)}]) > 0
+                            THEN reduce(s = 0.0, x IN [{', '.join(property_matches)}] | s + x) / size([{', '.join(property_matches)}])
+                            ELSE 0.0
+                         END as property_score
+                         {', relationship_score' if include_relationships and properties.get('id') else ''}
+                    WITH n, 
+                         CASE
+                            WHEN $include_relationships AND relationship_score IS NOT NULL
+                            THEN (property_score * 0.7 + relationship_score * 0.3)
+                            ELSE property_score
+                         END as similarity_score
+                    WHERE similarity_score >= $threshold
+                    RETURN n, similarity_score
+                    ORDER BY similarity_score DESC
+                    LIMIT $max_results
+                """
+                
+                params.update({
+                    "threshold": similarity_threshold,
+                    "max_results": max_results,
+                    "include_relationships": include_relationships
+                })
+                
+                result = session.run(query, **params)
+                return [self._node_from_record(record['n']) for record in result]
+                
+        except Exception as e:
+            traceback.print_exc()
+            raise DatabaseError(f"Failed to find similar nodes: {str(e)}")
+            
+    async def create_node(
+        self,
+        label: str,
+        properties: Dict[str, Any]
+    ) -> Node:
+        """Create a new node"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                # Ensure node has an ID
+                if 'id' not in properties:
+                    properties['id'] = str(uuid.uuid4())
+                    
+                query = f"""
+                    CREATE (n:{label} $props)
+                    RETURN n
+                """
+                result = session.run(query, props=properties)
+                record = result.single()
+                return self._node_from_record(record['n'])
+        except Exception as e:
+            traceback.print_exc()
+            raise DatabaseError(f"Failed to create node: {str(e)}")
+            
+    async def update_node(
+        self,
+        node_id: str,
+        properties: Dict[str, Any]
+    ) -> Node:
+        """Update an existing node"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                query = """
+                    MATCH (n {id: $node_id})
+                    SET n += $props
+                    RETURN n
+                """
+                result = session.run(query, node_id=node_id, props=properties)
+                record = result.single()
+                if not record:
+                    raise DatabaseError(f"Node {node_id} not found")
+                return self._node_from_record(record['n'])
+        except Exception as e:
+            traceback.print_exc()
+            raise DatabaseError(f"Failed to update node: {str(e)}")
+            
+    async def create_relationship(
+        self,
+        source_id: str,
+        target_id: str,
+        rel_type: str,
+        properties: Dict[str, Any] = None
+    ) -> Edge:
+        """Create a relationship between nodes"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                properties = properties or {}
+                if 'id' not in properties:
+                    properties['id'] = str(uuid.uuid4())
+                    
+                query = f"""
+                    MATCH (source {{id: $source_id}}), (target {{id: $target_id}})
+                    CREATE (source)-[r:{rel_type} $props]->(target)
+                    RETURN r, source, target
+                """
+                result = session.run(
+                    query,
+                    source_id=source_id,
+                    target_id=target_id,
+                    props=properties
+                )
+                record = result.single()
+                if not record:
+                    raise DatabaseError("Failed to create relationship")
+                return self._edge_from_record(record)
+        except Exception as e:
+            traceback.print_exc()
+            raise DatabaseError(f"Failed to create relationship: {str(e)}")
+            
+    def _node_from_record(self, record) -> Node:
+        """Convert Neo4j node record to Node model"""
+        properties = dict(record)
+        node_id = properties.pop('id', str(uuid.uuid4()))
+        label = list(record.labels)[0] if record.labels else 'Unknown'
+        
+        return Node(
+            id=node_id,
+            label=label,
+            properties=properties,
+            type=label
+        )
+        
+    def _edge_from_record(self, record) -> Edge:
+        """Convert Neo4j relationship record to Edge model"""
+        rel = record['r']
+        properties = dict(rel)
+        edge_id = properties.pop('id', str(uuid.uuid4()))
+        
+        return Edge(
+            id=edge_id,
+            source=record['source']['id'],
+            target=record['target']['id'],
+            type=rel.type,
+            properties=properties
+        )
     
     def close(self):
         """Close Neo4j connection"""
