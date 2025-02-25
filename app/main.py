@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.ontology import router as ontology_router
 from app.api.transform import router as transform_router
 from app.api.graph import router as graph_router
+from app.api.merge import router as merge_router
 from app.config import settings
 from app.utils.logger import logger
 from app.services.transform.prefect_client import configure_prefect
@@ -43,6 +44,7 @@ app.add_middleware(
 app.include_router(ontology_router)
 app.include_router(transform_router)
 app.include_router(graph_router)
+app.include_router(merge_router)
 
 @app.get("/health")
 async def health_check():
