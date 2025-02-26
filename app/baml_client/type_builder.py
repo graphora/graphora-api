@@ -2,7 +2,7 @@
 #
 #  Welcome to Baml! To use this generated code, please run the following:
 #
-#  $ pip install baml
+#  $ pip install baml-py
 #
 ###############################################################################
 
@@ -22,7 +22,7 @@ from .globals import DO_NOT_USE_DIRECTLY_UNLESS_YOU_KNOW_WHAT_YOURE_DOING_RUNTIM
 class TypeBuilder(_TypeBuilder):
     def __init__(self):
         super().__init__(classes=set(
-          ["DynamicContainer","RelationshipInference","ResolvedEntities","StandardisedProperties",]
+          ["ConflictAnalysis","ConflictClassification","ConflictGroupAnalysis","DynamicContainer","EntitySimilarityAnalysis","PropertyConflictAnalysis","RelationshipConflictAnalysis","RelationshipInference","ResolutionOption","ResolutionOptions","ResolvedEntities","SelectedResolution","StandardisedProperties",]
         ), enums=set(
           []
         ), runtime=DO_NOT_USE_DIRECTLY_UNLESS_YOU_KNOW_WHAT_YOURE_DOING_RUNTIME)

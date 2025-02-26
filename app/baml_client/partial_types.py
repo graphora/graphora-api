@@ -2,7 +2,7 @@
 #
 #  Welcome to Baml! To use this generated code, please run the following:
 #
-#  $ pip install baml
+#  $ pip install baml-py
 #
 ###############################################################################
 
@@ -34,8 +34,52 @@ class StreamState(BaseModel, Generic[T]):
     state: Literal["Pending", "Incomplete", "Complete"]
 
 
+class ConflictAnalysis(BaseModel):
+    description: Optional[str] = None
+    potential_causes: List[str]
+    semantic_meaning: Optional[str] = None
+    impact: Optional[str] = None
+    key_differences: List[str]
+
+class ConflictClassification(BaseModel):
+    category: Optional[str] = None
+    explanation: Optional[str] = None
+    confidence: Optional[float] = None
+
+class ConflictGroupAnalysis(BaseModel):
+    pattern: Optional[str] = None
+    batch_resolvable: Optional[bool] = None
+    recommended_strategy: Optional[str] = None
+    confidence: Optional[float] = None
+    risks: List[str]
+
 class DynamicContainer(BaseModel):
     model_config = ConfigDict(extra='allow')
+
+class EntitySimilarityAnalysis(BaseModel):
+    similarity_score: Optional[float] = None
+    confidence: Optional[float] = None
+    matching_properties: List[str]
+    mismatched_properties: List[str]
+    semantic_similarity: Optional[float] = None
+    potential_merge_impact: Optional[str] = None
+    recommended_action: Optional[str] = None
+    reasoning: Optional[str] = None
+
+class PropertyConflictAnalysis(BaseModel):
+    recommended_strategy: Optional[str] = None
+    confidence: Optional[float] = None
+    explanation: Optional[str] = None
+    can_auto_resolve: Optional[bool] = None
+    potential_risks: List[str]
+
+class RelationshipConflictAnalysis(BaseModel):
+    recommended_strategy: Optional[str] = None
+    confidence: Optional[float] = None
+    explanation: Optional[str] = None
+    can_auto_resolve: Optional[bool] = None
+    semantic_impact: Optional[str] = None
+    risks: List[str]
 
 class RelationshipInference(BaseModel):
     id: Optional[str] = None
@@ -47,10 +91,29 @@ class RelationshipInference(BaseModel):
     properties: Dict[str, Optional[str]]
     confidence_score: Optional[float] = None
 
+class ResolutionOption(BaseModel):
+    id: Optional[str] = None
+    description: Optional[str] = None
+    resolution_type: Optional[str] = None
+    resolution_data: Optional["JsonObject"] = None
+    confidence: Optional[float] = None
+    reasoning: Optional[str] = None
+
+class ResolutionOptions(BaseModel):
+    options: List["ResolutionOption"]
+    recommended_option_id: Optional[str] = None
+    recommendation_reasoning: Optional[str] = None
+
 class ResolvedEntities(BaseModel):
     matching_ids: List[str]
     confidence_scores: Optional[float] = None
     explanations: Optional[str] = None
+
+class SelectedResolution(BaseModel):
+    option_id: Optional[str] = None
+    resolution_type: Optional[str] = None
+    resolution_data: Optional["JsonObject"] = None
+    confidence: Optional[float] = None
 
 class StandardisedProperties(BaseModel):
     entity_id: Optional[str] = None

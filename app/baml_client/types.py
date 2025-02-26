@@ -2,7 +2,7 @@
 #
 #  Welcome to Baml! To use this generated code, please run the following:
 #
-#  $ pip install baml
+#  $ pip install baml-py
 #
 ###############################################################################
 
@@ -40,8 +40,52 @@ def all_succeeded(checks: Dict[CheckName, Check]) -> bool:
 
 
 
+class ConflictAnalysis(BaseModel):
+    description: str
+    potential_causes: List[str]
+    semantic_meaning: str
+    impact: str
+    key_differences: List[str]
+
+class ConflictClassification(BaseModel):
+    category: str
+    explanation: str
+    confidence: float
+
+class ConflictGroupAnalysis(BaseModel):
+    pattern: str
+    batch_resolvable: bool
+    recommended_strategy: str
+    confidence: float
+    risks: List[str]
+
 class DynamicContainer(BaseModel):
     model_config = ConfigDict(extra='allow')
+
+class EntitySimilarityAnalysis(BaseModel):
+    similarity_score: float
+    confidence: float
+    matching_properties: List[str]
+    mismatched_properties: List[str]
+    semantic_similarity: float
+    potential_merge_impact: str
+    recommended_action: str
+    reasoning: str
+
+class PropertyConflictAnalysis(BaseModel):
+    recommended_strategy: str
+    confidence: float
+    explanation: str
+    can_auto_resolve: bool
+    potential_risks: List[str]
+
+class RelationshipConflictAnalysis(BaseModel):
+    recommended_strategy: str
+    confidence: float
+    explanation: str
+    can_auto_resolve: bool
+    semantic_impact: str
+    risks: List[str]
 
 class RelationshipInference(BaseModel):
     id: str
@@ -53,11 +97,36 @@ class RelationshipInference(BaseModel):
     properties: Dict[str, str]
     confidence_score: float
 
+class ResolutionOption(BaseModel):
+    id: str
+    description: str
+    resolution_type: str
+    resolution_data: "JsonObject"
+    confidence: float
+    reasoning: str
+
+class ResolutionOptions(BaseModel):
+    options: List["ResolutionOption"]
+    recommended_option_id: str
+    recommendation_reasoning: str
+
 class ResolvedEntities(BaseModel):
     matching_ids: List[str]
     confidence_scores: float
     explanations: str
 
+class SelectedResolution(BaseModel):
+    option_id: str
+    resolution_type: str
+    resolution_data: "JsonObject"
+    confidence: float
+
 class StandardisedProperties(BaseModel):
     entity_id: str
     properties: Dict[str, str]
+
+JsonArray: TypeAlias = List["JsonValue"]
+
+JsonObject: TypeAlias = Dict[str, "JsonValue"]
+
+JsonValue: TypeAlias = Union[int, str, bool, float, "JsonObject", "JsonArray"]

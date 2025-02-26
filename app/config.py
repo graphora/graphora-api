@@ -174,6 +174,19 @@ class Settings(BaseSettings):
         description="Cache TTL in hours"
     )
     
+    CONFLICT_DETECTION_WORKERS: int = Field(
+        default=5,
+        description="Workers for conflict detection"
+    )
+    CONFLICT_BATCH_TTL: int = Field(
+        default=24,
+        description="Conflict batch TTL in hours"
+    )
+    NUMERIC_COMPARISON_TOLERANCE: float = Field(
+        default=1e-6,
+        description="Tolerance for comparing numeric values in conflict detection"
+    )
+    
     # Prefect Settings
     PREFECT_API_URL: str = Field(
         default="http://127.0.0.1:4200/api",
@@ -192,6 +205,24 @@ class Settings(BaseSettings):
         description="Prefect workpool for document merging"
     )
     
+    # OpenAI Settings
+    OPENAI_API_KEY: Optional[str] = Field(
+        default=None,
+        description="OpenAI API key for LLM services"
+    )
+    OPENAI_MODEL: str = Field(
+        default="gpt-4",
+        description="OpenAI model to use for LLM analysis"
+    )
+    OPENAI_TEMPERATURE: float = Field(
+        default=0.2,
+        description="Temperature setting for OpenAI completions (0.0-1.0)"
+    )
+    OPENAI_MAX_TOKENS: int = Field(
+        default=1000,
+        description="Maximum number of tokens for OpenAI completions"
+    )
+    
     @property
     def REDIS_URL(self) -> str:
         """Construct Redis URL from components"""
@@ -206,10 +237,6 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: Optional[str] = Field(
         default=None,
         description="DeepSeek API base URL for LLM operations"
-    )
-    OPENAI_API_KEY: Optional[str] = Field(
-        default=None,
-        description="OpenAI API key for LLM operations"
     )
     ANTHROPIC_API_KEY: Optional[str] = Field(
         default=None,
