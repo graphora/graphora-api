@@ -141,6 +141,10 @@ class StorageError(Exception):
     """Base exception for storage errors"""
     pass
 
+class StorageConnectionError(StorageError):
+    """Error in establishing database connection"""
+    pass
+
 class CheckpointError(StorageError):
     """Error in checkpoint operations"""
     pass

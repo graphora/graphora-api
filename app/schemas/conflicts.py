@@ -38,6 +38,7 @@ class ResolutionStrategy(str, Enum):
     KEEP_BOTH_RELS = "keep_both_rels"  # Keep both relationships
     REVERSE_RELATIONSHIP = "reverse_relationship"  # Reverse relationship direction
     MERGE_REL_PROPS = "merge_rel_props"  # Merge relationship properties
+    MATCH_ENTITY = "match_entity"  # Match with a specific production entity
 
 class ResolutionOption(BaseModel):
     """Resolution option for a conflict"""
@@ -46,7 +47,7 @@ class ResolutionOption(BaseModel):
     resolution_type: str = Field(..., description="Type of resolution action to take")
     resolution_data: Dict[str, Any] = Field(default_factory=dict, description="Data needed to apply the resolution")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score for this resolution option")
-    reasoning: str = Field(..., description="Reasoning behind this resolution option")
+    reasoning: Optional[str] = Field(default=None, description="Reasoning behind this resolution option")
     requires_review: bool = Field(default=True, description="Whether this resolution needs human review")
     auto_resolvable: bool = Field(default=False, description="Whether this can be auto-resolved")
 

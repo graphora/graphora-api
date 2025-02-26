@@ -7,7 +7,7 @@ import logging
 from app.services.merge.service import MergeService
 from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress
 from app.schemas.conflicts import Conflict, ConflictListResponse
-from app.dependencies import get_storage
+from app.dependencies import get_merge_service
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -20,12 +20,6 @@ router = APIRouter(
 class ConflictResolutionRequest(BaseModel):
     """Request model for conflict resolution"""
     resolution_id: str
-
-async def get_merge_service(
-    storage=Depends(get_storage)
-) -> MergeService:
-    """Get MergeService instance"""
-    return MergeService(storage=storage)
 
 @router.post("/{session_id}/{transform_id}/start",
             response_model=MergeInitResponse,
