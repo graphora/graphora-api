@@ -96,6 +96,52 @@ class BamlAsyncClient:
       )
       return cast(types.ConflictGroupAnalysis, raw.cast_to(types, types, partial_types, False))
     
+    async def AnalyzeDuplicateEntityConflict(
+        self,
+        entity_type: str,staging_entity_id: str,production_entity_ids: str,similarity_scores: str,entity_properties: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.ConflictAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "AnalyzeDuplicateEntityConflict",
+        {
+          "entity_type": entity_type,"staging_entity_id": staging_entity_id,"production_entity_ids": production_entity_ids,"similarity_scores": similarity_scores,"entity_properties": entity_properties,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
+    
+    async def AnalyzeEntityMatchConflict(
+        self,
+        entity_type: str,staging_entity_id: str,production_entity_id: str,match_confidence: float,staging_properties: str,production_properties: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.ConflictAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "AnalyzeEntityMatchConflict",
+        {
+          "entity_type": entity_type,"staging_entity_id": staging_entity_id,"production_entity_id": production_entity_id,"match_confidence": match_confidence,"staging_properties": staging_properties,"production_properties": production_properties,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
+    
     async def AnalyzeEntityMatchConflictWithOntology(
         self,
         conflict: types.JsonObject,ontology: types.JsonObject,
@@ -110,6 +156,52 @@ class BamlAsyncClient:
 
       raw = await self.__runtime.call_function(
         "AnalyzeEntityMatchConflictWithOntology",
+        {
+          "conflict": conflict,"ontology": ontology,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
+    
+    async def AnalyzeEntityMatchResolutionOption(
+        self,
+        entity_type: str,resolution_option: str,staging_entity_id: str,production_entity_id: str,staging_properties: str,production_properties: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.ConflictAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "AnalyzeEntityMatchResolutionOption",
+        {
+          "entity_type": entity_type,"resolution_option": resolution_option,"staging_entity_id": staging_entity_id,"production_entity_id": production_entity_id,"staging_properties": staging_properties,"production_properties": production_properties,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
+    
+    async def AnalyzeEntityMatchWithOntology(
+        self,
+        conflict: types.JsonObject,ontology: types.JsonObject,
+        baml_options: BamlCallOptions = {},
+    ) -> types.ConflictAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "AnalyzeEntityMatchWithOntology",
         {
           "conflict": conflict,"ontology": ontology,
         },
@@ -164,6 +256,29 @@ class BamlAsyncClient:
         __cr__,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
+    
+    async def AnalyzeMissingRelationshipConflict(
+        self,
+        relationship_type: str,source_entity_type: str,target_entity_type: str,source_entity_id: str,target_entity_id: str,exists_in: str,graph_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.RelationshipConflictAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "AnalyzeMissingRelationshipConflict",
+        {
+          "relationship_type": relationship_type,"source_entity_type": source_entity_type,"target_entity_type": target_entity_type,"source_entity_id": source_entity_id,"target_entity_id": target_entity_id,"exists_in": exists_in,"graph_context": graph_context,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.RelationshipConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
     async def AnalyzePropertyConflict(
         self,
@@ -257,6 +372,121 @@ class BamlAsyncClient:
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
+    async def AnalyzeRelationshipDirectionConflict(
+        self,
+        relationship_type: str,staging_source_id: str,staging_target_id: str,production_source_id: str,production_target_id: str,graph_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.RelationshipConflictAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "AnalyzeRelationshipDirectionConflict",
+        {
+          "relationship_type": relationship_type,"staging_source_id": staging_source_id,"staging_target_id": staging_target_id,"production_source_id": production_source_id,"production_target_id": production_target_id,"graph_context": graph_context,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.RelationshipConflictAnalysis, raw.cast_to(types, types, partial_types, False))
+    
+    async def AnalyzeRelationshipPropertyConflict(
+        self,
+        relationship_type: str,property_name: str,staging_value: str,production_value: str,value_type: str,graph_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.RelationshipConflictAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "AnalyzeRelationshipPropertyConflict",
+        {
+          "relationship_type": relationship_type,"property_name": property_name,"staging_value": staging_value,"production_value": production_value,"value_type": value_type,"graph_context": graph_context,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.RelationshipConflictAnalysis, raw.cast_to(types, types, partial_types, False))
+    
+    async def AnalyzeRelationshipTypeConflict(
+        self,
+        staging_relationship_type: str,production_relationship_type: str,source_entity_type: str,target_entity_type: str,source_entity_id: str,target_entity_id: str,graph_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.RelationshipConflictAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "AnalyzeRelationshipTypeConflict",
+        {
+          "staging_relationship_type": staging_relationship_type,"production_relationship_type": production_relationship_type,"source_entity_type": source_entity_type,"target_entity_type": target_entity_type,"source_entity_id": source_entity_id,"target_entity_id": target_entity_id,"graph_context": graph_context,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.RelationshipConflictAnalysis, raw.cast_to(types, types, partial_types, False))
+    
+    async def AnalyzeSchemaConflict(
+        self,
+        entity_type: str,conflict_description: str,staging_schema: str,production_schema: str,affected_properties: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.ConflictAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "AnalyzeSchemaConflict",
+        {
+          "entity_type": entity_type,"conflict_description": conflict_description,"staging_schema": staging_schema,"production_schema": production_schema,"affected_properties": affected_properties,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
+    
+    async def AnalyzeSchemaConflictWithOntology(
+        self,
+        conflict: types.JsonObject,ontology: types.JsonObject,
+        baml_options: BamlCallOptions = {},
+    ) -> types.ConflictAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "AnalyzeSchemaConflictWithOntology",
+        {
+          "conflict": conflict,"ontology": ontology,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
+    
     async def AssessResolutionComplexity(
         self,
         conflict_type: str,classification: str,resolution_option: str,
@@ -279,6 +509,29 @@ class BamlAsyncClient:
         __cr__,
       )
       return cast(float, raw.cast_to(types, types, partial_types, False))
+    
+    async def BatchAnalyzeConflicts(
+        self,
+        conflict_type: str,entity_type: str,conflict_summaries: str,sample_conflicts: str,total_count: int,
+        baml_options: BamlCallOptions = {},
+    ) -> types.ConflictGroupAnalysis:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "BatchAnalyzeConflicts",
+        {
+          "conflict_type": conflict_type,"entity_type": entity_type,"conflict_summaries": conflict_summaries,"sample_conflicts": sample_conflicts,"total_count": total_count,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(types.ConflictGroupAnalysis, raw.cast_to(types, types, partial_types, False))
     
     async def ClassifyConflict(
         self,
@@ -348,6 +601,29 @@ class BamlAsyncClient:
         __cr__,
       )
       return cast(types.ResolutionOptions, raw.cast_to(types, types, partial_types, False))
+    
+    async def GenerateEntityMatchResolutionOptionsFromStagingAndProd(
+        self,
+        conflict_analysis: str,entity_type: str,staging_entity_id: str,production_entity_id: str,staging_properties: str,production_properties: str,
+        baml_options: BamlCallOptions = {},
+    ) -> List[types.ResolutionOption]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "GenerateEntityMatchResolutionOptionsFromStagingAndProd",
+        {
+          "conflict_analysis": conflict_analysis,"entity_type": entity_type,"staging_entity_id": staging_entity_id,"production_entity_id": production_entity_id,"staging_properties": staging_properties,"production_properties": production_properties,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(List[types.ResolutionOption], raw.cast_to(types, types, partial_types, False))
     
     async def GenerateGenericResolutionOptions(
         self,
@@ -434,6 +710,29 @@ class BamlAsyncClient:
         "GenerateResolutionOptions",
         {
           "conflict_analysis": conflict_analysis,"classification": classification,"staging_element": staging_element,"prod_element": prod_element,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+      return cast(List[types.ResolutionOption], raw.cast_to(types, types, partial_types, False))
+    
+    async def GenerateSchemaConflictResolutionOptions(
+        self,
+        conflict_analysis: str,entity_type: str,staging_schema: str,production_schema: str,
+        baml_options: BamlCallOptions = {},
+    ) -> List[types.ResolutionOption]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = await self.__runtime.call_function(
+        "GenerateSchemaConflictResolutionOptions",
+        {
+          "conflict_analysis": conflict_analysis,"entity_type": entity_type,"staging_schema": staging_schema,"production_schema": production_schema,
         },
         self.__ctx_manager.get(),
         tb,
@@ -612,6 +911,75 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
       )
     
+    def AnalyzeDuplicateEntityConflict(
+        self,
+        entity_type: str,staging_entity_id: str,production_entity_ids: str,similarity_scores: str,entity_properties: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "AnalyzeDuplicateEntityConflict",
+        {
+          "entity_type": entity_type,
+          "staging_entity_id": staging_entity_id,
+          "production_entity_ids": production_entity_ids,
+          "similarity_scores": similarity_scores,
+          "entity_properties": entity_properties,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
+        raw,
+        lambda x: cast(partial_types.ConflictAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.ConflictAnalysis, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def AnalyzeEntityMatchConflict(
+        self,
+        entity_type: str,staging_entity_id: str,production_entity_id: str,match_confidence: float,staging_properties: str,production_properties: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "AnalyzeEntityMatchConflict",
+        {
+          "entity_type": entity_type,
+          "staging_entity_id": staging_entity_id,
+          "production_entity_id": production_entity_id,
+          "match_confidence": match_confidence,
+          "staging_properties": staging_properties,
+          "production_properties": production_properties,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
+        raw,
+        lambda x: cast(partial_types.ConflictAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.ConflictAnalysis, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
     def AnalyzeEntityMatchConflictWithOntology(
         self,
         conflict: types.JsonObject,ontology: types.JsonObject,
@@ -626,6 +994,72 @@ class BamlStreamClient:
 
       raw = self.__runtime.stream_function(
         "AnalyzeEntityMatchConflictWithOntology",
+        {
+          "conflict": conflict,
+          "ontology": ontology,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
+        raw,
+        lambda x: cast(partial_types.ConflictAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.ConflictAnalysis, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def AnalyzeEntityMatchResolutionOption(
+        self,
+        entity_type: str,resolution_option: str,staging_entity_id: str,production_entity_id: str,staging_properties: str,production_properties: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "AnalyzeEntityMatchResolutionOption",
+        {
+          "entity_type": entity_type,
+          "resolution_option": resolution_option,
+          "staging_entity_id": staging_entity_id,
+          "production_entity_id": production_entity_id,
+          "staging_properties": staging_properties,
+          "production_properties": production_properties,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
+        raw,
+        lambda x: cast(partial_types.ConflictAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.ConflictAnalysis, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def AnalyzeEntityMatchWithOntology(
+        self,
+        conflict: types.JsonObject,ontology: types.JsonObject,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "AnalyzeEntityMatchWithOntology",
         {
           "conflict": conflict,
           "ontology": ontology,
@@ -704,6 +1138,42 @@ class BamlStreamClient:
         raw,
         lambda x: cast(partial_types.ConflictAnalysis, x.cast_to(types, types, partial_types, True)),
         lambda x: cast(types.ConflictAnalysis, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def AnalyzeMissingRelationshipConflict(
+        self,
+        relationship_type: str,source_entity_type: str,target_entity_type: str,source_entity_id: str,target_entity_id: str,exists_in: str,graph_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "AnalyzeMissingRelationshipConflict",
+        {
+          "relationship_type": relationship_type,
+          "source_entity_type": source_entity_type,
+          "target_entity_type": target_entity_type,
+          "source_entity_id": source_entity_id,
+          "target_entity_id": target_entity_id,
+          "exists_in": exists_in,
+          "graph_context": graph_context,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis](
+        raw,
+        lambda x: cast(partial_types.RelationshipConflictAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.RelationshipConflictAnalysis, x.cast_to(types, types, partial_types, False)),
         self.__ctx_manager.get(),
       )
     
@@ -838,6 +1308,177 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
       )
     
+    def AnalyzeRelationshipDirectionConflict(
+        self,
+        relationship_type: str,staging_source_id: str,staging_target_id: str,production_source_id: str,production_target_id: str,graph_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "AnalyzeRelationshipDirectionConflict",
+        {
+          "relationship_type": relationship_type,
+          "staging_source_id": staging_source_id,
+          "staging_target_id": staging_target_id,
+          "production_source_id": production_source_id,
+          "production_target_id": production_target_id,
+          "graph_context": graph_context,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis](
+        raw,
+        lambda x: cast(partial_types.RelationshipConflictAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.RelationshipConflictAnalysis, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def AnalyzeRelationshipPropertyConflict(
+        self,
+        relationship_type: str,property_name: str,staging_value: str,production_value: str,value_type: str,graph_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "AnalyzeRelationshipPropertyConflict",
+        {
+          "relationship_type": relationship_type,
+          "property_name": property_name,
+          "staging_value": staging_value,
+          "production_value": production_value,
+          "value_type": value_type,
+          "graph_context": graph_context,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis](
+        raw,
+        lambda x: cast(partial_types.RelationshipConflictAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.RelationshipConflictAnalysis, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def AnalyzeRelationshipTypeConflict(
+        self,
+        staging_relationship_type: str,production_relationship_type: str,source_entity_type: str,target_entity_type: str,source_entity_id: str,target_entity_id: str,graph_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "AnalyzeRelationshipTypeConflict",
+        {
+          "staging_relationship_type": staging_relationship_type,
+          "production_relationship_type": production_relationship_type,
+          "source_entity_type": source_entity_type,
+          "target_entity_type": target_entity_type,
+          "source_entity_id": source_entity_id,
+          "target_entity_id": target_entity_id,
+          "graph_context": graph_context,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis](
+        raw,
+        lambda x: cast(partial_types.RelationshipConflictAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.RelationshipConflictAnalysis, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def AnalyzeSchemaConflict(
+        self,
+        entity_type: str,conflict_description: str,staging_schema: str,production_schema: str,affected_properties: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "AnalyzeSchemaConflict",
+        {
+          "entity_type": entity_type,
+          "conflict_description": conflict_description,
+          "staging_schema": staging_schema,
+          "production_schema": production_schema,
+          "affected_properties": affected_properties,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
+        raw,
+        lambda x: cast(partial_types.ConflictAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.ConflictAnalysis, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def AnalyzeSchemaConflictWithOntology(
+        self,
+        conflict: types.JsonObject,ontology: types.JsonObject,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "AnalyzeSchemaConflictWithOntology",
+        {
+          "conflict": conflict,
+          "ontology": ontology,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
+        raw,
+        lambda x: cast(partial_types.ConflictAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.ConflictAnalysis, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
     def AssessResolutionComplexity(
         self,
         conflict_type: str,classification: str,resolution_option: str,
@@ -867,6 +1508,40 @@ class BamlStreamClient:
         raw,
         lambda x: cast(Optional[float], x.cast_to(types, types, partial_types, True)),
         lambda x: cast(float, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def BatchAnalyzeConflicts(
+        self,
+        conflict_type: str,entity_type: str,conflict_summaries: str,sample_conflicts: str,total_count: int,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.ConflictGroupAnalysis, types.ConflictGroupAnalysis]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "BatchAnalyzeConflicts",
+        {
+          "conflict_type": conflict_type,
+          "entity_type": entity_type,
+          "conflict_summaries": conflict_summaries,
+          "sample_conflicts": sample_conflicts,
+          "total_count": total_count,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[partial_types.ConflictGroupAnalysis, types.ConflictGroupAnalysis](
+        raw,
+        lambda x: cast(partial_types.ConflictGroupAnalysis, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.ConflictGroupAnalysis, x.cast_to(types, types, partial_types, False)),
         self.__ctx_manager.get(),
       )
     
@@ -961,6 +1636,41 @@ class BamlStreamClient:
         raw,
         lambda x: cast(partial_types.ResolutionOptions, x.cast_to(types, types, partial_types, True)),
         lambda x: cast(types.ResolutionOptions, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def GenerateEntityMatchResolutionOptionsFromStagingAndProd(
+        self,
+        conflict_analysis: str,entity_type: str,staging_entity_id: str,production_entity_id: str,staging_properties: str,production_properties: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[List[partial_types.ResolutionOption], List[types.ResolutionOption]]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "GenerateEntityMatchResolutionOptionsFromStagingAndProd",
+        {
+          "conflict_analysis": conflict_analysis,
+          "entity_type": entity_type,
+          "staging_entity_id": staging_entity_id,
+          "production_entity_id": production_entity_id,
+          "staging_properties": staging_properties,
+          "production_properties": production_properties,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[List[partial_types.ResolutionOption], List[types.ResolutionOption]](
+        raw,
+        lambda x: cast(List[partial_types.ResolutionOption], x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(List[types.ResolutionOption], x.cast_to(types, types, partial_types, False)),
         self.__ctx_manager.get(),
       )
     
@@ -1079,6 +1789,39 @@ class BamlStreamClient:
           "classification": classification,
           "staging_element": staging_element,
           "prod_element": prod_element,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return baml_py.BamlStream[List[partial_types.ResolutionOption], List[types.ResolutionOption]](
+        raw,
+        lambda x: cast(List[partial_types.ResolutionOption], x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(List[types.ResolutionOption], x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def GenerateSchemaConflictResolutionOptions(
+        self,
+        conflict_analysis: str,entity_type: str,staging_schema: str,production_schema: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[List[partial_types.ResolutionOption], List[types.ResolutionOption]]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      raw = self.__runtime.stream_function(
+        "GenerateSchemaConflictResolutionOptions",
+        {
+          "conflict_analysis": conflict_analysis,
+          "entity_type": entity_type,
+          "staging_schema": staging_schema,
+          "production_schema": production_schema,
         },
         None,
         self.__ctx_manager.get(),

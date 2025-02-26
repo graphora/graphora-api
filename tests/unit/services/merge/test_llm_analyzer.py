@@ -80,19 +80,28 @@ def mock_ontology():
 @pytest.mark.asyncio
 async def test_analyze_property_conflict(llm_analyzer, mock_property_conflict, mock_ontology):
     """Test analyzing property value conflict."""
+    # Create mock results that match the structure expected from BAML
+    class MockResult:
+        def __init__(self, description, confidence, reasoning):
+            self.description = description
+            self.confidence = confidence
+            self.reasoning = reasoning
+    
+    mock_results = [
+        MockResult(
+            description="30",
+            confidence=0.8,
+            reasoning="The target value is likely correct based on other records."
+        ),
+        MockResult(
+            description="25",
+            confidence=0.2,
+            reasoning="The source value appears to be outdated."
+        )
+    ]
+    
     with patch.object(llm_analyzer, '_analyze_with_llm', new_callable=AsyncMock) as mock_analyze:
-        mock_analyze.return_value = [
-            {
-                "value": "30",
-                "confidence": 0.8,
-                "explanation": "The target value is likely correct based on other records."
-            },
-            {
-                "value": "25",
-                "confidence": 0.2,
-                "explanation": "The source value appears to be outdated."
-            }
-        ]
+        mock_analyze.return_value = mock_results
         
         options = await llm_analyzer.analyze_property_conflict(
             mock_property_conflict, 
@@ -107,19 +116,29 @@ async def test_analyze_property_conflict(llm_analyzer, mock_property_conflict, m
 @pytest.mark.asyncio
 async def test_analyze_relationship_conflict(llm_analyzer, mock_relationship_conflict, mock_ontology):
     """Test analyzing relationship type conflict."""
+    # Create mock results that match the structure expected from BAML
+    class MockResult:
+        def __init__(self, description, confidence, reasoning, resolution_type=None):
+            self.description = description
+            self.confidence = confidence
+            self.reasoning = reasoning
+            self.resolution_type = resolution_type
+    
+    mock_results = [
+        MockResult(
+            description="EMPLOYED_BY",
+            confidence=0.6,
+            reasoning="This is the standard term in the ontology."
+        ),
+        MockResult(
+            description="WORKS_FOR",
+            confidence=0.4,
+            reasoning="This is a common synonym but less precise."
+        )
+    ]
+    
     with patch.object(llm_analyzer, '_analyze_with_llm', new_callable=AsyncMock) as mock_analyze:
-        mock_analyze.return_value = [
-            {
-                "type": "EMPLOYED_BY",
-                "confidence": 0.6,
-                "explanation": "This is the standard term in the ontology."
-            },
-            {
-                "type": "WORKS_FOR",
-                "confidence": 0.4,
-                "explanation": "This is a common synonym but less precise."
-            }
-        ]
+        mock_analyze.return_value = mock_results
         
         options = await llm_analyzer.analyze_relationship_conflict(
             mock_relationship_conflict, 
@@ -134,19 +153,29 @@ async def test_analyze_relationship_conflict(llm_analyzer, mock_relationship_con
 @pytest.mark.asyncio
 async def test_analyze_entity_match_conflict(llm_analyzer, mock_entity_match_conflict, mock_ontology):
     """Test analyzing duplicate entity conflict."""
+    # Create mock results that match the structure expected from BAML
+    class MockResult:
+        def __init__(self, description, confidence, reasoning, resolution_type=None):
+            self.description = description
+            self.confidence = confidence
+            self.reasoning = reasoning
+            self.resolution_type = resolution_type
+    
+    mock_results = [
+        MockResult(
+            description="merge",
+            confidence=0.9,
+            reasoning="Entities appear to represent the same real-world object."
+        ),
+        MockResult(
+            description="keep_separate",
+            confidence=0.1,
+            reasoning="Entities have significant differences that suggest they are distinct."
+        )
+    ]
+    
     with patch.object(llm_analyzer, '_analyze_with_llm', new_callable=AsyncMock) as mock_analyze:
-        mock_analyze.return_value = [
-            {
-                "action": "merge",
-                "confidence": 0.9,
-                "explanation": "Entities appear to represent the same real-world object."
-            },
-            {
-                "action": "keep_separate",
-                "confidence": 0.1,
-                "explanation": "Although similar, these may be distinct entities."
-            }
-        ]
+        mock_analyze.return_value = mock_results
         
         options = await llm_analyzer.analyze_entity_match_conflict(
             mock_entity_match_conflict, 

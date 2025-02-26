@@ -434,3 +434,466 @@ function AnalyzeGenericConflictWithOntology(
     Focus on providing actionable insights that would help in resolving this conflict.
   "#
 }
+
+function AnalyzeRelationshipPropertyConflict(
+  relationship_type: string,
+  property_name: string,
+  staging_value: string,
+  production_value: string,
+  value_type: string,
+  graph_context: string
+) -> RelationshipConflictAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze this relationship property conflict between staging and production:
+
+    Relationship Type: {{relationship_type}}
+    Property Name: {{property_name}}
+    Value Type: {{value_type}}
+    
+    Staging Value: {{staging_value}}
+    Production Value: {{production_value}}
+    
+    Graph Context:
+    {{graph_context}}
+    
+    Guidelines:
+    1. Consider the property semantics within the relationship context
+    2. Evaluate impact on relationship meaning and utility
+    3. Assess risks to data integrity
+    4. Consider query patterns that may be affected
+    5. Evaluate if auto-resolution is safe
+    
+    {{ ctx.output_format }}
+  "#
+}
+
+function AnalyzeMissingRelationshipConflict(
+  relationship_type: string,
+  source_entity_type: string,
+  target_entity_type: string,
+  source_entity_id: string,
+  target_entity_id: string,
+  exists_in: string,
+  graph_context: string
+) -> RelationshipConflictAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze this missing relationship conflict between staging and production:
+
+    Relationship Type: {{relationship_type}}
+    Source Entity Type: {{source_entity_type}}
+    Target Entity Type: {{target_entity_type}}
+    Source Entity ID: {{source_entity_id}}
+    Target Entity ID: {{target_entity_id}}
+    Exists in: {{exists_in}} (staging or production)
+    
+    Graph Context:
+    {{graph_context}}
+    
+    Guidelines:
+    1. Consider the importance of this relationship type
+    2. Evaluate impact on graph connectivity
+    3. Assess risks of adding or removing the relationship
+    4. Consider query patterns that may be affected
+    5. Evaluate if auto-resolution is safe
+    
+    {{ ctx.output_format }}
+  "#
+}
+
+function AnalyzeRelationshipTypeConflict(
+  staging_relationship_type: string,
+  production_relationship_type: string,
+  source_entity_type: string,
+  target_entity_type: string,
+  source_entity_id: string,
+  target_entity_id: string,
+  graph_context: string
+) -> RelationshipConflictAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze this relationship type conflict between staging and production:
+
+    Staging Relationship Type: {{staging_relationship_type}}
+    Production Relationship Type: {{production_relationship_type}}
+    Source Entity Type: {{source_entity_type}}
+    Target Entity Type: {{target_entity_type}}
+    Source Entity ID: {{source_entity_id}}
+    Target Entity ID: {{target_entity_id}}
+    
+    Graph Context:
+    {{graph_context}}
+    
+    Guidelines:
+    1. Compare the semantic meaning of both relationship types
+    2. Evaluate which type is more appropriate for these entities
+    3. Assess risks of changing the relationship type
+    4. Consider query patterns that may be affected
+    5. Evaluate if auto-resolution is safe
+    
+    {{ ctx.output_format }}
+  "#
+}
+
+function AnalyzeRelationshipDirectionConflict(
+  relationship_type: string,
+  staging_source_id: string,
+  staging_target_id: string,
+  production_source_id: string,
+  production_target_id: string,
+  graph_context: string
+) -> RelationshipConflictAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze this relationship direction conflict between staging and production:
+
+    Relationship Type: {{relationship_type}}
+    Staging Source ID: {{staging_source_id}}
+    Staging Target ID: {{staging_target_id}}
+    Production Source ID: {{production_source_id}}
+    Production Target ID: {{production_target_id}}
+    
+    Graph Context:
+    {{graph_context}}
+    
+    Guidelines:
+    1. Consider the semantic meaning of the relationship direction
+    2. Evaluate which direction is more appropriate
+    3. Assess risks of changing the relationship direction
+    4. Consider query patterns that may be affected
+    5. Evaluate if auto-resolution is safe
+    
+    {{ ctx.output_format }}
+  "#
+}
+
+function AnalyzeDuplicateEntityConflict(
+  entity_type: string,
+  staging_entity_id: string,
+  production_entity_ids: string,
+  similarity_scores: string,
+  entity_properties: string
+) -> ConflictAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze this duplicate entity conflict where a staging entity matches multiple production entities:
+
+    Entity Type: {{entity_type}}
+    Staging Entity ID: {{staging_entity_id}}
+    Production Entity IDs: {{production_entity_ids}}
+    Similarity Scores: {{similarity_scores}}
+    
+    Entity Properties:
+    {{entity_properties}}
+    
+    Guidelines:
+    1. Evaluate whether these entities truly represent the same real-world object
+    2. Consider the implications of merging vs. keeping separate
+    3. Assess which production entity is the best match if any
+    4. Identify potential data quality issues
+    5. Recommend whether this requires manual review
+    
+    Provide a detailed analysis of this entity duplication conflict, including:
+    1. A clear description of why multiple matches were found
+    2. Potential causes for these duplicate entities
+    3. The semantic meaning of these matches
+    4. Business impact of having duplicate entities
+    5. Key similarities and differences between the matching entities
+    
+    {{ ctx.output_format }}
+  "#
+}
+
+function AnalyzeEntityMatchConflict(
+  entity_type: string,
+  staging_entity_id: string,
+  production_entity_id: string,
+  match_confidence: float,
+  staging_properties: string,
+  production_properties: string
+) -> ConflictAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze this entity match conflict where a staging entity potentially matches a production entity:
+
+    Entity Type: {{entity_type}}
+    Staging Entity ID: {{staging_entity_id}}
+    Production Entity ID: {{production_entity_id}}
+    Match Confidence: {{match_confidence}}
+    
+    Staging Properties:
+    {{staging_properties}}
+    
+    Production Properties:
+    {{production_properties}}
+    
+    Guidelines:
+    1. Evaluate whether these entities truly represent the same real-world object
+    2. Consider the key identifying properties and their similarity
+    3. Assess the implications of treating them as the same vs. different entities
+    4. Identify potential data quality issues
+    5. Consider the confidence score in your analysis
+    
+    Provide a detailed analysis of this entity match conflict, including:
+    1. A clear description of why these entities might be matches
+    2. Potential causes for having potentially duplicate entities
+    3. The semantic meaning of this potential match
+    4. Business impact of treating them as same or different
+    5. Key similarities and differences between the entities
+    
+    {{ ctx.output_format }}
+  "#
+}
+
+function AnalyzeSchemaConflict(
+  entity_type: string,
+  conflict_description: string,
+  staging_schema: string,
+  production_schema: string,
+  affected_properties: string
+) -> ConflictAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze this schema conflict between staging and production:
+
+    Entity Type: {{entity_type}}
+    Conflict Description: {{conflict_description}}
+    
+    Staging Schema:
+    {{staging_schema}}
+    
+    Production Schema:
+    {{production_schema}}
+    
+    Affected Properties:
+    {{affected_properties}}
+    
+    Guidelines:
+    1. Evaluate the nature of the schema differences
+    2. Consider the impact on data integrity and consistency
+    3. Assess the implications for queries and applications
+    4. Identify potential migration challenges
+    5. Consider backward compatibility issues
+    
+    Provide a detailed analysis of this schema conflict, including:
+    1. A clear description of the schema differences
+    2. Potential causes for the schema divergence
+    3. The semantic meaning of these schema changes
+    4. Business impact of the schema conflict
+    5. Key considerations for resolution
+    
+    {{ ctx.output_format }}
+  "#
+}
+
+function GenerateSchemaConflictResolutionOptions(
+  conflict_analysis: string,
+  entity_type: string,
+  staging_schema: string,
+  production_schema: string
+) -> ResolutionOption[] {
+  client VertexAI
+  prompt #"
+    For this schema conflict:
+
+    Analysis:
+    {{conflict_analysis}}
+
+    Entity Type:
+    {{entity_type}}
+
+    Staging Schema:
+    {{staging_schema}}
+
+    Production Schema:
+    {{production_schema}}
+
+    Generate 3-5 distinct resolution options. For each option, provide:
+    1. A short, descriptive name for the approach
+    2. A detailed explanation of the schema migration steps
+    3. The business impact of this resolution
+    4. Any risks or considerations for data integrity
+    5. Implementation complexity
+
+    All options should be valid solutions with different trade-offs.
+    Be specific and actionable in your suggestions.
+
+    {{ ctx.output_format }}
+  "#
+}
+
+function GenerateEntityMatchResolutionOptionsFromStagingAndProd(
+  conflict_analysis: string,
+  entity_type: string,
+  staging_entity_id: string,
+  production_entity_id: string,
+  staging_properties: string,
+  production_properties: string
+) -> ResolutionOption[] {
+  client VertexAI
+  prompt #"
+    For this entity match conflict:
+
+    Analysis:
+    {{conflict_analysis}}
+
+    Entity Type:
+    {{entity_type}}
+
+    Staging Entity ID:
+    {{staging_entity_id}}
+
+    Production Entity ID:
+    {{production_entity_id}}
+
+    Staging Properties:
+    {{staging_properties}}
+
+    Production Properties:
+    {{production_properties}}
+
+    Generate 3-5 distinct resolution options. For each option, provide:
+    1. A short, descriptive name for the approach
+    2. A detailed explanation of the resolution steps
+    3. The business impact of this resolution
+    4. Any risks or considerations for data integrity
+    5. Implementation complexity
+
+    Consider options such as:
+    - Treating them as the same entity (merge)
+    - Keeping them as separate entities
+    - Creating a relationship between them
+    - Partial property merging
+
+    All options should be valid solutions with different trade-offs.
+    Be specific and actionable in your suggestions.
+
+    {{ ctx.output_format }}
+  "#
+}
+
+function AnalyzeEntityMatchWithOntology(
+  conflict: JsonObject,
+  ontology: JsonObject
+) -> ConflictAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze the following entity match conflict where a staging entity potentially matches a production entity.
+    
+    ## Conflict Details
+    {{conflict}}
+    
+    ## Ontology Context
+    {{ontology}}
+    
+    Provide a detailed analysis of this entity match conflict, including:
+    1. A clear description of why these entities might be matches
+    2. Potential causes for having potentially duplicate entities
+    3. The semantic meaning of this potential match in the context of the ontology
+    4. Business impact of treating them as same or different
+    5. Key similarities and differences between the entities
+    
+    Focus on understanding whether these entities truly represent the same real-world object,
+    considering the ontology constraints and business rules.
+  "#
+}
+
+function AnalyzeSchemaConflictWithOntology(
+  conflict: JsonObject,
+  ontology: JsonObject
+) -> ConflictAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze the following schema conflict between staging and production.
+    
+    ## Conflict Details
+    {{conflict}}
+    
+    ## Ontology Context
+    {{ontology}}
+    
+    Provide a detailed analysis of this schema conflict, including:
+    1. A clear description of the schema differences
+    2. Potential causes for the schema divergence
+    3. The semantic meaning of these schema changes in the context of the ontology
+    4. Business impact of the schema conflict
+    5. Key considerations for resolution
+    
+    Focus on understanding how this schema conflict affects data integrity, query capabilities,
+    and compliance with the ontology constraints.
+  "#
+}
+
+function AnalyzeEntityMatchResolutionOption(
+  entity_type: string,
+  resolution_option: string,
+  staging_entity_id: string,
+  production_entity_id: string,
+  staging_properties: string,
+  production_properties: string
+) -> ConflictAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze this specific resolution option for an entity match conflict:
+
+    Entity Type: {{entity_type}}
+    Resolution Option: {{resolution_option}}
+    Staging Entity ID: {{staging_entity_id}}
+    Production Entity ID: {{production_entity_id}}
+    
+    Staging Properties:
+    {{staging_properties}}
+    
+    Production Properties:
+    {{production_properties}}
+    
+    Guidelines:
+    1. Evaluate the implications of this specific resolution approach
+    2. Consider data quality and integrity impacts
+    3. Assess business process impacts
+    4. Identify potential risks and mitigations
+    5. Consider implementation complexity
+    
+    Provide a detailed analysis of this resolution option, including:
+    1. A clear description of what the resolution entails
+    2. Potential benefits of this approach
+    3. Potential drawbacks or risks
+    4. Impact on data quality and integrity
+    5. Recommendations for implementation
+    
+    {{ ctx.output_format }}
+  "#
+}
+
+function BatchAnalyzeConflicts(
+  conflict_type: string,
+  entity_type: string,
+  conflict_summaries: string,
+  sample_conflicts: string,
+  total_count: int
+) -> ConflictGroupAnalysis {
+  client VertexAI
+  prompt #"
+    Analyze this batch of similar conflicts to identify patterns and recommend a unified approach:
+
+    Conflict Type: {{conflict_type}}
+    Entity Type: {{entity_type}}
+    Total Conflicts: {{total_count}}
+    
+    Conflict Summaries:
+    {{conflict_summaries}}
+    
+    Sample Conflicts:
+    {{sample_conflicts}}
+    
+    Guidelines:
+    1. Identify common patterns across these conflicts
+    2. Determine if they can be resolved with a single approach
+    3. Evaluate risks of batch resolution
+    4. Consider exceptions that might need special handling
+    5. Assess confidence in a unified resolution strategy
+    
+    {{ ctx.output_format }}
+  "#
+}

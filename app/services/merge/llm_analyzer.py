@@ -10,7 +10,7 @@ from app.schemas.conflicts import (
     ResolutionOption
 )
 from app.config import settings
-from app.baml_client import b as baml_client
+from app.baml_client import b
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +18,6 @@ class LLMConflictAnalyzer:
     """
     Analyzer that uses LLM to provide intelligent conflict resolution options.
     """
-    
-    def __init__(self):
-        """Initialize the LLM conflict analyzer with configuration settings."""
-        self.temperature = settings.OPENAI_TEMPERATURE
-        self.max_tokens = settings.OPENAI_MAX_TOKENS
     
     async def analyze_conflict(self, conflict: Conflict, ontology: Dict[str, Any]) -> List[ResolutionOption]:
         """
@@ -52,6 +47,32 @@ class LLMConflictAnalyzer:
             # Return default options if analysis fails
             return self._get_default_options(conflict)
     
+    async def _analyze_with_llm(self, prompt, entity_type, staging_entity_id, production_entity_id, 
+                               staging_properties, production_properties):
+        """
+        Internal method to call LLM for conflict analysis.
+        This method can be mocked in tests.
+        
+        Args:
+            prompt: The analysis prompt
+            entity_type: Type of the entity
+            staging_entity_id: ID of the staging entity
+            production_entity_id: ID of the production entity
+            staging_properties: Properties of the staging entity
+            production_properties: Properties of the production entity
+            
+        Returns:
+            List of analysis results from LLM
+        """
+        return b.GenerateEntityMatchResolutionOptionsFromStagingAndProd(
+            conflict_analysis=prompt,
+            entity_type=entity_type,
+            staging_entity_id=staging_entity_id,
+            production_entity_id=production_entity_id,
+            staging_properties=staging_properties,
+            production_properties=production_properties,
+        )
+    
     async def analyze_property_conflict(self, conflict: Conflict, ontology: Dict[str, Any]) -> List[ResolutionOption]:
         """
         Analyze a property value conflict and provide resolution options.
@@ -67,31 +88,27 @@ class LLMConflictAnalyzer:
         property_name = conflict.property_name
         property_constraints = ontology.get("property_constraints", {}).get(property_name, {})
         
-        # Build the prompt for LLM
-        prompt = f"""
-        Analyze this property value conflict and recommend the best resolution option.
-        
-        Property: {property_name}
-        Entity Type: {conflict.entity_type}
-        Staging Value: {conflict.staging_value}
-        Production Value: {conflict.production_value}
-        
-        Property Constraints:
-        {json.dumps(property_constraints, indent=2)}
-        
-        Provide a ranked list of resolution options with confidence scores and explanations.
-        Focus on data quality, consistency with constraints, and likely correctness.
-        """
+        # Create prompt for LLM analysis
+        prompt = f"Analyze property conflict for {property_name} in {conflict.entity_type} entity. " \
+                 f"Staging value: {conflict.staging_value}, Production value: {conflict.production_value}. " \
+                 f"Property constraints: {json.dumps(property_constraints) if property_constraints else 'None'}"
         
         # Get analysis from LLM
-        llm_results = await self._analyze_with_llm(prompt)
+        llm_results = await self._analyze_with_llm(
+            prompt=prompt,
+            entity_type=conflict.entity_type,
+            staging_entity_id=conflict.entity_id,
+            production_entity_id=conflict.entity_id,
+            staging_properties=json.dumps(conflict.staging_value),
+            production_properties=json.dumps(conflict.production_value),
+        )
         
         # Convert LLM results to ResolutionOption objects
         options = []
         for i, result in enumerate(llm_results):
-            value = result.get("value", "")
-            confidence = result.get("confidence", 0.0)
-            explanation = result.get("explanation", "")
+            value = result.description
+            confidence = result.confidence
+            explanation = result.reasoning
             
             # Determine resolution type based on which value matches
             if value == conflict.staging_value:
@@ -130,13 +147,18 @@ class LLMConflictAnalyzer:
         # Extract relevant relationship types from ontology
         relationship_types = ontology.get("relationship_types", [])
         
+        # Safely get relationship attributes
+        relationship_id = getattr(conflict, 'relationship_id', conflict.id)
+        staging_type = getattr(conflict, 'staging_relationship_type', None)
+        production_type = getattr(conflict, 'production_relationship_type', None)
+        
         # Build the prompt for LLM
         prompt = f"""
         Analyze this relationship type conflict and recommend the best resolution option.
         
-        Entity ID: {conflict.entity_id}
-        Staging Relationship Type: {conflict.staging_value}
-        Production Relationship Type: {conflict.production_value}
+        Relationship ID: {relationship_id}
+        Staging Relationship Type: {staging_type}
+        Production Relationship Type: {production_type}
         
         Available Relationship Types in Ontology:
         {json.dumps(relationship_types, indent=2)}
@@ -146,26 +168,33 @@ class LLMConflictAnalyzer:
         """
         
         # Get analysis from LLM
-        llm_results = await self._analyze_with_llm(prompt)
+        llm_results = await self._analyze_with_llm(
+            prompt=prompt,
+            entity_type="Relationship",  # Generic entity type for relationships
+            staging_entity_id=relationship_id,
+            production_entity_id=relationship_id,
+            staging_properties=json.dumps(staging_type),
+            production_properties=json.dumps(production_type),
+        )
         
         # Convert LLM results to ResolutionOption objects
         options = []
         for i, result in enumerate(llm_results):
-            rel_type = result.get("type", "")
-            confidence = result.get("confidence", 0.0)
-            explanation = result.get("explanation", "")
+            rel_type = result.description
+            confidence = result.confidence
+            explanation = result.reasoning
             
-            # Determine resolution type based on which type matches
-            if rel_type == conflict.staging_value:
-                resolution_type = "keep_staging_rel"
-            elif rel_type == conflict.production_value:
-                resolution_type = "keep_production_rel"
+            # Determine resolution type based on which value matches
+            if rel_type == staging_type:
+                resolution_type = "keep_staging"
+            elif rel_type == production_type:
+                resolution_type = "keep_production"
             else:
-                resolution_type = "custom_rel_type"
+                resolution_type = "custom_relationship"
             
             # Create resolution option
             option = ResolutionOption(
-                id=f"option_{i+1}_{uuid.uuid4().hex[:8]}",
+                id=f"rel_option_{i+1}_{uuid.uuid4().hex[:8]}",
                 description=f"Use relationship type: {rel_type}",
                 resolution_type=resolution_type,
                 resolution_data={"relationship_type": rel_type},
@@ -191,49 +220,67 @@ class LLMConflictAnalyzer:
         """
         # Build the prompt for LLM
         prompt = f"""
-        Analyze this potential entity match conflict and recommend the best resolution option.
+        Analyze this entity match conflict where two entities potentially represent the same real-world object.
         
-        Source Entity ID: {conflict.entity_id}
-        Target Entity ID: {conflict.staging_value}
-        Similarity Score: {conflict.production_value or 0.0}
+        Source Entity ID: {conflict.source_entity_id if hasattr(conflict, 'source_entity_id') else conflict.entity_id}
+        Target Entity ID: {conflict.target_entity_id if hasattr(conflict, 'target_entity_id') else conflict.staging_value}
+        Similarity Score: {conflict.similarity_score if hasattr(conflict, 'similarity_score') else 0.0}
         
         Provide a ranked list of resolution options with confidence scores and explanations.
-        Consider whether these entities should be merged or kept separate.
-        Focus on entity identity, data quality, and avoiding duplication.
+        Consider options like merging entities, keeping them separate, or creating a relationship between them.
         """
         
         # Get analysis from LLM
-        llm_results = await self._analyze_with_llm(prompt)
+        source_id = conflict.source_entity_id if hasattr(conflict, 'source_entity_id') else conflict.entity_id
+        target_id = conflict.target_entity_id if hasattr(conflict, 'target_entity_id') else conflict.staging_value
+        
+        llm_results = await self._analyze_with_llm(
+            prompt=prompt,
+            entity_type="Entity",  # Generic entity type
+            staging_entity_id=source_id,
+            production_entity_id=target_id,
+            staging_properties=json.dumps({}),  # No properties available in this conflict type
+            production_properties=json.dumps({}),
+        )
         
         # Convert LLM results to ResolutionOption objects
         options = []
         for i, result in enumerate(llm_results):
-            action = result.get("action", "")
-            confidence = result.get("confidence", 0.0)
-            explanation = result.get("explanation", "")
+            action = result.description
+            confidence = result.confidence
+            explanation = result.reasoning
             
-            # Determine resolution type based on action
-            if action.lower() == "merge":
+            # Map action to resolution type
+            if action == "merge":
                 resolution_type = "merge_entities"
-                description = "Merge entities"
-            else:
+                description = "Merge entities - they represent the same real-world object"
+            elif action == "keep_separate":
                 resolution_type = "keep_separate"
-                description = "Keep entities separate"
+                description = "Keep as separate entities - they are distinct"
+            elif action == "create_relationship":
+                resolution_type = "create_relationship"
+                description = "Create a relationship between these distinct entities"
+            else:
+                resolution_type = "custom_action"
+                description = f"Custom action: {action}"
             
             # Create resolution option
+            similarity = conflict.similarity_score if hasattr(conflict, 'similarity_score') else 0.0
+            
             option = ResolutionOption(
-                id=f"option_{i+1}_{uuid.uuid4().hex[:8]}",
+                id=f"match_option_{i+1}_{uuid.uuid4().hex[:8]}",
                 description=description,
                 resolution_type=resolution_type,
                 resolution_data={
-                    "source_entity_id": conflict.entity_id,
-                    "target_entity_id": conflict.staging_value,
-                    "similarity": conflict.production_value or 0.0
+                    "action": action,
+                    "source_entity_id": source_id,
+                    "target_entity_id": target_id,
+                    "similarity_score": similarity
                 },
                 confidence=confidence,
                 reasoning=explanation,
-                requires_review=confidence < 0.8,  # Higher threshold for entity merges
-                auto_resolvable=confidence > 0.9   # Higher threshold for auto-resolution
+                requires_review=confidence < 0.7,
+                auto_resolvable=confidence > 0.8
             )
             options.append(option)
         
