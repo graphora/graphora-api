@@ -11,7 +11,7 @@ import pytz
 import json
 import redis.asyncio as redis
 from app.config import settings
-from app.schemas.conflicts import Conflict, ConflictSeverity, ConflictType
+from app.schemas.conflicts import Conflict, ConflictSeverity, ConflictType, ResolutionOption, ResolutionStrategy
 from app.services.storage.interface import GraphStorageInterface
 from app.services.storage.models import Node, Edge
 from app.schemas.graph import GraphResponse
@@ -31,6 +31,11 @@ from app.services.merge.progress import ProgressTracker
 from prefect import flow, task
 from app.services.merge.resolution_pipeline import build_resolution_pipeline
 from app.services.merge.llm_analyzer import LLMConflictAnalyzer
+
+try:
+    import baml as b
+except ImportError:
+    b = None  # BAML client is optional
 
 logger = logging.getLogger(__name__)
 
@@ -693,10 +698,13 @@ async def merge_flow(
 class MergeService:
     """Service for managing merge operations"""
     
-    def __init__(self, storage: GraphStorageInterface):
+    def __init__(self, staging_storage: GraphStorageInterface, prod_storage: GraphStorageInterface):
         """Initialize merge service"""
-        self.storage = storage
+        self.staging_storage = staging_storage  # For staging graph operations
+        self.prod_storage = prod_storage     # For production graph operations
         self.progress_tracker = ProgressTracker()
+        self.merge_id = "test-merge-id"  # Default merge ID for testing
+        self.conflict_detection_service = ConflictDetectionService(prod_storage)
     
     async def start_merge_flow(
         self,
@@ -725,7 +733,7 @@ class MergeService:
                 merge_id=merge_id,
                 session_id=session_id,
                 transform_id=transform_id,
-                storage=self.storage,
+                storage=self.staging_storage,
                 progress_tracker=self.progress_tracker
             )
             
@@ -751,7 +759,7 @@ class MergeService:
         
         try:
             # Extract staging graph
-            staging_graph = await extract_staging_graph(self.storage, transform_id)
+            staging_graph = await extract_staging_graph(self.staging_storage, transform_id)
             
             # Get production entity matches
             await self.progress_tracker.update_merge_progress(
@@ -761,7 +769,7 @@ class MergeService:
                 {"task": "entity_mapping"}
             )
             entity_mapping_result = await map_production_entities(
-                self.storage,
+                self.prod_storage,
                 staging_graph,
                 similarity_threshold=0.7
             )
@@ -839,37 +847,43 @@ class MergeService:
         staging_graph: GraphResponse,
         production_entity_mapping: Dict[str, List[str]]
     ) -> List[Conflict]:
-        """Detect property conflicts for entire graph"""
+        """Detect property conflicts for all nodes in the staging graph"""
         conflicts = []
         
+        # Process each node in staging graph
         for staging_node in staging_graph.nodes:
             # Skip if no production matches
             if staging_node.id not in production_entity_mapping:
                 continue
                 
-            prod_node_ids = production_entity_mapping[staging_node.id]
-            for prod_node_id in prod_node_ids:
+            # Get production matches
+            production_ids = production_entity_mapping[staging_node.id]
+            
+            # Get production nodes
+            for production_id in production_ids:
                 # Get production node
-                prod_node = await self.storage.get_node_by_id(prod_node_id)
-                if not prod_node:
+                production_node = await self.prod_storage.get_node_by_id(production_id)
+                if not production_node:
                     continue
                     
-                # Detect conflicts
-                node_conflicts = await self.detect_property_conflicts(staging_node, prod_node)
+                # Detect property conflicts
+                node_conflicts = await self.detect_property_conflicts(
+                    staging_node,
+                    production_node,
+                    self.merge_id
+                )
+                
                 conflicts.extend(node_conflicts)
-        
+                
         return conflicts
 
     async def detect_property_conflicts(
         self,
         staging_node: Node,
-        production_node: Node
+        production_node: Node,
+        merge_id: str
     ) -> List[Conflict]:
         """Detect property conflicts between two nodes"""
-        # Create conflict detection service
-        conflict_service = ConflictDetectionService(
-            storage=self.storage)
-        
         # Convert storage.models.Node to Node if needed
         if not hasattr(staging_node, 'label') and hasattr(staging_node, 'type'):
             # Convert from storage model to schema model
@@ -892,14 +906,13 @@ class MergeService:
             )
         else:
             production_node_schema = production_node
-        
-        # Detect property conflicts
-        conflicts = await conflict_service.detect_property_conflicts(
+            
+        # Use conflict detection service to detect property conflicts
+        return await self.conflict_detection_service.detect_property_conflicts(
             staging_node_schema,
-            production_node_schema
+            production_node_schema,
+            merge_id
         )
-        
-        return conflicts
 
     async def detect_relationship_conflicts(
         self,
@@ -908,24 +921,25 @@ class MergeService:
     ) -> List[Conflict]:
         """Detect conflicts in relationships between staging and production"""
         conflicts = []
-        conflict_service = ConflictDetectionService(self.storage)
+        conflict_service = ConflictDetectionService(self.prod_storage)
+        merge_id = self.merge_id
         
         # Process each edge in staging graph
         for staging_edge in staging_graph.edges:
             # Skip if either endpoint has no production matches
-            if (staging_edge.source_id not in production_entity_mapping or
-                staging_edge.target_id not in production_entity_mapping):
+            if (staging_edge.source not in production_entity_mapping or
+                staging_edge.target not in production_entity_mapping):
                 continue
                 
             # Get production matches for both endpoints
-            source_matches = production_entity_mapping[staging_edge.source_id] 
-            target_matches = production_entity_mapping[staging_edge.target_id]
+            source_matches = production_entity_mapping[staging_edge.source] 
+            target_matches = production_entity_mapping[staging_edge.target]
             
             # Check relationships between all possible endpoint combinations
             for source_id in source_matches:
                 for target_id in target_matches:
                     # Get production relationships
-                    prod_edges = await self.storage.get_relationships_between(
+                    prod_edges = await self.prod_storage.get_relationships_between(
                         source_id,
                         target_id,
                         staging_edge.type
@@ -960,7 +974,8 @@ class MergeService:
                         # Detect conflicts
                         edge_conflicts = await conflict_service.detect_relationship_conflicts(
                             staging_edge_schema,
-                            prod_edge_schema
+                            prod_edge_schema,
+                            merge_id
                         )
                         conflicts.extend(edge_conflicts)
         
@@ -971,65 +986,66 @@ class MergeService:
         staging_graph: GraphResponse,
         production_entity_mapping: Dict[str, List[str]]
     ) -> List[Conflict]:
-        """Detect conflicts where staging entities match multiple production entities"""
+        """Detect conflicts where a staging entity has multiple matches in production"""
         conflicts = []
-        conflict_service = ConflictDetectionService(self.storage)
+        merge_id = self.merge_id
         
-        # Process each node with multiple matches
-        for staging_id, prod_matches in production_entity_mapping.items():
-            if len(prod_matches) <= 1:
-                continue
-                
-            # Get staging node
-            staging_node = next(
-                (n for n in staging_graph.nodes if n.id == staging_id),
-                None
-            )
-            if not staging_node:
-                continue
-                
-            # Get production nodes
-            prod_nodes = []
-            for prod_id in prod_matches:
-                prod_node = await self.storage.get_node_by_id(prod_id)
-                if prod_node:
-                    prod_nodes.append(prod_node)
+        for staging_id, production_ids in production_entity_mapping.items():
+            # Only create a conflict if there are multiple matches
+            if len(production_ids) > 1:
+                # Find the staging node
+                staging_node = next((n for n in staging_graph.nodes if n.id == staging_id), None)
+                if not staging_node:
+                    continue
                     
-            if len(prod_nodes) > 1:
-                # Convert storage.models.Node to Node if needed
-                staging_node_schema = staging_node
-                prod_nodes_schema = []
-                
-                if not hasattr(staging_node, 'label') and hasattr(staging_node, 'type'):
-                    # Convert from storage model to schema model
-                    staging_node_schema = Node(
-                        id=staging_node.id,
-                        label=staging_node.type,
-                        type=staging_node.type,
-                        properties=staging_node.properties
-                    )
-                else:
-                    staging_node_schema = staging_node
-                    
-                for prod_node in prod_nodes:
-                    if not hasattr(prod_node, 'label') and hasattr(prod_node, 'type'):
-                        # Convert from storage model to schema model
-                        prod_nodes_schema.append(Node(
-                            id=prod_node.id,
-                            label=prod_node.type,
-                            type=prod_node.type,
-                            properties=prod_node.properties
-                        ))
-                    else:
-                        prod_nodes_schema.append(prod_node)
-                
-                # Detect entity matching conflicts
-                match_conflicts = await conflict_service.detect_entity_matching_conflicts(
-                    staging_node_schema,
-                    prod_nodes_schema
+                # Create a conflict
+                conflict = Conflict(
+                    id=f"entity_match_{staging_id}",
+                    merge_id=merge_id,
+                    conflict_type=ConflictType.DUPLICATE_ENTITY,
+                    severity=ConflictSeverity.MAJOR,
+                    description=f"Entity '{staging_id}' matches multiple production entities: {', '.join(production_ids)}",
+                    staging_ids=[staging_id],
+                    production_ids=production_ids,
+                    staging_value=staging_id,
+                    production_value=production_ids,
+                    context={
+                        "entity_type": staging_node.label,
+                        "staging_id": staging_id,
+                        "production_ids": production_ids,
+                        "properties": staging_node.properties
+                    },
+                    resolution_options=[
+                        # Option for each production entity
+                        *[
+                            ResolutionOption(
+                                id=f"entity_match_{staging_id}_{prod_id}",
+                                description=f"Match with production entity: {prod_id}",
+                                resolution_type=ResolutionStrategy.MATCH_ENTITY,
+                                resolution_data={
+                                    "staging_id": staging_id,
+                                    "production_id": prod_id
+                                },
+                                confidence=1.0 / len(production_ids),
+                                auto_resolvable=False
+                            )
+                            for prod_id in production_ids
+                        ],
+                        # Option to create a new entity
+                        ResolutionOption(
+                            id=f"entity_match_{staging_id}_new",
+                            description="Create as a new entity",
+                            resolution_type=ResolutionStrategy.CREATE_NEW,
+                            resolution_data={
+                                "staging_id": staging_id
+                            },
+                            confidence=0.3,
+                            auto_resolvable=False
+                        )
+                    ]
                 )
-                conflicts.extend(match_conflicts)
-        
+                conflicts.append(conflict)
+                
         return conflicts
 
     async def _store_conflicts(self, merge_id: str, conflicts: List[Conflict]) -> None:

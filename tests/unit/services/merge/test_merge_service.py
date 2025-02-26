@@ -22,95 +22,149 @@ from app.services.merge.models import (
 )
 from app.services.merge.progress import ProgressTracker
 from app.services.merge.conflict import ConflictDetectionService
+from app.services.merge.llm_analyzer import LLMConflictAnalyzer
 
 # Import the mock storage class
 from tests.unit.services.storage.test_graph_storage import MockGraphStorage
+
+# Mock BAML module
+@pytest.fixture(autouse=True)
+def mock_baml():
+    with patch('app.services.merge.service.b') as mock_b:
+        # Mock entity matching function
+        mock_b.MatchEntities.return_value = {
+            "matches": [
+                {
+                    "staging_id": "s1",
+                    "production_id": "p1",
+                    "confidence": 0.9,
+                    "match_strategy": "EXACT_NAME"
+                }
+            ]
+        }
+        
+        # Mock property conflict analysis
+        mock_b.AnalyzePropertyConflict.return_value = {
+            "recommended_strategy": "KEEP_STAGING",
+            "confidence": 0.8,
+            "explanation": "Test explanation",
+            "can_auto_resolve": True,
+            "potential_risks": []
+        }
+        
+        yield mock_b
+
+@pytest.fixture
+def mock_llm_analyzer():
+    """Mock LLM analyzer for testing"""
+    analyzer = MagicMock(spec=LLMConflictAnalyzer)
+    analyzer.analyze_conflict = AsyncMock(return_value=[
+        ResolutionOption(
+            id="opt1",
+            description="Keep staging value",
+            resolution_type="keep_staging",
+            confidence=0.8,
+            reasoning="Staging data is more recent",
+            auto_resolvable=True
+        )
+    ])
+    return analyzer
 
 
 @pytest.fixture
 def mock_progress_tracker():
     """Mock progress tracker for testing"""
-    tracker = MagicMock()
+    tracker = MagicMock(spec=ProgressTracker)
     tracker.start_merge_stage = AsyncMock()
     tracker.update_merge_progress = AsyncMock()
     tracker.complete_merge_stage = AsyncMock()
-    tracker.initialize_merge = AsyncMock()
-    tracker.fail_merge = AsyncMock()
     tracker.fail_merge_stage = AsyncMock()
-    tracker.get_progress = AsyncMock()
     return tracker
 
 
 @pytest.fixture
 def mock_conflict_detection_service():
-    """Mock conflict detection service"""
+    """Mock conflict detection service for testing"""
     service = MagicMock(spec=ConflictDetectionService)
+    
+    # Mock conflict detection methods
     service.detect_property_conflicts = AsyncMock(return_value=[
         Conflict(
             id=f"conflict-{uuid.uuid4().hex}",
             merge_id="merge-123",
             conflict_type=ConflictType.PROPERTY,
-            severity=ConflictSeverity.MAJOR,
-            entity_id="s1",
-            entity_type="Person",
-            property_name="age",
-            staging_value=30,
-            production_value=32,
-            description="Property 'age' has different values: 30 vs 32"
+            severity=ConflictSeverity.MINOR,
+            staging_ids=["s1"],
+            production_ids=["p1"],
+            description="Property 'age' has different values",
+            context={},
+            resolution_options=[]
         )
     ])
-    service._create_property_conflict = AsyncMock()
+    
+    service.detect_relationship_conflicts = AsyncMock(return_value=[
+        Conflict(
+            id=f"conflict-{uuid.uuid4().hex}",
+            merge_id="merge-123",
+            conflict_type=ConflictType.RELATIONSHIP_TYPE,
+            severity=ConflictSeverity.MAJOR,
+            staging_ids=["sr1"],
+            production_ids=["pr1"],
+            description="Different relationship types",
+            context={},
+            resolution_options=[]
+        )
+    ])
+    
     return service
 
 
 @pytest.fixture
-def merge_service(mock_progress_tracker, mock_conflict_detection_service):
+def merge_service(mock_progress_tracker, mock_conflict_detection_service, mock_llm_analyzer):
     """Create a merge service with mock dependencies"""
     # Create mock storage
-    mock_storage = MockGraphStorage()
+    staging_storage = MockGraphStorage()
+    prod_storage = MockGraphStorage()
     
-    # Create service with mock dependencies
-    service = MergeService(storage=mock_storage)
-    
-    # Replace progress tracker with mock
-    service.progress_tracker = mock_progress_tracker
-    
-    # Add test data
-    mock_storage.add_test_node(
+    # Add test data to storage
+    staging_storage.add_test_node(
         Node(id="s1", label="Person", type="Person", properties={"name": "Alice", "age": 30, "transform_id": "test_id"})
     )
-    mock_storage.add_test_node(
+    staging_storage.add_test_node(
         Node(id="s2", label="Person", type="Person", properties={"name": "Bob", "age": 25, "transform_id": "test_id"})
     )
     
-    mock_storage.add_test_node(
+    prod_storage.add_test_node(
         Node(id="p1", label="Person", type="Person", properties={"name": "Alice", "age": 32})
     )
     
-    # Add a relationship
-    mock_storage.add_test_relationship(
-        Edge(
-            id="r1",
-            source="s1",
-            target="s2",
-            type="KNOWS",
-            properties={"since": 2020, "transform_id": "test_id"}
-        )
+    # Create service with mocks
+    service = MergeService(
+        staging_storage=staging_storage,
+        prod_storage=prod_storage
     )
     
-    # Mock the conflict detection service
-    with patch('app.services.merge.service.ConflictDetectionService', return_value=mock_conflict_detection_service):
-        yield service
+    # Inject mocked dependencies
+    service.progress_tracker = mock_progress_tracker
+    service.conflict_detection_service = mock_conflict_detection_service
+    service.llm_analyzer = mock_llm_analyzer
+    
+    # For backward compatibility with tests
+    service.storage = staging_storage
+    
+    return service
 
 
 @pytest.fixture
 def mock_redis_client():
     """Mock Redis client for testing"""
-    redis_client = MagicMock()
-    redis_client.get = AsyncMock()
-    redis_client.set = AsyncMock()
-    redis_client.expire = AsyncMock()
-    return redis_client
+    client = AsyncMock()
+    client.set = AsyncMock()
+    client.get = AsyncMock()
+    client.keys = AsyncMock(return_value=["merge:test_merge_id:conflict:1", "merge:test_merge_id:conflict:2"])
+    client.expire = AsyncMock()
+    
+    return client
 
 
 class TestMergeService:

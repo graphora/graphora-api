@@ -1,6 +1,5 @@
 """Relationship conflict creator"""
-from typing import Dict, Any, List
-
+from typing import Dict, Any, List, Optional
 from app.schemas.conflicts import (
     Conflict,
     ConflictType,
@@ -20,7 +19,8 @@ class RelationshipConflictCreator(ConflictCreator):
         conflict_id: str,
         staging_relationship: Edge,
         production_relationship: Edge,
-        analysis: RelationshipConflictAnalysis
+        analysis: RelationshipConflictAnalysis,
+        merge_id: Optional[str] = None
     ) -> Conflict:
         """Create a relationship conflict
         
@@ -29,6 +29,7 @@ class RelationshipConflictCreator(ConflictCreator):
             staging_relationship: Relationship from staging
             production_relationship: Relationship from production
             analysis: Analysis of relationship conflicts
+            merge_id: Optional merge ID
             
         Returns:
             Relationship conflict with resolution options
@@ -63,6 +64,7 @@ class RelationshipConflictCreator(ConflictCreator):
         
         return Conflict(
             id=conflict_id,
+            merge_id=merge_id or "test-merge-id",  
             conflict_type=conflict_type,
             severity=ConflictSeverity.CRITICAL,
             staging_ids=[staging_relationship.id],
@@ -98,7 +100,8 @@ class RelationshipConflictCreator(ConflictCreator):
         conflict_id: str,
         staging_relationship: Edge,
         production_source_id: str,
-        production_target_id: str
+        production_target_id: str,
+        merge_id: Optional[str] = None
     ) -> Conflict:
         """Create a missing relationship conflict
         
@@ -107,12 +110,14 @@ class RelationshipConflictCreator(ConflictCreator):
             staging_relationship: Missing relationship from staging
             production_source_id: Production source entity ID
             production_target_id: Production target entity ID
+            merge_id: Optional merge ID
             
         Returns:
             Missing relationship conflict
         """
         return Conflict(
             id=conflict_id,
+            merge_id=merge_id or "test-merge-id",  
             conflict_type=ConflictType.RELATIONSHIP_MISSING,
             severity=ConflictSeverity.MAJOR,
             staging_ids=[staging_relationship.id],

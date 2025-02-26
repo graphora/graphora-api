@@ -192,26 +192,28 @@ class TestStorageMergeIntegration:
         assert "staging3" in staging_node_ids
     
     @pytest.mark.asyncio
-    async def test_merge_service_can_use_storage(self, populated_mock_storage):
-        """Test that MergeService can use the storage implementation"""
-        # Arrange
-        storage = populated_mock_storage
-        merge_service = MergeService(storage)
+    async def test_merge_service_can_use_storage(self):
+        """Test that merge service can use storage instances"""
+        # Create mock storage instances
+        staging_storage = MockGraphStorage()
+        prod_storage = MockGraphStorage()
         
-        # Act - Get production data through merge service
-        prod_transform_id = "prod_transform"
-        staging_transform_id = "staging_transform"
+        # Create service
+        service = MergeService(staging_storage=staging_storage, prod_storage=prod_storage)
         
-        # This is a simplified test - in reality, the merge service would do more
-        # complex operations, but we're just testing the integration here
-        prod_data = await storage.get_transformation_data(prod_transform_id)
-        staging_data = await storage.get_transformation_data(staging_transform_id)
+        # Add test data
+        staging_storage.add_test_node(
+            Node(id="test1", label="Test", type="Test", properties={"name": "Test Node"})
+        )
         
-        # Assert
-        assert prod_data is not None
-        assert staging_data is not None
-        assert len(prod_data.nodes) == 3
-        assert len(staging_data.nodes) == 3
+        # Verify service can access storage
+        assert service.staging_storage is not None
+        assert service.prod_storage is not None
+        
+        # Test storage operations
+        nodes = await service.staging_storage.get_nodes_by_property("name", "Test Node")
+        assert len(nodes) == 1
+        assert nodes[0].id == "test1"
     
     @pytest.mark.asyncio
     async def test_conflict_detection_with_storage(self, populated_mock_storage):

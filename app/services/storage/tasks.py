@@ -3,7 +3,7 @@ from datetime import datetime
 import psutil
 from prefect import task, get_run_logger
 import traceback
-from app.services.storage.interface import Neo4jStorage
+from app.services.storage.neo4j import Neo4jStorage
 from app.services.storage.models import (
     StorageResult,
     StorageStage,
