@@ -77,11 +77,37 @@ class GraphStorageInterface(ABC):
         pass
     
     @abstractmethod
+    async def get_relationships_between(
+        self,
+        source_id: str,
+        target_id: str,
+        relationship_type: Optional[str] = None
+    ) -> List[Edge]:
+        """Get all relationships between two nodes.
+        
+        Args:
+            source_id: ID of the source node
+            target_id: ID of the target node
+            relationship_type: Optional type to filter relationships
+            
+        Returns:
+            List of edges between the nodes. Empty list if none exist.
+        """
+        pass
+        
+    @abstractmethod
     async def get_relationships_between_nodes(
         self,
         node_ids: List[str]
     ) -> List[Edge]:
-        """Get all relationships between the specified nodes"""
+        """Get all relationships between a set of nodes
+        
+        Args:
+            node_ids: List of node IDs to find relationships between
+            
+        Returns:
+            List of edges between any of the nodes
+        """
         pass
         
     @abstractmethod
@@ -157,6 +183,35 @@ class GraphStorageInterface(ABC):
         properties: Dict[str, Any] = None
     ) -> Edge:
         """Create a relationship between nodes"""
+        pass
+        
+    @abstractmethod
+    async def get_node_by_id(self, node_id: str) -> Optional[Node]:
+        """Get a node by its ID
+        
+        Args:
+            node_id: ID of the node to retrieve
+            
+        Returns:
+            Node if found, None otherwise
+        """
+        pass
+        
+    @abstractmethod
+    async def get_edges_between(
+        self,
+        source_id: str,
+        target_id: str
+    ) -> List[Edge]:
+        """Get all edges between two nodes
+        
+        Args:
+            source_id: ID of the source node
+            target_id: ID of the target node
+            
+        Returns:
+            List of edges between the nodes, empty list if none found
+        """
         pass
 
 class Neo4jStorage(GraphStorageInterface):
@@ -490,23 +545,57 @@ class Neo4jStorage(GraphStorageInterface):
             traceback.print_exc()
             raise DatabaseError(f"Failed to get nodes by property: {str(e)}")
             
+    async def get_relationships_between(
+        self,
+        source_id: str,
+        target_id: str,
+        relationship_type: Optional[str] = None
+    ) -> List[Edge]:
+        """Get all relationships between two nodes.
+        
+        Args:
+            source_id: ID of the source node
+            target_id: ID of the target node
+            relationship_type: Optional type to filter relationships
+            
+        Returns:
+            List of edges between the nodes. Empty list if none exist.
+        """
+        try:
+            with self.driver.session(database=self.database) as session:
+                query = """
+                    MATCH (source {id: $source_id})-[r]-(target {id: $target_id})
+                """
+                if relationship_type:
+                    query += f" WHERE type(r) = '{relationship_type}'"
+                query += " RETURN r"
+                result = session.run(query, source_id=source_id, target_id=target_id)
+                return [self._edge_from_record(record['r']) for record in result]
+        except Exception as e:
+            traceback.print_exc()
+            raise DatabaseError(f"Failed to get relationships: {str(e)}")
+            
     async def get_relationships_between_nodes(
         self,
         node_ids: List[str]
     ) -> List[Edge]:
-        """Get all relationships between the specified nodes"""
+        """Get all relationships between a set of nodes"""
         try:
+            # Build query to match relationships where both nodes are in the list
+            query = """
+            MATCH (n)-[r]-(m)
+            WHERE n.id IN $node_ids AND m.id IN $node_ids
+            RETURN DISTINCT r
+            """
+            
             with self.driver.session(database=self.database) as session:
-                query = """
-                    MATCH (n)-[r]-(m)
-                    WHERE n.id IN $node_ids AND m.id IN $node_ids
-                    RETURN r, n, m
-                """
                 result = session.run(query, node_ids=node_ids)
-                return [self._edge_from_record(record) for record in result]
+                edges = [self._edge_from_record(record['r']) for record in result]
+                return edges
+                
         except Exception as e:
             traceback.print_exc()
-            raise DatabaseError(f"Failed to get relationships: {str(e)}")
+            raise DatabaseError(f"Failed to get relationships between nodes: {str(e)}")
             
     async def find_nodes_by_property_value(
         self,
@@ -697,6 +786,41 @@ class Neo4jStorage(GraphStorageInterface):
         except Exception as e:
             traceback.print_exc()
             raise DatabaseError(f"Failed to create relationship: {str(e)}")
+            
+    async def get_node_by_id(self, node_id: str) -> Optional[Node]:
+        """Get a node by its ID"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                query = """
+                    MATCH (n {id: $node_id})
+                    RETURN n
+                """
+                result = session.run(query, node_id=node_id)
+                record = result.single()
+                if record:
+                    return self._node_from_record(record['n'])
+                return None
+        except Exception as e:
+            traceback.print_exc()
+            raise DatabaseError(f"Failed to get node by ID: {str(e)}")
+            
+    async def get_edges_between(
+        self,
+        source_id: str,
+        target_id: str
+    ) -> List[Edge]:
+        """Get all edges between two nodes"""
+        try:
+            with self.driver.session(database=self.database) as session:
+                query = """
+                    MATCH (source {id: $source_id})-[r]-(target {id: $target_id})
+                    RETURN r
+                """
+                result = session.run(query, source_id=source_id, target_id=target_id)
+                return [self._edge_from_record(record['r']) for record in result]
+        except Exception as e:
+            traceback.print_exc()
+            raise DatabaseError(f"Failed to get edges between nodes: {str(e)}")
             
     def _node_from_record(self, record) -> Node:
         """Convert Neo4j node record to Node model"""

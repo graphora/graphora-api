@@ -1,7 +1,7 @@
 """Progress tracking for merge operations"""
 import psutil
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import logging
 
@@ -236,6 +236,51 @@ class ProgressTracker:
             
         except Exception as e:
             logger.error(f"Failed to mark merge as failed: {str(e)}")
+    
+    async def fail_merge_stage(
+        self,
+        merge_id: str,
+        stage: MergeStage,
+        error: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Mark a merge stage as failed"""
+        try:
+            # Get current status
+            status_data = self.redis.get(
+                self._get_redis_key(merge_id, "status")
+            )
+            if not status_data:
+                return
+                
+            # Parse status
+            status = MergeProgress.model_validate_json(status_data)
+            
+            # Update stage progress
+            if stage in status.stages_progress:
+                stage_progress = status.stages_progress[stage]
+                stage_progress.status = StageStatus.FAILED
+                stage_progress.end_time = datetime.now(timezone.utc)
+                stage_progress.error_details = {
+                    "error": error,
+                    **(metadata or {})
+                }
+                
+            # Update overall status
+            status.overall_status = MergeStatus.FAILED
+            status.error = error
+            status.end_time = datetime.now(timezone.utc)
+            
+            # Store updated status
+            self.redis.set(
+                self._get_redis_key(merge_id, "status"),
+                status.model_dump_json()
+            )
+            
+            logger.error(f"Merge stage {stage} failed for merge {merge_id}: {error}")
+            
+        except Exception as e:
+            logger.error(f"Failed to mark merge stage as failed: {str(e)}")
     
     async def get_progress(self, merge_id: str) -> Optional[MergeProgress]:
         """Get current progress of a merge operation"""
