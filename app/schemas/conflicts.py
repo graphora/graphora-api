@@ -5,6 +5,14 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 import pytz
 
+class ConflictStatus(str, Enum):
+    """Status of a conflict in the merge process"""
+    PENDING = "pending"      # Conflict detected but not yet resolved
+    RESOLVED = "resolved"    # Conflict has been resolved
+    AUTO_RESOLVED = "auto_resolved"  # Conflict was automatically resolved
+    IGNORED = "ignored"      # Conflict was intentionally ignored
+    FAILED = "failed"        # Resolution attempt failed
+
 class ConflictType(str, Enum):
     """Types of conflicts that can occur during merge"""
     PROPERTY = "property"
@@ -217,3 +225,32 @@ class StrategySelectionConfig(BaseModel):
     strategies: Dict[str, StrategyConfig] = Field(default_factory=dict, description="Strategy-specific configurations")
     custom_strategies: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="Custom strategy configurations")
     auto_resolution_enabled: bool = Field(default=True, description="Whether auto-resolution is enabled")
+
+class ResolutionRequest(BaseModel):
+    """Request to apply a resolution"""
+    resolution_id: str = Field(..., description="ID of the resolution option to apply")
+
+class ResolutionResult(BaseModel):
+    """Result of applying a resolution"""
+    applied: bool = Field(..., description="Whether the resolution was successfully applied")
+    conflict_id: str = Field(..., description="ID of the conflict that was resolved")
+    resolution_id: Optional[str] = Field(None, description="ID of the resolution that was applied")
+    verification: Optional[Dict[str, Any]] = Field(None, description="Verification results")
+    error: Optional[str] = Field(None, description="Error message if application failed")
+    changes: Optional[Dict[str, Any]] = Field(None, description="Changes that were applied")
+
+class BatchResolutionItem(BaseModel):
+    """Single resolution in a batch"""
+    conflict_id: str = Field(..., description="ID of the conflict to resolve")
+    resolution_id: str = Field(..., description="ID of the resolution to apply")
+
+class BatchResolutionRequest(BaseModel):
+    """Request to apply multiple resolutions"""
+    resolutions: List[BatchResolutionItem] = Field(..., description="List of resolutions to apply")
+
+class BatchResolutionResult(BaseModel):
+    """Result of applying multiple resolutions"""
+    total: int = Field(..., description="Total number of resolutions requested")
+    success_count: int = Field(..., description="Number of successful applications")
+    failure_count: int = Field(..., description="Number of failed applications")
+    results: List[ResolutionResult] = Field(..., description="Individual resolution results")

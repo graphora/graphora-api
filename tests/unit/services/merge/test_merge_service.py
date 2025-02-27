@@ -473,13 +473,21 @@ class TestMergeService:
         ]
         
         # Act
-        with patch.object(merge_service, 'resolve_conflict', new_callable=AsyncMock) as mock_resolve:
-            mock_resolve.return_value = True
-            result = await mock_resolve(merge_id, conflict_id, resolution_id)
+        with patch.object(merge_service, 'apply_conflict_resolution', new_callable=AsyncMock) as mock_resolve:
+            mock_resolve.return_value = {
+                "applied": True,
+                "conflict_id": conflict_id,
+                "resolution_id": resolution_id,
+                "verification": {"verified": True},
+                "changes": {"action": "updated_production"}
+            }
+            result = await mock_resolve(conflict_id=conflict_id, resolution_id=resolution_id)
         
         # Assert
-        assert result is True
-        mock_resolve.assert_called_once_with(merge_id, conflict_id, resolution_id)
+        assert result["applied"] is True
+        assert result["conflict_id"] == conflict_id
+        assert result["resolution_id"] == resolution_id
+        mock_resolve.assert_called_once_with(conflict_id=conflict_id, resolution_id=resolution_id)
     
     @pytest.mark.asyncio
     async def test_start_merge_flow(self, merge_service):
@@ -572,8 +580,14 @@ class TestMergeServiceAutoResolution:
             with patch.object(merge_service, 'get_conflicts', new_callable=AsyncMock) as mock_get_conflicts:
                 mock_get_conflicts.return_value = ([auto_conflict, manual_conflict], 2)
                 
-                # Mock apply_resolution
-                with patch.object(merge_service, 'apply_resolution', new_callable=AsyncMock) as mock_apply:
+                # Mock apply_conflict_resolution
+                with patch.object(merge_service, 'apply_conflict_resolution', new_callable=AsyncMock) as mock_apply:
+                    mock_apply.return_value = {
+                        "applied": True,
+                        "conflict_id": auto_conflict_id,
+                        "resolution_id": f"{auto_conflict_id}_auto_option",
+                        "verification": {"verified": True}
+                    }
                     # Act
                     result = await merge_service.auto_resolve_conflicts(merge_id)
         
@@ -584,9 +598,11 @@ class TestMergeServiceAutoResolution:
         assert ConflictType.PROPERTY_VALUE.value in result["by_type"]
         assert result["by_type"][ConflictType.PROPERTY_VALUE.value] == 1
         
-        # Verify apply_resolution was called for auto-resolved conflict
+        # Verify apply_conflict_resolution was called for auto-resolved conflict
         mock_apply.assert_called_once_with(
-            merge_id, auto_conflict_id, f"{auto_conflict_id}_auto_option", "auto"
+            merge_id=merge_id,
+            conflict_id=auto_conflict_id,
+            resolution_id=f"{auto_conflict_id}_auto_option"
         )
 
 
@@ -800,8 +816,14 @@ class TestMergeServiceStrategySelection:
             f"merge:{merge_id}:conflict:conflict_3": conflicts[2].model_dump_json(),
         }.get(key)
         
-        # Mock apply_resolution
-        merge_service.apply_resolution = AsyncMock()
+        # Mock apply_conflict_resolution
+        merge_service.apply_conflict_resolution = AsyncMock()
+        merge_service.apply_conflict_resolution.return_value = {
+            "applied": True,
+            "conflict_id": "conflict_1",
+            "resolution_id": "option_1",
+            "verification": {"verified": True}
+        }
         
         # Act
         result = await merge_service.apply_selected_strategies(merge_id, min_confidence=0.7)
@@ -814,7 +836,9 @@ class TestMergeServiceStrategySelection:
         assert "prefer_staging" in result["by_strategy"]
         assert result["by_strategy"]["prefer_staging"] == 1
         
-        # Verify apply_resolution was called only for high-confidence strategy
-        merge_service.apply_resolution.assert_called_once_with(
-            merge_id, "conflict_1", "option_1", "strategy:prefer_staging"
+        # Verify apply_conflict_resolution was called only for high-confidence strategy
+        merge_service.apply_conflict_resolution.assert_called_once_with(
+            merge_id=merge_id,
+            conflict_id="conflict_1", 
+            resolution_id="option_1"
         )
