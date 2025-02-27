@@ -52,6 +52,7 @@ from app.services.merge.conflicts.detectors.property import PropertyConflictDete
 from app.services.merge.conflicts.detectors.relationship import RelationshipConflictDetector
 from app.services.merge.resolution_applicator import ResolutionApplicator
 from app.services.resolution_history_service import ResolutionHistoryService
+from app.services.merge.flow_manager import run_resolution_pipeline
 
 try:
     import baml as b
@@ -1915,3 +1916,41 @@ class MergeService:
             "failure_count": failure_count,
             "results": results
         }
+
+    async def start_resolution_pipeline(self, merge_id: str) -> str:
+        """Start the resolution pipeline for conflicts"""
+        # First check if the conflict detection is complete
+        status = await self.get_merge_status(merge_id)
+        
+        if not status or status.stages_progress[MergeStage.CONFLICT_DETECTION].status != StageStatus.COMPLETED:
+            raise ValueError("Cannot start resolution before conflict detection is complete")
+        
+        # Start resolution process
+        flow_run_id = await run_resolution_pipeline(merge_id)
+        
+        return flow_run_id
+
+    async def mark_conflict_for_review(self, merge_id: str, conflict_id: str) -> bool:
+        """Mark a conflict as requiring human review"""
+        conflict = await self.get_conflict(merge_id, conflict_id)
+        if not conflict:
+            return False
+            
+        # Set review flag
+        conflict.requires_review = True
+        
+        # Update conflict
+        await self._update_conflict(merge_id, conflict)
+        
+        return True
+
+    async def apply_resolution(self, merge_id: str, conflict_id: str, resolution_id: str) -> bool:
+        """Apply a specific resolution to a conflict"""
+        result = await self.apply_conflict_resolution(
+            merge_id=merge_id,
+            conflict_id=conflict_id,
+            resolution_id=resolution_id,
+            resolved_by="prefect"
+        )
+        
+        return result.resolved
