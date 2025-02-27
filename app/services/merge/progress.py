@@ -7,6 +7,7 @@ import logging
 import asyncio
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError, TimeoutError
+import json
 
 from app.services.merge.models import (
     MergeStage,
@@ -17,6 +18,7 @@ from app.services.merge.models import (
     ResourceMetrics
 )
 from app.config import settings
+from app.utils.redis import DateTimeEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -332,3 +334,53 @@ class ProgressTracker:
         except Exception as e:
             logger.error(f"Failed to get merge progress: {str(e)}")
             return None
+    
+    async def pause_merge_stage(
+        self,
+        merge_id: str,
+        stage: MergeStage,
+        reason: str,
+        details: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Pause a merge stage for human intervention
+        
+        Args:
+            merge_id: ID of the merge operation
+            stage: Stage to pause
+            reason: Reason for pausing
+            details: Additional details about the pause
+        """
+        # Get current progress
+        progress = await self.get_progress(merge_id)
+        if not progress:
+            logger.error(f"Cannot pause stage {stage} for merge {merge_id}: progress not found")
+            return
+            
+        # Update stage status
+        stage_progress = progress.stages_progress.get(stage)
+        if not stage_progress:
+            logger.error(f"Cannot pause stage {stage} for merge {merge_id}: stage not found")
+            return
+            
+        # Set status to a custom value that indicates paused
+        # We'll use RUNNING with additional metadata
+        stage_progress.status = StageStatus.RUNNING
+        
+        # Add pause metadata
+        if not stage_progress.metrics:
+            stage_progress.metrics = {}
+            
+        stage_progress.metrics["paused"] = True
+        stage_progress.metrics["pause_reason"] = reason
+        stage_progress.metrics["paused_at"] = datetime.now(timezone.utc).isoformat()
+        
+        if details:
+            stage_progress.metrics["pause_details"] = details
+            
+        # Update progress in Redis
+        progress_dict = progress.model_dump()
+        await self._redis_operation(
+            self.redis.set,
+            self._get_redis_key(merge_id, "progress"),
+            json.dumps(progress_dict, cls=DateTimeEncoder)
+        )
