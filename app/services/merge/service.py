@@ -51,6 +51,7 @@ from app.services.merge.conflicts.base import ConflictDetector
 from app.services.merge.conflicts.detectors.property import PropertyConflictDetector
 from app.services.merge.conflicts.detectors.relationship import RelationshipConflictDetector
 from app.services.merge.resolution_applicator import ResolutionApplicator
+from app.services.resolution_history_service import ResolutionHistoryService
 
 try:
     import baml as b
@@ -753,6 +754,8 @@ class MergeService:
         self.conflict_detection = ConflictDetectionService(production_storage)
         # Initialize the resolution applicator
         self.resolution_applicator = ResolutionApplicator(storage, production_storage)
+        # Initialize the resolution history service
+        self.resolution_history = ResolutionHistoryService()
 
     async def start_merge_flow(
         self,
@@ -1239,6 +1242,19 @@ class MergeService:
             
             # Store the updated conflict
             await self._update_conflict(merge_id, conflict)
+            
+            # Store in resolution history
+            try:
+                await self.resolution_history.store_resolution(
+                    conflict=conflict,
+                    resolution_id=resolution_option.id,
+                    applied_by=resolved_by,
+                    merge_id=merge_id,
+                    success=True
+                )
+            except Exception as e:
+                logger.error(f"Error storing resolution history: {str(e)}")
+                # Don't fail the resolution if history storage fails
         
         return result
 
@@ -1795,6 +1811,46 @@ class MergeService:
                 return option
                 
         return None
+
+    async def get_resolution_suggestions(
+        self,
+        merge_id: str,
+        conflict_id: str
+    ) -> List[Dict[str, Any]]:
+        """Get resolution suggestions based on similar past resolutions
+        
+        Args:
+            merge_id: ID of the merge process
+            conflict_id: ID of the conflict
+            
+        Returns:
+            List of suggested resolutions with similarity scores
+        """
+        # Get conflict
+        conflict = await self.get_conflict(merge_id, conflict_id)
+        if not conflict:
+            raise ValueError(f"Conflict {conflict_id} not found for merge {merge_id}")
+        
+        # Find similar resolutions
+        similar_resolutions = await self.resolution_history.find_similar_resolutions(
+            conflict=conflict
+        )
+        
+        # Format suggestions
+        suggestions = []
+        for res in similar_resolutions:
+            entry = res["entry"]
+            suggestion = {
+                "resolution_type": entry["resolution_type"],
+                "resolution_data": entry["resolution_data"],
+                "similarity_score": res["similarity_score"],
+                "previously_applied_at": entry["applied_at"],
+                "was_successful": entry["success"],
+                "original_conflict_context": entry["context"]
+            }
+            suggestions.append(suggestion)
+        
+        return suggestions
 
     async def apply_batch_resolutions(
         self,
