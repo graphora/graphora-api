@@ -11,7 +11,8 @@ from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgr
 from app.schemas.conflicts import (
     Conflict, ConflictListResponse, ConflictResolutionRequest,
     PendingConflictsResponse, ConflictResolutionResponse,
-    BulkResolutionRequest, BulkResolutionResponse
+    BulkResolutionRequest, BulkResolutionResponse,
+    ResolutionRequest, ResolutionResult, BatchResolutionRequest, BatchResolutionResult
 )
 from app.dependencies import get_progress_tracker, get_merge_service
 from app.config import settings
@@ -218,40 +219,39 @@ async def get_conflict_detail(
 
 @router.post(
     "/conflicts/{merge_id}/{conflict_id}/resolve",
-    response_model=dict,
-    description="Resolve a specific conflict"
+    response_model=ResolutionResult,
+    description="Apply a resolution to a conflict"
 )
 async def resolve_conflict(
     merge_id: str,
     conflict_id: str,
-    resolution_request: ConflictResolutionRequest,
+    resolution: ResolutionRequest,
     merge_service: MergeService = Depends(get_merge_service)
-) -> dict:
-    """Resolve a specific conflict using the provided resolution option"""
+) -> ResolutionResult:
+    """
+    Apply a specific resolution to a conflict
+    
+    Parameters:
+    - merge_id: ID of the merge process
+    - conflict_id: ID of the conflict to resolve
+    - resolution: Resolution request with resolution_id
+    
+    Returns:
+    - Result of the resolution application with verification status
+    """
     try:
-        # Resolve conflict
-        success = await merge_service.resolve_conflict(
-            merge_id=merge_id,
+        result = await merge_service.apply_conflict_resolution(
             conflict_id=conflict_id,
-            resolution_id=resolution_request.resolution_id
+            resolution_id=resolution.resolution_id
         )
         
-        if not success:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Failed to resolve conflict {conflict_id}"
-            )
-            
-        return {
-            "success": True,
-            "merge_id": merge_id,
-            "conflict_id": conflict_id,
-            "resolution_id": resolution_request.resolution_id,
-            "message": "Conflict resolved successfully"
-        }
+        return ResolutionResult(**result)
         
-    except HTTPException:
-        raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=str(e)
+        )
     except Exception as e:
         logger.error(f"Error resolving conflict: {str(e)}")
         raise HTTPException(
@@ -390,88 +390,129 @@ async def get_pending_conflicts(
         )
 
 @router.post(
-    "/merge/{merge_id}/conflicts/{conflict_id}/resolve",
-    response_model=ConflictResolutionResponse,
-    summary="Resolve a specific conflict",
-    description="Apply a resolution to a specific conflict, either using an existing resolution option or providing a custom resolution."
+    "/conflicts/{merge_id}/batch-resolve",
+    response_model=BatchResolutionResult,
+    description="Apply multiple resolutions at once"
 )
-async def resolve_conflict_enhanced(
+async def batch_resolve_conflicts(
     merge_id: str,
-    conflict_id: str,
-    resolution_request: ConflictResolutionRequest,
+    resolutions: BatchResolutionRequest,
     merge_service: MergeService = Depends(get_merge_service)
-):
+) -> BatchResolutionResult:
     """
-    Resolve a specific conflict with enhanced options.
+    Apply multiple resolutions at once
     
-    - **merge_id**: ID of the merge process
-    - **conflict_id**: ID of the conflict to resolve
-    - **resolution_request**: Resolution details including resolution ID or type, comments, and additional data
+    Parameters:
+    - merge_id: ID of the merge process
+    - resolutions: List of conflict_id/resolution_id pairs to apply
+    
+    Returns:
+    - Summary of resolution application results
     """
     try:
-        result = await merge_service.apply_conflict_resolution(
+        result = await merge_service.apply_batch_resolutions(
             merge_id=merge_id,
-            conflict_id=conflict_id,
-            resolution_id=resolution_request.resolution_id,
-            resolution_type=resolution_request.resolution_type if hasattr(resolution_request, "resolution_type") else None,
-            resolution_data=resolution_request.additional_data if hasattr(resolution_request, "additional_data") else None,
-            resolved_by=resolution_request.resolved_by if hasattr(resolution_request, "resolved_by") else "user"
+            resolutions=resolutions.resolutions
         )
         
-        return ConflictResolutionResponse(
-            merge_id=merge_id,
-            conflict_id=conflict_id,
-            resolution_id=resolution_request.resolution_id,
-            success=result.success,
-            resolved=result.resolved,
-            error=result.error
-        )
+        return BatchResolutionResult(**result)
+        
     except Exception as e:
-        logger.error(f"Error resolving conflict: {str(e)}")
+        logger.error(f"Error in batch resolution: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to resolve conflict: {str(e)}"
+            detail=f"Error in batch resolution: {str(e)}"
         )
 
 @router.post(
     "/merge/{merge_id}/conflicts/bulk-resolve",
     response_model=BulkResolutionResponse,
-    summary="Bulk resolve multiple conflicts",
-    description="Apply the same resolution to multiple conflicts at once."
+    description="Apply the same resolution to multiple conflicts"
 )
 async def bulk_resolve_conflicts(
     merge_id: str,
-    bulk_request: BulkResolutionRequest,
+    request: BulkResolutionRequest,
     merge_service: MergeService = Depends(get_merge_service)
-):
+) -> BulkResolutionResponse:
     """
-    Bulk resolve multiple conflicts with the same resolution.
+    Apply the same resolution to multiple conflicts
     
-    - **merge_id**: ID of the merge process
-    - **bulk_request**: Bulk resolution details including conflict IDs, resolution type, and additional data
+    Parameters:
+    - merge_id: ID of the merge process
+    - request: Bulk resolution request with conflict IDs and resolution type
+    
+    Returns:
+    - Summary of resolution application results
     """
     try:
         results = await merge_service.apply_bulk_conflict_resolution(
             merge_id=merge_id,
-            conflict_ids=bulk_request.conflict_ids,
-            resolution_type=bulk_request.resolution_type,
-            resolution_data=bulk_request.additional_data,
-            resolved_by=bulk_request.resolved_by
+            conflict_ids=request.conflict_ids,
+            resolution_type=request.resolution_type,
+            resolution_data=request.additional_data,
+            resolved_by=request.resolved_by
         )
         
-        # Calculate success metrics
-        total_conflicts = len(bulk_request.conflict_ids)
-        resolved_conflicts = sum(1 for r in results if r.resolved)
+        # Count resolved conflicts
+        resolved_count = sum(1 for r in results if r.resolved)
         
         return BulkResolutionResponse(
             merge_id=merge_id,
-            total=total_conflicts,
-            resolved=resolved_conflicts,
+            total=len(request.conflict_ids),
+            resolved=resolved_count,
             results=results
         )
+        
     except Exception as e:
         logger.error(f"Error in bulk resolution: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to perform bulk resolution: {str(e)}"
+            detail=f"Error in bulk resolution: {str(e)}"
+        )
+
+@router.post(
+    "/merge/{merge_id}/conflicts/{conflict_id}/resolve",
+    response_model=ConflictResolutionResponse,
+    description="Apply a resolution to a specific conflict"
+)
+async def resolve_conflict(
+    merge_id: str,
+    conflict_id: str,
+    request: ConflictResolutionRequest,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> ConflictResolutionResponse:
+    """
+    Apply a resolution to a specific conflict
+    
+    Parameters:
+    - merge_id: ID of the merge process
+    - conflict_id: ID of the conflict to resolve
+    - request: Resolution request with resolution type and data
+    
+    Returns:
+    - Result of the resolution application
+    """
+    try:
+        result = await merge_service.apply_conflict_resolution(
+            merge_id=merge_id,
+            conflict_id=conflict_id,
+            resolution_type=request.resolution_type,
+            resolution_data=request.additional_data,
+            resolved_by=request.resolved_by
+        )
+        
+        return ConflictResolutionResponse(
+            merge_id=merge_id,
+            conflict_id=conflict_id,
+            resolution_id=request.resolution_id,
+            success=result.success,
+            resolved=result.resolved,
+            error=result.error
+        )
+        
+    except Exception as e:
+        logger.error(f"Error resolving conflict: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error resolving conflict: {str(e)}"
         )
