@@ -11,7 +11,7 @@ router = APIRouter(prefix=settings.API_V1_STR, tags=["Ontology"])
 
 def ensure_ontology_dir():
     """Ensure ontology directory exists"""
-    Path(settings.ONTOLOGY_DIR).expanduser().mkdir(parents=True, exist_ok=True)
+    Path(settings.ontology_dir).expanduser().mkdir(parents=True, exist_ok=True)
 
 @router.post("/ontology", response_model=OntologyResponse)
 async def validate_ontology(request: OntologyRequest) -> OntologyResponse:
@@ -35,7 +35,7 @@ async def validate_ontology(request: OntologyRequest) -> OntologyResponse:
         ensure_ontology_dir()
         
         # Save ontology to file
-        ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
+        ontology_path = Path(settings.ontology_dir).expanduser() / f"{ontology_id}.yaml"
         with open(ontology_path, 'w') as f:
             f.write(request.text)
             
@@ -65,7 +65,7 @@ async def get_ontology(ontology_id: str) -> OntologyRequest:
     """
     try:
         # Check if ontology exists
-        ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
+        ontology_path = Path(settings.ontology_dir).expanduser() / f"{ontology_id}.yaml"
         if not ontology_path.exists():
             raise HTTPException(
                 status_code=404,

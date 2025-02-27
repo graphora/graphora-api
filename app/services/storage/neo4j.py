@@ -1,5 +1,5 @@
 """Neo4j implementation of graph storage"""
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import logging
 import traceback
 from contextlib import asynccontextmanager
@@ -35,8 +35,7 @@ class Neo4jStorage(GraphStorageInterface):
             # Create the async driver
             self.driver = AsyncGraphDatabase.driver(
                 uri,
-                auth=(username, password),
-                database=database
+                auth=(username, password)
             )
             self.database = database
             self.max_retries = max_retries
@@ -45,8 +44,7 @@ class Neo4jStorage(GraphStorageInterface):
                 # Create a synchronous driver for testing
                 sync_driver = GraphDatabase.driver(
                     uri,
-                    auth=(username, password),
-                    database=database
+                    auth=(username, password)
                 )
                 try:
                     with sync_driver.session(database=database) as session:
@@ -70,7 +68,7 @@ class Neo4jStorage(GraphStorageInterface):
         """Get a Neo4j session with automatic cleanup"""
         session = None
         try:
-            session = await self.driver.session()
+            session = self.driver.session(database=self.database)
             yield session
         except (ServiceUnavailable, SessionExpired) as e:
             logger.error(f"Failed to create Neo4j session: {str(e)}")
@@ -112,57 +110,54 @@ class Neo4jStorage(GraphStorageInterface):
                 raise StorageError(f"Unexpected error: {str(e)}")
 
     def _build_node_query(self, node: BaseNode, transform_id: str) -> tuple[str, Dict]:
-        """Build Cypher query for node creation"""
-        labels = [node.type]
-        
+        """Build Cypher query for creating a node with properties"""
         # Extract properties excluding metadata
-        properties = {}
-        if hasattr(node, 'properties') and node.properties:
-            properties = {
-                k: v for k, v in node.properties.items()
-                if v is not None
-            }
-        
-        # Add transform ID and provenance
+        properties = {
+            k: v for k, v in node.properties.items()
+            if k not in ['id', 'type', 'transform_id']
+        }
+
+        # Add transform ID
         properties['transform_id'] = transform_id
+
+        # Add provenance if present
         if hasattr(node, 'provenance') and node.provenance:
-            properties['provenance'] = json.dumps(node.provenance.model_dump())
-        
-        return (
+            properties.update(node.provenance)
+
+        # Build labels string
+        labels = [node.type] if node.type else []
+
+        # Build query
+        query = (
             f"CREATE (n:{':'.join(labels)} {{id: $id}}) "
             "SET n += $properties "
-            "RETURN n",
-            {"id": node.id, "properties": properties}
+            "RETURN n"
         )
 
-    def _build_relationship_query(
-        self,
-        relationship: RelationshipInstance,
-        transform_id: str
-    ) -> tuple[str, Dict]:
-        """Build Cypher query for relationship creation"""
-        properties = {}
-        if hasattr(relationship, 'properties') and relationship.properties:
-            properties = {
-                k: v for k, v in relationship.properties.items()
-                if v is not None
-            }
+        return query, {
+            "id": node.id,
+            "properties": properties
+        }
+
+    def _build_relationship_query(self, relationship: Edge) -> Tuple[str, Dict[str, Any]]:
+        """Build Cypher query for creating a relationship"""
+        query = f"""
+        MATCH (source {{id: $source}}), (target {{id: $target}})
+        MERGE (source)-[r:{relationship.type}]->(target)
+        SET r += $properties
+        RETURN r
+        """
         
-        properties['transform_id'] = transform_id
-        if hasattr(relationship, 'provenance') and relationship.provenance:
-            properties['provenance'] = json.dumps(relationship.provenance.model_dump())
+        # Extract properties, excluding null values
+        properties = {k: v for k, v in relationship.properties.items() if v is not None}
         
-        return (
-            f"MATCH (source {{id: $source_id}}), (target {{id: $target_id}}) "
-            f"MERGE (source)-[r:{relationship.type}]->(target) "
-            "SET r += $properties "
-            "RETURN r",
-            {
-                "source_id": relationship.source_id,
-                "target_id": relationship.target_id,
-                "properties": properties
-            }
-        )
+        params = {
+            "source": relationship.source,
+            "target": relationship.target,
+            "properties": properties
+        }
+        
+        return query, params
 
     async def store_nodes(
         self,
@@ -182,8 +177,8 @@ class Neo4jStorage(GraphStorageInterface):
             try:
                 async def _execute_query():
                     async with self._get_session() as session:
-                        query = self._build_node_query(node, transform_id)
-                        await session.run(query)
+                        query, params = self._build_node_query(node, transform_id)
+                        await session.run(query, params)
 
                 await self._execute_with_retry(_execute_query)
                 items_processed += 1
@@ -241,8 +236,8 @@ class Neo4jStorage(GraphStorageInterface):
             try:
                 async def _execute_query():
                     async with self._get_session() as session:
-                        query = self._build_relationship_query(rel, transform_id)
-                        await session.run(query)
+                        query, params = self._build_relationship_query(rel)
+                        await session.run(query, params)
 
                 await self._execute_with_retry(_execute_query)
                 items_processed += 1
@@ -294,7 +289,9 @@ class Neo4jStorage(GraphStorageInterface):
                 RETURN c ORDER BY c.timestamp DESC LIMIT 1
                 """
                 result = await session.run(query, {"transform_id": transform_id})
-                records = await result.fetch_all()
+                records = []
+                async for record in result:
+                    records.append(record)
                 
                 if not records:
                     return None
@@ -375,7 +372,9 @@ class Neo4jStorage(GraphStorageInterface):
                 RETURN n
                 """
                 node_result = await session.run(node_query, {"transform_id": transform_id})
-                node_records = await node_result.fetch_all()
+                node_records = []
+                async for record in node_result:
+                    node_records.append(record)
                 
                 nodes = [
                     {
@@ -396,7 +395,9 @@ class Neo4jStorage(GraphStorageInterface):
                 RETURN source, r, target
                 """
                 rel_result = await session.run(rel_query, {"transform_id": transform_id})
-                rel_records = await rel_result.fetch_all()
+                rel_records = []
+                async for record in rel_result:
+                    rel_records.append(record)
                 
                 relationships = [
                     {
@@ -424,93 +425,74 @@ class Neo4jStorage(GraphStorageInterface):
     ) -> List[Node]:
         """Get all nodes with the specified property value"""
         async def _execute_query():
-            async with self._get_session() as session:
-                query = f"""
-                MATCH (n)
-                WHERE n.{property_name} = $value
-                RETURN n
-                """
-                result = await session.run(query, {"value": property_value})
-                records = await result.fetch_all()
-                
-                return [
-                    Node(
-                        id=str(record["n"].id),
-                        label=list(record["n"].labels)[0],
-                        type=record["n"].get("type", ""),
-                        properties=dict(record["n"].items())
-                    )
-                    for record in records
-                ]
+            query = f"""
+            MATCH (n)
+            WHERE n.{property_name} = $value
+            RETURN n
+            """
+            records = await self._execute_query(query, {"value": property_value})
+            
+            return [
+                Node(
+                    id=str(record[0].id),
+                    label=record[0].get("type", list(record[0].labels)[0]),  # Use type property if available, fallback to first label
+                    type=record[0].get("type", list(record[0].labels)[0]),  # Use same value for type
+                    properties={k: v for k, v in dict(record[0].items()).items() if k != "type"}
+                )
+                for record in records
+            ]
         
         return await self._execute_with_retry(_execute_query)
 
     async def get_relationships_between(
         self,
         source_id: str,
-        target_id: str,
-        relationship_type: Optional[str] = None
+        target_id: str
     ) -> List[Edge]:
         """Get all relationships between two nodes"""
-        async def _execute_query():
-            async with self._get_session() as session:
-                if relationship_type:
-                    query = f"""
-                    MATCH (source {{id: $source_id}})-[r:{relationship_type}]-(target {{id: $target_id}})
-                    RETURN r
-                    """
-                else:
-                    query = """
-                    MATCH (source {id: $source_id})-[r]-(target {id: $target_id})
-                    RETURN r
-                    """
-                
-                result = await session.run(
-                    query,
-                    {"source_id": source_id, "target_id": target_id}
-                )
-                records = await result.fetch_all()
-                
-                return [
-                    Edge(
-                        id=str(record["r"].id),
-                        source=source_id,
-                        target=target_id,
-                        type=type(record["r"]).__name__,
-                        properties=dict(record["r"].items())
-                    )
-                    for record in records
-                ]
-        
-        return await self._execute_with_retry(_execute_query)
+        query = """
+                MATCH (s)-[r]->(t)
+                WHERE elementId(s) = $source_id AND elementId(t) = $target_id
+                RETURN r
+                """
+        records = await self._execute_query(query, {
+            "source_id": source_id,
+            "target_id": target_id
+        })
+
+        edges = []
+        for record in records:
+            edges.append(Edge(
+                id=str(record[0].element_id),
+                source=str(record[0].start_node.element_id),
+                target=str(record[0].end_node.element_id),
+                type=record[0].type,
+                properties=dict(record[0].items())
+            ))
+        return edges
 
     async def get_relationships_between_nodes(
         self,
         node_ids: List[str]
     ) -> List[Edge]:
         """Get all relationships between a set of nodes"""
-        async def _execute_query():
-            async with self._get_session() as session:
-                query = """
-                MATCH (n)-[r]-(m)
-                WHERE n.id IN $node_ids AND m.id IN $node_ids
-                RETURN DISTINCT r, n, m
+        query = """
+                MATCH (s)-[r]->(t)
+                WHERE elementId(s) IN $node_ids AND elementId(t) IN $node_ids
+                RETURN r
                 """
-                result = await session.run(query, {"node_ids": node_ids})
-                records = await result.fetch_all()
-                
-                return [
-                    Edge(
-                        id=str(record["r"].id),
-                        source=record["n"]["id"],
-                        target=record["m"]["id"],
-                        type=type(record["r"]).__name__,
-                        properties=dict(record["r"].items())
-                    )
-                    for record in records
-                ]
-        
-        return await self._execute_with_retry(_execute_query)
+        records = await self._execute_query(query, {"node_ids": node_ids})
+
+        edges = []
+        for record in records:
+            edges.append(Edge(
+                id=str(record[0].element_id),
+                source=str(record[0].start_node.element_id),
+                target=str(record[0].end_node.element_id),
+                type=record[0].type,
+                properties=dict(record[0].items())
+            ))
+        return edges
 
     async def find_nodes_by_property_value(
         self,
@@ -521,32 +503,34 @@ class Neo4jStorage(GraphStorageInterface):
     ) -> List[Node]:
         """Find nodes with matching property value"""
         async def _execute_query():
-            async with self._get_session() as session:
-                if exact_match:
-                    query = f"""
-                    MATCH (n:{label})
-                    WHERE n.{property_name} = $value
-                    RETURN n
-                    """
-                else:
-                    query = f"""
-                    MATCH (n:{label})
-                    WHERE n.{property_name} CONTAINS $value
-                    RETURN n
-                    """
-                
-                result = await session.run(query, {"value": property_value})
-                records = await result.fetch_all()
-                
-                return [
-                    Node(
-                        id=str(record["n"].id),
-                        label=list(record["n"].labels)[0],
-                        type=record["n"].get("type", ""),
-                        properties=dict(record["n"].items())
-                    )
-                    for record in records
-                ]
+            if exact_match:
+                query = f"""
+                MATCH (n:{label})
+                WHERE n.{property_name} = $value
+                RETURN n
+                """
+            else:
+                query = f"""
+                MATCH (n:{label})
+                WHERE n.{property_name} =~ $value
+                RETURN n
+                """
+            
+            params = {
+                "value": property_value if exact_match else f"(?i).*{property_value}.*"
+            }
+            
+            records = await self._execute_query(query, params)
+            
+            return [
+                Node(
+                    id=str(record[0].id),
+                    label=record[0].get("type", list(record[0].labels)[0]),  # Use type property if available, fallback to first label
+                    type=record[0].get("type", list(record[0].labels)[0]),  # Use same value for type
+                    properties={k: v for k, v in dict(record[0].items()).items() if k != "type"}
+                )
+                for record in records
+            ]
         
         return await self._execute_with_retry(_execute_query)
 
@@ -559,87 +543,72 @@ class Neo4jStorage(GraphStorageInterface):
         include_relationships: bool = True
     ) -> List[Node]:
         """Find nodes with similar properties using fuzzy matching"""
-        async def _execute_query():
-            async with self._get_session() as session:
-                # Build dynamic property matching based on type
-                property_matches = []
-                params = {}
-                
-                for idx, (key, value) in enumerate(properties.items()):
-                    param_key = f"value{idx}"
-                    params[param_key] = value
-                    
-                    if isinstance(value, str):
-                        # Use Levenshtein for string properties
-                        property_matches.append(
-                            f"apoc.text.levenshteinSimilarity(n.{key}, ${param_key})"
-                        )
-                    else:
-                        # Exact match for non-string properties
-                        property_matches.append(
-                            f"CASE WHEN n.{key} = ${param_key} THEN 1.0 ELSE 0.0 END"
-                        )
-                
-                # Include relationship patterns if requested
-                relationship_score = ""
-                if include_relationships and properties.get("id"):
-                    relationship_score = """
-                    , size([
-                        (n)-[r]->(m) WHERE type(r) IN 
-                        [(source)-[sr]->() WHERE id(source) = $source_id | type(sr)]
-                    ]) * 1.0 / 
-                    CASE 
-                        WHEN size([(source)-[sr]->() WHERE id(source) = $source_id | type(sr)]) > 0 
-                        THEN size([(source)-[sr]->() WHERE id(source) = $source_id | type(sr)])
-                        ELSE 1 
-                    END as relationship_score
-                    """
-                    params["source_id"] = properties["id"]
-                
-                # Calculate weighted similarity score
-                query = f"""
-                MATCH (n:{label})
-                WITH n
-                {relationship_score}
-                WITH n,
-                     CASE 
-                        WHEN size([{', '.join(property_matches)}]) > 0
-                        THEN reduce(s = 0.0, x IN [{', '.join(property_matches)}] | s + x) / size([{', '.join(property_matches)}])
-                        ELSE 0.0
-                     END as property_score
-                     {', relationship_score' if include_relationships and properties.get('id') else ''}
-                WITH n, 
-                     CASE
-                        WHEN $include_relationships AND relationship_score IS NOT NULL
-                        THEN (property_score * 0.7 + relationship_score * 0.3)
-                        ELSE property_score
-                     END as similarity_score
-                WHERE similarity_score >= $threshold
-                RETURN n, similarity_score
-                ORDER BY similarity_score DESC
-                LIMIT $max_results
-                """
-                
-                params.update({
-                    "threshold": similarity_threshold,
-                    "max_results": max_results,
-                    "include_relationships": include_relationships
-                })
-                
-                result = await session.run(query, params)
-                records = await result.fetch_all()
-                
-                return [
-                    Node(
-                        id=str(record["n"].id),
-                        label=list(record["n"].labels)[0],
-                        type=record["n"].get("type", ""),
-                        properties=dict(record["n"].items())
-                    )
-                    for record in records
-                ]
-        
-        return await self._execute_with_retry(_execute_query)
+        # Build query parameters for each property
+        params = {
+            "include_relationships": include_relationships,
+            "threshold": similarity_threshold,
+            "max_results": max_results
+        }
+
+        # Add source_id parameter if available
+        has_source_id = bool(properties.get("id"))
+        if has_source_id:
+            params["source_id"] = properties["id"]
+
+        property_conditions = []
+        for idx, (key, value) in enumerate(properties.items()):
+            if key != "id":  # Skip id property for similarity calculation
+                param_key = f"value{idx}"
+                params[param_key] = str(value)  # Convert all values to strings
+                property_conditions.append(f"apoc.text.levenshteinSimilarity(toString(coalesce(n.{key}, '')), ${param_key})")
+
+        # Build final query with conditional relationship score calculation
+        query = f"""
+        MATCH (n:{label})
+        WITH n,
+             CASE 
+                WHEN size([{', '.join(property_conditions)}]) > 0
+                THEN reduce(s = 0.0, x IN [{', '.join(property_conditions)}] | s + x) / size([{', '.join(property_conditions)}])
+                ELSE 0.0
+             END as property_score
+        """
+
+        # Only add relationship score calculation if source_id is present
+        if has_source_id and include_relationships:
+            query += """
+            WITH n, property_score,
+                 size([(n)-[r]->() WHERE type(r) IN [(s)-[sr]->() WHERE elementId(s) = $source_id | type(sr)] | r]) * 1.0 /
+                 CASE 
+                    WHEN size([(s)-[sr]->() WHERE elementId(s) = $source_id | sr]) > 0 
+                    THEN size([(s)-[sr]->() WHERE elementId(s) = $source_id | sr])
+                    ELSE 1.0
+                 END as relationship_score
+            WITH n, property_score, relationship_score,
+                 property_score * 0.7 + relationship_score * 0.3 as similarity_score
+            """
+        else:
+            query += """
+            WITH n, property_score as similarity_score
+            """
+
+        query += """
+        WHERE similarity_score >= $threshold
+        RETURN n, similarity_score
+        ORDER BY similarity_score DESC
+        LIMIT $max_results
+        """
+
+        records = await self._execute_query(query, params)
+
+        return [
+            Node(
+                id=str(record[0].element_id),
+                label=list(record[0].labels)[0] if record[0].labels else None,
+                type=list(record[0].labels)[0] if record[0].labels else None,
+                properties=dict(record[0].items())
+            )
+            for record in records
+        ]
 
     async def create_node(
         self,
@@ -648,28 +617,22 @@ class Neo4jStorage(GraphStorageInterface):
     ) -> Node:
         """Create a new node"""
         async def _execute_query():
-            async with self._get_session() as session:
-                # Ensure node has an ID
-                if "id" not in properties:
-                    properties["id"] = str(uuid.uuid4())
-                
-                query = f"""
-                CREATE (n:{label} $props)
-                RETURN n
-                """
-                result = await session.run(query, {"props": properties})
-                records = await result.fetch_all()
-                
-                if not records:
-                    raise StorageError("Failed to create node")
-                
-                node_data = records[0]["n"]
-                return Node(
-                    id=str(node_data.id),
-                    label=list(node_data.labels)[0],
-                    type=node_data.get("type", ""),
-                    properties=dict(node_data.items())
-                )
+            query = f"""
+            CREATE (n:{label})
+            SET n = $properties
+            RETURN n
+            """
+            records = await self._execute_query(query, {
+                "properties": properties
+            })
+            
+            node_data = records[0][0]
+            return Node(
+                id=str(node_data.id),
+                label=list(node_data.labels)[0],
+                type=node_data.get("type", ""),
+                properties=dict(node_data.items())
+            )
         
         return await self._execute_with_retry(_execute_query)
 
@@ -680,28 +643,27 @@ class Neo4jStorage(GraphStorageInterface):
     ) -> Node:
         """Update an existing node"""
         async def _execute_query():
-            async with self._get_session() as session:
-                query = """
-                MATCH (n {id: $node_id})
-                SET n += $props
-                RETURN n
-                """
-                result = await session.run(
-                    query,
-                    {"node_id": node_id, "props": properties}
-                )
-                records = await result.fetch_all()
-                
-                if not records:
-                    raise StorageError(f"Node {node_id} not found")
-                
-                node_data = records[0]["n"]
-                return Node(
-                    id=str(node_data.id),
-                    label=list(node_data.labels)[0],
-                    type=node_data.get("type", ""),
-                    properties=dict(node_data.items())
-                )
+            query = """
+            MATCH (n)
+            WHERE id(n) = $id
+            SET n += $properties
+            RETURN n
+            """
+            records = await self._execute_query(query, {
+                "id": node_id,
+                "properties": properties
+            })
+            
+            if not records:
+                raise StorageError(f"Node {node_id} not found")
+            
+            node_data = records[0][0]
+            return Node(
+                id=str(node_data.id),
+                label=list(node_data.labels)[0],
+                type=node_data.get("type", ""),
+                properties=dict(node_data.items())
+            )
         
         return await self._execute_with_retry(_execute_query)
 
@@ -714,63 +676,53 @@ class Neo4jStorage(GraphStorageInterface):
     ) -> Edge:
         """Create a relationship between nodes"""
         async def _execute_query():
-            async with self._get_session() as session:
-                properties = properties or {}
-                if "id" not in properties:
-                    properties["id"] = str(uuid.uuid4())
-                
-                query = f"""
-                MATCH (source {{id: $source_id}}), (target {{id: $target_id}})
-                CREATE (source)-[r:{rel_type} $props]->(target)
-                RETURN r, source, target
-                """
-                result = await session.run(
-                    query,
-                    {
-                        "source_id": source_id,
-                        "target_id": target_id,
-                        "props": properties
-                    }
-                )
-                records = await result.fetch_all()
-                
-                if not records:
-                    raise StorageError("Failed to create relationship")
-                
-                record = records[0]
-                return Edge(
-                    id=str(record["r"].id),
-                    source=source_id,
-                    target=target_id,
-                    type=rel_type,
-                    properties=dict(record["r"].items())
-                )
+            query = """
+            MATCH (s), (t)
+            WHERE id(s) = $source_id AND id(t) = $target_id
+            CREATE (s)-[r:$type]->(t)
+            SET r = $properties
+            RETURN r
+            """
+            records = await self._execute_query(query, {
+                "source_id": source_id,
+                "target_id": target_id,
+                "type": rel_type,
+                "properties": properties or {}
+            })
+            
+            if not records:
+                raise StorageError("Failed to create relationship")
+            
+            rel_data = records[0][0]
+            return Edge(
+                id=str(rel_data.id),
+                source=str(rel_data.start_node.id),
+                target=str(rel_data.end_node.id),
+                type=rel_data.type,
+                properties=dict(rel_data.items())
+            )
         
         return await self._execute_with_retry(_execute_query)
 
     async def get_node_by_id(self, node_id: str) -> Optional[Node]:
         """Get a node by its ID"""
-        async def _execute_query():
-            async with self._get_session() as session:
-                query = """
-                MATCH (n {id: $node_id})
+        query = """
+                MATCH (n)
+                WHERE elementId(n) = $id
                 RETURN n
                 """
-                result = await session.run(query, {"node_id": node_id})
-                records = await result.fetch_all()
-                
-                if not records:
-                    return None
-                
-                node_data = records[0]["n"]
-                return Node(
-                    id=str(node_data.id),
-                    label=list(node_data.labels)[0],
-                    type=node_data.get("type", ""),
-                    properties=dict(node_data.items())
-                )
-        
-        return await self._execute_with_retry(_execute_query)
+        records = await self._execute_query(query, {"id": node_id})
+        if not records:
+            return None
+
+        record = records[0]
+        labels = list(record[0].labels) if record[0].labels else []
+        return Node(
+            id=str(record[0].element_id),
+            label=labels[0] if labels else None,
+            type=labels[0] if labels else None,
+            properties=dict(record[0].items())
+        )
 
     async def get_edges_between(
         self,
@@ -778,41 +730,72 @@ class Neo4jStorage(GraphStorageInterface):
         target_id: str
     ) -> List[Edge]:
         """Get all edges between two nodes"""
-        async def _execute_query():
-            async with self._get_session() as session:
-                query = """
-                MATCH (source {id: $source_id})-[r]-(target {id: $target_id})
-                RETURN r, source, target
+        query = """
+                MATCH (s)-[r]->(t)
+                WHERE elementId(s) = $source_id AND elementId(t) = $target_id
+                RETURN r
                 """
-                result = await session.run(
-                    query,
-                    {"source_id": source_id, "target_id": target_id}
-                )
-                records = await result.fetch_all()
-                
-                return [
-                    Edge(
-                        id=str(record["r"].id),
-                        source=source_id,
-                        target=target_id,
-                        type=type(record["r"]).__name__,
-                        properties=dict(record["r"].items())
-                    )
-                    for record in records
-                ]
-        
-        return await self._execute_with_retry(_execute_query)
+        records = await self._execute_query(query, {
+            "source_id": source_id,
+            "target_id": target_id
+        })
+
+        edges = []
+        for record in records:
+            edges.append(Edge(
+                id=str(record[0].element_id),
+                source=str(record[0].start_node.element_id),
+                target=str(record[0].end_node.element_id),
+                type=record[0].type,
+                properties=dict(record[0].items())
+            ))
+        return edges
 
     async def close(self):
-        """Close Neo4j connection"""
-        try:
-            await self.driver.close()
-            logger.info("Neo4j connection closed successfully")
-        except Exception as e:
-            logger.error(f"Error closing Neo4j connection: {str(e)}")
-            raise StorageError(f"Failed to close connection: {str(e)}")
-
+        """Close the database connection"""
+        if hasattr(self, 'driver'):
+            try:
+                await self.driver.close()
+            except Exception as e:
+                logger.error(f"Error closing Neo4j driver: {str(e)}")
+            finally:
+                self.driver = None
+    
+    async def __aenter__(self):
+        """Async context manager entry"""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit"""
+        await self.close()
+    
     def __del__(self):
-        """Cleanup on deletion"""
-        if hasattr(self, "driver"):
-            asyncio.create_task(self.close())
+        """Cleanup when object is deleted"""
+        try:
+            loop = asyncio.get_running_loop()
+            if not loop.is_closed():
+                loop.create_task(self.close())
+        except RuntimeError:
+            # No event loop running, which is fine during interpreter shutdown
+            pass
+
+    async def _execute_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Any]:
+        """Execute a Cypher query and return results"""
+        async with self._get_session() as session:
+            result = await session.run(query, parameters=params)
+            records = []
+            async for record in result:
+                records.append(record)
+            await result.consume()  # Ensure resources are released
+            return records
+
+    async def clear_all(self) -> None:
+        """Delete all nodes and relationships in the database"""
+        async def _execute_query():
+            async with self._get_session() as session:
+                # Delete all relationships first
+                await session.run("MATCH ()-[r]-() DELETE r")
+                # Then delete all nodes
+                await session.run("MATCH (n) DELETE n")
+        
+        await self._execute_with_retry(_execute_query)

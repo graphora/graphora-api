@@ -1,10 +1,12 @@
 """Functional tests for LLM-assisted conflict analysis"""
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 import asyncio
 from app.schemas.conflicts import ResolutionOption, ResolutionStrategy
 from app.main import app
 from fastapi.testclient import TestClient
+from app.dependencies import get_staging_storage, get_production_storage, get_merge_service
+from tests.unit.services.storage.test_graph_storage import MockGraphStorage
 
 client = TestClient(app)
 
@@ -16,8 +18,29 @@ def setup_event_loop():
     yield loop
     loop.close()
 
+@pytest.fixture(autouse=True)
+def mock_storage():
+    """Mock storage dependencies"""
+    mock_storage = MockGraphStorage()
+    
+    # Create a mock MergeService
+    mock_service = MagicMock()
+    mock_service.analyze_conflicts_with_llm = AsyncMock(
+        return_value={"total_conflicts": 2, "analyzed": 2}
+    )
+    
+    # Override dependencies
+    app.dependency_overrides[get_staging_storage] = lambda: mock_storage
+    app.dependency_overrides[get_production_storage] = lambda: mock_storage
+    app.dependency_overrides[get_merge_service] = lambda: mock_service
+    
+    yield mock_storage
+    
+    # Clean up
+    app.dependency_overrides.clear()
+
 @pytest.mark.asyncio
-async def test_analyze_conflicts_api():
+async def test_analyze_conflicts_api(mock_storage):
     """Test the analyze conflicts API endpoint"""
     # Mock the LLM analyzer
     mock_analyzer = AsyncMock()
@@ -45,7 +68,7 @@ async def test_analyze_conflicts_api():
     assert "analyzed" in result
 
 @pytest.mark.asyncio
-async def test_analyze_conflicts_with_no_ids():
+async def test_analyze_conflicts_with_no_ids(mock_storage):
     """Test analyzing conflicts without specifying IDs"""
     # Mock the LLM analyzer
     mock_analyzer = AsyncMock()

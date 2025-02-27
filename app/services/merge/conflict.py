@@ -1007,3 +1007,12 @@ class ConflictDetectionService:
                 )
             ]
         )
+
+    def _group_nodes_by_type(self, nodes: List[Node]) -> Dict[str, List[Node]]:
+        """Group nodes by their type"""
+        grouped = {}
+        for node in nodes:
+            if node.type not in grouped:
+                grouped[node.type] = []
+            grouped[node.type].append(node)
+        return grouped

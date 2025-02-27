@@ -4,8 +4,9 @@ import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import logging
-
-from redis import Redis
+import asyncio
+from redis.asyncio import Redis
+from redis.exceptions import ConnectionError, TimeoutError
 
 from app.services.merge.models import (
     MergeStage,
@@ -22,15 +23,50 @@ logger = logging.getLogger(__name__)
 class ProgressTracker:
     """Tracks progress of merge operations"""
     
-    def __init__(self, redis_client: Optional[Redis] = None):
+    def __init__(self, redis_client: Optional[Redis] = None, max_retries: int = 3):
         """Initialize progress tracker"""
         self.redis = redis_client or Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
-            db=settings.REDIS_DB
+            db=settings.REDIS_DB,
+            password=settings.REDIS_PASSWORD,
+            socket_timeout=5,  # 5 second timeout
+            socket_connect_timeout=5,
+            retry_on_timeout=True,
+            decode_responses=True  # Automatically decode responses to strings
         )
+        self.max_retries = max_retries
         self.process = psutil.Process()
-    
+        
+    async def __aenter__(self):
+        """Async context manager entry"""
+        await self.redis.ping()  # Test connection
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit"""
+        await self.close()
+        
+    async def close(self):
+        """Close Redis connection"""
+        if self.redis:
+            await self.redis.aclose()
+            self.redis = None
+            
+    async def _redis_operation(self, operation, *args, **kwargs) -> Any:
+        """Execute Redis operation with retries"""
+        if not self.redis:
+            raise RuntimeError("Redis client is not initialized")
+            
+        for attempt in range(self.max_retries):
+            try:
+                return await operation(*args, **kwargs)
+            except (ConnectionError, TimeoutError) as e:
+                if attempt == self.max_retries - 1:
+                    logger.error(f"Redis operation failed after {self.max_retries} attempts: {str(e)}")
+                    raise
+                await asyncio.sleep(1)  # Wait before retrying
+                
     def _get_redis_key(self, merge_id: str, suffix: str) -> str:
         """Get Redis key for merge data"""
         return f"merge:{merge_id}:{suffix}"
@@ -74,7 +110,8 @@ class ProgressTracker:
             )
             
             # Store in Redis
-            self.redis.set(
+            await self._redis_operation(
+                self.redis.set,
                 self._get_redis_key(merge_id, "status"),
                 status.model_dump_json()
             )
@@ -93,7 +130,8 @@ class ProgressTracker:
         """Start a new merge stage"""
         try:
             # Get current status
-            status_data = self.redis.get(
+            status_data = await self._redis_operation(
+                self.redis.get,
                 self._get_redis_key(merge_id, "status")
             )
             if not status_data:
@@ -104,7 +142,8 @@ class ProgressTracker:
             status.start_stage(stage)
             
             # Store updated status
-            self.redis.set(
+            await self._redis_operation(
+                self.redis.set,
                 self._get_redis_key(merge_id, "status"),
                 status.model_dump_json()
             )
@@ -126,7 +165,8 @@ class ProgressTracker:
         """Update progress for a merge stage"""
         try:
             # Get current status
-            status_data = self.redis.get(
+            status_data = await self._redis_operation(
+                self.redis.get,
                 self._get_redis_key(merge_id, "status")
             )
             if not status_data:
@@ -153,7 +193,8 @@ class ProgressTracker:
             status.update_resource_metrics(resource_metrics)
             
             # Store updated status
-            self.redis.set(
+            await self._redis_operation(
+                self.redis.set,
                 self._get_redis_key(merge_id, "status"),
                 status.model_dump_json()
             )
@@ -170,7 +211,8 @@ class ProgressTracker:
         """Complete a merge stage"""
         try:
             # Get current status
-            status_data = self.redis.get(
+            status_data = await self._redis_operation(
+                self.redis.get,
                 self._get_redis_key(merge_id, "status")
             )
             if not status_data:
@@ -190,7 +232,8 @@ class ProgressTracker:
                 status.end_time = datetime.now()
             
             # Store updated status
-            self.redis.set(
+            await self._redis_operation(
+                self.redis.set,
                 self._get_redis_key(merge_id, "status"),
                 status.model_dump_json()
             )
@@ -207,7 +250,8 @@ class ProgressTracker:
         """Mark merge as failed"""
         try:
             # Get current status
-            status_data = self.redis.get(
+            status_data = await self._redis_operation(
+                self.redis.get,
                 self._get_redis_key(merge_id, "status")
             )
             if not status_data:
@@ -229,7 +273,8 @@ class ProgressTracker:
                 status.stages_progress[status.current_stage].metrics.update(metadata)
             
             # Store updated status
-            self.redis.set(
+            await self._redis_operation(
+                self.redis.set,
                 self._get_redis_key(merge_id, "status"),
                 status.model_dump_json()
             )
@@ -247,37 +292,27 @@ class ProgressTracker:
         """Mark a merge stage as failed"""
         try:
             # Get current status
-            status_data = self.redis.get(
+            status_data = await self._redis_operation(
+                self.redis.get,
                 self._get_redis_key(merge_id, "status")
             )
             if not status_data:
                 return
-                
-            # Parse status
-            status = MergeProgress.model_validate_json(status_data)
             
-            # Update stage progress
-            if stage in status.stages_progress:
-                stage_progress = status.stages_progress[stage]
-                stage_progress.status = StageStatus.FAILED
-                stage_progress.end_time = datetime.now(timezone.utc)
-                stage_progress.error_details = {
-                    "error": error,
-                    **(metadata or {})
-                }
-                
-            # Update overall status
-            status.overall_status = MergeStatus.FAILED
-            status.error = error
-            status.end_time = datetime.now(timezone.utc)
+            # Parse and update status
+            status = MergeProgress.model_validate_json(status_data)
+            status.fail_stage(stage, error)
+            
+            # Update stage metrics
+            if metadata and stage in status.stages_progress:
+                status.stages_progress[stage].metrics.update(metadata)
             
             # Store updated status
-            self.redis.set(
+            await self._redis_operation(
+                self.redis.set,
                 self._get_redis_key(merge_id, "status"),
                 status.model_dump_json()
             )
-            
-            logger.error(f"Merge stage {stage} failed for merge {merge_id}: {error}")
             
         except Exception as e:
             logger.error(f"Failed to mark merge stage as failed: {str(e)}")
@@ -285,7 +320,8 @@ class ProgressTracker:
     async def get_progress(self, merge_id: str) -> Optional[MergeProgress]:
         """Get current progress of a merge operation"""
         try:
-            status_data = self.redis.get(
+            status_data = await self._redis_operation(
+                self.redis.get,
                 self._get_redis_key(merge_id, "status")
             )
             if not status_data:

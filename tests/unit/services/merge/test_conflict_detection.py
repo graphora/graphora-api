@@ -8,6 +8,7 @@ from app.schemas.conflicts import Conflict, ConflictType, ConflictSeverity, Reso
 from app.services.storage.models import Node as StorageNode, Edge as StorageEdge
 from app.schemas.graph import GraphResponse, Node, Edge
 from tests.unit.services.storage.test_graph_storage import MockGraphStorage
+from app.services.merge.progress import ProgressTracker
 
 # Mock BAML responses
 class MockPropertyConflictAnalysis:
@@ -53,8 +54,18 @@ def merge_service_with_conflicts(mock_baml):
     staging_storage = MockGraphStorage()
     prod_storage = MockGraphStorage()
     
+    # Create mock progress tracker
+    progress_tracker = AsyncMock(spec=ProgressTracker)
+    progress_tracker.start_merge_stage = AsyncMock()
+    progress_tracker.update_merge_progress = AsyncMock()
+    progress_tracker.complete_merge_stage = AsyncMock()
+    progress_tracker.fail_merge_stage = AsyncMock()
+    
     # Create service with mock storage
-    service = MergeService(staging_storage=staging_storage, prod_storage=prod_storage)
+    service = MergeService(storage=staging_storage, production_storage=prod_storage, progress_tracker=progress_tracker)
+    
+    # Add test merge_id attribute
+    service.merge_id = "test-merge-id"
     
     # Add test data with known conflicts
     
@@ -179,7 +190,7 @@ class TestConflictDetection:
         )
         
         # Act
-        conflicts = await merge_service_with_conflicts.conflict_detection_service.detect_relationship_conflicts(
+        conflicts = await merge_service_with_conflicts.conflict_detection.detect_relationship_conflicts(
             staging_edge,
             production_edge,
             "test-merge-id"

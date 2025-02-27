@@ -1,20 +1,18 @@
-"""Service for handling merge operations"""
+"""Service for handling graph merge operations"""
 import uuid
 import time
 import logging
 import asyncio
-import yaml
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Set, Tuple
 from datetime import datetime
-import pytz
 import json
 import redis.asyncio as redis
 from app.config import settings
 from app.schemas.conflicts import Conflict, ConflictSeverity, ConflictType, ResolutionOption, ResolutionStrategy
 from app.services.storage.interface import GraphStorageInterface
 from app.services.storage.models import Node, Edge
-from app.schemas.graph import GraphResponse
+from app.schemas.graph import Node as SchemaNode, Edge as SchemaEdge, GraphResponse
 from app.services.merge.conflict import ConflictDetectionService
 from app.services.merge.models import (
     MergeStage,
@@ -31,6 +29,15 @@ from app.services.merge.progress import ProgressTracker
 from prefect import flow, task
 from app.services.merge.resolution_pipeline import build_resolution_pipeline
 from app.services.merge.llm_analyzer import LLMConflictAnalyzer
+from app.services.merge.tasks import (
+    start_stage,
+    complete_merge_stage,
+    fail_merge,
+    map_production_entities,
+    detect_merge_conflicts
+)
+from app.services.ontology import load_ontology
+from prefect.cache_policies import NO_CACHE
 
 try:
     import baml as b
@@ -49,25 +56,25 @@ async def extract_staging_graph(
     transform_id: str
 ) -> GraphResponse:
     """
-    Extract complete graph with transform_id from staging database.
+    Extract graph from staging area
     
     Args:
         storage: Graph storage interface
-        transform_id: ID of the transform to extract nodes for
+        transform_id: Transform ID to extract
         
     Returns:
-        GraphResponse containing nodes and relationships
+        GraphResponse containing nodes and edges
     """
+    start_time = time.time()
+    
     try:
-        start_time = time.time()
-        
         # Extract nodes with transform_id
-        nodes = await storage.get_nodes_by_property(
+        storage_nodes = await storage.get_nodes_by_property(
             property_name="transform_id",
             property_value=transform_id
         )
         
-        if not nodes:
+        if not storage_nodes:
             logger.warning(f"No nodes found with transform_id {transform_id}")
             return GraphResponse(
                 nodes=[],
@@ -76,9 +83,30 @@ async def extract_staging_graph(
                 total_edges=0
             )
         
+        # Convert storage nodes to schema nodes
+        nodes = [
+            SchemaNode(
+                id=str(node.id),
+                label=node.label,
+                type=node.type,
+                properties=node.properties
+            ) for node in storage_nodes
+        ]
+        
         # Extract relationships between these nodes
-        node_ids = [node.id for node in nodes]
-        edges = await storage.get_relationships_between_nodes(node_ids)
+        node_ids = [node.id for node in storage_nodes]
+        storage_edges = await storage.get_relationships_between_nodes(node_ids)
+        
+        # Convert storage edges to schema edges
+        edges = [
+            SchemaEdge(
+                id=str(edge.id),
+                source=str(edge.source),
+                target=str(edge.target),
+                type=edge.type,
+                properties=edge.properties
+            ) for edge in storage_edges
+        ]
         
         # Calculate metrics
         duration_ms = (time.time() - start_time) * 1000
@@ -98,7 +126,7 @@ async def extract_staging_graph(
         logger.error(f"Failed to extract staging graph: {str(e)}")
         raise
 
-@task(name="map_production_entities")
+@task(name="map_production_entities", cache_policy=NO_CACHE)
 async def map_production_entities(
     storage: GraphStorageInterface,
     staging_graph: GraphResponse,
@@ -149,7 +177,7 @@ async def map_production_entities(
 
 async def get_matching_nodes(
     storage: GraphStorageInterface,
-    node: Node,
+    node: SchemaNode,
     similarity_threshold: float
 ) -> EntityMatch:
     """Find matching nodes in production based on node type and properties"""
@@ -205,96 +233,75 @@ async def get_matching_nodes(
         logger.error(f"Failed to get matching nodes: {str(e)}")
         raise
 
-@task(name="validate_graph")
+@task(name="validate_graph", cache_policy=NO_CACHE)
 async def validate_graph(
     graph: GraphResponse,
     ontology_id: str,
-    ontology_dir: str = settings.ONTOLOGY_DIR
-) -> ValidationResult:
-    """
-    Validate graph against ontology requirements.
-    
-    Args:
-        graph: Graph to validate
-        ontology_id: ID of the ontology to validate against
-        ontology_dir: Directory containing ontology files
-        
-    Returns:
-        ValidationResult containing validation details
-    """
+    progress_tracker: ProgressTracker
+) -> List[ValidationIssue]:
+    """Validate graph against ontology"""
     try:
-        start_time = time.time()
-        
         # Load ontology
-        ontology = await load_ontology(ontology_id, ontology_dir)
+        ontology = await load_ontology(ontology_id)
         
-        issues = []
-        critical_count = 0
-        warning_count = 0
-        info_count = 0
+        # Define internal node types to skip validation
+        INTERNAL_NODE_TYPES = {"Checkpoint"}
         
-        # Check nodes against ontology definitions
+        # Validate nodes
         for node in graph.nodes:
-            node_issues = validate_node(node, ontology)
-            issues.extend(node_issues)
-            
-            critical_count += sum(1 for i in node_issues if i.severity == ValidationSeverity.CRITICAL)
-            warning_count += sum(1 for i in node_issues if i.severity == ValidationSeverity.WARNING)
-            info_count += sum(1 for i in node_issues if i.severity == ValidationSeverity.INFO)
-        
-        # Check for orphaned nodes
-        orphaned_nodes = find_orphaned_nodes(graph)
-        if orphaned_nodes:
-            issues.append(ValidationIssue(
-                type=ValidationIssueType.ORPHANED_NODE,
-                message=f"Found {len(orphaned_nodes)} nodes with no relationships",
-                affected_ids=orphaned_nodes,
-                severity=ValidationSeverity.WARNING,
-                metadata={"count": len(orphaned_nodes)}
-            ))
-            warning_count += 1
-        
-        # Check relationship constraints
-        relationship_issues = validate_relationships(graph, ontology)
-        issues.extend(relationship_issues)
-        
-        critical_count += sum(1 for i in relationship_issues if i.severity == ValidationSeverity.CRITICAL)
-        warning_count += sum(1 for i in relationship_issues if i.severity == ValidationSeverity.WARNING)
-        info_count += sum(1 for i in relationship_issues if i.severity == ValidationSeverity.INFO)
-        
-        duration_ms = (time.time() - start_time) * 1000
-        
-        return ValidationResult(
-            valid=critical_count == 0,
-            issues=issues,
-            critical_count=critical_count,
-            warning_count=warning_count,
-            info_count=info_count,
-            total_nodes=len(graph.nodes),
-            total_edges=len(graph.edges),
-            validation_time_ms=duration_ms,
-            metadata={
-                "ontology_id": ontology_id
+            # Skip validation for internal node types
+            if node.type in INTERNAL_NODE_TYPES:
+                continue
+                
+            if node.type not in ontology.get("entities", {}):
+                raise ValueError(f"Invalid node type: {node.type}")
+                
+            # Validate properties
+            entity_def = ontology["entities"][node.type]
+            required_props = {
+                name for name, prop in entity_def.get("properties", {}).items()
+                if prop.get("required", False)
             }
-        )
+            
+            missing_props = required_props - set(node.properties.keys())
+            if missing_props:
+                raise ValueError(
+                    f"Node {node.id} missing required properties: {missing_props}"
+                )
+                
+        # Validate edges
+        for edge in graph.edges:
+            source_type = next(
+                (n.type for n in graph.nodes if n.id == edge.source),
+                None
+            )
+            target_type = next(
+                (n.type for n in graph.nodes if n.id == edge.target),
+                None
+            )
+            
+            if not source_type or not target_type:
+                raise ValueError(f"Edge {edge.id} has invalid source or target node")
+                
+            # Skip validation for edges connected to internal nodes
+            if source_type in INTERNAL_NODE_TYPES or target_type in INTERNAL_NODE_TYPES:
+                continue
+                
+            # Check if relationship type exists in ontology
+            if edge.type not in ontology.get("relationships", {}):
+                raise ValueError(f"Invalid relationship type: {edge.type}")
+                
+            # Check if relationship is valid between these node types
+            rel_def = ontology["relationships"][edge.type]
+            if source_type != rel_def.get("source") or target_type != rel_def.get("target"):
+                raise ValueError(
+                    f"Invalid relationship {edge.type} between {source_type} and {target_type}"
+                )
+                
+        return True
         
     except Exception as e:
         logger.error(f"Failed to validate graph: {str(e)}")
-        raise
-
-async def load_ontology(ontology_id: str, ontology_dir: str) -> Dict[str, Any]:
-    """Load ontology definition from file"""
-    try:
-        ontology_path = Path(ontology_dir).expanduser() / f"{ontology_id}.yaml"
-        
-        if not ontology_path.exists():
-            raise ValueError(f"Ontology {ontology_id} not found at {ontology_path}")
-            
-        with open(ontology_path, 'r') as f:
-            return yaml.safe_load(f)
-            
-    except Exception as e:
-        logger.error(f"Failed to load ontology: {str(e)}")
         raise
 
 def find_orphaned_nodes(graph: GraphResponse) -> List[str]:
@@ -311,7 +318,7 @@ def find_orphaned_nodes(graph: GraphResponse) -> List[str]:
         if node.id not in connected_nodes
     ]
 
-def validate_node(node: Node, ontology: Dict[str, Any]) -> List[ValidationIssue]:
+def validate_node(node: SchemaNode, ontology: Dict[str, Any]) -> List[ValidationIssue]:
     """Validate a node against ontology definition"""
     issues = []
     
@@ -500,7 +507,7 @@ async def complete_merge_stage(
         metadata = {}
         
     # Update stage completion time
-    metadata['completed_at'] = datetime.now(pytz.utc).isoformat()
+    metadata['completed_at'] = datetime.now().isoformat()
     
     # Mark stage as complete
     await progress_tracker.complete_merge_stage(
@@ -598,8 +605,7 @@ async def merge_flow(
     merge_id: str,
     session_id: str,
     transform_id: str,
-    storage: GraphStorageInterface,
-    progress_tracker: ProgressTracker
+    ontology_id: Optional[str] = None
 ) -> None:
     """
     Prefect flow for graph merge process.
@@ -608,6 +614,13 @@ async def merge_flow(
     observability and retry capabilities.
     """
     try:
+        # Initialize services
+        from app.services.storage.neo4j import Neo4jStorage
+        from app.services.merge.progress import ProgressTracker
+        
+        storage = Neo4jStorage()
+        progress_tracker = ProgressTracker()
+        
         # Extract Stage
         await start_stage(merge_id, MergeStage.EXTRACT, progress_tracker)
         
@@ -641,10 +654,14 @@ async def merge_flow(
             name="validate_graph",
             retries=2,
             retry_delay_seconds=5
-        )(graph, session_id, settings.ONTOLOGY_DIR)
+        )(graph, ontology_id, progress_tracker) if ontology_id else None
         
         # Wait for both tasks to complete
-        mapping, validation = await asyncio.gather(mapping_task, validation_task)
+        if validation_task:
+            mapping, validation = await asyncio.gather(mapping_task, validation_task)
+        else:
+            mapping = await mapping_task
+            validation = True  # Skip validation if no ontology_id provided
         
         await complete_merge_stage(
             merge_id,
@@ -654,19 +671,19 @@ async def merge_flow(
                 "total_entities": mapping.total_entities,
                 "matched_entities": mapping.matched_entities,
                 "mapping_time_ms": mapping.mapping_time_ms,
-                "validation_result": validation.model_dump(),
-                "is_valid": validation.valid
+                "validation_result": validation,
+                "is_valid": validation
             }
         )
         
-        if not validation.valid:
+        if not validation:
             error_msg = "Graph validation failed with critical issues"
             logger.error(error_msg)
             await fail_merge(
                 merge_id,
                 error_msg,
                 progress_tracker,
-                validation.model_dump()
+                validation
             )
             return
             
@@ -694,22 +711,39 @@ async def merge_flow(
         logger.error(error_msg)
         await fail_merge(merge_id, error_msg, progress_tracker)
         raise
+    finally:
+        # Clean up resources
+        if 'storage' in locals():
+            await storage.close()
+        if 'progress_tracker' in locals() and hasattr(progress_tracker, 'close'):
+            await progress_tracker.close()
 
 class MergeService:
-    """Service for managing merge operations"""
+    """Service for handling graph merge operations"""
     
-    def __init__(self, staging_storage: GraphStorageInterface, prod_storage: GraphStorageInterface):
-        """Initialize merge service"""
-        self.staging_storage = staging_storage  # For staging graph operations
-        self.prod_storage = prod_storage     # For production graph operations
-        self.progress_tracker = ProgressTracker()
-        self.merge_id = "test-merge-id"  # Default merge ID for testing
-        self.conflict_detection_service = ConflictDetectionService(prod_storage)
-    
+    def __init__(
+        self,
+        storage: GraphStorageInterface,
+        production_storage: GraphStorageInterface,
+        progress_tracker: ProgressTracker
+    ):
+        """Initialize merge service
+        
+        Args:
+            storage: Storage interface for staging data
+            production_storage: Storage interface for production data
+            progress_tracker: Progress tracking service
+        """
+        self.storage = storage  # Staging storage
+        self.production_storage = production_storage  # Production storage
+        self.progress_tracker = progress_tracker
+        self.conflict_detection = ConflictDetectionService(production_storage)
+
     async def start_merge_flow(
         self,
         session_id: str,
-        transform_id: str
+        transform_id: str,
+        ontology_id: Optional[str] = None
     ) -> str:
         """
         Start a new merge flow.
@@ -717,6 +751,7 @@ class MergeService:
         Args:
             session_id: ID of the session
             transform_id: ID of the transform to merge
+            ontology_id: Optional ID of the ontology to validate against
             
         Returns:
             str: Unique merge ID for tracking
@@ -733,8 +768,7 @@ class MergeService:
                 merge_id=merge_id,
                 session_id=session_id,
                 transform_id=transform_id,
-                storage=self.staging_storage,
-                progress_tracker=self.progress_tracker
+                ontology_id=ontology_id
             )
             
             logger.info(f"Started merge flow {merge_id}")
@@ -759,7 +793,7 @@ class MergeService:
         
         try:
             # Extract staging graph
-            staging_graph = await extract_staging_graph(self.staging_storage, transform_id)
+            staging_graph = await extract_staging_graph(self.storage, transform_id)
             
             # Get production entity matches
             await self.progress_tracker.update_merge_progress(
@@ -769,7 +803,7 @@ class MergeService:
                 {"task": "entity_mapping"}
             )
             entity_mapping_result = await map_production_entities(
-                self.prod_storage,
+                self.storage,
                 staging_graph,
                 similarity_threshold=0.7
             )
@@ -862,7 +896,7 @@ class MergeService:
             # Get production nodes
             for production_id in production_ids:
                 # Get production node
-                production_node = await self.prod_storage.get_node_by_id(production_id)
+                production_node = await self.production_storage.get_node_by_id(production_id)
                 if not production_node:
                     continue
                     
@@ -879,38 +913,15 @@ class MergeService:
 
     async def detect_property_conflicts(
         self,
-        staging_node: Node,
-        production_node: Node,
+        staging_node: SchemaNode,
+        production_node: SchemaNode,
         merge_id: str
     ) -> List[Conflict]:
         """Detect property conflicts between two nodes"""
-        # Convert storage.models.Node to Node if needed
-        if not hasattr(staging_node, 'label') and hasattr(staging_node, 'type'):
-            # Convert from storage model to schema model
-            staging_node_schema = Node(
-                id=staging_node.id,
-                label=staging_node.type,
-                type=staging_node.type,
-                properties=staging_node.properties
-            )
-        else:
-            staging_node_schema = staging_node
-            
-        if not hasattr(production_node, 'label') and hasattr(production_node, 'type'):
-            # Convert from storage model to schema model
-            production_node_schema = Node(
-                id=production_node.id,
-                label=production_node.type,
-                type=production_node.type,
-                properties=production_node.properties
-            )
-        else:
-            production_node_schema = production_node
-            
         # Use conflict detection service to detect property conflicts
-        return await self.conflict_detection_service.detect_property_conflicts(
-            staging_node_schema,
-            production_node_schema,
+        return await self.conflict_detection.detect_property_conflicts(
+            staging_node,
+            production_node,
             merge_id
         )
 
@@ -921,7 +932,7 @@ class MergeService:
     ) -> List[Conflict]:
         """Detect conflicts in relationships between staging and production"""
         conflicts = []
-        conflict_service = ConflictDetectionService(self.prod_storage)
+        conflict_service = ConflictDetectionService(self.production_storage)
         merge_id = self.merge_id
         
         # Process each edge in staging graph
@@ -939,7 +950,7 @@ class MergeService:
             for source_id in source_matches:
                 for target_id in target_matches:
                     # Get production relationships
-                    prod_edges = await self.prod_storage.get_relationships_between(
+                    prod_edges = await self.production_storage.get_relationships_between(
                         source_id,
                         target_id,
                         staging_edge.type
@@ -947,34 +958,10 @@ class MergeService:
                     
                     # Detect conflicts for each relationship
                     for prod_edge in prod_edges:
-                        # Convert storage.models.Edge to Edge if needed
-                        staging_edge_schema = staging_edge
-                        prod_edge_schema = prod_edge
-                        
-                        if not hasattr(staging_edge, 'source') and hasattr(staging_edge, 'from_node'):
-                            # Convert from storage model to schema model
-                            staging_edge_schema = Edge(
-                                id=staging_edge.id,
-                                source=staging_edge.from_node,
-                                target=staging_edge.to_node,
-                                type=staging_edge.type,
-                                properties=staging_edge.properties
-                            )
-                            
-                        if not hasattr(prod_edge, 'source') and hasattr(prod_edge, 'from_node'):
-                            # Convert from storage model to schema model
-                            prod_edge_schema = Edge(
-                                id=prod_edge.id,
-                                source=prod_edge.from_node,
-                                target=prod_edge.to_node,
-                                type=prod_edge.type,
-                                properties=prod_edge.properties
-                            )
-                        
                         # Detect conflicts
                         edge_conflicts = await conflict_service.detect_relationship_conflicts(
-                            staging_edge_schema,
-                            prod_edge_schema,
+                            staging_edge,
+                            prod_edge,
                             merge_id
                         )
                         conflicts.extend(edge_conflicts)
@@ -1404,3 +1391,73 @@ class MergeService:
         # Set TTL for cleanup (30 days)
         ttl = 30 * 24 * 60 * 60  # 30 days in seconds
         await redis_client.expire(key, ttl)
+
+    async def start_merge_process(
+        self,
+        merge_id: str,
+        graph: GraphResponse,
+        ontology_id: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Start a new merge process"""
+        try:
+            # Load and validate ontology
+            ontology_path = Path(settings.ontology_dir).expanduser() / f"{ontology_id}.yaml"
+            ontology = load_ontology(ontology_path)
+            
+            # Start validation stage
+            await start_stage(merge_id, MergeStage.VALIDATION, self.progress_tracker)
+            
+            # TODO: Validate graph against ontology
+            
+            await complete_merge_stage(
+                merge_id,
+                MergeStage.VALIDATION,
+                self.progress_tracker,
+                metadata={
+                    "ontology_id": ontology_id,
+                    "node_count": len(graph.nodes),
+                    "edge_count": len(graph.edges)
+                }
+            )
+            
+            # Start entity mapping
+            await start_stage(merge_id, MergeStage.ENTITY_MAPPING, self.progress_tracker)
+            
+            mapping_result = await map_production_entities(
+                self.storage,
+                graph
+            )
+            
+            await complete_merge_stage(
+                merge_id,
+                MergeStage.ENTITY_MAPPING,
+                self.progress_tracker,
+                metadata={
+                    "total_entities": mapping_result.total_entities,
+                    "matched_entities": mapping_result.matched_entities,
+                    "mapping_time_ms": mapping_result.mapping_time_ms
+                }
+            )
+            
+            # Start conflict detection
+            await start_stage(merge_id, MergeStage.CONFLICT_DETECTION, self.progress_tracker)
+            
+            await detect_merge_conflicts(
+                merge_id,
+                graph,
+                mapping_result,
+                self.storage,
+                self.progress_tracker
+            )
+            
+            await complete_merge_stage(
+                merge_id,
+                MergeStage.CONFLICT_DETECTION,
+                self.progress_tracker
+            )
+            
+        except Exception as e:
+            logger.error(f"Merge process failed: {str(e)}")
+            await fail_merge(merge_id, str(e), self.progress_tracker)
+            raise
