@@ -7,6 +7,12 @@ from pydantic import Field
 class Settings(BaseSettings):
     """Application settings loaded from environment variables with validation."""
     
+    # Test mode flag
+    test_mode: bool = Field(
+        default=False,
+        description="Whether the application is running in test mode"
+    )
+    
     # API Settings
     API_V1_STR: str = Field(
         default="/api/v1",
@@ -275,6 +281,13 @@ class Settings(BaseSettings):
         default="INFO",
         description="Application logging level"
     )
+    
+    @property
+    def ontology_dir(self) -> str:
+        """Get the ontology directory path based on mode"""
+        if self.test_mode:
+            return "/tmp/graphit-test/ontologies"
+        return self.ONTOLOGY_DIR
     
     model_config = SettingsConfigDict(
         env_file=".env",

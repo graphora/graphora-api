@@ -198,8 +198,19 @@ class TestStorageMergeIntegration:
         staging_storage = MockGraphStorage()
         prod_storage = MockGraphStorage()
         
+        # Create a mock progress tracker
+        mock_progress_tracker = AsyncMock()
+        mock_progress_tracker.initialize_merge = AsyncMock()
+        mock_progress_tracker.start_merge_stage = AsyncMock()
+        mock_progress_tracker.update_merge_progress = AsyncMock()
+        mock_progress_tracker.complete_merge_stage = AsyncMock()
+        
         # Create service
-        service = MergeService(staging_storage=staging_storage, prod_storage=prod_storage)
+        service = MergeService(
+            storage=staging_storage, 
+            production_storage=prod_storage,
+            progress_tracker=mock_progress_tracker
+        )
         
         # Add test data
         staging_storage.add_test_node(
@@ -207,11 +218,11 @@ class TestStorageMergeIntegration:
         )
         
         # Verify service can access storage
-        assert service.staging_storage is not None
-        assert service.prod_storage is not None
+        assert service.storage is not None
+        assert service.production_storage is not None
         
         # Test storage operations
-        nodes = await service.staging_storage.get_nodes_by_property("name", "Test Node")
+        nodes = await service.storage.get_nodes_by_property("name", "Test Node")
         assert len(nodes) == 1
         assert nodes[0].id == "test1"
     

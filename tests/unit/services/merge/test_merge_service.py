@@ -140,12 +140,15 @@ def merge_service(mock_progress_tracker, mock_conflict_detection_service, mock_l
     
     # Create service with mocks
     service = MergeService(
-        staging_storage=staging_storage,
-        prod_storage=prod_storage
+        storage=staging_storage,
+        production_storage=prod_storage,
+        progress_tracker=mock_progress_tracker
     )
     
+    # Add merge_id attribute for tests
+    service.merge_id = "test-merge-id"
+    
     # Inject mocked dependencies
-    service.progress_tracker = mock_progress_tracker
     service.conflict_detection_service = mock_conflict_detection_service
     service.llm_analyzer = mock_llm_analyzer
     
@@ -234,7 +237,17 @@ class TestMergeService:
             mock_extract.return_value = staging_graph
             with patch('app.services.merge.service.map_production_entities', new_callable=AsyncMock) as mock_map:
                 mock_map.return_value = entity_mapping
-                result = await merge_service.detect_conflicts("merge-123", "test_id")
+                # Mock the _analyze_property_conflict method to avoid BAML client error
+                with patch('app.services.merge.conflict.ConflictDetectionService._analyze_property_conflict', 
+                          new_callable=AsyncMock) as mock_analyze:
+                    mock_analyze.return_value = {
+                        "recommended_strategy": "keep_production",
+                        "confidence": 0.9,
+                        "explanation": "Production value is more complete",
+                        "can_auto_resolve": True,
+                        "potential_risks": []
+                    }
+                    result = await merge_service.detect_conflicts("merge-123", "test_id")
         
         # Assert
         assert merge_service.progress_tracker.update_merge_progress.called

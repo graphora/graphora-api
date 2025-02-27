@@ -51,6 +51,13 @@ class ResolutionOption(BaseModel):
     requires_review: bool = Field(default=True, description="Whether this resolution needs human review")
     auto_resolvable: bool = Field(default=False, description="Whether this can be auto-resolved")
 
+class ConflictResolutionRequest(BaseModel):
+    """Request model for conflict resolution"""
+    resolution_id: str = Field(..., description="ID of the chosen resolution option")
+    resolution_data: Optional[Dict[str, Any]] = Field(default=None, description="Additional data for resolution")
+    comments: Optional[str] = Field(default=None, description="Optional comments about the resolution")
+    auto_resolve_similar: bool = Field(default=False, description="Whether to auto-resolve similar conflicts")
+
 class Conflict(BaseModel):
     """Represents a conflict between staging and production graphs"""
     id: str = Field(..., description="Unique identifier for this conflict")

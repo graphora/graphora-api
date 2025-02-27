@@ -34,6 +34,18 @@ def mock_redis_client():
     return client
 
 @pytest.fixture
+def mock_progress_tracker():
+    """Mock progress tracker for testing"""
+    tracker = AsyncMock()
+    tracker.initialize_merge = AsyncMock()
+    tracker.start_merge_stage = AsyncMock()
+    tracker.update_merge_progress = AsyncMock()
+    tracker.complete_merge_stage = AsyncMock()
+    tracker.fail_merge = AsyncMock()
+    tracker.get_progress = AsyncMock()
+    return tracker
+
+@pytest.fixture
 def sample_conflicts():
     return [
         Conflict(
@@ -103,10 +115,10 @@ def sample_conflicts():
 
 class TestConflictResolution:
     @pytest.mark.asyncio
-    async def test_store_conflicts(self, mock_storage, mock_redis_client, sample_conflicts):
+    async def test_store_conflicts(self, mock_storage, mock_redis_client, sample_conflicts, mock_progress_tracker):
         """Test storing conflicts in Redis"""
         # Arrange
-        merge_service = MergeService(staging_storage=mock_storage, prod_storage=mock_storage)
+        merge_service = MergeService(storage=mock_storage, production_storage=mock_storage, progress_tracker=mock_progress_tracker)
         merge_service.storage = mock_storage
         merge_id = "test_merge_id"
         
@@ -136,10 +148,10 @@ class TestConflictResolution:
             )
     
     @pytest.mark.asyncio
-    async def test_get_conflicts(self, mock_storage, mock_redis_client, sample_conflicts):
+    async def test_get_conflicts(self, mock_storage, mock_redis_client, sample_conflicts, mock_progress_tracker):
         """Test retrieving conflicts with filtering"""
         # Arrange
-        merge_service = MergeService(staging_storage=mock_storage, prod_storage=mock_storage)
+        merge_service = MergeService(storage=mock_storage, production_storage=mock_storage, progress_tracker=mock_progress_tracker)
         merge_service.storage = mock_storage
         merge_id = "test_merge_id"
         
@@ -247,10 +259,10 @@ class TestConflictResolution:
         mock_pipeline.invoke.assert_called_once_with(initial_state)
     
     @pytest.mark.asyncio
-    async def test_apply_resolution(self, mock_storage, mock_redis_client, sample_conflicts):
+    async def test_apply_resolution(self, mock_storage, mock_redis_client, sample_conflicts, mock_progress_tracker):
         """Test applying a resolution to a conflict"""
         # Arrange
-        merge_service = MergeService(staging_storage=mock_storage, prod_storage=mock_storage)
+        merge_service = MergeService(storage=mock_storage, production_storage=mock_storage, progress_tracker=mock_progress_tracker)
         merge_service.storage = mock_storage
         merge_id = "test_merge_id"
         conflict = sample_conflicts[0]
@@ -271,10 +283,10 @@ class TestConflictResolution:
         )
     
     @pytest.mark.asyncio
-    async def test_analyze_conflict_resolution(self, mock_storage, mock_redis_client, sample_conflicts):
+    async def test_analyze_conflict_resolution(self, mock_storage, mock_redis_client, sample_conflicts, mock_progress_tracker):
         """Test analyzing conflict resolution options"""
         # Arrange
-        merge_service = MergeService(staging_storage=mock_storage, prod_storage=mock_storage)
+        merge_service = MergeService(storage=mock_storage, production_storage=mock_storage, progress_tracker=mock_progress_tracker)
         merge_service.storage = mock_storage
         merge_id = "test_merge_id"
         conflict = sample_conflicts[0]

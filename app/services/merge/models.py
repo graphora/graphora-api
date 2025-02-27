@@ -2,7 +2,7 @@
 from enum import Enum
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.services.storage.models import Node, Edge
 
@@ -32,10 +32,10 @@ class StageStatus(str, Enum):
 
 class ResourceMetrics(BaseModel):
     """Resource usage metrics"""
-    cpu_percent: float = 0.0
-    memory_mb: float = 0.0
-    elapsed_time_ms: float = 0.0
-    nodes_per_second: float = 0.0
+    cpu_percent: float = Field(default=0.0)
+    memory_mb: float = Field(default=0.0)
+    elapsed_time_ms: float = Field(default=0.0)
+    nodes_per_second: Optional[float] = None
 
 class MergeStageProgress(BaseModel):
     """Progress tracking for a merge stage"""
@@ -47,13 +47,24 @@ class MergeStageProgress(BaseModel):
     items_total: Optional[int] = None
     items_processed: Optional[int] = None
     error_details: Optional[Dict[str, Any]] = None
-    metrics: Dict[str, float] = Field(default_factory=dict)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator('start_time', 'end_time', mode='before')
+    @classmethod
+    def validate_datetime(cls, v):
+        """Convert string timestamps to datetime objects"""
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            except ValueError:
+                return None
+        return v
 
     def update_progress(
         self,
         items_processed: int,
         items_total: int,
-        metrics: Optional[Dict[str, float]] = None
+        metrics: Optional[Dict[str, Any]] = None
     ) -> None:
         """Update progress metrics"""
         self.items_processed = items_processed
@@ -73,6 +84,17 @@ class MergeProgress(BaseModel):
     end_time: Optional[datetime] = None
     error: Optional[str] = None
     resource_metrics: ResourceMetrics = Field(default_factory=ResourceMetrics)
+
+    @field_validator('start_time', 'end_time', mode='before')
+    @classmethod
+    def validate_datetime(cls, v):
+        """Convert string timestamps to datetime objects"""
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            except ValueError:
+                return None
+        return v
 
     def start_stage(self, stage: MergeStage) -> None:
         """Start a new stage"""
