@@ -254,3 +254,9 @@ class BatchResolutionResult(BaseModel):
     success_count: int = Field(..., description="Number of successful applications")
     failure_count: int = Field(..., description="Number of failed applications")
     results: List[ResolutionResult] = Field(..., description="Individual resolution results")
+
+class GroupBatchResolutionRequest(BaseModel):
+    """Request for batch conflict resolution"""
+    group_key: str = Field(..., description="Key identifying the conflict group")
+    resolution_option: ResolutionOption = Field(..., description="Resolution option to apply to all conflicts in the group")
+    exceptions: List[str] = Field(default_factory=list, description="List of conflict IDs to exclude from batch resolution")
