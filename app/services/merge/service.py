@@ -4,12 +4,16 @@ import time
 import logging
 import asyncio
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Set, Tuple
+from typing import Optional, List, Dict, Any, Set, Tuple, Union
 from datetime import datetime
 import json
 import redis.asyncio as redis
+import pytz
 from app.config import settings
-from app.schemas.conflicts import Conflict, ConflictSeverity, ConflictType, ResolutionOption, ResolutionStrategy
+from app.schemas.conflicts import (
+    Conflict, ConflictSeverity, ConflictType, ResolutionOption, ResolutionStrategy,
+    ConflictResolutionResult, BulkResolutionResult
+)
 from app.services.storage.interface import GraphStorageInterface
 from app.services.storage.models import Node, Edge
 from app.schemas.graph import Node as SchemaNode, Edge as SchemaEdge, GraphResponse
@@ -23,10 +27,12 @@ from app.services.merge.models import (
     ValidationIssueType,
     EntityMappingResult,
     EntityMatch,
-    MatchStrategy
+    MatchStrategy,
+    MergeStatus, 
+    StageStatus
 )
 from app.services.merge.progress import ProgressTracker
-from prefect import flow, task
+from prefect import flow, task, get_run_logger
 from app.services.merge.resolution_pipeline import build_resolution_pipeline
 from app.services.merge.llm_analyzer import LLMConflictAnalyzer
 from app.services.merge.tasks import (
@@ -39,15 +45,11 @@ from app.services.merge.tasks import (
 from app.services.ontology import load_ontology
 from prefect.cache_policies import NO_CACHE
 from app.services.merge.auto_resolution import AutoResolutionEngine
-from app.services.merge.models import MergeStatus, StageStatus
 from app.utils.redis import get_redis_client
-from app.services.merge.conflict import ConflictDetectionService
-from app.services.merge.llm_analyzer import LLMConflictAnalyzer
-from app.services.merge.auto_resolution import AutoResolutionEngine
-from app.schemas.conflicts import Conflict, ConflictType, ConflictSeverity, ResolutionOption
-from app.schemas.graph import GraphResponse, Node, Edge
-from app.config import settings
 from app.services.merge.strategy_selection import StrategySelectionEngine
+from app.services.merge.conflicts.base import ConflictDetector
+from app.services.merge.conflicts.detectors.property import PropertyConflictDetector
+from app.services.merge.conflicts.detectors.relationship import RelationshipConflictDetector
 
 try:
     import baml as b
@@ -1094,7 +1096,8 @@ class MergeService:
         severity: Optional[str] = None,
         resolved: Optional[bool] = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        entity_type: Optional[str] = None
     ) -> Tuple[List[Conflict], int]:
         """Get conflicts with filtering and pagination"""
         redis_client = await get_redis_client()
@@ -1121,6 +1124,8 @@ class MergeService:
                 if severity and conflict.severity.value != severity:
                     continue
                 if resolved is not None and conflict.resolved != resolved:
+                    continue
+                if entity_type and conflict.entity_type != entity_type:
                     continue
                     
                 conflicts.append(conflict)
@@ -1703,3 +1708,159 @@ class MergeService:
             stats["by_strategy"][strategy_name] += 1
             
         return stats
+
+    async def apply_conflict_resolution(
+        self,
+        merge_id: str,
+        conflict_id: str,
+        resolution_id: Optional[str] = None,
+        resolution_type: Optional[str] = None,
+        resolution_data: Optional[Dict[str, Any]] = None,
+        resolved_by: str = "user"
+    ) -> ConflictResolutionResult:
+        """
+        Apply a resolution to a conflict with enhanced functionality
+        
+        Args:
+            merge_id: ID of the merge process
+            conflict_id: ID of the conflict to resolve
+            resolution_id: ID of the resolution option to apply (if using existing option)
+            resolution_type: Type of resolution to apply (if creating custom resolution)
+            resolution_data: Additional data for the resolution
+            resolved_by: Identifier of who resolved the conflict
+            
+        Returns:
+            Result of the resolution operation
+        """
+        try:
+            # Get conflict
+            conflict = await self.get_conflict(merge_id, conflict_id)
+            if not conflict:
+                return ConflictResolutionResult(
+                    conflict_id=conflict_id,
+                    success=False,
+                    resolved=False,
+                    error="Conflict not found"
+                )
+                
+            # Handle resolution based on provided parameters
+            if resolution_id:
+                # Use existing resolution option
+                resolution = next((o for o in conflict.resolution_options if o.id == resolution_id), None)
+                if not resolution:
+                    return ConflictResolutionResult(
+                        conflict_id=conflict_id,
+                        success=False,
+                        resolved=False,
+                        error=f"Resolution option {resolution_id} not found"
+                    )
+            elif resolution_type:
+                # Create custom resolution option
+                resolution_id = f"custom-{uuid.uuid4()}"
+                resolution = ResolutionOption(
+                    id=resolution_id,
+                    description=f"Custom resolution: {resolution_type}",
+                    resolution_type=resolution_type,
+                    resolution_data=resolution_data or {},
+                    confidence=1.0,  # High confidence for manual resolution
+                    requires_review=False,
+                    auto_resolvable=False
+                )
+                conflict.resolution_options.append(resolution)
+            else:
+                return ConflictResolutionResult(
+                    conflict_id=conflict_id,
+                    success=False,
+                    resolved=False,
+                    error="Either resolution_id or resolution_type must be provided"
+                )
+                
+            # Apply the resolution
+            conflict.resolved = True
+            conflict.resolution = resolution
+            conflict.resolution_timestamp = datetime.now(pytz.utc)
+            conflict.resolution_by = resolved_by
+            
+            # Store updated conflict
+            await self._update_conflict(merge_id, conflict)
+            
+            # Log the resolution
+            logger.info(
+                f"Conflict {conflict_id} resolved with option {resolution_id}",
+                extra={
+                    "merge_id": merge_id,
+                    "conflict_id": conflict_id,
+                    "resolution_id": resolution_id,
+                    "resolution_by": resolved_by,
+                    "conflict_type": conflict.conflict_type.value,
+                    "resolution_type": resolution.resolution_type
+                }
+            )
+            
+            return ConflictResolutionResult(
+                conflict_id=conflict_id,
+                success=True,
+                resolved=True,
+                error=None
+            )
+            
+        except Exception as e:
+            logger.error(f"Error applying resolution to conflict {conflict_id}: {str(e)}")
+            return ConflictResolutionResult(
+                conflict_id=conflict_id,
+                success=False,
+                resolved=False,
+                error=str(e)
+            )
+            
+    async def apply_bulk_conflict_resolution(
+        self,
+        merge_id: str,
+        conflict_ids: List[str],
+        resolution_type: str,
+        resolution_data: Optional[Dict[str, Any]] = None,
+        resolved_by: str = "user"
+    ) -> List[BulkResolutionResult]:
+        """
+        Apply the same resolution to multiple conflicts
+        
+        Args:
+            merge_id: ID of the merge process
+            conflict_ids: List of conflict IDs to resolve
+            resolution_type: Type of resolution to apply
+            resolution_data: Additional data for the resolution
+            resolved_by: Identifier of who resolved the conflicts
+            
+        Returns:
+            List of results for each conflict resolution
+        """
+        results = []
+        
+        for conflict_id in conflict_ids:
+            try:
+                # Apply resolution to each conflict
+                result = await self.apply_conflict_resolution(
+                    merge_id=merge_id,
+                    conflict_id=conflict_id,
+                    resolution_type=resolution_type,
+                    resolution_data=resolution_data,
+                    resolved_by=resolved_by
+                )
+                
+                # Convert to bulk result format
+                bulk_result = BulkResolutionResult(
+                    conflict_id=conflict_id,
+                    resolved=result.resolved,
+                    error=result.error
+                )
+                results.append(bulk_result)
+                
+            except Exception as e:
+                logger.error(f"Error in bulk resolution for conflict {conflict_id}: {str(e)}")
+                results.append(BulkResolutionResult(
+                    conflict_id=conflict_id,
+                    resolved=False,
+                    error=str(e)
+                ))
+                
+        return results

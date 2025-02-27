@@ -254,8 +254,8 @@ class MockDataGenerator:
                 production_value=prod_person1.properties.get("age"),
                 entity_id=person1.id,
                 entity_type=person1.type,
-                staging_ids=[person1.id],
-                production_ids=[prod_person1.id],
+                source_data={"age": person1.properties.get("age")},
+                target_data={"age": prod_person1.properties.get("age")},
                 resolution_options=[
                     ResolutionOption(
                         id="keep_staging",
@@ -283,28 +283,34 @@ class MockDataGenerator:
                 conflict_type=ConflictType.RELATIONSHIP_TYPE,
                 severity=ConflictSeverity.MAJOR,
                 description=f"Relationship type mismatch: WORKS_IN vs BELONGS_TO",
-                staging_value="WORKS_IN",
-                production_value="BELONGS_TO",
                 entity_id=staging_edges[0].id,
-                entity_type="RELATIONSHIP",
-                staging_ids=[staging_edges[0].id],
-                production_ids=[prod_edges[0].id],
+                entity_type="relationship",
+                source_data={"type": staging_edges[0].type},
+                target_data={"type": prod_edges[0].type},
                 resolution_options=[
                     ResolutionOption(
                         id="keep_staging_rel",
-                        description="Keep WORKS_IN relationship",
-                        resolution_type=ResolutionStrategy.KEEP_STAGING,
+                        description="Keep staging relationship type",
+                        resolution_type=ResolutionStrategy.KEEP_STAGING_REL,
                         confidence=0.7,
-                        reasoning="WORKS_IN is more specific",
-                        auto_resolvable=True
+                        reasoning="Staging data is more recent",
+                        auto_resolvable=False
                     ),
                     ResolutionOption(
                         id="keep_prod_rel",
-                        description="Keep BELONGS_TO relationship",
-                        resolution_type=ResolutionStrategy.KEEP_PRODUCTION,
+                        description="Keep production relationship type",
+                        resolution_type=ResolutionStrategy.KEEP_PRODUCTION_REL,
                         confidence=0.5,
-                        reasoning="BELONGS_TO is more general",
-                        auto_resolvable=True
+                        reasoning="Production data might be verified",
+                        auto_resolvable=False
+                    ),
+                    ResolutionOption(
+                        id="keep_both_rels",
+                        description="Keep both relationships",
+                        resolution_type=ResolutionStrategy.KEEP_BOTH_RELS,
+                        confidence=0.8,
+                        reasoning="Both relationships might be valid",
+                        auto_resolvable=False
                     )
                 ]
             ))
@@ -314,21 +320,37 @@ class MockDataGenerator:
                 id=f"conflict_dup_{person2.id}",
                 merge_id="test_merge",
                 conflict_type=ConflictType.DUPLICATE_ENTITY,
-                severity=ConflictSeverity.MAJOR,
-                description=f"Multiple matching entities found in production",
-                staging_value=None,
-                production_value=None,
+                severity=ConflictSeverity.CRITICAL,
+                description=f"Multiple potential matches for entity",
                 entity_id=person2.id,
                 entity_type=person2.type,
-                staging_ids=[person2.id],
-                production_ids=[prod_person2_a.id, prod_person2_b.id],
+                source_data={"id": person2.id, "type": person2.type},
+                target_data={"matches": [{"id": prod_person2_a.id}, {"id": prod_person2_b.id}]},
                 resolution_options=[
                     ResolutionOption(
-                        id="merge_entities",
-                        description="Merge all matching entities",
-                        resolution_type=ResolutionStrategy.MERGE_VALUES,
-                        confidence=0.9,
-                        reasoning="Entities appear to represent the same person",
+                        id="match_a",
+                        description=f"Match with entity {prod_person2_a.id}",
+                        resolution_type=ResolutionStrategy.MATCH_ENTITY,
+                        confidence=0.6,
+                        reasoning="Similar properties",
+                        auto_resolvable=False,
+                        resolution_data={"target_entity_id": prod_person2_a.id}
+                    ),
+                    ResolutionOption(
+                        id="match_b",
+                        description=f"Match with entity {prod_person2_b.id}",
+                        resolution_type=ResolutionStrategy.MATCH_ENTITY,
+                        confidence=0.4,
+                        reasoning="Similar but has additional properties",
+                        auto_resolvable=False,
+                        resolution_data={"target_entity_id": prod_person2_b.id}
+                    ),
+                    ResolutionOption(
+                        id="create_new",
+                        description="Create as new entity",
+                        resolution_type=ResolutionStrategy.CREATE_NEW,
+                        confidence=0.3,
+                        reasoning="Might be a new entity",
                         auto_resolvable=False
                     )
                 ]
