@@ -8,12 +8,13 @@ from prefect import get_client
 
 from app.services.merge.service import MergeService, merge_flow
 from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress, MergeStage
+from app.services.merge.batch_resolver import BatchResolver
 from app.schemas.conflicts import (
     Conflict, ConflictListResponse, ConflictResolutionRequest,
     PendingConflictsResponse, ConflictResolutionResponse,
     BulkResolutionRequest, BulkResolutionResponse,
     ResolutionRequest, ResolutionResult, BatchResolutionRequest, BatchResolutionResult,
-    ConflictType
+    ConflictType, GroupBatchResolutionRequest
 )
 from app.dependencies import get_progress_tracker, get_merge_service
 from app.config import settings
@@ -613,3 +614,72 @@ async def update_resolution_feedback(
         )
         
     return {"updated": True}
+
+@router.get(
+    "/conflicts/{merge_id}/groups",
+    response_model=Dict[str, List[Dict[str, Any]]],
+    description="Get grouped conflicts for batch resolution"
+)
+async def get_conflict_groups(
+    merge_id: str,
+    grouping_strategy: str = "type_and_entity",
+    similarity_threshold: float = 0.8,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Get grouped conflicts for batch resolution"""
+    try:
+        # Create batch resolver
+        resolver = BatchResolver(merge_service)
+        
+        # Get grouped conflicts
+        groups = await resolver.group_similar_conflicts(
+            merge_id=merge_id,
+            grouping_strategy=grouping_strategy,
+            similarity_threshold=similarity_threshold
+        )
+        
+        # Convert conflicts to dictionaries for response
+        result = {}
+        for group_key, conflicts in groups.items():
+            result[group_key] = [conflict.model_dump() for conflict in conflicts]
+            
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting conflict groups: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting conflict groups: {str(e)}"
+        )
+
+@router.post(
+    "/conflicts/{merge_id}/resolve-batch",
+    response_model=Dict[str, Any],
+    description="Resolve a batch of conflicts with the same strategy"
+)
+async def resolve_batch_conflicts(
+    merge_id: str,
+    request: GroupBatchResolutionRequest,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> Dict[str, Any]:
+    """Resolve a batch of conflicts with the same strategy"""
+    try:
+        # Create batch resolver
+        resolver = BatchResolver(merge_service)
+        
+        # Apply batch resolution
+        result = await resolver.apply_batch_resolution(
+            merge_id=merge_id,
+            group_key=request.group_key,
+            resolution_option=request.resolution_option,
+            exceptions=request.exceptions
+        )
+            
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error resolving batch conflicts: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error resolving batch conflicts: {str(e)}"
+        )
