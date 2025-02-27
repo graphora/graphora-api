@@ -1,15 +1,19 @@
 """API endpoints for merge operations"""
 from datetime import datetime, timezone
 from typing import Annotated, Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Body
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Body, Query
 import logging
 import uuid
 from prefect import get_client
 
 from app.services.merge.service import MergeService, merge_flow
 from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress, MergeStage
-from app.schemas.conflicts import Conflict, ConflictListResponse, ConflictResolutionRequest
-from app.dependencies import get_merge_service, get_progress_tracker
+from app.schemas.conflicts import (
+    Conflict, ConflictListResponse, ConflictResolutionRequest,
+    PendingConflictsResponse, ConflictResolutionResponse,
+    BulkResolutionRequest, BulkResolutionResponse
+)
+from app.dependencies import get_progress_tracker, get_merge_service
 from app.config import settings
 from pydantic import BaseModel
 
@@ -19,10 +23,6 @@ router = APIRouter(
     prefix=f"{settings.API_V1_STR}/merge",
     tags=["Merge"]
 )
-
-class ConflictResolutionRequest(BaseModel):
-    """Request model for conflict resolution"""
-    resolution_id: str
 
 class StartMergeRequest(BaseModel):
     """Request model for starting a merge"""
@@ -336,4 +336,142 @@ async def apply_selected_strategies(
         raise HTTPException(
             status_code=500,
             detail=f"Applying strategies failed: {str(e)}"
+        )
+
+@router.get(
+    "/merge/{merge_id}/pending-conflicts",
+    response_model=PendingConflictsResponse,
+    summary="Get pending conflicts requiring human review",
+    description="Retrieves a list of conflicts that require human review, with filtering and pagination options."
+)
+async def get_pending_conflicts(
+    merge_id: str,
+    conflict_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    entity_type: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    merge_service: MergeService = Depends(get_merge_service)
+):
+    """
+    Get conflicts that require human review with filtering and pagination.
+    
+    - **merge_id**: ID of the merge process
+    - **conflict_type**: Filter by conflict type
+    - **severity**: Filter by severity level
+    - **entity_type**: Filter by entity type
+    - **limit**: Maximum number of conflicts to return
+    - **offset**: Pagination offset
+    """
+    try:
+        # Get conflicts that are not resolved
+        conflicts, total_count = await merge_service.get_conflicts(
+            merge_id=merge_id,
+            conflict_type=conflict_type,
+            severity=severity,
+            entity_type=entity_type,
+            resolved=False,
+            limit=limit,
+            offset=offset
+        )
+        
+        return PendingConflictsResponse(
+            merge_id=merge_id,
+            conflicts=conflicts,
+            total=total_count,
+            limit=limit,
+            offset=offset
+        )
+    except Exception as e:
+        logger.error(f"Error getting pending conflicts: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get pending conflicts: {str(e)}"
+        )
+
+@router.post(
+    "/merge/{merge_id}/conflicts/{conflict_id}/resolve",
+    response_model=ConflictResolutionResponse,
+    summary="Resolve a specific conflict",
+    description="Apply a resolution to a specific conflict, either using an existing resolution option or providing a custom resolution."
+)
+async def resolve_conflict_enhanced(
+    merge_id: str,
+    conflict_id: str,
+    resolution_request: ConflictResolutionRequest,
+    merge_service: MergeService = Depends(get_merge_service)
+):
+    """
+    Resolve a specific conflict with enhanced options.
+    
+    - **merge_id**: ID of the merge process
+    - **conflict_id**: ID of the conflict to resolve
+    - **resolution_request**: Resolution details including resolution ID or type, comments, and additional data
+    """
+    try:
+        result = await merge_service.apply_conflict_resolution(
+            merge_id=merge_id,
+            conflict_id=conflict_id,
+            resolution_id=resolution_request.resolution_id,
+            resolution_type=resolution_request.resolution_type if hasattr(resolution_request, "resolution_type") else None,
+            resolution_data=resolution_request.additional_data if hasattr(resolution_request, "additional_data") else None,
+            resolved_by=resolution_request.resolved_by if hasattr(resolution_request, "resolved_by") else "user"
+        )
+        
+        return ConflictResolutionResponse(
+            merge_id=merge_id,
+            conflict_id=conflict_id,
+            resolution_id=resolution_request.resolution_id,
+            success=result.success,
+            resolved=result.resolved,
+            error=result.error
+        )
+    except Exception as e:
+        logger.error(f"Error resolving conflict: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to resolve conflict: {str(e)}"
+        )
+
+@router.post(
+    "/merge/{merge_id}/conflicts/bulk-resolve",
+    response_model=BulkResolutionResponse,
+    summary="Bulk resolve multiple conflicts",
+    description="Apply the same resolution to multiple conflicts at once."
+)
+async def bulk_resolve_conflicts(
+    merge_id: str,
+    bulk_request: BulkResolutionRequest,
+    merge_service: MergeService = Depends(get_merge_service)
+):
+    """
+    Bulk resolve multiple conflicts with the same resolution.
+    
+    - **merge_id**: ID of the merge process
+    - **bulk_request**: Bulk resolution details including conflict IDs, resolution type, and additional data
+    """
+    try:
+        results = await merge_service.apply_bulk_conflict_resolution(
+            merge_id=merge_id,
+            conflict_ids=bulk_request.conflict_ids,
+            resolution_type=bulk_request.resolution_type,
+            resolution_data=bulk_request.additional_data,
+            resolved_by=bulk_request.resolved_by
+        )
+        
+        # Calculate success metrics
+        total_conflicts = len(bulk_request.conflict_ids)
+        resolved_conflicts = sum(1 for r in results if r.resolved)
+        
+        return BulkResolutionResponse(
+            merge_id=merge_id,
+            total=total_conflicts,
+            resolved=resolved_conflicts,
+            results=results
+        )
+    except Exception as e:
+        logger.error(f"Error in bulk resolution: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to perform bulk resolution: {str(e)}"
         )

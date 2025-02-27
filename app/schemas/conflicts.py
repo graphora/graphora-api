@@ -75,48 +75,99 @@ class StrategyResult(BaseModel):
 
 class ConflictResolutionRequest(BaseModel):
     """Request model for conflict resolution"""
-    resolution_id: str = Field(..., description="ID of the chosen resolution option")
-    resolution_data: Optional[Dict[str, Any]] = Field(default=None, description="Additional data for resolution")
+    resolution_id: Optional[str] = None
+    resolution_type: Optional[str] = None
+    additional_data: Dict[str, Any] = Field(default_factory=dict)
+    resolved_by: str = Field(default="user")
     comments: Optional[str] = Field(default=None, description="Optional comments about the resolution")
     auto_resolve_similar: bool = Field(default=False, description="Whether to auto-resolve similar conflicts")
-    strategy_override: Optional[str] = Field(default=None, description="Override the default strategy selection")
+
+class ConflictResolutionResponse(BaseModel):
+    """Response for conflict resolution"""
+    merge_id: str
+    conflict_id: str
+    resolution_id: Optional[str]
+    success: bool
+    resolved: bool
+    error: Optional[str] = None
+
+class ConflictResolutionResult(BaseModel):
+    """Result of applying a resolution to a conflict"""
+    conflict_id: str
+    success: bool
+    resolved: bool
+    error: Optional[str] = None
+
+class BulkResolutionRequest(BaseModel):
+    """Request model for bulk conflict resolution"""
+    conflict_ids: List[str]
+    resolution_type: str
+    additional_data: Optional[Dict[str, Any]] = None
+    resolved_by: str
+    comments: Optional[str] = None
+
+class BulkResolutionResult(BaseModel):
+    """Result of applying a resolution to a single conflict in bulk operation"""
+    conflict_id: str
+    resolved: bool
+    error: Optional[str] = None
+
+class BulkResolutionResponse(BaseModel):
+    """Response model for bulk conflict resolution"""
+    merge_id: str
+    total: int
+    resolved: int
+    results: List[BulkResolutionResult]
 
 class Conflict(BaseModel):
-    """Represents a conflict between staging and production graphs"""
-    id: str = Field(..., description="Unique identifier for this conflict")
-    merge_id: str = Field(..., description="ID of the merge operation")
-    conflict_type: ConflictType = Field(..., description="Type of conflict")
-    severity: ConflictSeverity = Field(..., description="Severity of the conflict")
-    entity_id: Optional[str] = Field(None, description="ID of the entity involved")
-    entity_type: Optional[str] = Field(None, description="Type of the entity involved")
-    property_name: Optional[str] = Field(None, description="Name of the property in conflict")
-    staging_value: Optional[Any] = Field(None, description="Value of the property in staging")
-    production_value: Optional[Any] = Field(None, description="Value of the property in production")
-    description: str = Field(..., description="Human-readable description of the conflict")
-    context: Optional[Dict[str, Any]] = Field(default=None, description="Additional context about the conflict")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc), description="When the conflict was detected")
-    resolved: bool = Field(False, description="Whether the conflict has been resolved")
-    resolution_options: List[ResolutionOption] = Field(default_factory=list, description="Available resolution options")
-    resolution: Optional[ResolutionOption] = Field(None, description="Chosen resolution for the conflict")
-    analysis: Optional[Dict[str, Any]] = Field(None, description="Analysis of the conflict")
-    strategy_result: Optional[StrategyResult] = Field(None, description="Result of strategy selection")
-    auto_resolved: bool = Field(False, description="Whether the conflict was auto-resolved")
-    resolution_timestamp: Optional[datetime] = Field(None, description="When the conflict was resolved")
+    """Conflict model representing a detected conflict between staging and production graphs"""
+    id: str
+    merge_id: str
+    conflict_type: ConflictType
+    severity: ConflictSeverity
+    entity_id: Optional[str] = None
+    entity_type: Optional[str] = None
+    property_name: Optional[str] = None
+    staging_ids: Optional[List[str]] = None
+    production_ids: Optional[List[str]] = None
+    staging_value: Optional[Any] = None
+    production_value: Optional[Any] = None
+    source_data: Optional[Any] = None
+    target_data: Optional[Any] = None
+    description: str
+    context: Optional[Dict[str, Any]] = None
+    resolution_options: List[ResolutionOption] = []
+    resolution: Optional[ResolutionOption] = None
+    resolved: bool = False
+    resolution_timestamp: Optional[datetime] = None
+    resolved_by: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc))
+    
+    def __init__(self, **data):
+        super().__init__(**data)
+        # For backward compatibility
+        if self.entity_id is None and self.staging_ids:
+            self.entity_id = self.staging_ids[0] if self.staging_ids else None
+        if self.entity_type is None and self.context and "entity_type" in self.context:
+            self.entity_type = self.context.get("entity_type")
+
+class PendingConflictsResponse(BaseModel):
+    """Response model for pending conflicts"""
+    merge_id: str
+    conflicts: List[Conflict]
+    total: int
+    limit: int
+    offset: int
 
 class ConflictGroup(BaseModel):
-    """Group of similar conflicts that can be resolved together"""
-    id: str = Field(..., description="Unique identifier for this group")
-    entity_type: str = Field(..., description="Type of entity involved")
-    property_name: str = Field(..., description="Name of the property in conflict")
-    value_type: str = Field(..., description="Type of the property value")
-    conflict_ids: List[str] = Field(..., description="IDs of conflicts in this group")
-    total_conflicts: int = Field(..., description="Total number of conflicts in group")
-    pattern: str = Field(..., description="Common pattern identified in conflicts")
-    batch_resolvable: bool = Field(..., description="Whether conflicts can be batch resolved")
-    recommended_strategy: Optional[str] = Field(None, description="Recommended resolution strategy")
-    confidence: float = Field(..., description="Confidence in batch resolution (0-1)")
-    risks: List[str] = Field(default_factory=list, description="Potential risks of batch resolution")
-    strategy_explanation: Optional[str] = Field(None, description="Explanation of recommended strategy")
+    """Group of related conflicts"""
+    id: str
+    merge_id: str
+    conflicts: List[Conflict]
+    pattern: Optional[str] = None
+    description: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc))
 
 class ConflictBatch(BaseModel):
     """Batch of conflicts for efficient processing"""

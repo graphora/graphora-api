@@ -40,6 +40,8 @@ def mock_conflicts(test_merge_id):
                 production_value=f"john doe {i}",
                 description=f"Case difference in name property for Person {i}",
                 context={"entity_type": "Person"},
+                source_data={"name": f"John Doe {i}"},
+                target_data={"name": f"john doe {i}"},
                 resolution_options=[
                     ResolutionOption(
                         id=f"option-minor-{i}-1",
@@ -76,6 +78,8 @@ def mock_conflicts(test_merge_id):
                 entity_type="Organization",
                 description=f"Multiple potential matches for Organization {i}",
                 context={"entity_type": "Organization"},
+                source_data={"id": f"entity-major-{i}", "type": "Organization"},
+                target_data={"id": f"prod-entity-{i}", "type": "Organization"},
                 resolution_options=[
                     ResolutionOption(
                         id=f"option-major-{i}",
