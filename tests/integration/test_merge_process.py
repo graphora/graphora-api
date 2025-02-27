@@ -204,3 +204,65 @@ class TestMergeProcessIntegration:
         assert response.status_code == 200
         conflicts = response.json()
         assert len(conflicts) > 0  # We expect conflicts from our test data
+
+    @pytest.mark.asyncio
+    async def test_strategy_selection_api(self, test_client, setup_test_data):
+        """Test the strategy selection API endpoints"""
+        # Start a merge process
+        response = await test_client.post(
+            f"{settings.API_V1_STR}/merge/{setup_test_data['transform_id']}/{setup_test_data['transform_id']}/start",
+            json={"ontology_id": None}
+        )
+        assert response.status_code == 200
+        
+        # Get the actual merge ID from the response
+        merge_response = response.json()
+        merge_id = merge_response["merge_id"]
+        
+        # Wait for merge process to complete
+        max_retries = 30  # Increase timeout
+        for i in range(max_retries):
+            status_response = await test_client.get(f"{settings.API_V1_STR}/merge/status/{merge_id}")
+            if status_response.status_code == 200:
+                status_data = status_response.json()
+                if status_data["overall_status"] == "COMPLETED":
+                    break
+            await asyncio.sleep(1)
+        
+        # Get conflicts
+        conflicts_response = await test_client.get(f"{settings.API_V1_STR}/merge/conflicts/{merge_id}")
+        assert conflicts_response.status_code == 200
+        conflicts_data = conflicts_response.json()
+        
+        # Skip test if no conflicts found
+        if len(conflicts_data) == 0:
+            pytest.skip("No conflicts found for testing strategy selection")
+        
+        # Test strategy selection API
+        select_response = await test_client.post(
+            f"{settings.API_V1_STR}/merge/{merge_id}/select-strategies",
+            json={"config": {}}
+        )
+        assert select_response.status_code == 200
+        select_data = select_response.json()
+        
+        # Verify response structure
+        assert "total" in select_data
+        assert "processed" in select_data
+        assert "strategy_counts" in select_data
+        assert "confidence_avg" in select_data
+        
+        # Test apply strategies API
+        apply_response = await test_client.post(
+            f"{settings.API_V1_STR}/merge/{merge_id}/apply-strategies",
+            json={"min_confidence": 0.7}
+        )
+        assert apply_response.status_code == 200
+        apply_data = apply_response.json()
+        
+        # Verify response structure
+        assert "total" in apply_data
+        assert "applied" in apply_data
+        assert "skipped_low_confidence" in apply_data
+        assert "skipped_no_strategy" in apply_data
+        assert "by_strategy" in apply_data

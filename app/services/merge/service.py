@@ -38,6 +38,16 @@ from app.services.merge.tasks import (
 )
 from app.services.ontology import load_ontology
 from prefect.cache_policies import NO_CACHE
+from app.services.merge.auto_resolution import AutoResolutionEngine
+from app.services.merge.models import MergeStatus, StageStatus
+from app.utils.redis import get_redis_client
+from app.services.merge.conflict import ConflictDetectionService
+from app.services.merge.llm_analyzer import LLMConflictAnalyzer
+from app.services.merge.auto_resolution import AutoResolutionEngine
+from app.schemas.conflicts import Conflict, ConflictType, ConflictSeverity, ResolutionOption
+from app.schemas.graph import GraphResponse, Node, Edge
+from app.config import settings
+from app.services.merge.strategy_selection import StrategySelectionEngine
 
 try:
     import baml as b
@@ -1185,6 +1195,8 @@ class MergeService:
         # For now, just mark the conflict as resolved
         conflict.resolved = True
         conflict.resolution = resolution_option
+        conflict.resolution_timestamp = datetime.now()
+        conflict.resolution_by = "manual"
         
         # Update the conflict in Redis
         await redis_client.set(conflict_key, conflict.model_dump_json())
@@ -1205,6 +1217,96 @@ class MergeService:
             await redis_client.set(counts_key, json.dumps(counts))
             
         return True
+
+    async def apply_resolution(
+        self, 
+        merge_id: str, 
+        conflict_id: str, 
+        resolution_id: str, 
+        resolution_by: str
+    ) -> Conflict:
+        """Apply resolution to a conflict"""
+        # Get conflict
+        conflict = await self.get_conflict(merge_id, conflict_id)
+        if not conflict:
+            raise ValueError(f"Conflict {conflict_id} not found")
+            
+        # Get resolution option
+        resolution = next((o for o in conflict.resolution_options if o.id == resolution_id), None)
+        if not resolution:
+            raise ValueError(f"Resolution option {resolution_id} not found")
+            
+        # Apply the resolution (stored for now, actual application happens during final merge)
+        conflict.resolved = True
+        conflict.resolution = resolution
+        conflict.resolution_timestamp = datetime.now()
+        conflict.resolution_by = resolution_by
+        
+        # Store updated conflict
+        await self._update_conflict(merge_id, conflict)
+        
+        # Log the resolution
+        logger.info(
+            f"Conflict {conflict_id} resolved with option {resolution_id}",
+            extra={
+                "merge_id": merge_id,
+                "conflict_id": conflict_id,
+                "resolution_id": resolution_id,
+                "resolution_by": resolution_by,
+                "conflict_type": conflict.conflict_type.value,
+                "resolution_type": resolution.resolution_type
+            }
+        )
+        
+        return conflict
+
+    async def auto_resolve_conflicts(
+        self, 
+        merge_id: str, 
+        config: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Automatically resolve minor conflicts"""
+        # Get unresolved conflicts
+        conflicts, total = await self.get_conflicts(
+            merge_id=merge_id,
+            resolved=False
+        )
+        
+        # Create resolution engine
+        engine = AutoResolutionEngine(config)
+        
+        # Track statistics
+        stats = {
+            "total": total,
+            "auto_resolved": 0,
+            "manual_required": 0,
+            "by_type": {}
+        }
+        
+        # Process each conflict
+        for conflict in conflicts:
+            # Skip if not minor
+            if conflict.severity != ConflictSeverity.MINOR:
+                stats["manual_required"] += 1
+                continue
+                
+            # Try to resolve
+            resolution_id = await engine.resolve_conflict(conflict)
+            
+            # If resolved, apply the resolution
+            if resolution_id:
+                await self.apply_resolution(merge_id, conflict.id, resolution_id, "auto")
+                stats["auto_resolved"] += 1
+                
+                # Track by type
+                conflict_type = conflict.conflict_type.value
+                if conflict_type not in stats["by_type"]:
+                    stats["by_type"][conflict_type] = 0
+                stats["by_type"][conflict_type] += 1
+            else:
+                stats["manual_required"] += 1
+                
+        return stats
 
     async def analyze_and_resolve_conflict(
         self,
@@ -1461,3 +1563,143 @@ class MergeService:
             logger.error(f"Merge process failed: {str(e)}")
             await fail_merge(merge_id, str(e), self.progress_tracker)
             raise
+
+    async def select_resolution_strategies(self, merge_id: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Select best resolution strategies for conflicts"""
+        # Get unresolved conflicts
+        conflicts, total = await self.get_conflicts(
+            merge_id=merge_id,
+            resolved=False
+        )
+        
+        # Create strategy engine
+        engine = StrategySelectionEngine(config)
+        
+        # Track statistics
+        stats = {
+            "total": total,
+            "processed": 0,
+            "strategy_counts": {},
+            "confidence_avg": 0.0,
+            "by_type": {}
+        }
+        
+        total_confidence = 0.0
+        
+        # Process each conflict
+        for conflict in conflicts:
+            # Select strategy
+            strategy_name, resolution_option, confidence, explanation = await engine.select_strategy(conflict)
+            
+            # Skip if no strategy found
+            if not strategy_name or not resolution_option:
+                continue
+                
+            # Store strategy selection
+            await self._store_strategy_selection(
+                merge_id,
+                conflict.id,
+                strategy_name,
+                resolution_option.id,
+                confidence,
+                explanation
+            )
+            
+            # Update stats
+            stats["processed"] += 1
+            total_confidence += confidence
+            
+            if strategy_name not in stats["strategy_counts"]:
+                stats["strategy_counts"][strategy_name] = 0
+            stats["strategy_counts"][strategy_name] += 1
+            
+            conflict_type = conflict.conflict_type.value
+            if conflict_type not in stats["by_type"]:
+                stats["by_type"][conflict_type] = 0
+            stats["by_type"][conflict_type] += 1
+            
+        # Calculate average confidence
+        if stats["processed"] > 0:
+            stats["confidence_avg"] = total_confidence / stats["processed"]
+            
+        return stats
+        
+    async def _store_strategy_selection(
+        self,
+        merge_id: str,
+        conflict_id: str,
+        strategy: str,
+        resolution_id: str,
+        confidence: float,
+        explanation: str
+    ) -> None:
+        """Store strategy selection for a conflict"""
+        # Get conflict
+        conflict = await self.get_conflict(merge_id, conflict_id)
+        if not conflict:
+            return
+            
+        # Store strategy in conflict
+        conflict.context = conflict.context or {}
+        conflict.context["selected_strategy"] = {
+            "name": strategy,
+            "resolution_id": resolution_id,
+            "confidence": confidence,
+            "explanation": explanation,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        # Update conflict
+        await self._update_conflict(merge_id, conflict)
+
+    async def apply_selected_strategies(self, merge_id: str, min_confidence: float = 0.7) -> Dict[str, Any]:
+        """Apply selected strategies that meet confidence threshold"""
+        # Get unresolved conflicts
+        conflicts, total = await self.get_conflicts(
+            merge_id=merge_id,
+            resolved=False
+        )
+        
+        # Track statistics
+        stats = {
+            "total": total,
+            "applied": 0,
+            "skipped_low_confidence": 0,
+            "skipped_no_strategy": 0,
+            "by_strategy": {}
+        }
+        
+        # Process each conflict
+        for conflict in conflicts:
+            # Skip if no strategy selected
+            if not conflict.context or "selected_strategy" not in conflict.context:
+                stats["skipped_no_strategy"] += 1
+                continue
+                
+            # Get selected strategy
+            selected = conflict.context["selected_strategy"]
+            strategy_name = selected.get("name")
+            resolution_id = selected.get("resolution_id")
+            confidence = selected.get("confidence", 0.0)
+            
+            # Skip if confidence too low
+            if confidence < min_confidence:
+                stats["skipped_low_confidence"] += 1
+                continue
+                
+            # Apply resolution
+            await self.apply_resolution(
+                merge_id,
+                conflict.id,
+                resolution_id,
+                f"strategy:{strategy_name}"
+            )
+            
+            # Update stats
+            stats["applied"] += 1
+            
+            if strategy_name not in stats["by_strategy"]:
+                stats["by_strategy"][strategy_name] = 0
+            stats["by_strategy"][strategy_name] += 1
+            
+        return stats

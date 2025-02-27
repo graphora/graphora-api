@@ -9,7 +9,7 @@ import uuid
 from typing import Dict, List, Any, Optional
 
 from app.services.merge.service import MergeService
-from app.schemas.conflicts import Conflict, ConflictType, ConflictSeverity, ResolutionOption
+from app.schemas.conflicts import Conflict, ConflictType, ConflictSeverity, ResolutionOption, ResolutionStrategy
 from app.schemas.graph import Node, Edge, GraphResponse
 from app.services.storage.interface import GraphStorageInterface
 from app.services.merge.models import (
@@ -508,3 +508,313 @@ class TestMergeService:
         
         # Assert
         merge_service.progress_tracker.get_progress.assert_called_once_with(merge_id)
+
+
+class TestMergeServiceAutoResolution:
+    """Tests for auto-resolution functionality in MergeService"""
+    
+    @pytest.mark.asyncio
+    async def test_auto_resolve_conflicts(self, merge_service, mock_redis_client):
+        """Test auto-resolution of conflicts"""
+        # Arrange
+        merge_id = "test-merge-id"
+        
+        # Create test conflicts
+        auto_conflict_id = f"auto_conflict_{uuid.uuid4().hex}"
+        manual_conflict_id = f"manual_conflict_{uuid.uuid4().hex}"
+        
+        # Minor conflict that can be auto-resolved
+        auto_conflict = Conflict(
+            id=auto_conflict_id,
+            merge_id=merge_id,
+            conflict_type=ConflictType.PROPERTY_VALUE,
+            severity=ConflictSeverity.MINOR,
+            entity_id="s1",
+            entity_type="Person",
+            property_name="name",
+            staging_value="Test",
+            production_value="test",
+            description="Property value conflict",
+            resolution_options=[
+                ResolutionOption(
+                    id=f"{auto_conflict_id}_auto_option",
+                    description="Auto option",
+                    resolution_type=ResolutionStrategy.KEEP_STAGING,
+                    resolution_data={},
+                    confidence=0.8
+                )
+            ]
+        )
+        
+        # Major conflict that requires manual resolution
+        manual_conflict = Conflict(
+            id=manual_conflict_id,
+            merge_id=merge_id,
+            conflict_type=ConflictType.RELATIONSHIP_TYPE,
+            severity=ConflictSeverity.MAJOR,
+            entity_id="s2",
+            entity_type="Person",
+            description="Relationship conflict",
+            resolution_options=[
+                ResolutionOption(
+                    id=f"{manual_conflict_id}_manual_option",
+                    description="Manual option",
+                    resolution_type=ResolutionStrategy.KEEP_STAGING,
+                    resolution_data={},
+                    confidence=0.5
+                )
+            ]
+        )
+        
+        # Mock Redis responses
+        with patch('app.services.merge.service.get_redis_client', return_value=mock_redis_client):
+            # Mock get_conflicts to return our test conflicts
+            with patch.object(merge_service, 'get_conflicts', new_callable=AsyncMock) as mock_get_conflicts:
+                mock_get_conflicts.return_value = ([auto_conflict, manual_conflict], 2)
+                
+                # Mock apply_resolution
+                with patch.object(merge_service, 'apply_resolution', new_callable=AsyncMock) as mock_apply:
+                    # Act
+                    result = await merge_service.auto_resolve_conflicts(merge_id)
+        
+        # Assert
+        assert result["total"] == 2
+        assert result["auto_resolved"] == 1
+        assert result["manual_required"] == 1
+        assert ConflictType.PROPERTY_VALUE.value in result["by_type"]
+        assert result["by_type"][ConflictType.PROPERTY_VALUE.value] == 1
+        
+        # Verify apply_resolution was called for auto-resolved conflict
+        mock_apply.assert_called_once_with(
+            merge_id, auto_conflict_id, f"{auto_conflict_id}_auto_option", "auto"
+        )
+
+
+class TestMergeServiceStrategySelection:
+    """Tests for strategy selection methods in MergeService"""
+    
+    @pytest.mark.asyncio
+    @patch('app.services.merge.service.get_redis_client')
+    async def test_select_resolution_strategies(self, mock_get_redis, merge_service, mock_redis_client):
+        """Test selection of resolution strategies"""
+        # Arrange
+        mock_get_redis.return_value = mock_redis_client
+        merge_id = str(uuid.uuid4())
+        
+        # Create test conflicts
+        conflicts = [
+            # Property value conflict
+            Conflict(
+                id="conflict_1",
+                merge_id=merge_id,
+                conflict_type=ConflictType.PROPERTY_VALUE,
+                severity=ConflictSeverity.MINOR,
+                entity_id="s1",
+                entity_type="Person",
+                property_name="name",
+                staging_value="Test",
+                production_value="test",
+                description="Property value conflict",
+                context={
+                    "property_name": "name",
+                    "staging_value": "Test",
+                    "production_value": "test",
+                    "entity_type": "Person",
+                    "staging_timestamp": (datetime.datetime.now() - datetime.timedelta(days=1)).isoformat(),
+                    "production_timestamp": (datetime.datetime.now() - datetime.timedelta(days=30)).isoformat()
+                },
+                resolution_options=[
+                    ResolutionOption(
+                        id="option_1",
+                        description="Keep staging",
+                        resolution_type="keep_staging",
+                        resolution_data={},
+                        confidence=0.5
+                    ),
+                    ResolutionOption(
+                        id="option_2",
+                        description="Keep production",
+                        resolution_type="keep_production",
+                        resolution_data={},
+                        confidence=0.5
+                    )
+                ]
+            ),
+            # Relationship conflict
+            Conflict(
+                id="conflict_2",
+                merge_id=merge_id,
+                conflict_type=ConflictType.RELATIONSHIP_TYPE,
+                severity=ConflictSeverity.MAJOR,
+                entity_id="s2",
+                entity_type="Person",
+                description="Relationship conflict",
+                context={
+                    "staging_type": "WORKS_IN",
+                    "production_type": "BELONGS_TO",
+                    "entity_type": "Person"
+                },
+                resolution_options=[
+                    ResolutionOption(
+                        id="option_3",
+                        description="Keep both",
+                        resolution_type="keep_both_relationships",
+                        resolution_data={},
+                        confidence=0.5
+                    )
+                ]
+            )
+        ]
+        
+        # Configure Redis mocks
+        mock_redis_client.get.side_effect = lambda key: {
+            f"merge:{merge_id}:conflict_ids": json.dumps(["conflict_1", "conflict_2"]),
+            f"merge:{merge_id}:conflict:conflict_1": conflicts[0].model_dump_json(),
+            f"merge:{merge_id}:conflict:conflict_2": conflicts[1].model_dump_json(),
+        }.get(key)
+        
+        # Mock strategy selection engine
+        with patch("app.services.merge.strategy_selection.StrategySelectionEngine") as mock_engine_class:
+            mock_engine = MagicMock()
+            mock_engine_class.return_value = mock_engine
+            
+            # Configure mock engine responses
+            mock_engine.select_strategy.side_effect = [
+                ("prefer_staging", conflicts[0].resolution_options[0], 0.8, "Test explanation 1"),
+                ("keep_both", conflicts[1].resolution_options[0], 0.7, "Test explanation 2")
+            ]
+            
+            # Mock store_strategy_selection
+            merge_service._store_strategy_selection = AsyncMock()
+            
+            # Act
+            result = await merge_service.select_resolution_strategies(merge_id)
+            
+            # Assert
+            assert result["total"] == 2
+            assert result["processed"] == 2
+            assert "prefer_staging" in result["strategy_counts"]
+            assert "keep_both" in result["strategy_counts"]
+            assert result["strategy_counts"]["prefer_staging"] == 1
+            assert result["strategy_counts"]["keep_both"] == 1
+            assert result["confidence_avg"] > 0.7
+            assert "property_value" in result["by_type"]
+            assert "relationship_type" in result["by_type"]
+            
+            # Verify store_strategy_selection was called for each conflict
+            assert merge_service._store_strategy_selection.call_count == 2
+    
+    @pytest.mark.asyncio
+    @patch('app.services.merge.service.get_redis_client')
+    async def test_apply_selected_strategies(self, mock_get_redis, merge_service, mock_redis_client):
+        """Test applying selected strategies"""
+        # Arrange
+        mock_get_redis.return_value = mock_redis_client
+        merge_id = str(uuid.uuid4())
+        
+        # Create test conflicts with selected strategies
+        conflicts = [
+            # Conflict with high-confidence strategy
+            Conflict(
+                id="conflict_1",
+                merge_id=merge_id,
+                conflict_type=ConflictType.PROPERTY_VALUE,
+                severity=ConflictSeverity.MINOR,
+                entity_id="s1",
+                entity_type="Person",
+                property_name="name",
+                staging_value="Test",
+                production_value="test",
+                description="Property value conflict",
+                context={
+                    "property_name": "name",
+                    "staging_value": "Test",
+                    "production_value": "test",
+                    "entity_type": "Person",
+                    "selected_strategy": {
+                        "name": "prefer_staging",
+                        "resolution_id": "option_1",
+                        "confidence": 0.8,
+                        "explanation": "Test explanation"
+                    }
+                },
+                resolution_options=[
+                    ResolutionOption(
+                        id="option_1",
+                        description="Keep staging",
+                        resolution_type="keep_staging",
+                        resolution_data={},
+                        confidence=0.5
+                    )
+                ],
+                resolved=False
+            ),
+            # Conflict with low-confidence strategy (should be skipped)
+            Conflict(
+                id="conflict_2",
+                merge_id=merge_id,
+                conflict_type=ConflictType.RELATIONSHIP_TYPE,
+                severity=ConflictSeverity.MAJOR,
+                entity_id="s2",
+                entity_type="Person",
+                description="Relationship conflict",
+                context={
+                    "selected_strategy": {
+                        "name": "keep_both",
+                        "resolution_id": "option_2",
+                        "confidence": 0.4,  # Below threshold
+                        "explanation": "Test explanation"
+                    }
+                },
+                resolution_options=[
+                    ResolutionOption(
+                        id="option_2",
+                        description="Keep both",
+                        resolution_type="keep_both_relationships",
+                        resolution_data={},
+                        confidence=0.5
+                    )
+                ],
+                resolved=False
+            ),
+            # Conflict with no selected strategy
+            Conflict(
+                id="conflict_3",
+                merge_id=merge_id,
+                conflict_type=ConflictType.ENTITY_MATCH,
+                severity=ConflictSeverity.CRITICAL,
+                entity_id="s3",
+                entity_type="Organization",
+                description="Entity type conflict",
+                context={},  # No selected strategy
+                resolution_options=[],
+                resolved=False
+            )
+        ]
+        
+        # Configure Redis mocks
+        mock_redis_client.get.side_effect = lambda key: {
+            f"merge:{merge_id}:conflict_ids": json.dumps(["conflict_1", "conflict_2", "conflict_3"]),
+            f"merge:{merge_id}:conflict:conflict_1": conflicts[0].model_dump_json(),
+            f"merge:{merge_id}:conflict:conflict_2": conflicts[1].model_dump_json(),
+            f"merge:{merge_id}:conflict:conflict_3": conflicts[2].model_dump_json(),
+        }.get(key)
+        
+        # Mock apply_resolution
+        merge_service.apply_resolution = AsyncMock()
+        
+        # Act
+        result = await merge_service.apply_selected_strategies(merge_id, min_confidence=0.7)
+        
+        # Assert
+        assert result["total"] == 3
+        assert result["applied"] == 1
+        assert result["skipped_low_confidence"] == 1
+        assert result["skipped_no_strategy"] == 1
+        assert "prefer_staging" in result["by_strategy"]
+        assert result["by_strategy"]["prefer_staging"] == 1
+        
+        # Verify apply_resolution was called only for high-confidence strategy
+        merge_service.apply_resolution.assert_called_once_with(
+            merge_id, "conflict_1", "option_1", "strategy:prefer_staging"
+        )
