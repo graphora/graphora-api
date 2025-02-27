@@ -12,11 +12,13 @@ from app.schemas.conflicts import (
     Conflict, ConflictListResponse, ConflictResolutionRequest,
     PendingConflictsResponse, ConflictResolutionResponse,
     BulkResolutionRequest, BulkResolutionResponse,
-    ResolutionRequest, ResolutionResult, BatchResolutionRequest, BatchResolutionResult
+    ResolutionRequest, ResolutionResult, BatchResolutionRequest, BatchResolutionResult,
+    ConflictType
 )
 from app.dependencies import get_progress_tracker, get_merge_service
 from app.config import settings
 from pydantic import BaseModel
+from app.schemas.resolution_history import ResolutionHistoryEntry
 
 logger = logging.getLogger(__name__)
 
@@ -516,3 +518,98 @@ async def resolve_conflict(
             status_code=500,
             detail=f"Error resolving conflict: {str(e)}"
         )
+
+@router.get(
+    "/resolution/history",
+    response_model=List[ResolutionHistoryEntry],
+    description="Get resolution history"
+)
+async def get_resolution_history(
+    merge_id: Optional[str] = None,
+    conflict_type: Optional[str] = None,
+    entity_type: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> List[ResolutionHistoryEntry]:
+    """Get resolution history with optional filtering"""
+    # Convert string to enum if provided
+    conflict_type_enum = None
+    if conflict_type:
+        try:
+            conflict_type_enum = ConflictType(conflict_type)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid conflict type: {conflict_type}"
+            )
+    
+    return await merge_service.resolution_history.get_resolution_history(
+        merge_id=merge_id,
+        conflict_type=conflict_type_enum,
+        entity_type=entity_type,
+        limit=limit,
+        offset=offset
+    )
+
+@router.get(
+    "/resolution/stats",
+    description="Get resolution statistics"
+)
+async def get_resolution_stats(
+    merge_service: MergeService = Depends(get_merge_service)
+) -> Dict[str, Any]:
+    """Get statistics about resolutions"""
+    return await merge_service.resolution_history.get_resolution_stats()
+
+@router.get(
+    "/conflicts/{merge_id}/{conflict_id}/suggestions",
+    description="Get resolution suggestions for a conflict"
+)
+async def get_resolution_suggestions(
+    merge_id: str,
+    conflict_id: str,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> List[Dict[str, Any]]:
+    """Get resolution suggestions based on similar past resolutions"""
+    try:
+        return await merge_service.get_resolution_suggestions(
+            merge_id=merge_id,
+            conflict_id=conflict_id
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error getting resolution suggestions: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting suggestions: {str(e)}"
+        )
+
+@router.post(
+    "/resolution/{resolution_id}/feedback",
+    description="Update resolution success and feedback"
+)
+async def update_resolution_feedback(
+    resolution_id: str,
+    success: bool,
+    feedback: Optional[str] = None,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> Dict[str, bool]:
+    """Update success status and feedback for a resolution"""
+    result = await merge_service.resolution_history.update_resolution_success(
+        resolution_id=resolution_id,
+        success=success,
+        feedback=feedback
+    )
+    
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Resolution {resolution_id} not found"
+        )
+        
+    return {"updated": True}

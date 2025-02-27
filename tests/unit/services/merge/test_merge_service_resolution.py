@@ -9,6 +9,8 @@ from app.schemas.conflicts import (
 from app.schemas.graph import Node, Edge
 from app.storage.conflicts import ConflictStorageInterface
 from app.storage.graph import GraphStorageInterface
+from app.services.resolution_history_service import ResolutionHistoryService
+from app.schemas.resolution_history import ResolutionHistoryEntry
 
 @pytest.fixture
 def mock_conflict_storage():
@@ -66,7 +68,48 @@ def sample_conflict():
     )
 
 @pytest.fixture
-def merge_service_with_mocks(mock_conflict_storage, mock_graph_storages, mock_resolution_applicator):
+def mock_resolution_history_service():
+    service = MagicMock(spec=ResolutionHistoryService)
+    
+    # Mock store_resolution method
+    service.store_resolution = AsyncMock()
+    service.store_resolution.return_value = ResolutionHistoryEntry(
+        id="history1",
+        conflict_id="conflict1",
+        merge_id="merge1",
+        conflict_type=ConflictType.PROPERTY_VALUE,
+        severity=ConflictSeverity.MAJOR,
+        context={"property_name": "age"},
+        resolution_id="opt1",
+        resolution_type="keep_staging",
+        entity_types=["Person"],
+        property_names=["age"],
+        applied_by="test_user"
+    )
+    
+    # Mock find_similar_resolutions method
+    service.find_similar_resolutions = AsyncMock()
+    service.find_similar_resolutions.return_value = [
+        {
+            "entry": {
+                "id": "history1",
+                "conflict_id": "conflict1",
+                "merge_id": "merge1",
+                "conflict_type": "property_value",
+                "resolution_type": "keep_staging",
+                "resolution_data": {"property_name": "age"},
+                "applied_at": "2023-01-01T00:00:00",
+                "success": True,
+                "context": {"property_name": "age"}
+            },
+            "similarity_score": 0.9
+        }
+    ]
+    
+    return service
+
+@pytest.fixture
+def merge_service_with_mocks(mock_conflict_storage, mock_graph_storages, mock_resolution_applicator, mock_resolution_history_service):
     """Create a MergeService with mocked dependencies"""
     mock_staging, mock_production = mock_graph_storages
     
@@ -77,11 +120,17 @@ def merge_service_with_mocks(mock_conflict_storage, mock_graph_storages, mock_re
         progress_tracker=AsyncMock()
     )
     
+    # Set the resolution history service directly
+    service.resolution_history = mock_resolution_history_service
+    
     # Add mock for _update_conflict method
     service._update_conflict = AsyncMock()
     
     # Set the resolution applicator directly
     service.resolution_applicator = mock_resolution_applicator
+    
+    # Mock the get_conflict method
+    service.get_conflict = AsyncMock()
     
     # Mock the ResolutionApplicator creation
     with patch("app.services.merge.service.ResolutionApplicator", return_value=mock_resolution_applicator):
@@ -362,4 +411,136 @@ class TestMergeServiceResolution:
         assert "error" in result["results"][1]
         
         # Verify apply_conflict_resolution was called for each resolution
-        assert merge_service_with_mocks.apply_conflict_resolution.call_count == 2 
+        assert merge_service_with_mocks.apply_conflict_resolution.call_count == 2
+    
+    @pytest.mark.asyncio
+    async def test_apply_conflict_resolution_stores_history(self, merge_service_with_mocks):
+        # Arrange
+        service = merge_service_with_mocks
+        
+        # Mock get_conflict to return a conflict
+        sample_conflict = Conflict(
+            id="conflict1",
+            merge_id="merge1",
+            conflict_type=ConflictType.PROPERTY_VALUE,
+            severity=ConflictSeverity.MAJOR,
+            staging_ids=["s1"],
+            production_ids=["p1"],
+            description="Property 'age' has different values",
+            context={
+                "property_name": "age",
+                "staging_value": 30,
+                "production_value": 32,
+                "entity_type": "Person"
+            },
+            resolution_options=[
+                ResolutionOption(
+                    id="opt1",
+                    description="Keep staging value: 30",
+                    resolution_type="keep_staging",
+                    resolution_data={"property_name": "age"},
+                    confidence=0.5
+                )
+            ]
+        )
+        service.get_conflict.return_value = sample_conflict
+        
+        # Get the real method from MergeService
+        real_method = MergeService.apply_conflict_resolution
+        
+        # Act
+        result = await real_method(
+            service,
+            merge_id="merge1",
+            conflict_id="conflict1",
+            resolution_id="opt1",
+            resolved_by="test_user"
+        )
+        
+        # Assert
+        service.get_conflict.assert_called_once_with("merge1", "conflict1")
+        service._update_conflict.assert_called_once()
+        service.resolution_history.store_resolution.assert_called_once_with(
+            conflict=sample_conflict,
+            resolution_id="opt1",
+            applied_by="test_user",
+            merge_id="merge1",
+            success=True
+        )
+    
+    @pytest.mark.asyncio
+    async def test_get_resolution_suggestions(self, merge_service_with_mocks):
+        # Arrange
+        service = merge_service_with_mocks
+        
+        # Mock get_conflict to return a conflict
+        sample_conflict = Conflict(
+            id="conflict1",
+            merge_id="merge1",
+            conflict_type=ConflictType.PROPERTY_VALUE,
+            severity=ConflictSeverity.MAJOR,
+            staging_ids=["s1"],
+            production_ids=["p1"],
+            description="Property 'age' has different values",
+            context={"property_name": "age", "entity_type": "Person"},
+            resolution_options=[]
+        )
+        service.get_conflict.return_value = sample_conflict
+        
+        # Get the real method from MergeService
+        real_method = MergeService.get_resolution_suggestions
+        
+        # Act
+        suggestions = await real_method(
+            service,
+            merge_id="merge1",
+            conflict_id="conflict1"
+        )
+        
+        # Assert
+        assert len(suggestions) == 1
+        assert suggestions[0]["resolution_type"] == "keep_staging"
+        assert suggestions[0]["similarity_score"] == 0.9
+        assert suggestions[0]["was_successful"] is True
+        
+        # Verify methods were called
+        service.get_conflict.assert_called_once_with("merge1", "conflict1")
+        service.resolution_history.find_similar_resolutions.assert_called_once_with(
+            conflict=sample_conflict
+        )
+    
+    @pytest.mark.asyncio
+    async def test_apply_conflict_resolution_not_found(self, merge_service_with_mocks):
+        # Arrange
+        service = merge_service_with_mocks
+        service.get_conflict.return_value = None
+        
+        # Get the real method from MergeService
+        real_method = MergeService.apply_conflict_resolution
+        
+        # Act/Assert
+        with pytest.raises(ValueError, match="Conflict .* not found"):
+            await real_method(
+                service,
+                merge_id="merge1",
+                conflict_id="nonexistent",
+                resolution_id="opt1",
+                resolved_by="test_user"
+            )
+    
+    @pytest.mark.asyncio
+    async def test_get_resolution_suggestions_not_found(self, merge_service_with_mocks):
+        # Arrange
+        service = merge_service_with_mocks
+        service.get_conflict.return_value = None
+        
+        # Get the real method from MergeService
+        real_method = MergeService.get_resolution_suggestions
+        
+        # Act/Assert
+        with pytest.raises(ValueError, match="Conflict .* not found"):
+            await real_method(
+                service,
+                merge_id="merge1",
+                conflict_id="nonexistent"
+            ) 
