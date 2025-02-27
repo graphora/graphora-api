@@ -272,3 +272,68 @@ async def analyze_conflicts_with_llm(
     Otherwise, all unresolved conflicts will be analyzed.
     """
     return await merge_service.analyze_conflicts_with_llm(merge_id, conflict_ids)
+
+@router.post(
+    "/{merge_id}/auto-resolve",
+    response_model=Dict[str, Any],
+    description="Automatically resolve minor conflicts"
+)
+async def auto_resolve_conflicts(
+    merge_id: str,
+    request: Optional[Dict[str, Any]] = Body(None)
+) -> Dict[str, Any]:
+    """Automatically resolve minor conflicts"""
+    try:
+        async with get_merge_service() as merge_service:
+            result = await merge_service.auto_resolve_conflicts(merge_id, request)
+            return result
+    except Exception as e:
+        logger.error(f"Auto-resolution failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Auto-resolution failed: {str(e)}"
+        )
+
+@router.post(
+    "/{merge_id}/select-strategies",
+    response_model=Dict[str, Any],
+    description="Select resolution strategies for conflicts"
+)
+async def select_resolution_strategies(
+    merge_id: str,
+    request: Optional[Dict[str, Any]] = Body(None)
+) -> Dict[str, Any]:
+    """Select resolution strategies for conflicts"""
+    try:
+        config = request.get("config") if request else None
+        async with get_merge_service() as merge_service:
+            result = await merge_service.select_resolution_strategies(merge_id, config)
+            return result
+    except Exception as e:
+        logger.error(f"Strategy selection failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Strategy selection failed: {str(e)}"
+        )
+
+@router.post(
+    "/{merge_id}/apply-strategies",
+    response_model=Dict[str, Any],
+    description="Apply selected resolution strategies"
+)
+async def apply_selected_strategies(
+    merge_id: str,
+    request: Dict[str, Any] = Body(...)
+) -> Dict[str, Any]:
+    """Apply selected resolution strategies"""
+    try:
+        min_confidence = request.get("min_confidence", 0.7)
+        async with get_merge_service() as merge_service:
+            result = await merge_service.apply_selected_strategies(merge_id, min_confidence)
+            return result
+    except Exception as e:
+        logger.error(f"Applying strategies failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Applying strategies failed: {str(e)}"
+        )
