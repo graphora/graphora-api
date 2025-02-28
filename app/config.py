@@ -282,6 +282,36 @@ class Settings(BaseSettings):
         description="Application logging level"
     )
     
+    # Qdrant Vector Database Settings
+    QDRANT_URL: str = Field(
+        default="http://localhost:6333",
+        description="Qdrant server URL"
+    )
+    QDRANT_API_KEY: Optional[str] = Field(
+        default=None,
+        description="Qdrant API key for authentication"
+    )
+    QDRANT_COLLECTION_NAME: str = Field(
+        default="resolution_patterns",
+        description="Qdrant collection name for resolution patterns"
+    )
+    QDRANT_VECTOR_SIZE: int = Field(
+        default=1536,
+        description="Vector size for embeddings"
+    )
+    QDRANT_DISTANCE_METRIC: str = Field(
+        default="Cosine",
+        description="Distance metric for vector similarity (Cosine, Euclid, Dot)"
+    )
+    QDRANT_SEARCH_LIMIT: int = Field(
+        default=10,
+        description="Default limit for similarity search results"
+    )
+    QDRANT_SCORE_THRESHOLD: float = Field(
+        default=0.7,
+        description="Default score threshold for similarity search"
+    )
+    
     @property
     def ontology_dir(self) -> str:
         """Get the ontology directory path based on mode"""
