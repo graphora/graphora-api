@@ -261,3 +261,17 @@ class GroupBatchResolutionRequest(BaseModel):
     group_key: str = Field(..., description="Key identifying the conflict group")
     resolution_option: ResolutionOption = Field(..., description="Resolution option to apply to all conflicts in the group")
     exceptions: List[str] = Field(default_factory=list, description="List of conflict IDs to exclude from batch resolution")
+
+class ResolutionPattern(BaseModel):
+    """Data model for resolution patterns extracted from conflict resolutions"""
+    id: str = Field(..., description="Unique identifier for this pattern")
+    conflict_type: ConflictType = Field(..., description="Type of conflict this pattern applies to")
+    context_features: Dict[str, Any] = Field(default_factory=dict, description="Context features that define when this pattern applies")
+    condition_features: Dict[str, Any] = Field(default_factory=dict, description="Condition features that determine when this pattern should be applied")
+    resolution_action: str = Field(..., description="Type of resolution action to take")
+    resolution_params: Dict[str, Any] = Field(default_factory=dict, description="Parameters needed to apply the resolution")
+    confidence_score: float = Field(..., ge=0.0, le=1.0, description="Confidence score for this pattern")
+    embedding: Optional[List[float]] = Field(None, description="Vector embedding for semantic similarity search")
+    occurrence_count: int = Field(default=1, description="Number of times this pattern has been observed")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc), description="When this pattern was first created")
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc), description="When this pattern was last updated")
