@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Path
+from fastapi import APIRouter, Depends, HTTPException, Query, Path, Body
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from app.dependencies import get_merge_service
@@ -44,6 +44,12 @@ class ResolutionStats(BaseModel):
     success_rate: float = Field(..., description="Overall success rate")
     average_effectiveness: float = Field(..., description="Average effectiveness rating")
     time_distribution: Dict[str, int] = Field(..., description="Distribution by time period")
+
+class FeedbackRequest(BaseModel):
+    """Request model for submitting feedback on a resolution"""
+    success: bool = Field(..., description="Whether the resolution was successful")
+    feedback: Optional[str] = Field(None, description="Detailed feedback on the resolution")
+    effectiveness: Optional[float] = Field(None, ge=0.0, le=1.0, description="Effectiveness rating (0.0-1.0)")
 
 @router.get("/stats", response_model=ResolutionStats)
 async def get_resolution_stats(
@@ -157,4 +163,35 @@ async def filter_resolutions(
         total=total_count,
         limit=limit,
         offset=offset
-    ) 
+    )
+
+@router.post("/{resolution_id}/feedback", response_model=Dict[str, bool])
+async def submit_resolution_feedback(
+    resolution_id: str = Path(..., description="ID of the resolution to update"),
+    feedback_request: FeedbackRequest = Body(..., description="Feedback details"),
+    merge_service = Depends(get_merge_service)
+):
+    """
+    Submit feedback for a specific resolution.
+    
+    This endpoint allows users to provide feedback on a resolution, including whether it was successful,
+    detailed feedback comments, and an effectiveness rating.
+    """
+    # Get resolution history service from merge service
+    resolution_service: ResolutionHistoryService = merge_service.resolution_history
+    
+    # Update the resolution with feedback
+    result = await resolution_service.update_resolution_success(
+        resolution_id=resolution_id,
+        success=feedback_request.success,
+        feedback=feedback_request.feedback,
+        effectiveness=feedback_request.effectiveness
+    )
+    
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Resolution {resolution_id} not found"
+        )
+        
+    return {"updated": True} 
