@@ -37,7 +37,7 @@ async def get_embedding(text: str) -> List[float]:
     except Exception as e:
         logger.error(f"Error generating embedding: {str(e)}")
         # Return zero vector as fallback
-        return [0.0] * 1536  # Default size for OpenAI embeddings
+        return [0.0] * 1536  # Default size for the embedding model
 
 async def get_batch_embeddings(texts: List[str]) -> List[List[float]]:
     """

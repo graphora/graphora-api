@@ -20,7 +20,7 @@ async def vector_storage():
     # Create storage instance with test collection
     storage = QdrantResolutionStorage(
         collection_name=collection_name,
-        vector_size=768,  # Updated: Use 768 for HuggingFace all-mpnet-base-v2 model (not 1536 which is for OpenAI)
+        vector_size=768,  # Use 768 to match the embedding dimension of the model
         url="http://localhost:6333",  # Use local Qdrant instance
     )
     
@@ -28,7 +28,7 @@ async def vector_storage():
     
     # Cleanup: delete the test collection
     try:
-        await storage.client.delete_collection(collection_name=collection_name)
+        storage.client.delete_collection(collection_name=collection_name)
     except Exception as e:
         print(f"Error cleaning up test collection: {str(e)}")
 

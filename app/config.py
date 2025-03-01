@@ -312,6 +312,32 @@ class Settings(BaseSettings):
         description="Default score threshold for similarity search"
     )
     
+    # Resolution Learning Service Settings
+    RESOLUTION_LEARNING_HIGH_CONFIDENCE: float = Field(
+        default=0.85,
+        description="Threshold for automatic application of learned resolutions"
+    )
+    RESOLUTION_LEARNING_MEDIUM_CONFIDENCE: float = Field(
+        default=0.70,
+        description="Threshold for suggesting learned resolutions"
+    )
+    RESOLUTION_LEARNING_RATE_LIMIT: int = Field(
+        default=10,
+        description="Maximum number of automatic resolutions per minute"
+    )
+    RESOLUTION_LEARNING_MIN_SUCCESS_RATE: float = Field(
+        default=0.5,
+        description="Minimum success rate required for automatic application"
+    )
+    RESOLUTION_LEARNING_MIN_RESOLUTION_COUNT: int = Field(
+        default=3,
+        description="Minimum number of successful resolutions required for learning"
+    )
+    RESOLUTION_LEARNING_MAX_AGE_DAYS: int = Field(
+        default=30,
+        description="Maximum age of resolutions to consider for learning (in days)"
+    )
+    
     @property
     def ontology_dir(self) -> str:
         """Get the ontology directory path based on mode"""

@@ -20,7 +20,7 @@ class ResolutionEmbeddingGenerator:
         except Exception as e:
             logger.error(f"Error generating embedding for conflict {conflict.id}: {str(e)}")
             # Return zero vector as fallback
-            return [0.0] * 1536  # Default size for OpenAI embeddings
+            return [0.0] * 1536  # Default size for the embedding model
     
     def _conflict_to_text(self, conflict: Conflict) -> str:
         """Convert conflict to text representation for embedding"""
@@ -89,13 +89,18 @@ class ResolutionPatternSearchService:
         start_time = time.time()
         
         try:
+            logger.info(f"Finding similar resolutions for conflict {conflict.id} with limit {limit}")
+            
             # Generate embedding for the conflict
             embedding = await self.embedding_generator.generate_embedding(conflict)
+            logger.info(f"Generated embedding for conflict {conflict.id} with length {len(embedding)}")
             
             # Prepare filters
             query_filters = self._build_filters(conflict, filters)
+            logger.info(f"Built filters for search: {query_filters}")
             
             # Query vector storage
+            logger.info(f"Querying vector storage with threshold {self.similarity_threshold}")
             results = await self.vector_storage.search_similar_resolutions(
                 conflict=conflict,
                 top_k=limit,
@@ -107,6 +112,12 @@ class ResolutionPatternSearchService:
             # Log performance
             elapsed_time = (time.time() - start_time) * 1000  # Convert to ms
             logger.info(f"Resolution pattern search completed in {elapsed_time:.2f}ms, found {len(results)} results")
+            
+            if results:
+                for i, (pattern, score) in enumerate(results):
+                    logger.info(f"Result {i+1}: Pattern {pattern.id} with score {score}, strategy: {pattern.resolution_strategy}")
+            else:
+                logger.warning(f"No similar resolution patterns found for conflict {conflict.id}")
             
             return results
         except Exception as e:
