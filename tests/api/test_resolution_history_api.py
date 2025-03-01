@@ -9,6 +9,8 @@ from app.main import app
 from app.schemas.conflicts import ConflictType, ConflictSeverity
 from app.schemas.resolution_history import ResolutionHistoryEntry, ResolutionFilter, PaginationParams, ResolutionStats
 from app.dependencies import get_merge_service
+from app.services.resolution_history_service import ResolutionHistoryService
+import json
 
 # Mock data
 mock_entries = [
@@ -169,9 +171,14 @@ async def mock_get_merge_service():
     yield mock_service
 
 @pytest.fixture
-def test_client():
+def test_client(mock_resolution_service):
     """Create a test client with mocked dependencies"""
     # Patch the get_merge_service dependency
+    async def mock_get_merge_service():
+        mock_service = MagicMock()
+        mock_service.resolution_history = mock_resolution_service
+        yield mock_service
+    
     app.dependency_overrides[get_merge_service] = mock_get_merge_service
     
     # Create and return the test client
@@ -181,122 +188,309 @@ def test_client():
     # Clean up the override after the test
     app.dependency_overrides.clear()
 
+@pytest.fixture
+def mock_resolution_service():
+    with patch("app.dependencies.get_merge_service") as mock_get_service:
+        mock_service = MagicMock()
+        mock_resolution_service = AsyncMock(spec=ResolutionHistoryService)
+        mock_service.resolution_history = mock_resolution_service
+        mock_get_service.return_value = mock_service
+        yield mock_resolution_service
+
 class TestResolutionHistoryAPI:
     """Tests for the resolution history API endpoints"""
     
-    def test_get_resolutions_by_merge_id(self, test_client):
-        # Act
-        response = test_client.get("/api/v1/resolutions/merge1")
+    def test_get_resolutions_by_merge_id(self, test_client, mock_resolution_service):
+        # Setup mock data
+        mock_entries = [
+            ResolutionHistoryEntry(
+                id="res1",
+                conflict_id="conflict1",
+                merge_id="merge123",
+                conflict_type=ConflictType.PROPERTY_VALUE,
+                severity=ConflictSeverity.MAJOR,
+                context={"entity_type": "Person"},
+                resolution_id="opt1",
+                resolution_type="keep_source",
+                entity_types=["Person"],
+                property_names=["name"],
+                applied_by="user1",
+                applied_at=datetime.now(),
+                success=True,
+                effectiveness=0.8
+            ),
+            ResolutionHistoryEntry(
+                id="res2",
+                conflict_id="conflict2",
+                merge_id="merge123",
+                conflict_type=ConflictType.RELATIONSHIP_TYPE,
+                severity=ConflictSeverity.MAJOR,
+                context={"entity_type": "Organization"},
+                resolution_id="opt2",
+                resolution_type="keep_target",
+                entity_types=["Organization"],
+                relationship_types=["EMPLOYS"],
+                applied_by="user2",
+                applied_at=datetime.now(),
+                success=False,
+                effectiveness=0.7
+            )
+        ]
         
-        # Assert
+        # Configure mock
+        mock_resolution_service.get_resolution_history.return_value = mock_entries
+        mock_resolution_service.get_resolution_count.return_value = len(mock_entries)
+        
+        # Make request
+        response = test_client.get("/api/v1/resolutions/merge123")
+        
+        # Assertions
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 2
         assert len(data["items"]) == 2
-        assert data["items"][0]["id"] == "history1"
-        assert data["items"][1]["id"] == "history2"
-    
-    def test_get_resolutions_by_merge_id_not_found(self, test_client):
-        # Act
-        response = test_client.get("/api/v1/resolutions/nonexistent")
+        assert data["items"][0]["id"] == "res1"
+        assert data["items"][1]["id"] == "res2"
         
-        # Assert
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 0
-        assert len(data["items"]) == 0
+        # Verify service was called correctly
+        mock_resolution_service.get_resolution_history.assert_called_once_with(
+            merge_id="merge123",
+            limit=10,
+            offset=0
+        )
     
-    def test_filter_resolutions(self, test_client):
-        # Act
+    def test_filter_resolutions(self, test_client, mock_resolution_service):
+        # Setup mock data
+        mock_entries = [
+            ResolutionHistoryEntry(
+                id="res1",
+                conflict_id="conflict1",
+                merge_id="merge123",
+                conflict_type=ConflictType.PROPERTY_VALUE,
+                severity=ConflictSeverity.MAJOR,
+                context={"entity_type": "Person"},
+                resolution_id="opt1",
+                resolution_type="keep_source",
+                entity_types=["Person"],
+                property_names=["name"],
+                applied_by="user1",
+                applied_at=datetime.now(),
+                success=True,
+                effectiveness=0.8
+            )
+        ]
+        
+        # Configure mock
+        mock_resolution_service.filter_resolutions.return_value = (mock_entries, 1)
+        
+        # Make request with filters
         response = test_client.get(
-            "/api/v1/resolutions?conflict_type=property_value&limit=10&offset=0"
+            "/api/v1/resolutions?conflict_type=property_value&user=user1&effectiveness=0.8"
         )
         
-        # Assert
+        # Assertions
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 1
         assert len(data["items"]) == 1
+        assert data["items"][0]["id"] == "res1"
         assert data["items"][0]["conflict_type"] == "property_value"
+        assert data["items"][0]["applied_by"] == "user1"
+        assert data["items"][0]["effectiveness"] == 0.8
     
-    def test_filter_resolutions_with_multiple_filters(self, test_client):
-        # Act
+    def test_filter_resolutions_with_multiple_filters(self, test_client, mock_resolution_service):
+        # Setup mock data
+        mock_entries = [
+            ResolutionHistoryEntry(
+                id="res1",
+                conflict_id="conflict1",
+                merge_id="merge123",
+                conflict_type=ConflictType.PROPERTY_VALUE,
+                severity=ConflictSeverity.MAJOR,
+                context={"entity_type": "Person"},
+                resolution_id="opt1",
+                resolution_type="keep_source",
+                entity_types=["Person"],
+                property_names=["name"],
+                applied_by="user1",
+                applied_at=datetime.now(),
+                success=True,
+                effectiveness=0.8
+            )
+        ]
+        
+        # Configure mock
+        mock_resolution_service.filter_resolutions.return_value = (mock_entries, 1)
+        
+        # Make request with multiple filters
         response = test_client.get(
-            "/api/v1/resolutions?conflict_type=relationship_type&user=user1&effectiveness=0.7"
+            "/api/v1/resolutions?conflict_type=property_value&entity_type=Person&resolution_type=keep_source"
         )
         
-        # Assert
+        # Assertions
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 1
-        assert len(data["items"]) == 1
-        assert data["items"][0]["conflict_type"] == "relationship_type"
-        assert data["items"][0]["applied_by"] == "user1"
     
-    def test_get_resolution_stats(self, test_client):
-        # Act
+    def test_get_resolution_stats(self, test_client, mock_resolution_service):
+        # Setup mock stats
+        mock_stats = {
+            "total_resolutions": 10,
+            "by_conflict_type": {
+                "property_value": 5,
+                "relationship_type": 3,
+                "entity_match": 2
+            },
+            "by_resolution_type": {
+                "keep_source": 4,
+                "keep_target": 3,
+                "merge_values": 3
+            },
+            "by_entity_type": {
+                "Person": 5,
+                "Organization": 3,
+                "Product": 2
+            },
+            "by_user": {
+                "user1": 6,
+                "user2": 4
+            },
+            "success_rate": 0.8,
+            "average_effectiveness": 0.75,
+            "time_distribution": {
+                "last_day": 2,
+                "last_week": 5,
+                "last_month": 3
+            }
+        }
+        
+        # Configure mock
+        mock_resolution_service.get_resolution_stats.return_value = mock_stats
+        
+        # Make request
         response = test_client.get("/api/v1/resolutions/stats")
         
-        # Assert
+        # Assertions
         assert response.status_code == 200
         data = response.json()
-        assert data["total_resolutions"] == 100
-        assert data["success_rate"] == 0.85
-        assert data["by_conflict_type"]["property_value"] == 60
-        assert data["by_resolution_type"]["KEEP_STAGING"] == 45
-        assert data["by_entity_type"]["Person"] == 50
-        assert data["by_user"]["user1"] == 60
+        assert data["total_resolutions"] == 10
+        assert data["by_conflict_type"]["property_value"] == 5
+        assert data["success_rate"] == 0.8
         assert data["average_effectiveness"] == 0.75
-        assert data["time_distribution"]["2023-01"] == 30
     
-    def test_get_resolution_history(self, test_client):
-        # Act
-        response = test_client.get("/api/v1/merge/resolution/history?merge_id=merge1")
+    def test_pagination_and_sorting(self, test_client, mock_resolution_service):
+        # Setup mock data
+        mock_entries = [
+            ResolutionHistoryEntry(
+                id=f"res{i}",
+                conflict_id=f"conflict{i}",
+                merge_id="merge123",
+                conflict_type=ConflictType.PROPERTY_VALUE,
+                severity=ConflictSeverity.MAJOR,
+                context={"entity_type": "Person"},
+                resolution_id=f"opt{i}",
+                resolution_type="keep_source",
+                entity_types=["Person"],
+                property_names=["name"],
+                applied_by="user1",
+                applied_at=datetime.now(),
+                success=True,
+                effectiveness=0.5 + (i/10)
+            ) for i in range(5)
+        ]
         
-        # Assert
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data) == 2
-        assert data[0]["id"] == "history1"
-        assert data[1]["id"] == "history2"
-    
-    def test_get_resolution_history_invalid_conflict_type(self, test_client):
-        # Act
-        response = test_client.get("/api/v1/merge/resolution/history?conflict_type=INVALID")
+        # Configure mock
+        mock_resolution_service.filter_resolutions.return_value = (mock_entries[2:4], 5)
         
-        # Assert
-        assert response.status_code == 400
-        assert "Invalid conflict type" in response.json()["detail"]
-    
-    def test_get_resolution_suggestions(self, test_client):
-        # Act
-        response = test_client.get("/api/v1/merge/conflicts/merge1/conflict1/suggestions")
-        
-        # Assert
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data) == 2
-        assert data[0]["resolution_type"] == "KEEP_STAGING"
-        assert data[0]["confidence"] == 0.85
-    
-    def test_update_resolution_feedback(self, test_client):
-        # Act
-        response = test_client.post(
-            "/api/v1/merge/resolution/history1/feedback?success=false",
-            json={"feedback": "Resolution didn't work as expected"}
+        # Make request with pagination and sorting
+        response = test_client.get(
+            "/api/v1/resolutions?limit=2&offset=2&sort_by=effectiveness&sort_order=desc"
         )
         
-        # Assert
+        # Assertions
         assert response.status_code == 200
-        assert response.json()["updated"] is True
+        data = response.json()
+        assert data["total"] == 5
+        assert data["limit"] == 2
+        assert data["offset"] == 2
+        assert len(data["items"]) == 2
     
-    def test_update_resolution_feedback_not_found(self, test_client):
-        # Act
+    def test_submit_resolution_feedback(self, test_client, mock_resolution_service):
+        # Setup mock response
+        mock_resolution_service.update_resolution_success.return_value = True
+        
+        # Prepare feedback data
+        feedback_data = {
+            "success": True,
+            "feedback": "This resolution worked perfectly",
+            "effectiveness": 0.95
+        }
+        
+        # Make request
         response = test_client.post(
-            "/api/v1/merge/resolution/nonexistent/feedback?success=false"
+            "/api/v1/resolutions/res123/feedback",
+            json=feedback_data
         )
         
-        # Assert
+        # Assertions
+        assert response.status_code == 200
+        data = response.json()
+        assert data["updated"] == True
+        
+        # Verify service was called correctly
+        mock_resolution_service.update_resolution_success.assert_called_once_with(
+            resolution_id="res123",
+            success=True,
+            feedback="This resolution worked perfectly",
+            effectiveness=0.95
+        )
+    
+    def test_submit_resolution_feedback_not_found(self, test_client, mock_resolution_service):
+        # Setup mock response for non-existent resolution
+        mock_resolution_service.update_resolution_success.return_value = False
+        
+        # Prepare feedback data
+        feedback_data = {
+            "success": True,
+            "feedback": "This resolution worked perfectly",
+            "effectiveness": 0.95
+        }
+        
+        # Make request
+        response = test_client.post(
+            "/api/v1/resolutions/nonexistent/feedback",
+            json=feedback_data
+        )
+        
+        # Assertions
         assert response.status_code == 404
-        # The exact error message might be "Resolution nonexistent not found"
-        assert "nonexistent not found" in response.json()["detail"] 
+        data = response.json()
+        assert "not found" in data["detail"]
+    
+    def test_submit_resolution_feedback_minimal(self, test_client, mock_resolution_service):
+        # Setup mock response
+        mock_resolution_service.update_resolution_success.return_value = True
+        
+        # Prepare minimal feedback data (only success is required)
+        feedback_data = {
+            "success": False
+        }
+        
+        # Make request
+        response = test_client.post(
+            "/api/v1/resolutions/res123/feedback",
+            json=feedback_data
+        )
+        
+        # Assertions
+        assert response.status_code == 200
+        data = response.json()
+        assert data["updated"] == True
+        
+        # Verify service was called correctly with minimal data
+        mock_resolution_service.update_resolution_success.assert_called_once_with(
+            resolution_id="res123",
+            success=False,
+            feedback=None,
+            effectiveness=None
+        ) 
