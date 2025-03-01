@@ -1,11 +1,11 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import redis
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 from app.schemas.conflicts import Conflict, ConflictType
-from app.schemas.resolution_history import ResolutionHistoryEntry
+from app.schemas.resolution_history import ResolutionHistoryEntry, ResolutionFilter, PaginationParams
 from app.config import settings
 
 class ResolutionHistoryService:
@@ -22,7 +22,8 @@ class ResolutionHistoryService:
         applied_by: str,
         merge_id: str,
         success: bool = True,
-        feedback: Optional[str] = None
+        feedback: Optional[str] = None,
+        effectiveness: Optional[float] = None
     ) -> ResolutionHistoryEntry:
         """Store a resolution for learning"""
         # Get chosen resolution
@@ -76,7 +77,8 @@ class ResolutionHistoryService:
             applied_by=applied_by,
             applied_at=datetime.now(),
             success=success,
-            feedback=feedback
+            feedback=feedback,
+            effectiveness=effectiveness
         )
         
         # Generate vector embedding (simplified for illustration)
@@ -148,6 +150,31 @@ class ResolutionHistoryService:
                 f"resolution_index:relationship_type:{rel_type}",
                 entry.id
             )
+            
+        # Add to resolution type index
+        self.redis.sadd(
+            f"resolution_index:resolution_type:{entry.resolution_type}",
+            entry.id
+        )
+        
+        # Add to user index
+        self.redis.sadd(
+            f"resolution_index:user:{entry.applied_by}",
+            entry.id
+        )
+        
+        # Add to merge ID index
+        self.redis.sadd(
+            f"resolution_index:merge_id:{entry.merge_id}",
+            entry.id
+        )
+        
+        # Add to date index (by year-month)
+        date_key = entry.applied_at.strftime("%Y-%m")
+        self.redis.sadd(
+            f"resolution_index:date:{date_key}",
+            entry.id
+        )
         
         # Store vector embedding in a format suitable for similarity search
         # In a production system, you might use a vector database like Qdrant, Pinecone, or Redis with RediSearch
@@ -319,7 +346,9 @@ class ResolutionHistoryService:
         conflict_type: Optional[ConflictType] = None,
         entity_type: Optional[str] = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        sort_by: str = "applied_at",
+        sort_order: str = "desc"
     ) -> List[ResolutionHistoryEntry]:
         """Get resolution history with optional filtering"""
         # Build filter sets
@@ -327,26 +356,12 @@ class ResolutionHistoryService:
         
         if merge_id:
             # Get all resolutions for this merge ID
-            merge_entry_ids = []
-            cursor = 0
-            while True:
-                cursor, keys = self.redis.scan(
-                    cursor=cursor,
-                    match=f"resolution_history:*",
-                    count=1000
-                )
-                
-                for key in keys:
-                    entry_json = self.redis.get(key)
-                    if entry_json:
-                        entry = ResolutionHistoryEntry.model_validate_json(entry_json)
-                        if entry.merge_id == merge_id:
-                            merge_entry_ids.append(entry.id)
-                
-                if cursor == 0:
-                    break
-            
-            filter_sets.append(set(merge_entry_ids))
+            merge_entry_ids = self.redis.smembers(f"resolution_index:merge_id:{merge_id}")
+            if merge_entry_ids:
+                filter_sets.append({m.decode('utf-8') for m in merge_entry_ids})
+            else:
+                # If no entries found for this merge ID, return empty list
+                return []
         
         if conflict_type:
             type_matches = self.redis.smembers(
@@ -378,27 +393,154 @@ class ResolutionHistoryService:
                     break
             result_ids = set(all_entries)
         
-        # Sort by timestamp (newer first)
-        sorted_entries = []
+        # Get entries
+        entries = []
         for entry_id in result_ids:
             entry_json = self.redis.get(f"resolution_history:{entry_id}")
             if entry_json:
-                sorted_entries.append(
+                entries.append(
                     ResolutionHistoryEntry.model_validate_json(entry_json)
                 )
-                
-        sorted_entries.sort(key=lambda e: e.applied_at, reverse=True)
+        
+        # Sort entries
+        if sort_by == "applied_at":
+            entries.sort(key=lambda e: e.applied_at, reverse=(sort_order.lower() == "desc"))
+        elif sort_by == "effectiveness" and all(e.effectiveness is not None for e in entries):
+            entries.sort(key=lambda e: e.effectiveness or 0.0, reverse=(sort_order.lower() == "desc"))
+        elif sort_by == "severity":
+            entries.sort(key=lambda e: e.severity.value, reverse=(sort_order.lower() == "desc"))
         
         # Apply pagination
-        return sorted_entries[offset:offset+limit]
+        return entries[offset:offset+limit]
+    
+    async def get_resolution_count(self, merge_id: Optional[str] = None) -> int:
+        """Get count of resolutions matching the filter"""
+        if merge_id:
+            # Get count of resolutions for this merge ID
+            merge_entry_ids = self.redis.smembers(f"resolution_index:merge_id:{merge_id}")
+            return len(merge_entry_ids)
+        else:
+            # Get count of all resolutions
+            all_keys = self.redis.keys("resolution_history:*")
+            return len(all_keys)
+    
+    async def filter_resolutions(
+        self,
+        filter_params: ResolutionFilter,
+        pagination_params: PaginationParams
+    ) -> Tuple[List[ResolutionHistoryEntry], int]:
+        """Filter resolutions by various criteria with pagination and sorting"""
+        # Build filter sets
+        filter_sets = []
+        
+        # Filter by conflict type
+        if filter_params.conflict_type:
+            type_matches = self.redis.smembers(
+                f"resolution_index:conflict_type:{filter_params.conflict_type.value}"
+            )
+            filter_sets.append({m.decode('utf-8') for m in type_matches})
+        
+        # Filter by resolution type
+        if filter_params.resolution_type:
+            type_matches = self.redis.smembers(
+                f"resolution_index:resolution_type:{filter_params.resolution_type}"
+            )
+            filter_sets.append({m.decode('utf-8') for m in type_matches})
+        
+        # Filter by entity type
+        if filter_params.entity_type:
+            entity_matches = self.redis.smembers(
+                f"resolution_index:entity_type:{filter_params.entity_type}"
+            )
+            filter_sets.append({m.decode('utf-8') for m in entity_matches})
+        
+        # Filter by property name
+        if filter_params.property_name:
+            prop_matches = self.redis.smembers(
+                f"resolution_index:property_name:{filter_params.property_name}"
+            )
+            filter_sets.append({m.decode('utf-8') for m in prop_matches})
+        
+        # Filter by relationship type
+        if filter_params.relationship_type:
+            rel_matches = self.redis.smembers(
+                f"resolution_index:relationship_type:{filter_params.relationship_type}"
+            )
+            filter_sets.append({m.decode('utf-8') for m in rel_matches})
+        
+        # Filter by user
+        if filter_params.user:
+            user_matches = self.redis.smembers(
+                f"resolution_index:user:{filter_params.user}"
+            )
+            filter_sets.append({m.decode('utf-8') for m in user_matches})
+        
+        # Intersect all filter sets
+        if filter_sets:
+            result_ids = set.intersection(*filter_sets) if len(filter_sets) > 1 else filter_sets[0]
+        else:
+            # No filters, get all IDs
+            all_entries = []
+            cursor = 0
+            while True:
+                cursor, keys = self.redis.scan(
+                    cursor=cursor,
+                    match=f"resolution_history:*",
+                    count=1000
+                )
+                all_entries.extend([k.decode('utf-8').split(':')[1] for k in keys])
+                if cursor == 0:
+                    break
+            result_ids = set(all_entries)
+        
+        # Get entries
+        entries = []
+        for entry_id in result_ids:
+            entry_json = self.redis.get(f"resolution_history:{entry_id}")
+            if entry_json:
+                entry = ResolutionHistoryEntry.model_validate_json(entry_json)
+                
+                # Apply date filters
+                if filter_params.start_date and entry.applied_at < filter_params.start_date:
+                    continue
+                if filter_params.end_date and entry.applied_at > filter_params.end_date:
+                    continue
+                
+                # Apply effectiveness filter
+                if filter_params.effectiveness is not None:
+                    if entry.effectiveness is None or entry.effectiveness < filter_params.effectiveness:
+                        continue
+                
+                # Apply success filter
+                if filter_params.success is not None and entry.success != filter_params.success:
+                    continue
+                
+                entries.append(entry)
+        
+        # Get total count for pagination
+        total_count = len(entries)
+        
+        # Sort entries
+        if pagination_params.sort_by == "applied_at":
+            entries.sort(key=lambda e: e.applied_at, reverse=(pagination_params.sort_order.lower() == "desc"))
+        elif pagination_params.sort_by == "effectiveness" and all(e.effectiveness is not None for e in entries):
+            entries.sort(key=lambda e: e.effectiveness or 0.0, reverse=(pagination_params.sort_order.lower() == "desc"))
+        elif pagination_params.sort_by == "severity":
+            entries.sort(key=lambda e: e.severity.value, reverse=(pagination_params.sort_order.lower() == "desc"))
+        
+        # Apply pagination
+        paginated_entries = entries[pagination_params.offset:pagination_params.offset+pagination_params.limit]
+        
+        return paginated_entries, total_count
             
     async def update_resolution_success(
         self,
         resolution_id: str,
         success: bool,
-        feedback: Optional[str] = None
+        feedback: Optional[str] = None,
+        effectiveness: Optional[float] = None
     ) -> bool:
-        """Update success status and feedback for a resolution"""
+        """Update success status, feedback, and effectiveness for a resolution"""
         entry_json = self.redis.get(f"resolution_history:{resolution_id}")
         if not entry_json:
             return False
@@ -407,6 +549,8 @@ class ResolutionHistoryService:
         entry.success = success
         if feedback:
             entry.feedback = feedback
+        if effectiveness is not None:
+            entry.effectiveness = effectiveness
             
         # Update in Redis
         self.redis.set(
@@ -416,34 +560,100 @@ class ResolutionHistoryService:
         
         return True
         
-    async def get_resolution_stats(self) -> Dict[str, Any]:
+    async def get_resolution_stats(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> Dict[str, Any]:
         """Get statistics about stored resolutions"""
+        # Get all entries
+        all_entries = []
+        cursor = 0
+        while True:
+            cursor, keys = self.redis.scan(
+                cursor=cursor,
+                match=f"resolution_history:*",
+                count=1000
+            )
+            
+            for key in keys:
+                entry_json = self.redis.get(key)
+                if entry_json:
+                    entry = ResolutionHistoryEntry.model_validate_json(entry_json)
+                    
+                    # Apply date filters
+                    if start_date and entry.applied_at < start_date:
+                        continue
+                    if end_date and entry.applied_at > end_date:
+                        continue
+                    
+                    all_entries.append(entry)
+            
+            if cursor == 0:
+                break
+        
         # Count total entries
-        all_entry_keys = self.redis.keys("resolution_history:*")
-        total_count = len(all_entry_keys)
+        total_count = len(all_entries)
+        
+        if total_count == 0:
+            return {
+                "total_resolutions": 0,
+                "by_conflict_type": {},
+                "by_resolution_type": {},
+                "by_entity_type": {},
+                "by_user": {},
+                "success_count": 0,
+                "success_rate": 0.0,
+                "average_effectiveness": 0.0,
+                "time_distribution": {}
+            }
         
         # Count by conflict type
         type_counts = {}
-        for conflict_type in ConflictType:
-            count = len(self.redis.smembers(
-                f"resolution_index:conflict_type:{conflict_type.value}"
-            ))
-            type_counts[conflict_type.value] = count
+        for entry in all_entries:
+            conflict_type = entry.conflict_type.value
+            type_counts[conflict_type] = type_counts.get(conflict_type, 0) + 1
+        
+        # Count by resolution type
+        resolution_type_counts = {}
+        for entry in all_entries:
+            resolution_type = entry.resolution_type
+            resolution_type_counts[resolution_type] = resolution_type_counts.get(resolution_type, 0) + 1
+        
+        # Count by entity type
+        entity_type_counts = {}
+        for entry in all_entries:
+            for entity_type in entry.entity_types:
+                entity_type_counts[entity_type] = entity_type_counts.get(entity_type, 0) + 1
+        
+        # Count by user
+        user_counts = {}
+        for entry in all_entries:
+            user = entry.applied_by
+            user_counts[user] = user_counts.get(user, 0) + 1
         
         # Count success rate
-        success_count = 0
-        for key in all_entry_keys:
-            entry_json = self.redis.get(key)
-            if entry_json:
-                entry = ResolutionHistoryEntry.model_validate_json(entry_json)
-                if entry.success:
-                    success_count += 1
-        
+        success_count = sum(1 for entry in all_entries if entry.success)
         success_rate = success_count / total_count if total_count > 0 else 0
+        
+        # Calculate average effectiveness
+        effectiveness_values = [entry.effectiveness for entry in all_entries if entry.effectiveness is not None]
+        average_effectiveness = sum(effectiveness_values) / len(effectiveness_values) if effectiveness_values else 0.0
+        
+        # Count by time period (month)
+        time_distribution = {}
+        for entry in all_entries:
+            month_key = entry.applied_at.strftime("%Y-%m")
+            time_distribution[month_key] = time_distribution.get(month_key, 0) + 1
         
         return {
             "total_resolutions": total_count,
             "by_conflict_type": type_counts,
+            "by_resolution_type": resolution_type_counts,
+            "by_entity_type": entity_type_counts,
+            "by_user": user_counts,
             "success_count": success_count,
-            "success_rate": success_rate
+            "success_rate": success_rate,
+            "average_effectiveness": average_effectiveness,
+            "time_distribution": time_distribution
         } 

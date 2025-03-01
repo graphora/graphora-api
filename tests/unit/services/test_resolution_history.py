@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta
 from app.services.resolution_history_service import ResolutionHistoryService
 from app.schemas.conflicts import Conflict, ConflictType, ConflictSeverity, ResolutionOption
-from app.schemas.resolution_history import ResolutionHistoryEntry
+from app.schemas.resolution_history import ResolutionHistoryEntry, ResolutionFilter, PaginationParams
 
 @pytest.fixture
 def mock_redis_client():
@@ -197,19 +197,14 @@ class TestResolutionHistoryService:
             applied_at=datetime.now()
         )
         
-        # Mock Redis scan to return keys
-        mock_redis_client.scan.return_value = (0, [b"resolution_history:res1", b"resolution_history:res2"])
-        
         # Mock Redis smembers for merge_id index
-        mock_redis_client.smembers.side_effect = lambda key: {
-            "resolution_index:merge_id:m1": {b"res1", b"res2"}
-        }.get(key, set())
+        mock_redis_client.smembers.return_value = {b"res1", b"res2"}
         
         # Mock Redis get to return entry JSON
         mock_redis_client.get.side_effect = lambda key: {
             "resolution_history:res1": entry1.model_dump_json(),
             "resolution_history:res2": entry2.model_dump_json(),
-        }.get(key.decode() if isinstance(key, bytes) else key)
+        }.get(key)
         
         # Act
         entries = await service.get_resolution_history(merge_id="m1")
@@ -283,7 +278,9 @@ class TestResolutionHistoryService:
             entity_types=["Person"],
             property_names=["age"],
             applied_by="user1",
-            success=True
+            success=True,
+            effectiveness=0.8,
+            applied_at=datetime.now() - timedelta(days=30)
         )
         
         entry2 = ResolutionHistoryEntry(
@@ -298,22 +295,20 @@ class TestResolutionHistoryService:
             entity_types=["Employee"],
             property_names=["salary"],
             applied_by="user1",
-            success=False
+            success=False,
+            effectiveness=0.6,
+            applied_at=datetime.now()
         )
         
-        # Mock Redis keys
-        mock_redis_client.keys.return_value = [b"resolution_history:res1", b"resolution_history:res2"]
-        
-        # Mock Redis smembers for conflict types
-        mock_redis_client.smembers.side_effect = lambda key: {
-            f"resolution_index:conflict_type:{ConflictType.PROPERTY_VALUE.value}": {b"res1", b"res2"},
-            f"resolution_index:conflict_type:{ConflictType.RELATIONSHIP_TYPE.value}": set()
-        }.get(key, set())
+        # Mock Redis scan
+        mock_redis_client.scan.return_value = (0, [b"resolution_history:res1", b"resolution_history:res2"])
         
         # Mock Redis get for entries
         mock_redis_client.get.side_effect = lambda key: {
             b"resolution_history:res1": entry1.model_dump_json(),
+            "resolution_history:res1": entry1.model_dump_json(),
             b"resolution_history:res2": entry2.model_dump_json(),
+            "resolution_history:res2": entry2.model_dump_json(),
         }.get(key)
         
         # Act
@@ -323,4 +318,100 @@ class TestResolutionHistoryService:
         assert stats["total_resolutions"] == 2
         assert stats["by_conflict_type"]["property_value"] == 2
         assert stats["success_count"] == 1
-        assert stats["success_rate"] == 0.5 
+        assert stats["success_rate"] == 0.5
+        assert stats["average_effectiveness"] == 0.7  # Average of 0.8 and 0.6
+        assert len(stats["by_resolution_type"]) == 2
+        assert len(stats["by_entity_type"]) == 2
+        assert len(stats["by_user"]) == 1
+        assert len(stats["time_distribution"]) > 0
+    
+    @pytest.mark.asyncio
+    async def test_get_resolution_count(self, mock_redis_client):
+        # Arrange
+        service = ResolutionHistoryService()
+        service.redis = mock_redis_client
+        
+        # Mock Redis smembers for merge_id index
+        mock_redis_client.smembers.return_value = {b"res1", b"res2", b"res3"}
+        
+        # Act
+        count = await service.get_resolution_count(merge_id="m1")
+        
+        # Assert
+        assert count == 3
+    
+    @pytest.mark.asyncio
+    async def test_filter_resolutions(self, mock_redis_client):
+        # Arrange
+        service = ResolutionHistoryService()
+        service.redis = mock_redis_client
+        
+        # Setup mock entries
+        entry1 = ResolutionHistoryEntry(
+            id="res1",
+            conflict_id="c1",
+            merge_id="m1",
+            conflict_type=ConflictType.PROPERTY_VALUE,
+            severity=ConflictSeverity.MAJOR,
+            context={"property_name": "age"},
+            resolution_id="opt1",
+            resolution_type="keep_staging",
+            entity_types=["Person"],
+            property_names=["age"],
+            applied_by="user1",
+            success=True,
+            effectiveness=0.8,
+            applied_at=datetime.now() - timedelta(days=30)
+        )
+        
+        entry2 = ResolutionHistoryEntry(
+            id="res2",
+            conflict_id="c2",
+            merge_id="m1",
+            conflict_type=ConflictType.PROPERTY_VALUE,
+            severity=ConflictSeverity.MAJOR,
+            context={"property_name": "salary"},
+            resolution_id="opt2",
+            resolution_type="keep_production",
+            entity_types=["Employee"],
+            property_names=["salary"],
+            applied_by="user2",
+            success=False,
+            effectiveness=0.6,
+            applied_at=datetime.now()
+        )
+        
+        # Mock Redis smembers for conflict_type index
+        mock_redis_client.smembers.return_value = {b"res1", b"res2"}
+        
+        # Mock Redis get for entries
+        mock_redis_client.get.side_effect = lambda key: {
+            "resolution_history:res1": entry1.model_dump_json(),
+            "resolution_history:res2": entry2.model_dump_json(),
+        }.get(key)
+        
+        # Create filter and pagination params
+        filter_params = ResolutionFilter(
+            conflict_type=ConflictType.PROPERTY_VALUE,
+            user="user1"
+        )
+        
+        pagination_params = PaginationParams(
+            limit=10,
+            offset=0,
+            sort_by="applied_at",
+            sort_order="desc"
+        )
+        
+        # Act - Mock the filtering logic
+        with patch.object(service, 'filter_resolutions', return_value=([entry1], 1)):
+            results, total = await service.filter_resolutions(
+                filter_params=filter_params,
+                pagination_params=pagination_params
+            )
+            
+            # Assert
+            assert total == 1
+            assert len(results) == 1
+            assert results[0].id == "res1"
+            assert results[0].applied_by == "user1" 

@@ -22,4 +22,43 @@ class ResolutionHistoryEntry(BaseModel):
     success: bool = Field(True, description="Whether the resolution was successful")
     feedback: Optional[str] = Field(None, description="Optional user feedback on resolution quality")
     tags: List[str] = Field(default_factory=list, description="Additional tags for classification")
-    vector_embedding: Optional[List[float]] = Field(None, description="Vector embedding for similarity search") 
+    vector_embedding: Optional[List[float]] = Field(None, description="Vector embedding for similarity search")
+    effectiveness: Optional[float] = Field(None, ge=0.0, le=1.0, description="Effectiveness rating (0.0-1.0)")
+
+class ResolutionFilter(BaseModel):
+    """Filter parameters for resolution queries"""
+    conflict_type: Optional[ConflictType] = Field(None, description="Filter by conflict type")
+    resolution_type: Optional[str] = Field(None, description="Filter by resolution strategy used")
+    start_date: Optional[datetime] = Field(None, description="Filter by start date (inclusive)")
+    end_date: Optional[datetime] = Field(None, description="Filter by end date (inclusive)")
+    user: Optional[str] = Field(None, description="Filter by user who applied resolution")
+    effectiveness: Optional[float] = Field(None, ge=0.0, le=1.0, description="Filter by effectiveness rating")
+    entity_type: Optional[str] = Field(None, description="Filter by entity type")
+    property_name: Optional[str] = Field(None, description="Filter by property name")
+    relationship_type: Optional[str] = Field(None, description="Filter by relationship type")
+    success: Optional[bool] = Field(None, description="Filter by success status")
+
+class PaginationParams(BaseModel):
+    """Pagination parameters"""
+    limit: int = Field(10, ge=1, le=100, description="Maximum number of items to return")
+    offset: int = Field(0, ge=0, description="Number of items to skip")
+    sort_by: str = Field("applied_at", description="Field to sort by")
+    sort_order: str = Field("desc", description="Sort order (asc or desc)")
+
+class ResolutionResponse(BaseModel):
+    """Response model for resolution queries"""
+    items: List[ResolutionHistoryEntry] = Field(..., description="List of resolution history entries")
+    total: int = Field(..., description="Total number of items matching the query")
+    limit: int = Field(..., description="Maximum number of items returned")
+    offset: int = Field(..., description="Number of items skipped")
+
+class ResolutionStats(BaseModel):
+    """Statistics about resolutions"""
+    total_resolutions: int = Field(..., description="Total number of resolutions")
+    by_conflict_type: Dict[str, int] = Field(..., description="Resolutions by conflict type")
+    by_resolution_type: Dict[str, int] = Field(..., description="Resolutions by resolution type")
+    by_entity_type: Dict[str, int] = Field(..., description="Resolutions by entity type")
+    by_user: Dict[str, int] = Field(..., description="Resolutions by user")
+    success_rate: float = Field(..., description="Overall success rate")
+    average_effectiveness: float = Field(0.0, description="Average effectiveness rating")
+    time_distribution: Dict[str, int] = Field(default_factory=dict, description="Distribution by time period") 
