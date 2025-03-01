@@ -312,6 +312,12 @@ class Settings(BaseSettings):
         description="Default score threshold for similarity search"
     )
     
+    # Vector Storage Settings
+    VECTOR_STORAGE_TYPE: str = Field(
+        default="qdrant",
+        description="Type of vector storage to use (e.g., qdrant)"
+    )
+    
     # Resolution Learning Service Settings
     RESOLUTION_LEARNING_HIGH_CONFIDENCE: float = Field(
         default=0.85,
