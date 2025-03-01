@@ -9,6 +9,8 @@ from prefect import get_client
 from app.services.merge.service import MergeService, merge_flow
 from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress, MergeStage
 from app.services.merge.batch_resolver import BatchResolver
+from app.services.merge.resolution_search import ResolutionPatternSearchService
+from app.services.storage.vector_storage import QdrantResolutionStorage
 from app.schemas.conflicts import (
     Conflict, ConflictListResponse, ConflictResolutionRequest,
     PendingConflictsResponse, ConflictResolutionResponse,
@@ -18,7 +20,7 @@ from app.schemas.conflicts import (
 )
 from app.dependencies import get_progress_tracker, get_merge_service
 from app.config import settings
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.schemas.resolution_history import ResolutionHistoryEntry
 
 logger = logging.getLogger(__name__)
@@ -682,4 +684,167 @@ async def resolve_batch_conflicts(
         raise HTTPException(
             status_code=500,
             detail=f"Error resolving batch conflicts: {str(e)}"
+        )
+
+class SimilarResolutionRequest(BaseModel):
+    """Request model for finding similar resolutions"""
+    conflict_id: str = Field(..., description="ID of the conflict to find similar resolutions for")
+    limit: int = Field(5, description="Maximum number of similar resolutions to return")
+    min_similarity: float = Field(0.7, description="Minimum similarity score threshold")
+    filters: Optional[Dict[str, Any]] = Field(None, description="Optional filters to apply")
+
+
+class SimilarResolutionResponse(BaseModel):
+    """Response model for similar resolutions"""
+    conflict_id: str = Field(..., description="ID of the original conflict")
+    similar_resolutions: List[Dict[str, Any]] = Field(..., description="List of similar resolutions")
+    total_found: int = Field(..., description="Total number of similar resolutions found")
+
+
+class BatchSimilarResolutionRequest(BaseModel):
+    """Request model for batch similar resolution search"""
+    conflict_ids: List[str] = Field(..., description="IDs of conflicts to find similar resolutions for")
+    limit_per_conflict: int = Field(5, description="Maximum number of similar resolutions per conflict")
+    min_similarity: float = Field(0.7, description="Minimum similarity score threshold")
+    filters: Optional[Dict[str, Any]] = Field(None, description="Optional filters to apply")
+
+
+@router.post(
+    "/resolutions/similar",
+    response_model=SimilarResolutionResponse,
+    description="Find similar past resolutions for a conflict"
+)
+async def find_similar_resolutions(
+    request: SimilarResolutionRequest,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> SimilarResolutionResponse:
+    """Find similar past resolutions for a conflict"""
+    try:
+        # Get the conflict
+        conflict = await merge_service.get_conflict(request.conflict_id)
+        if not conflict:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Conflict with ID {request.conflict_id} not found"
+            )
+        
+        # Initialize the resolution pattern search service
+        vector_storage = QdrantResolutionStorage()
+        search_service = ResolutionPatternSearchService(
+            vector_storage=vector_storage,
+            similarity_threshold=request.min_similarity
+        )
+        
+        # Find similar resolutions
+        similar_results = await search_service.find_similar_resolutions(
+            conflict=conflict,
+            limit=request.limit,
+            filters=request.filters
+        )
+        
+        # Format the response
+        similar_resolutions = []
+        for pattern, score in similar_results:
+            similar_resolutions.append({
+                "id": pattern.id,
+                "similarity_score": score,
+                "conflict_type": pattern.conflict_type,
+                "entity_types": pattern.entity_types,
+                "property_names": pattern.property_names,
+                "relationship_types": pattern.relationship_types,
+                "resolution_strategy": pattern.resolution_strategy,
+                "resolution_data": pattern.resolution_data,
+                "confidence": pattern.confidence,
+                "original_conflict_id": pattern.original_conflict_id,
+                "original_merge_id": pattern.original_merge_id,
+                "created_at": pattern.created_at.isoformat() if pattern.created_at else None
+            })
+        
+        return SimilarResolutionResponse(
+            conflict_id=request.conflict_id,
+            similar_resolutions=similar_resolutions,
+            total_found=len(similar_resolutions)
+        )
+    
+    except Exception as e:
+        logger.error(f"Error finding similar resolutions: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error finding similar resolutions: {str(e)}"
+        )
+
+
+@router.post(
+    "/resolutions/batch-similar",
+    response_model=Dict[str, SimilarResolutionResponse],
+    description="Find similar past resolutions for multiple conflicts"
+)
+async def batch_find_similar_resolutions(
+    request: BatchSimilarResolutionRequest,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> Dict[str, SimilarResolutionResponse]:
+    """Find similar past resolutions for multiple conflicts"""
+    try:
+        # Get all conflicts
+        conflicts = []
+        for conflict_id in request.conflict_ids:
+            conflict = await merge_service.get_conflict(conflict_id)
+            if conflict:
+                conflicts.append(conflict)
+        
+        if not conflicts:
+            raise HTTPException(
+                status_code=404,
+                detail="No valid conflicts found"
+            )
+        
+        # Initialize the resolution pattern search service
+        vector_storage = QdrantResolutionStorage()
+        search_service = ResolutionPatternSearchService(
+            vector_storage=vector_storage,
+            similarity_threshold=request.min_similarity
+        )
+        
+        # Find similar resolutions for all conflicts
+        batch_results = await search_service.batch_find_similar_resolutions(
+            conflicts=conflicts,
+            limit_per_conflict=request.limit_per_conflict,
+            filters=request.filters
+        )
+        
+        # Format the response
+        response = {}
+        for conflict in conflicts:
+            similar_results = batch_results.get(conflict.id, [])
+            similar_resolutions = []
+            
+            for pattern, score in similar_results:
+                similar_resolutions.append({
+                    "id": pattern.id,
+                    "similarity_score": score,
+                    "conflict_type": pattern.conflict_type,
+                    "entity_types": pattern.entity_types,
+                    "property_names": pattern.property_names,
+                    "relationship_types": pattern.relationship_types,
+                    "resolution_strategy": pattern.resolution_strategy,
+                    "resolution_data": pattern.resolution_data,
+                    "confidence": pattern.confidence,
+                    "original_conflict_id": pattern.original_conflict_id,
+                    "original_merge_id": pattern.original_merge_id,
+                    "created_at": pattern.created_at.isoformat() if pattern.created_at else None
+                })
+            
+            response[conflict.id] = SimilarResolutionResponse(
+                conflict_id=conflict.id,
+                similar_resolutions=similar_resolutions,
+                total_found=len(similar_resolutions)
+            )
+        
+        return response
+    
+    except Exception as e:
+        logger.error(f"Error finding similar resolutions in batch: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error finding similar resolutions in batch: {str(e)}"
         )
