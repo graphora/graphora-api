@@ -233,25 +233,31 @@ class QdrantResolutionStorage:
             top_k = top_k or settings.QDRANT_SEARCH_LIMIT
             score_threshold = score_threshold or settings.QDRANT_SCORE_THRESHOLD
             
+            logger.info(f"Searching for similar resolutions for conflict {conflict.id} with top_k={top_k}, threshold={score_threshold}")
+            
             # Create query embedding
             query_embedding = await self._generate_embedding_for_conflict(conflict)
+            logger.info(f"Generated embedding for conflict {conflict.id} with length {len(query_embedding)}")
             
             # Create filter conditions
             filter_conditions = None
             must_conditions = []
             
             if filter_by_conflict_type:
+                conflict_type_value = conflict.conflict_type.value
                 must_conditions.append(
                     models.FieldCondition(
                         key="conflict_type",
-                        match=models.MatchValue(value=conflict.conflict_type.value)
+                        match=models.MatchValue(value=conflict_type_value.lower())
                     )
                 )
+                logger.info(f"Added conflict_type filter: {conflict_type_value.lower()}")
             
             # Add additional filters if provided
             if additional_filters:
+                logger.info(f"Adding additional filters: {additional_filters}")
                 for key, value in additional_filters.items():
-                    if key == "entity_type":
+                    if key == "entity_type" and value:
                         # For entity_types which is a list, we need to use the 'has' operator
                         must_conditions.append(
                             models.FieldCondition(
@@ -259,7 +265,8 @@ class QdrantResolutionStorage:
                                 match=models.MatchAny(any=[value])
                             )
                         )
-                    elif key == "property_name":
+                        logger.info(f"Added entity_type filter: {value}")
+                    elif key == "property_name" and value:
                         # For property_names which is a list, we need to use the 'has' operator
                         must_conditions.append(
                             models.FieldCondition(
@@ -267,6 +274,7 @@ class QdrantResolutionStorage:
                                 match=models.MatchAny(any=[value])
                             )
                         )
+                        logger.info(f"Added property_name filter: {value}")
                     else:
                         # For other fields, use exact match
                         must_conditions.append(
@@ -275,28 +283,37 @@ class QdrantResolutionStorage:
                                 match=models.MatchValue(value=value)
                             )
                         )
+                        logger.info(f"Added filter {key}: {value}")
             
             if must_conditions:
                 filter_conditions = models.Filter(must=must_conditions)
+                logger.info(f"Created filter conditions with {len(must_conditions)} conditions")
             
             # Search
-            search_result = self.client.search(
+            logger.info(f"Executing search with collection_name={self.collection_name}")
+            logger.info(f"Search query filter: {filter_conditions}")
+            search_result = self.client.query_points(
                 collection_name=self.collection_name,
-                query_vector=query_embedding,
+                query=query_embedding,
                 query_filter=filter_conditions,
                 limit=top_k,
                 score_threshold=score_threshold
             )
             
+            logger.info(f"Search returned {len(search_result.points)} results")
+            if len(search_result.points) == 0:
+                logger.info(f"No results found. Query details: collection={self.collection_name}, filter={filter_conditions}, threshold={score_threshold}")
+            
             # Convert to ResolutionPattern objects with scores
             patterns_with_scores = []
-            for point in search_result:
+            for point in search_result.points:
                 payload = point.payload
                 # Use the original ID from the payload instead of the point.id (which is formatted)
                 # The original ID is stored in the payload during upsert
                 pattern = ResolutionPattern(**payload)
                 pattern.embedding = None  # Embedding not included in payload
                 patterns_with_scores.append((pattern, point.score))
+                logger.info(f"Found pattern {pattern.id} with score {point.score}, strategy: {pattern.resolution_strategy}")
             
             logger.info(f"Found {len(patterns_with_scores)} similar resolution patterns")
             return patterns_with_scores

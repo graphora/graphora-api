@@ -23,28 +23,28 @@ def mock_qdrant_client():
         collections_response.collections = [mock_collection]
         client.get_collections.return_value = collections_response
         
-        # Mock search response
-        search_result = [
-            MagicMock(
-                id="test-id-1",
-                score=0.95,
-                payload={
-                    "conflict_type": "property_value",
-                    "entity_types": ["Person"],
-                    "property_names": ["name"],
-                    "resolution_strategy": "keep_staging",
-                    "resolution_data": {},
-                    "confidence": 0.9,
-                    "original_conflict_id": "conflict-1",
-                    "original_merge_id": "merge-1",
-                    "created_at": datetime.now().isoformat()
-                }
-            )
-        ]
-        client.search.return_value = search_result
+        # Mock query_points response
+        query_response = MagicMock()
+        point = MagicMock(
+            id="test-id-1",
+            score=0.95,
+            payload={
+                "conflict_type": "property_value",
+                "entity_types": ["Person"],
+                "property_names": ["name"],
+                "resolution_strategy": "keep_staging",
+                "resolution_data": {},
+                "confidence": 0.9,
+                "original_conflict_id": "conflict-1",
+                "original_merge_id": "merge-1",
+                "created_at": datetime.now().isoformat()
+            }
+        )
+        query_response.points = [point]
+        client.query_points.return_value = query_response
         
         # Mock retrieve response
-        client.retrieve.return_value = search_result
+        client.retrieve.return_value = [point]
         
         yield client
 
@@ -224,7 +224,7 @@ class TestQdrantResolutionStorage:
         results = await storage.search_similar_resolutions(sample_conflict)
         
         # Assert
-        mock_qdrant_client.search.assert_called_once()
+        mock_qdrant_client.query_points.assert_called_once()
         assert len(results) == 1
         pattern, score = results[0]
         assert pattern.conflict_type == "property_value"
@@ -246,8 +246,8 @@ class TestQdrantResolutionStorage:
         )
         
         # Assert
-        mock_qdrant_client.search.assert_called_once()
-        search_args = mock_qdrant_client.search.call_args[1]
+        mock_qdrant_client.query_points.assert_called_once()
+        search_args = mock_qdrant_client.query_points.call_args[1]
         assert search_args["limit"] == 20
         assert search_args["score_threshold"] == 0.8
         assert search_args["query_filter"] is None  # No filter when filter_by_conflict_type=False

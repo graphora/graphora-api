@@ -17,6 +17,9 @@ from app.services.merge.progress import ProgressTracker
 # Import models
 from app.services.merge.models import MergeStage, StageStatus
 
+# Import resolution learning service
+from app.services.merge.resolution_learning import ResolutionLearningService, ResolutionLearningConfig
+
 __all__ = [
     "MergeService",
     "create_resolution_pipeline_deployment",
@@ -25,5 +28,7 @@ __all__ = [
     "cancel_flow_run",
     "ProgressTracker",
     "MergeStage",
-    "StageStatus"
+    "StageStatus",
+    "ResolutionLearningService",
+    "ResolutionLearningConfig"
 ] 
