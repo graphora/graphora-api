@@ -212,7 +212,8 @@ class QdrantResolutionStorage:
         conflict: Conflict,
         top_k: Optional[int] = None,
         score_threshold: Optional[float] = None,
-        filter_by_conflict_type: bool = True
+        filter_by_conflict_type: bool = True,
+        additional_filters: Optional[Dict[str, Any]] = None
     ) -> List[Tuple[ResolutionPattern, float]]:
         """
         Search for similar resolution patterns
@@ -222,6 +223,7 @@ class QdrantResolutionStorage:
             top_k: Maximum number of results to return
             score_threshold: Minimum similarity score threshold
             filter_by_conflict_type: Whether to filter by conflict type
+            additional_filters: Additional filters to apply (e.g., {"entity_type": "Person"})
             
         Returns:
             List of (ResolutionPattern, score) tuples
@@ -236,15 +238,46 @@ class QdrantResolutionStorage:
             
             # Create filter conditions
             filter_conditions = None
+            must_conditions = []
+            
             if filter_by_conflict_type:
-                filter_conditions = models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="conflict_type",
-                            match=models.MatchValue(value=conflict.conflict_type.value)
-                        )
-                    ]
+                must_conditions.append(
+                    models.FieldCondition(
+                        key="conflict_type",
+                        match=models.MatchValue(value=conflict.conflict_type.value)
+                    )
                 )
+            
+            # Add additional filters if provided
+            if additional_filters:
+                for key, value in additional_filters.items():
+                    if key == "entity_type":
+                        # For entity_types which is a list, we need to use the 'has' operator
+                        must_conditions.append(
+                            models.FieldCondition(
+                                key="entity_types",
+                                match=models.MatchAny(any=[value])
+                            )
+                        )
+                    elif key == "property_name":
+                        # For property_names which is a list, we need to use the 'has' operator
+                        must_conditions.append(
+                            models.FieldCondition(
+                                key="property_names",
+                                match=models.MatchAny(any=[value])
+                            )
+                        )
+                    else:
+                        # For other fields, use exact match
+                        must_conditions.append(
+                            models.FieldCondition(
+                                key=key,
+                                match=models.MatchValue(value=value)
+                            )
+                        )
+            
+            if must_conditions:
+                filter_conditions = models.Filter(must=must_conditions)
             
             # Search
             search_result = self.client.search(
