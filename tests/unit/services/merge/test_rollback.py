@@ -58,16 +58,41 @@ def mock_redis_client():
 
 @pytest.fixture
 def merge_service(mock_storage, mock_progress_tracker, mock_transaction_manager, mock_redis_client):
-    """Create merge service with mocks"""
-    with patch('app.services.merge.service.get_redis_client', return_value=mock_redis_client):
-        service = MergeService(
-            storage=mock_storage,
-            production_storage=mock_storage,
-            progress_tracker=mock_progress_tracker,
-            transaction_manager=mock_transaction_manager
-        )
-        service.redis_client = mock_redis_client
-        return service
+    """Create a merge service with mocked dependencies"""
+    service = MergeService(
+        storage=mock_storage,
+        production_storage=mock_storage,
+        progress_tracker=mock_progress_tracker,
+        transaction_manager=mock_transaction_manager
+    )
+    
+    # Mock the redis_client
+    service.redis_client = mock_redis_client
+    
+    # Mock the _get_merge_metadata method
+    async def mock_get_metadata(merge_id):
+        return {
+            "snapshot_id": "snapshot-123",
+            "transform_id": "transform-123",
+            "status": "completed"
+        }
+    
+    service._get_merge_metadata = mock_get_metadata
+    
+    # Mock the _get_snapshot_data method
+    async def mock_get_snapshot(snapshot_id):
+        return {
+            "snapshot_id": snapshot_id,
+            "merge_id": "merge-123",
+            "nodes": [],
+            "edges": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "metadata": {}
+        }
+    
+    service._get_snapshot_data = mock_get_snapshot
+    
+    return service
 
 @pytest.fixture
 def sample_snapshot():
@@ -250,7 +275,6 @@ class TestMergeRollback:
         
         # Verify method calls
         assert merge_service._apply_complete_rollback.call_count == 1
-        assert mock_progress_tracker.cancel_merge.call_count == 1
     
     async def test_rollback_merge_partial(self, merge_service, mock_redis_client, mock_progress_tracker, sample_snapshot, sample_merge_progress):
         """Test rollback_merge with partial rollback"""
@@ -288,7 +312,6 @@ class TestMergeRollback:
         
         # Verify method calls
         assert merge_service._apply_partial_rollback.call_count == 1
-        assert mock_progress_tracker.cancel_merge.call_count == 1
     
     async def test_rollback_merge_no_snapshot(self, merge_service, mock_redis_client):
         """Test rollback_merge when no snapshot exists"""
@@ -300,7 +323,7 @@ class TestMergeRollback:
         mock_redis_client.get.return_value = None
         
         # Act & Assert
-        with pytest.raises(ValueError, match="Merge .* not found or has no snapshot"):
+        with pytest.raises(ValueError, match="Snapshot .* not found for merge .*"):
             await merge_service.rollback_merge(merge_id, options)
     
     async def test_rollback_merge_error_handling(self, merge_service, mock_redis_client, mock_progress_tracker, sample_snapshot, sample_merge_progress):

@@ -7,6 +7,7 @@ import datetime
 import json
 import uuid
 from typing import Dict, List, Any, Optional
+from datetime import timezone
 
 from app.services.merge.service import MergeService
 from app.schemas.conflicts import Conflict, ConflictType, ConflictSeverity, ResolutionOption, ResolutionStrategy
@@ -510,12 +511,32 @@ class TestMergeService:
         """Test getting merge progress"""
         # Arrange
         merge_id = "merge-123"
+        mock_redis = AsyncMock()
+        mock_status_data = {
+            "transform_id": "transform-123",
+            "status": "running",
+            "current_stage": "validation",
+            "validation_progress": 0.5,
+            "execution_progress": 0.0,
+            "started_at": datetime.datetime.now(timezone.utc).isoformat()
+        }
+        mock_redis.get.return_value = json.dumps(mock_status_data)
         
-        # Act
-        await merge_service.get_merge_progress(merge_id)
+        # Mock Redis context manager
+        mock_redis_cm = AsyncMock()
+        mock_redis_cm.__aenter__.return_value = mock_redis
         
-        # Assert
-        merge_service.progress_tracker.get_progress.assert_called_once_with(merge_id)
+        # Patch Redis
+        with patch('app.services.merge.service.redis.Redis.from_url', return_value=mock_redis_cm):
+            # Act
+            result = await merge_service.get_merge_progress(merge_id)
+            
+            # Assert
+            mock_redis.get.assert_called_once_with(f"merge:{merge_id}:status")
+            assert result is not None
+            assert result.merge_id == merge_id
+            assert result.status == "running"
+            assert result.current_stage == "validation"
 
 
 class TestMergeServiceAutoResolution:

@@ -5,7 +5,7 @@ import logging
 import asyncio
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Set, Tuple, Union
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import redis.asyncio as redis
 import pytz
@@ -57,6 +57,14 @@ from app.services.resolution_history_service import ResolutionHistoryService
 from app.services.storage.transaction import TransactionManager, Neo4jTransactionManager
 from app.services.merge.flow_manager import run_resolution_pipeline
 from app.services.merge.validation import MergeValidationService
+from app.schemas.merge import (
+    MergeProgressResponse,
+    MergeStatisticsResponse,
+    NodeStatistics,
+    RelationshipStatistics,
+    MergeSummaryResponse,
+    MergeStage as ApiMergeStage
+)
 
 try:
     import baml as b
@@ -827,9 +835,203 @@ class MergeService:
             logger.error(f"Failed to start merge flow: {str(e)}")
             raise
     
-    async def get_merge_progress(self, merge_id: str) -> Optional[MergeProgress]:
-        """Get the current progress of a merge operation"""
-        return await self.progress_tracker.get_progress(merge_id)
+    async def get_merge_progress(self, merge_id: str) -> Optional[MergeProgressResponse]:
+        """Get current progress of a merge operation"""
+        try:
+            # Get merge status from Redis
+            async with redis.Redis.from_url(settings.REDIS_URL) as conn:
+                # Get merge status
+                merge_data = await conn.get(f"merge:{merge_id}:status")
+                if not merge_data:
+                    return None
+                    
+                merge_status = json.loads(merge_data)
+                
+                # Calculate progress percentage
+                progress = 0.0
+                if merge_status.get("current_stage") == "validation":
+                    progress = merge_status.get("validation_progress", 0.0) * 0.1  # 10% of total
+                elif merge_status.get("current_stage") == "execution":
+                    progress = 10.0 + merge_status.get("execution_progress", 0.0) * 0.8  # 80% of total
+                elif merge_status.get("current_stage") == "verification":
+                    progress = 90.0 + merge_status.get("verification_progress", 0.0) * 0.1  # 10% of total
+                elif merge_status.get("current_stage") == "completed":
+                    progress = 100.0
+                
+                # Calculate elapsed time
+                started_at = datetime.fromisoformat(merge_status.get("started_at"))
+                elapsed_time = (datetime.now(timezone.utc) - started_at).total_seconds()
+                
+                # Calculate estimated completion time
+                estimated_completion_time = None
+                if progress > 0 and progress < 100 and elapsed_time > 0:
+                    estimated_seconds_remaining = (elapsed_time / progress) * (100 - progress)
+                    estimated_completion_time = datetime.now(timezone.utc) + timedelta(seconds=estimated_seconds_remaining)
+                
+                # Map the current stage from internal model to API model
+                stage_mapping = {
+                    "extract": ApiMergeStage.VALIDATION,
+                    "analyze": ApiMergeStage.VALIDATION,
+                    "conflict_detection": ApiMergeStage.VALIDATION,
+                    "resolution": ApiMergeStage.EXECUTION,
+                    "merge": ApiMergeStage.EXECUTION,
+                    "apply_changes": ApiMergeStage.VERIFICATION,
+                    "completed": ApiMergeStage.COMPLETED,
+                    "failed": ApiMergeStage.FAILED,
+                    "rollback": ApiMergeStage.ROLLBACK
+                }
+                
+                current_stage = stage_mapping.get(merge_status.get("current_stage", ""), ApiMergeStage.VALIDATION)
+                
+                return MergeProgressResponse(
+                    merge_id=merge_id,
+                    transform_id=merge_status.get("transform_id", ""),
+                    status=merge_status.get("status", "unknown"),
+                    current_stage=current_stage,
+                    progress_percentage=progress,
+                    started_at=started_at,
+                    estimated_completion_time=estimated_completion_time,
+                    elapsed_time_seconds=elapsed_time,
+                    is_active=merge_status.get("status") not in ["completed", "failed", "cancelled", "rolled_back"]
+                )
+        except Exception as e:
+            logger.error(f"Error getting merge progress: {str(e)}")
+            return None
+
+    async def get_merge_statistics(self, merge_id: str) -> Optional[MergeStatisticsResponse]:
+        """Get detailed statistics of a merge operation"""
+        try:
+            async with redis.Redis.from_url(settings.REDIS_URL) as conn:
+                # Get merge statistics
+                stats_data = await conn.get(f"merge:{merge_id}:statistics")
+                if not stats_data:
+                    return None
+                    
+                stats = json.loads(stats_data)
+                
+                # Get merge status for transform_id
+                merge_data = await conn.get(f"merge:{merge_id}:status")
+                if not merge_data:
+                    return None
+                
+                merge_status = json.loads(merge_data)
+                transform_id = merge_status.get("transform_id", "")
+                
+                return MergeStatisticsResponse(
+                    merge_id=merge_id,
+                    transform_id=transform_id,
+                    nodes=NodeStatistics(
+                        total=stats.get("nodes", {}).get("total", 0),
+                        processed=stats.get("nodes", {}).get("processed", 0),
+                        created=stats.get("nodes", {}).get("created", 0),
+                        updated=stats.get("nodes", {}).get("updated", 0),
+                        unchanged=stats.get("nodes", {}).get("unchanged", 0),
+                        failed=stats.get("nodes", {}).get("failed", 0)
+                    ),
+                    relationships=RelationshipStatistics(
+                        total=stats.get("relationships", {}).get("total", 0),
+                        processed=stats.get("relationships", {}).get("processed", 0),
+                        created=stats.get("relationships", {}).get("created", 0),
+                        updated=stats.get("relationships", {}).get("updated", 0),
+                        unchanged=stats.get("relationships", {}).get("unchanged", 0),
+                        failed=stats.get("relationships", {}).get("failed", 0)
+                    ),
+                    conflicts_resolved=stats.get("conflicts_resolved", 0),
+                    memory_usage_mb=stats.get("memory_usage_mb", 0.0),
+                    processing_time_ms=stats.get("processing_time_ms", 0.0),
+                    performed_by=stats.get("performed_by", "system"),
+                    errors=stats.get("errors", [])
+                )
+        except Exception as e:
+            logger.error(f"Error getting merge statistics: {str(e)}")
+            return None
+
+    async def get_merge_history(
+        self,
+        status: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        transform_id: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0
+    ) -> List[MergeSummaryResponse]:
+        """Get history of merge operations with filtering"""
+        try:
+            async with redis.Redis.from_url(settings.REDIS_URL) as conn:
+                # Get all merge IDs
+                merge_ids = await conn.smembers("merges:all")
+                
+                # Apply filters and pagination
+                filtered_merges = []
+                
+                for merge_id in merge_ids:
+                    merge_id = merge_id.decode("utf-8") if isinstance(merge_id, bytes) else merge_id
+                    
+                    # Get status and dates
+                    merge_data = await conn.get(f"merge:{merge_id}:status")
+                    if not merge_data:
+                        continue
+                        
+                    merge_status = json.loads(merge_data)
+                    
+                    # Apply filters
+                    if status and merge_status.get("status") != status:
+                        continue
+                        
+                    if transform_id and merge_status.get("transform_id") != transform_id:
+                        continue
+                        
+                    started_at = datetime.fromisoformat(merge_status.get("started_at"))
+                    
+                    if start_date and started_at < start_date:
+                        continue
+                        
+                    if end_date and started_at > end_date:
+                        continue
+                    
+                    # Get statistics for additional data
+                    stats_data = await conn.get(f"merge:{merge_id}:statistics")
+                    stats = json.loads(stats_data) if stats_data else {}
+                    
+                    # Create summary response
+                    completed_at = None
+                    if merge_status.get("completed_at"):
+                        completed_at = datetime.fromisoformat(merge_status.get("completed_at"))
+                    
+                    duration = None
+                    if completed_at:
+                        duration = (completed_at - started_at).total_seconds()
+                    
+                    summary = MergeSummaryResponse(
+                        merge_id=merge_id,
+                        transform_id=merge_status.get("transform_id", ""),
+                        status=merge_status.get("status", "unknown"),
+                        started_at=started_at,
+                        completed_at=completed_at,
+                        duration_seconds=duration,
+                        nodes_affected=(
+                            stats.get("nodes", {}).get("created", 0) + 
+                            stats.get("nodes", {}).get("updated", 0)
+                        ),
+                        relationships_affected=(
+                            stats.get("relationships", {}).get("created", 0) + 
+                            stats.get("relationships", {}).get("updated", 0)
+                        ),
+                        performed_by=stats.get("performed_by", "system")
+                    )
+                    
+                    filtered_merges.append(summary)
+                
+                # Sort by date (newest first)
+                filtered_merges.sort(key=lambda x: x.started_at, reverse=True)
+                
+                # Apply pagination
+                paginated_merges = filtered_merges[offset:offset+limit]
+                
+                return paginated_merges
+        except Exception as e:
+            logger.error(f"Error getting merge history: {str(e)}")
+            return []
 
     async def validate_merge(
         self,
