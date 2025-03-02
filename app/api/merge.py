@@ -22,6 +22,7 @@ from app.dependencies import get_progress_tracker, get_merge_service
 from app.config import settings
 from pydantic import BaseModel, Field
 from app.schemas.resolution_history import ResolutionHistoryEntry
+from app.schemas.merge import MergeProgressResponse, MergeStatisticsResponse, MergeSummaryResponse
 
 logger = logging.getLogger(__name__)
 
@@ -904,3 +905,58 @@ async def rollback_merge(
             status_code=500,
             detail=f"Failed to rollback merge: {str(e)}"
         )
+
+@router.get(
+    "/progress/{merge_id}",
+    response_model=MergeProgressResponse,
+    description="Get progress of an active merge operation"
+)
+async def get_merge_progress(
+    merge_id: str,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> MergeProgressResponse:
+    """Get current progress of a merge operation"""
+    progress = await merge_service.get_merge_progress(merge_id)
+    if not progress:
+        raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
+    return progress
+
+@router.get(
+    "/statistics/{merge_id}",
+    response_model=MergeStatisticsResponse,
+    description="Get detailed statistics of a merge operation"
+)
+async def get_merge_statistics(
+    merge_id: str,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> MergeStatisticsResponse:
+    """Get detailed statistics of a merge operation"""
+    statistics = await merge_service.get_merge_statistics(merge_id)
+    if not statistics:
+        raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
+    return statistics
+
+@router.get(
+    "/history",
+    response_model=List[MergeSummaryResponse],
+    description="Get history of merge operations"
+)
+async def get_merge_history(
+    status: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    transform_id: Optional[str] = None,
+    limit: int = 10,
+    offset: int = 0,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> List[MergeSummaryResponse]:
+    """Get history of merge operations with filtering"""
+    history = await merge_service.get_merge_history(
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+        transform_id=transform_id,
+        limit=limit,
+        offset=offset
+    )
+    return history
