@@ -7,7 +7,7 @@ import uuid
 from prefect import get_client
 
 from app.services.merge.service import MergeService, merge_flow
-from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress, MergeStage
+from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress, MergeStage, RollbackOptions, RollbackResponse
 from app.services.merge.batch_resolver import BatchResolver
 from app.services.merge.resolution_search import ResolutionPatternSearchService
 from app.services.storage.vector_storage import QdrantResolutionStorage
@@ -847,4 +847,60 @@ async def batch_find_similar_resolutions(
         raise HTTPException(
             status_code=500,
             detail=f"Error finding similar resolutions in batch: {str(e)}"
+        )
+
+@router.post(
+    "/merge/{merge_id}/rollback", 
+    response_model=RollbackResponse,
+    description="Rollback a merge operation"
+)
+async def rollback_merge(
+    merge_id: str,
+    options: RollbackOptions,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> RollbackResponse:
+    """
+    Rollback a merge operation completely or partially
+    
+    Parameters:
+    - merge_id: ID of the merge to rollback
+    - options: Configuration options for rollback
+    """
+    try:
+        logger.info(f"Rollback requested for merge {merge_id}")
+        
+        # Check if merge exists
+        progress = await merge_service.get_merge_progress(merge_id)
+        if not progress:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Merge {merge_id} not found"
+            )
+        
+        # Check if rollback is already in progress
+        if progress.overall_status == MergeStatus.CANCELLED and "rollback" in (progress.error or ""):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Rollback already in progress for merge {merge_id}"
+            )
+        
+        # Execute rollback
+        result = await merge_service.rollback_merge(merge_id, options)
+        
+        return result
+        
+    except ValueError as e:
+        # Handle validation errors
+        logger.error(f"Rollback validation error: {str(e)}")
+        raise HTTPException(
+            status_code=422,
+            detail=str(e)
+        )
+        
+    except Exception as e:
+        # Handle other errors
+        logger.error(f"Rollback error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to rollback merge: {str(e)}"
         )

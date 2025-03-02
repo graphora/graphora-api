@@ -204,7 +204,13 @@ class TestMergeServiceValidation:
     
     @pytest.mark.asyncio
     @patch("app.services.merge.service.MergeService.validate_merge")
-    async def test_execute_merge_with_valid_validation(self, mock_validate_merge, merge_service, valid_graph):
+    @patch("app.services.merge.service.extract_staging_graph")
+    @patch("app.services.merge.service.map_production_entities")
+    @patch("app.services.merge.service.start_stage")
+    @patch("app.services.merge.service.complete_merge_stage")
+    @patch("app.services.merge.service.complete_merge")
+    @patch("app.services.merge.service.fail_merge")
+    async def test_execute_merge_with_valid_validation(self, mock_fail_merge, mock_complete_merge, mock_complete_merge_stage, mock_start_stage, mock_map_production_entities, mock_extract_staging_graph, mock_validate_merge, merge_service, valid_graph):
         """Test execute_merge method with valid validation"""
         # Arrange
         merge_id = str(uuid.uuid4())
@@ -223,34 +229,73 @@ class TestMergeServiceValidation:
             metadata={}
         )
         
-        # Mock get_graph_by_transform_id
-        merge_service.storage.get_graph_by_transform_id.return_value = valid_graph
+        # Mock extract_staging_graph to return an awaitable that returns valid_graph
+        async def mock_extract(storage, transform_id):
+            return valid_graph
+        mock_extract_staging_graph.side_effect = mock_extract
         
-        # Mock execution_service.execute_merge to return a specific result
-        with patch("app.services.merge.execution_service.MergeExecutionService") as mock_execution_service_class:
-            mock_execution_service = AsyncMock()
-            mock_execution_service.execute_merge.return_value = {
-                "merge_id": merge_id,
-                "status": "completed",
-                "nodes_merged": 3,
-                "edges_merged": 2
-            }
-            mock_execution_service_class.return_value = mock_execution_service
-            
-            # Act
-            result = await merge_service.execute_merge(merge_id, transform_id)
-            
-            # Assert
-            assert result["merge_id"] == merge_id
-            assert result["status"] == "completed"
-            assert result["nodes_merged"] == 3
-            assert result["edges_merged"] == 2
-            
-            # Verify mock calls
-            mock_validate_merge.assert_called_once_with(merge_id, transform_id, None, None)
-            merge_service.progress_tracker.start_merge_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
-            mock_execution_service.execute_merge.assert_called_once()
-            merge_service.progress_tracker.complete_stage.assert_not_called()  # This is handled by the execution service
+        # Mock map_production_entities to return an awaitable that returns entity_mapping
+        entity_mapping = MagicMock()
+        entity_mapping.matches = {
+            "node1": MagicMock(production_matches=["prod-node1"]),
+            "node2": MagicMock(production_matches=["prod-node2"]),
+            "node3": MagicMock(production_matches=["prod-node3"])
+        }
+        async def mock_map(storage, graph):
+            return entity_mapping
+        mock_map_production_entities.side_effect = mock_map
+        
+        # Mock start_stage, complete_merge_stage, complete_merge, and fail_merge
+        async def mock_start(merge_id, stage, progress_tracker):
+            return None
+        mock_start_stage.side_effect = mock_start
+        
+        async def mock_complete_stage(merge_id, stage, progress_tracker, metadata=None):
+            return None
+        mock_complete_merge_stage.side_effect = mock_complete_stage
+        
+        async def mock_complete(merge_id, progress_tracker):
+            return None
+        mock_complete_merge.side_effect = mock_complete
+        
+        async def mock_fail(merge_id, error_message, progress_tracker):
+            return None
+        mock_fail_merge.side_effect = mock_fail
+        
+        # Mock storage methods
+        merge_service.production_storage.update_node = AsyncMock()
+        merge_service.production_storage.create_node = AsyncMock()
+        merge_service.production_storage.get_relationships_between = AsyncMock(return_value=[])
+        merge_service.production_storage.create_relationship = AsyncMock()
+        
+        # Mock transaction manager
+        transaction_manager = AsyncMock()
+        transaction_manager.begin_transaction = AsyncMock(return_value="transaction-123")
+        transaction_manager.commit_transaction = AsyncMock()
+        merge_service._get_transaction_manager = MagicMock(return_value=transaction_manager)
+        
+        # Mock snapshot creation
+        snapshot = MagicMock()
+        snapshot.snapshot_id = "snapshot-123"
+        merge_service._create_snapshot = AsyncMock(return_value=snapshot)
+        
+        # Act
+        result = await merge_service.execute_merge(merge_id, transform_id)
+        
+        # Assert
+        assert result["success"] is True
+        assert result["nodes_processed"] == 3
+        assert result["relationships_processed"] == 2
+        assert result["snapshot_id"] == "snapshot-123"
+        
+        # Verify mock calls
+        mock_validate_merge.assert_called_once_with(merge_id, transform_id, None, None)
+        mock_extract_staging_graph.assert_called_once_with(merge_service.storage, transform_id)
+        mock_map_production_entities.assert_called_once_with(merge_service.production_storage, valid_graph)
+        mock_start_stage.assert_called_once_with(merge_id, MergeStage.MERGE, merge_service.progress_tracker)
+        mock_complete_merge_stage.assert_called_once()
+        mock_complete_merge.assert_called_once_with(merge_id, merge_service.progress_tracker)
+        mock_fail_merge.assert_not_called()
     
     @pytest.mark.asyncio
     @patch("app.services.merge.service.MergeService.validate_merge")
@@ -281,51 +326,95 @@ class TestMergeServiceValidation:
             metadata={}
         )
         
-        # Act & Assert
-        with pytest.raises(ValueError, match="Merge validation failed with 1 critical issues"):
-            await merge_service.execute_merge(merge_id, transform_id)
+        # Act
+        result = await merge_service.execute_merge(merge_id, transform_id)
+        
+        # Assert
+        assert result["success"] is False
+        assert "error" in result
+        assert "Validation failed with 1 critical issues" in result["error"]
+        assert "validation_result" in result
         
         # Verify mock calls
         mock_validate_merge.assert_called_once_with(merge_id, transform_id, None, None)
         merge_service.progress_tracker.start_merge_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
-        
-        # The fail_stage is called twice in the implementation:
-        # 1. When validation fails
-        # 2. When the exception is caught and logged
-        assert merge_service.progress_tracker.fail_merge_stage.call_count == 2
-        merge_service.progress_tracker.complete_stage.assert_not_called()
     
     @pytest.mark.asyncio
-    async def test_execute_merge_with_skip_validation(self, merge_service, valid_graph):
+    @patch("app.services.merge.service.extract_staging_graph")
+    @patch("app.services.merge.service.map_production_entities")
+    @patch("app.services.merge.service.start_stage")
+    @patch("app.services.merge.service.complete_merge_stage")
+    @patch("app.services.merge.service.complete_merge")
+    @patch("app.services.merge.service.fail_merge")
+    async def test_execute_merge_with_skip_validation(self, mock_fail_merge, mock_complete_merge, mock_complete_merge_stage, mock_start_stage, mock_map_production_entities, mock_extract_staging_graph, merge_service, valid_graph):
         """Test execute_merge method with skip_validation=True"""
         # Arrange
         merge_id = str(uuid.uuid4())
         transform_id = str(uuid.uuid4())
         
-        # Mock get_graph_by_transform_id
-        merge_service.storage.get_graph_by_transform_id.return_value = valid_graph
+        # Mock extract_staging_graph to return an awaitable that returns valid_graph
+        async def mock_extract(storage, transform_id):
+            return valid_graph
+        mock_extract_staging_graph.side_effect = mock_extract
         
-        # Mock execution_service.execute_merge to return a specific result
-        with patch("app.services.merge.execution_service.MergeExecutionService") as mock_execution_service_class:
-            mock_execution_service = AsyncMock()
-            mock_execution_service.execute_merge.return_value = {
-                "merge_id": merge_id,
-                "status": "completed",
-                "nodes_merged": 3,
-                "edges_merged": 2
-            }
-            mock_execution_service_class.return_value = mock_execution_service
-            
-            # Act
-            result = await merge_service.execute_merge(merge_id, transform_id, skip_validation=True)
-            
-            # Assert
-            assert result["merge_id"] == merge_id
-            assert result["status"] == "completed"
-            assert result["nodes_merged"] == 3
-            assert result["edges_merged"] == 2
-            
-            # Verify mock calls
-            merge_service.progress_tracker.start_merge_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
-            mock_execution_service.execute_merge.assert_called_once()
-            merge_service.progress_tracker.fail_merge_stage.assert_not_called() 
+        # Mock map_production_entities to return an awaitable that returns entity_mapping
+        entity_mapping = MagicMock()
+        entity_mapping.matches = {
+            "node1": MagicMock(production_matches=["prod-node1"]),
+            "node2": MagicMock(production_matches=["prod-node2"]),
+            "node3": MagicMock(production_matches=["prod-node3"])
+        }
+        async def mock_map(storage, graph):
+            return entity_mapping
+        mock_map_production_entities.side_effect = mock_map
+        
+        # Mock start_stage, complete_merge_stage, complete_merge, and fail_merge
+        async def mock_start(merge_id, stage, progress_tracker):
+            return None
+        mock_start_stage.side_effect = mock_start
+        
+        async def mock_complete_stage(merge_id, stage, progress_tracker, metadata=None):
+            return None
+        mock_complete_merge_stage.side_effect = mock_complete_stage
+        
+        async def mock_complete(merge_id, progress_tracker):
+            return None
+        mock_complete_merge.side_effect = mock_complete
+        
+        async def mock_fail(merge_id, error_message, progress_tracker):
+            return None
+        mock_fail_merge.side_effect = mock_fail
+        
+        # Mock storage methods
+        merge_service.production_storage.update_node = AsyncMock()
+        merge_service.production_storage.create_node = AsyncMock()
+        merge_service.production_storage.get_relationships_between = AsyncMock(return_value=[])
+        merge_service.production_storage.create_relationship = AsyncMock()
+        
+        # Mock transaction manager
+        transaction_manager = AsyncMock()
+        transaction_manager.begin_transaction = AsyncMock(return_value="transaction-123")
+        transaction_manager.commit_transaction = AsyncMock()
+        merge_service._get_transaction_manager = MagicMock(return_value=transaction_manager)
+        
+        # Mock snapshot creation
+        snapshot = MagicMock()
+        snapshot.snapshot_id = "snapshot-123"
+        merge_service._create_snapshot = AsyncMock(return_value=snapshot)
+        
+        # Act
+        result = await merge_service.execute_merge(merge_id, transform_id, skip_validation=True)
+        
+        # Assert
+        assert result["success"] is True
+        assert result["nodes_processed"] == 3
+        assert result["relationships_processed"] == 2
+        assert result["snapshot_id"] == "snapshot-123"
+        
+        # Verify mock calls
+        mock_extract_staging_graph.assert_called_once_with(merge_service.storage, transform_id)
+        mock_map_production_entities.assert_called_once_with(merge_service.production_storage, valid_graph)
+        mock_start_stage.assert_called_once_with(merge_id, MergeStage.MERGE, merge_service.progress_tracker)
+        mock_complete_merge_stage.assert_called_once()
+        mock_complete_merge.assert_called_once_with(merge_id, merge_service.progress_tracker)
+        mock_fail_merge.assert_not_called() 

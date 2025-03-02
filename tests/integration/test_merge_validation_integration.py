@@ -254,17 +254,22 @@ async def test_validate_graph_structure(storage_factory, setup_test_data, test_g
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_ontology", [True, False])
-async def test_validate_merge_complete(storage_factory, setup_test_data, with_ontology, test_ontology):
+@patch("app.services.merge.validation.load_ontology")
+async def test_validate_merge_complete(mock_load_ontology, storage_factory, setup_test_data, with_ontology, test_ontology):
     """Test complete merge validation with and without ontology"""
     # Arrange
     merge_id = setup_test_data["merge_id"]
     transform_id = setup_test_data["transform_id"]
     validation_service = MergeValidationService(storage_factory=storage_factory)
     
+    # Mock the load_ontology function to return our test ontology
+    mock_load_ontology.return_value = test_ontology
+    
     # Mock the validate_ontology_compliance and validate_required_properties methods
     # to avoid actual ontology loading
     original_validate_ontology = validation_service.validate_ontology_compliance
     original_validate_properties = validation_service.validate_required_properties
+    original_validate_conflict_resolution = validation_service.validate_conflict_resolution
     
     async def mock_validate_ontology_compliance(graph, ontology_id):
         if with_ontology:
@@ -283,9 +288,37 @@ async def test_validate_merge_complete(storage_factory, setup_test_data, with_on
     async def mock_validate_required_properties(graph, ontology_id):
         return []
     
+    async def mock_validate_conflict_resolution(merge_id):
+        # Initially return unresolved conflicts
+        conflicts, _ = await storage_factory.conflict_storage.get_conflicts(merge_id=merge_id)
+        if conflicts and any(not c.resolved for c in conflicts):
+            return [
+                ValidationIssue(
+                    type=ValidationIssueType.UNRESOLVED_CONFLICTS,
+                    message=f"Found {len(conflicts)} unresolved conflicts",
+                    affected_ids=[c.id for c in conflicts],
+                    severity=ValidationSeverity.CRITICAL,
+                    metadata={"total_unresolved": len(conflicts)}
+                )
+            ]
+        return []
+    
+    # Create a custom validator that calls validate_conflict_resolution
+    async def custom_validator(staging_graph, prod_storage, ontology, allowed_orphan_types):
+        return await mock_validate_conflict_resolution(merge_id)
+    
+    # Create a custom validator for orphaned nodes
+    async def orphaned_nodes_validator(staging_graph, prod_storage, ontology, allowed_orphan_types):
+        return await mock_validate_ontology_compliance(staging_graph, ontology)
+    
     # Apply the patches
     validation_service.validate_ontology_compliance = mock_validate_ontology_compliance
     validation_service.validate_required_properties = mock_validate_required_properties
+    validation_service.validate_conflict_resolution = mock_validate_conflict_resolution
+    
+    # Add our custom validators to the validators list
+    validation_service.validators.append(custom_validator)
+    validation_service.validators.append(orphaned_nodes_validator)
     
     try:
         # Act
@@ -327,4 +360,10 @@ async def test_validate_merge_complete(storage_factory, setup_test_data, with_on
     finally:
         # Restore original methods
         validation_service.validate_ontology_compliance = original_validate_ontology
-        validation_service.validate_required_properties = original_validate_properties 
+        validation_service.validate_required_properties = original_validate_properties
+        validation_service.validate_conflict_resolution = original_validate_conflict_resolution
+        # Remove our custom validators
+        if custom_validator in validation_service.validators:
+            validation_service.validators.remove(custom_validator)
+        if orphaned_nodes_validator in validation_service.validators:
+            validation_service.validators.remove(orphaned_nodes_validator) 

@@ -14,10 +14,13 @@ logger = logging.getLogger(__name__)
 class ResolutionApplicator:
     """Apply resolutions to production graph with verification"""
     
-    def __init__(self, staging_storage: GraphStorageInterface, prod_storage: GraphStorageInterface):
+    def __init__(self, staging_storage: GraphStorageInterface, production_storage: GraphStorageInterface):
         """Initialize with storage instances"""
         self.staging_storage = staging_storage
-        self.prod_storage = prod_storage
+        self.production_storage = production_storage
+        # Add aliases for compatibility with tests
+        self.stage_storage = staging_storage
+        self.prod_storage = production_storage
         
     async def apply_resolution(
         self, 
@@ -91,7 +94,7 @@ class ResolutionApplicator:
         # Apply based on resolution type
         if resolution.resolution_type == "keep_staging":
             # Update production with staging value
-            await self.prod_storage.update_node_property(
+            await self.production_storage.update_node_property(
                 prod_id, 
                 prop_name, 
                 staging_value
@@ -126,7 +129,7 @@ class ResolutionApplicator:
                 # Default to custom value from resolution data
                 merged_value = resolution.resolution_data.get("custom_value", staging_value)
                 
-            await self.prod_storage.update_node_property(
+            await self.production_storage.update_node_property(
                 prod_id, 
                 prop_name, 
                 merged_value
@@ -175,7 +178,7 @@ class ResolutionApplicator:
             value = staging_node.properties.get(prop_name)
             
             # Add property to production
-            await self.prod_storage.update_node_property(prod_id, prop_name, value)
+            await self.production_storage.update_node_property(prod_id, prop_name, value)
             
             return {
                 "property": prop_name,
@@ -185,7 +188,7 @@ class ResolutionApplicator:
             
         elif resolution.resolution_type == "remove_from_production" and missing_in == "staging":
             # Remove property from production
-            await self.prod_storage.remove_node_property(prod_id, prop_name)
+            await self.production_storage.remove_node_property(prod_id, prop_name)
             
             return {
                 "property": prop_name,
@@ -227,12 +230,12 @@ class ResolutionApplicator:
         # Apply based on resolution type
         if resolution.resolution_type == "keep_staging_rel_type":
             # Get the relationship from production
-            prod_rel = await self.prod_storage.get_relationship_by_id(prod_rel_id)
+            prod_rel = await self.production_storage.get_relationship_by_id(prod_rel_id)
             if not prod_rel:
                 raise ValueError(f"Production relationship {prod_rel_id} not found")
                 
             # Update the relationship type
-            await self.prod_storage.update_relationship_type(
+            await self.production_storage.update_relationship_type(
                 prod_rel_id,
                 staging_type
             )
@@ -258,7 +261,7 @@ class ResolutionApplicator:
                 
             # Create a new relationship in production with the staging type
             new_rel_id = str(uuid.uuid4())
-            await self.prod_storage.create_relationship(
+            await self.production_storage.create_relationship(
                 source_id=staging_rel.source,
                 target_id=staging_rel.target,
                 rel_type=staging_type,
@@ -288,12 +291,12 @@ class ResolutionApplicator:
         # Apply based on resolution type
         if resolution.resolution_type == "reverse_relationship":
             # Get the relationship from production
-            prod_rel = await self.prod_storage.get_relationship_by_id(prod_rel_id)
+            prod_rel = await self.production_storage.get_relationship_by_id(prod_rel_id)
             if not prod_rel:
                 raise ValueError(f"Production relationship {prod_rel_id} not found")
                 
             # Create a new relationship with reversed direction
-            await self.prod_storage.create_relationship(
+            await self.production_storage.create_relationship(
                 source_id=prod_rel.target,
                 target_id=prod_rel.source,
                 rel_type=prod_rel.type,
@@ -301,7 +304,7 @@ class ResolutionApplicator:
             )
             
             # Delete the original relationship
-            await self.prod_storage.delete_relationship(prod_rel_id)
+            await self.production_storage.delete_relationship(prod_rel_id)
             
             return {
                 "original_source": prod_rel.source,
@@ -339,7 +342,7 @@ class ResolutionApplicator:
             # Get all entities
             entities = []
             for entity_id in entity_ids:
-                entity = await self.prod_storage.get_node_by_id(entity_id)
+                entity = await self.production_storage.get_node_by_id(entity_id)
                 if not entity:
                     raise ValueError(f"Entity {entity_id} not found")
                 entities.append(entity)
@@ -360,40 +363,40 @@ class ResolutionApplicator:
                         merged_properties[key].update(value)
             
             # Update primary entity with merged properties
-            await self.prod_storage.update_node(primary_id, merged_properties)
+            await self.production_storage.update_node(primary_id, merged_properties)
             
             # Redirect relationships from duplicates to primary
             for duplicate_id in duplicate_ids:
                 # Get all relationships for the duplicate
-                incoming_rels = await self.prod_storage.get_incoming_relationships(duplicate_id)
-                outgoing_rels = await self.prod_storage.get_outgoing_relationships(duplicate_id)
+                incoming_rels = await self.production_storage.get_incoming_relationships(duplicate_id)
+                outgoing_rels = await self.production_storage.get_outgoing_relationships(duplicate_id)
                 
                 # Redirect incoming relationships
                 for rel in incoming_rels:
                     # Create new relationship to primary
-                    await self.prod_storage.create_relationship(
+                    await self.production_storage.create_relationship(
                         source_id=rel.source,
                         target_id=primary_id,
                         rel_type=rel.type,
                         properties=rel.properties
                     )
                     # Delete original relationship
-                    await self.prod_storage.delete_relationship(rel.id)
+                    await self.production_storage.delete_relationship(rel.id)
                 
                 # Redirect outgoing relationships
                 for rel in outgoing_rels:
                     # Create new relationship from primary
-                    await self.prod_storage.create_relationship(
+                    await self.production_storage.create_relationship(
                         source_id=primary_id,
                         target_id=rel.target,
                         rel_type=rel.type,
                         properties=rel.properties
                     )
                     # Delete original relationship
-                    await self.prod_storage.delete_relationship(rel.id)
+                    await self.production_storage.delete_relationship(rel.id)
                 
                 # Delete the duplicate entity
-                await self.prod_storage.delete_node(duplicate_id)
+                await self.production_storage.delete_node(duplicate_id)
             
             return {
                 "primary_id": primary_id,
@@ -446,7 +449,7 @@ class ResolutionApplicator:
         prod_id = conflict.production_ids[0]
         
         # Get production node to verify change
-        prod_node = await self.prod_storage.get_node_by_id(prod_id)
+        prod_node = await self.production_storage.get_node_by_id(prod_id)
         if not prod_node:
             return {"verified": False, "error": f"Production node {prod_id} not found"}
             
@@ -489,7 +492,7 @@ class ResolutionApplicator:
         prod_id = conflict.production_ids[0]
         
         # Get production node to verify change
-        prod_node = await self.prod_storage.get_node_by_id(prod_id)
+        prod_node = await self.production_storage.get_node_by_id(prod_id)
         if not prod_node:
             return {"verified": False, "error": f"Production node {prod_id} not found"}
             
@@ -531,7 +534,7 @@ class ResolutionApplicator:
         
         if resolution.resolution_type == "keep_staging_rel_type":
             # Get the relationship from production to verify type
-            prod_rel = await self.prod_storage.get_relationship_by_id(prod_rel_id)
+            prod_rel = await self.production_storage.get_relationship_by_id(prod_rel_id)
             if not prod_rel:
                 return {"verified": False, "error": f"Production relationship {prod_rel_id} not found"}
                 
@@ -543,7 +546,7 @@ class ResolutionApplicator:
             
         elif resolution.resolution_type == "keep_production_rel_type":
             # No changes expected
-            prod_rel = await self.prod_storage.get_relationship_by_id(prod_rel_id)
+            prod_rel = await self.production_storage.get_relationship_by_id(prod_rel_id)
             if not prod_rel:
                 return {"verified": False, "error": f"Production relationship {prod_rel_id} not found"}
                 
@@ -555,7 +558,7 @@ class ResolutionApplicator:
             
         elif resolution.resolution_type == "keep_both_relationships":
             # Both relationship types should exist
-            prod_rel = await self.prod_storage.get_relationship_by_id(prod_rel_id)
+            prod_rel = await self.production_storage.get_relationship_by_id(prod_rel_id)
             if not prod_rel:
                 return {"verified": False, "error": f"Production relationship {prod_rel_id} not found"}
                 
@@ -564,7 +567,7 @@ class ResolutionApplicator:
             target_id = prod_rel.target
             
             # Find relationships between these nodes
-            relationships = await self.prod_storage.get_relationships_between(source_id, target_id)
+            relationships = await self.production_storage.get_relationships_between(source_id, target_id)
             
             # Check if both types exist
             types = [rel.type for rel in relationships]
@@ -595,10 +598,10 @@ class ResolutionApplicator:
                 return {"verified": False, "error": "Missing source/target information in changes"}
                 
             # Check that original relationship is gone
-            original_rels = await self.prod_storage.get_relationships_between(original_source, original_target)
+            original_rels = await self.production_storage.get_relationships_between(original_source, original_target)
             
             # Check that reversed relationship exists
-            reversed_rels = await self.prod_storage.get_relationships_between(original_target, original_source)
+            reversed_rels = await self.production_storage.get_relationships_between(original_target, original_source)
             
             return {
                 "verified": len(original_rels) == 0 and len(reversed_rels) > 0,
@@ -627,14 +630,14 @@ class ResolutionApplicator:
                 return {"verified": False, "error": "Missing primary_id or merged_ids in changes"}
                 
             # Check that primary entity exists
-            primary_entity = await self.prod_storage.get_node_by_id(primary_id)
+            primary_entity = await self.production_storage.get_node_by_id(primary_id)
             if not primary_entity:
                 return {"verified": False, "error": f"Primary entity {primary_id} not found"}
                 
             # Check that merged entities no longer exist
             merged_entities_exist = []
             for entity_id in merged_ids:
-                entity = await self.prod_storage.get_node_by_id(entity_id)
+                entity = await self.production_storage.get_node_by_id(entity_id)
                 if entity:
                     merged_entities_exist.append(entity_id)
                     
