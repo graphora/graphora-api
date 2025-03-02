@@ -2,7 +2,7 @@
 import psutil
 import time
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import logging
 import asyncio
 from redis.asyncio import Redis
@@ -320,7 +320,7 @@ class ProgressTracker:
             logger.error(f"Failed to mark merge stage as failed: {str(e)}")
     
     async def get_progress(self, merge_id: str) -> Optional[MergeProgress]:
-        """Get current progress of a merge operation"""
+        """Get current merge progress"""
         try:
             status_data = await self._redis_operation(
                 self.redis.get,
@@ -335,6 +335,83 @@ class ProgressTracker:
             logger.error(f"Failed to get merge progress: {str(e)}")
             return None
     
+    async def cancel_merge(
+        self,
+        merge_id: str,
+        reason: str = "Cancelled by user",
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Cancel a merge operation
+        
+        Args:
+            merge_id: ID of the merge operation
+            reason: Reason for cancellation
+            metadata: Optional metadata about the cancellation
+        """
+        try:
+            # Get current status
+            progress = await self.get_progress(merge_id)
+            if not progress:
+                return
+                
+            # Update status to cancelled
+            progress.overall_status = MergeStatus.CANCELLED
+            
+            # If there's a current stage, mark it as failed
+            if progress.current_stage:
+                stage = progress.current_stage
+                if stage in progress.stages_progress:
+                    progress.stages_progress[stage].status = StageStatus.FAILED
+                    progress.stages_progress[stage].end_time = datetime.now(timezone.utc)
+                    progress.stages_progress[stage].error_details = {
+                        "reason": reason,
+                        "cancelled_at": datetime.now(timezone.utc).isoformat()
+                    }
+                    
+                    # Add metadata if provided
+                    if metadata:
+                        progress.stages_progress[stage].metrics.update(metadata)
+            
+            # Set end time
+            progress.end_time = datetime.now(timezone.utc)
+            
+            # Store updated status
+            await self._redis_operation(
+                self.redis.set,
+                self._get_redis_key(merge_id, "status"),
+                progress.model_dump_json()
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to cancel merge: {str(e)}")
+    
+    async def get_all_merge_ids(self) -> List[str]:
+        """Get all merge IDs from Redis
+        
+        Returns:
+            List of merge IDs that have status information in Redis
+        """
+        try:
+            # Get all keys matching the pattern merge:*:status
+            keys = await self._redis_operation(
+                self.redis.keys,
+                "merge:*:status"
+            )
+            
+            # Extract merge IDs from keys
+            merge_ids = []
+            for key in keys:
+                # Format is merge:{merge_id}:status
+                parts = key.split(":")
+                if len(parts) == 3 and parts[0] == "merge" and parts[2] == "status":
+                    merge_ids.append(parts[1])
+            
+            return merge_ids
+            
+        except Exception as e:
+            logger.error(f"Failed to get all merge IDs: {str(e)}")
+            return []
+    
     async def pause_merge_stage(
         self,
         merge_id: str,
@@ -342,45 +419,54 @@ class ProgressTracker:
         reason: str,
         details: Optional[Dict[str, Any]] = None
     ) -> None:
-        """Pause a merge stage for human intervention
+        """
+        Pause a merge stage for human review or other reasons.
         
         Args:
-            merge_id: ID of the merge operation
-            stage: Stage to pause
-            reason: Reason for pausing
-            details: Additional details about the pause
+            merge_id: The ID of the merge operation
+            stage: The stage to pause
+            reason: The reason for pausing the stage
+            details: Optional additional details about the pause
         """
-        # Get current progress
-        progress = await self.get_progress(merge_id)
-        if not progress:
-            logger.error(f"Cannot pause stage {stage} for merge {merge_id}: progress not found")
-            return
+        try:
+            status_key = f"merge:{merge_id}:status"
+            status_json = await self._redis_operation(
+                self.redis.get,
+                status_key
+            )
             
-        # Update stage status
-        stage_progress = progress.stages_progress.get(stage)
-        if not stage_progress:
-            logger.error(f"Cannot pause stage {stage} for merge {merge_id}: stage not found")
-            return
+            if not status_json:
+                raise ValueError(f"No status found for merge {merge_id}")
             
-        # Set status to a custom value that indicates paused
-        # We'll use RUNNING with additional metadata
-        stage_progress.status = StageStatus.RUNNING
-        
-        # Add pause metadata
-        if not stage_progress.metrics:
-            stage_progress.metrics = {}
+            status = MergeProgress.model_validate_json(status_json)
             
-        stage_progress.metrics["paused"] = True
-        stage_progress.metrics["pause_reason"] = reason
-        stage_progress.metrics["paused_at"] = datetime.now(timezone.utc).isoformat()
-        
-        if details:
-            stage_progress.metrics["pause_details"] = details
+            # Check if the stage exists in stages_progress, if not, add it
+            if stage not in status.stages_progress:
+                status.stages_progress[stage] = MergeStageProgress(
+                    stage=stage,
+                    status=StageStatus.PENDING
+                )
             
-        # Update progress in Redis
-        progress_dict = progress.model_dump()
-        await self._redis_operation(
-            self.redis.set,
-            self._get_redis_key(merge_id, "progress"),
-            json.dumps(progress_dict, cls=DateTimeEncoder)
-        )
+            # Update the stage status to PAUSED
+            stage_progress = status.stages_progress[stage]
+            stage_progress.status = StageStatus.PAUSED
+            stage_progress.pause_reason = reason
+            
+            # Add details if provided
+            if details:
+                if not stage_progress.metrics:
+                    stage_progress.metrics = {}
+                stage_progress.metrics["pause_details"] = details
+                stage_progress.metrics["paused_at"] = datetime.now(timezone.utc).isoformat()
+            
+            # Save the updated status
+            await self._redis_operation(
+                self.redis.set,
+                status_key,
+                status.model_dump_json()
+            )
+            
+            logger.info(f"Paused merge {merge_id} at stage {stage.value} due to: {reason}")
+        except Exception as e:
+            logger.error(f"Failed to pause merge {merge_id} at stage {stage.value}: {str(e)}")
+            raise

@@ -878,7 +878,7 @@ class MergeService:
             ValueError: If validation fails and skip_validation is False
         """
         # Start merge stage
-        await self.progress_tracker.start_stage(merge_id, MergeStage.MERGE)
+        await self.progress_tracker.start_merge_stage(merge_id, MergeStage.MERGE)
         
         try:
             # Validate merge if not skipped
@@ -890,36 +890,98 @@ class MergeService:
                 # Block merge if validation fails
                 if not validation_result.valid:
                     error_msg = f"Merge validation failed with {validation_result.critical_count} critical issues"
-                    await self.progress_tracker.fail_stage(
+                    await self.progress_tracker.fail_merge_stage(
                         merge_id, MergeStage.MERGE, error_msg
                     )
                     raise ValueError(error_msg)
             
             # Get storages
-            staging_storage = self.get_storage(is_staging=True)
-            prod_storage = self.get_storage(is_staging=False)
+            staging_storage = self.storage  # Use the staging storage from the service
+            prod_storage = self.production_storage  # Use the production storage from the service
             
-            # Get staging graph
-            staging_graph = await staging_storage.get_graph_by_transform_id(transform_id)
+            # Create merge execution service
+            from app.services.merge.execution_service import MergeExecutionService
+            execution_service = MergeExecutionService(
+                staging_storage=staging_storage,
+                prod_storage=prod_storage,
+                progress_tracker=self.progress_tracker
+            )
             
-            # TODO: Implement actual merge logic
-            # This is a placeholder for the actual merge implementation
+            # Execute the merge
+            merge_stats = await execution_service.execute_merge(
+                merge_id=merge_id,
+                transform_id=transform_id,
+                batch_size=100  # Default batch size
+            )
             
-            # Complete merge stage
-            await self.progress_tracker.complete_stage(merge_id, MergeStage.MERGE)
-            
-            return {
-                "merge_id": merge_id,
-                "status": "completed",
-                "nodes_merged": len(staging_graph.nodes),
-                "edges_merged": len(staging_graph.edges)
-            }
+            return merge_stats
             
         except Exception as e:
             error_msg = f"Error executing merge: {str(e)}"
             logger.error(error_msg)
-            await self.progress_tracker.fail_stage(merge_id, MergeStage.MERGE, error_msg)
+            await self.progress_tracker.fail_merge_stage(merge_id, MergeStage.MERGE, error_msg)
             raise
+
+    async def cancel_merge(self, merge_id: str) -> bool:
+        """Cancel an in-progress merge operation
+        
+        Args:
+            merge_id: ID of the merge operation to cancel
+            
+        Returns:
+            bool: True if successfully cancelled, False otherwise
+        """
+        try:
+            # Get current progress to check if merge exists and is running
+            progress = await self.progress_tracker.get_progress(merge_id)
+            
+            if not progress:
+                logger.warning(f"Cannot cancel merge {merge_id}: not found")
+                return False
+                
+            if progress.overall_status in [MergeStatus.COMPLETED, MergeStatus.FAILED, MergeStatus.CANCELLED]:
+                logger.warning(f"Cannot cancel merge {merge_id}: already {progress.overall_status}")
+                return False
+            
+            # Create merge execution service
+            from app.services.merge.execution_service import MergeExecutionService
+            execution_service = MergeExecutionService(
+                staging_storage=self.storage,
+                prod_storage=self.production_storage,
+                progress_tracker=self.progress_tracker
+            )
+            
+            # Cancel the merge
+            return await execution_service.cancel_merge(merge_id)
+            
+        except Exception as e:
+            error_msg = f"Error cancelling merge {merge_id}: {str(e)}"
+            logger.error(error_msg)
+            return False
+
+    async def get_all_merges(self) -> List[Dict[str, Any]]:
+        """Get all merge operations with their progress information
+        
+        Returns:
+            List of merge operations with their progress details
+        """
+        try:
+            # Get all merge IDs
+            merge_ids = await self.progress_tracker.get_all_merge_ids()
+            
+            # Get progress for each merge ID
+            merges = []
+            for merge_id in merge_ids:
+                progress = await self.progress_tracker.get_progress(merge_id)
+                if progress:
+                    merges.append(progress.model_dump())
+            
+            return merges
+            
+        except Exception as e:
+            error_msg = f"Error getting all merges: {str(e)}"
+            logger.error(error_msg)
+            return []
 
     async def detect_conflicts(
         self,

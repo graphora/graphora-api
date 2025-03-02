@@ -28,7 +28,7 @@ class StageStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
-    SKIPPED = "skipped"
+    PAUSED = "paused"
 
 class ResourceMetrics(BaseModel):
     """Resource usage metrics"""
@@ -48,6 +48,7 @@ class MergeStageProgress(BaseModel):
     items_processed: Optional[int] = None
     error_details: Optional[Dict[str, Any]] = None
     metrics: Dict[str, Any] = Field(default_factory=dict)
+    pause_reason: Optional[str] = None
 
     @field_validator('start_time', 'end_time', mode='before')
     @classmethod

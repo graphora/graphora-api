@@ -1,21 +1,22 @@
 """Integration tests for the MergeValidationService"""
 import pytest
 import uuid
+import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 import os
-from datetime import datetime
-import pytz
 
 from app.services.merge.validation import MergeValidationService
-from app.services.merge.models import ValidationResult, ValidationIssueType, ValidationSeverity
+from app.services.merge.models import ValidationResult, ValidationIssue, ValidationIssueType, ValidationSeverity
+from app.schemas.conflicts import ConflictStatus, ConflictType, ConflictSeverity, Conflict
 from app.schemas.graph import GraphResponse, Node, Edge
 from app.services.storage.neo4j import Neo4jStorage
 from app.services.storage.conflicts import ConflictStorage
-from app.schemas.conflicts import Conflict, ConflictType, ConflictSeverity, ConflictStatus
 
 # Skip these tests by default
-pytestmark = pytest.mark.skip(
-    reason="Integration tests require a Neo4j container. These tests are for reference only."
+pytestmark = pytest.mark.skipif(
+    "INTEGRATION_TESTS" not in os.environ,
+    reason="Integration tests are skipped by default"
 )
 
 @pytest.fixture
@@ -136,8 +137,7 @@ async def setup_test_data(storage_factory, test_graph):
             staging_value=30,
             production_value=31,
             description="Age property conflict",
-            resolved=False,
-            status=ConflictStatus.PENDING
+            resolved=False
         ),
         Conflict(
             id=str(uuid.uuid4()),
@@ -147,8 +147,7 @@ async def setup_test_data(storage_factory, test_graph):
             entity_id="edge1",
             entity_type="WORKS_AT",
             description="Relationship type conflict",
-            resolved=False,
-            status=ConflictStatus.PENDING
+            resolved=False
         )
     ]
     
@@ -161,7 +160,6 @@ async def setup_test_data(storage_factory, test_graph):
         for c in conflicts:
             if c.id == conflict.id:
                 c.resolved = conflict.resolved
-                c.status = conflict.status
         
         # After updating, if we're checking for unresolved conflicts, return empty list
         if all(c.resolved for c in conflicts):
@@ -196,9 +194,10 @@ async def test_validate_conflict_resolution(storage_factory, setup_test_data):
     conflicts, _ = await conflict_storage.get_conflicts(merge_id=merge_id)
     
     for conflict in conflicts:
-        conflict.resolved = True
-        conflict.status = ConflictStatus.RESOLVED
-        await conflict_storage.update_conflict(conflict)
+        # Update conflict using model_copy instead of direct attribute assignment
+        updated_conflict = conflict.model_copy(update={"resolved": True})
+        # Store the updated conflict
+        await conflict_storage.update_conflict(updated_conflict)
     
     # Act again
     issues = await validation_service.validate_conflict_resolution(merge_id)
@@ -304,9 +303,10 @@ async def test_validate_merge_complete(storage_factory, setup_test_data, with_on
         conflicts, _ = await conflict_storage.get_conflicts(merge_id=merge_id)
         
         for conflict in conflicts:
-            conflict.resolved = True
-            conflict.status = ConflictStatus.RESOLVED
-            await conflict_storage.update_conflict(conflict)
+            # Update conflict using model_copy instead of direct attribute assignment
+            updated_conflict = conflict.model_copy(update={"resolved": True})
+            # Store the updated conflict
+            await conflict_storage.update_conflict(updated_conflict)
         
         # Act again
         result = await validation_service.validate_merge(
