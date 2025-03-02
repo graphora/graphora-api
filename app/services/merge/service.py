@@ -918,9 +918,6 @@ class MergeService:
         """
         logger.info(f"Executing merge {merge_id} for transform {transform_id}")
         
-        # Start merge stage
-        await start_stage(merge_id, MergeStage.MERGE, self.progress_tracker)
-        
         try:
             # Extract staging graph
             staging_graph = await extract_staging_graph(self.storage, transform_id)
@@ -949,12 +946,19 @@ class MergeService:
                 if not validation_result.valid:
                     error_msg = f"Validation failed with {validation_result.critical_count} critical issues"
                     logger.error(error_msg)
+                    
+                    if auto_rollback:
+                        await self._rollback_merge(merge_id, snapshot.snapshot_id)
+                    
                     await fail_merge(merge_id, error_msg, self.progress_tracker)
                     return {
-                        "success": False,
-                        "error": error_msg,
-                        "validation_result": validation_result.model_dump()
+                        "status": "failed",
+                        "reason": "validation_failed",
+                        "validation_result": validation_result.dict()
                     }
+            
+            # Start merge stage - moved after validation
+            await start_stage(merge_id, MergeStage.MERGE, self.progress_tracker)
             
             # Apply merge changes
             transaction_manager = self._get_transaction_manager()
@@ -1028,10 +1032,12 @@ class MergeService:
                 await complete_merge(merge_id, self.progress_tracker)
                 
                 return {
-                    "success": True,
-                    "nodes_processed": nodes_processed,
-                    "relationships_processed": relationships_processed,
-                    "snapshot_id": snapshot.snapshot_id
+                    "status": "success",
+                    "metrics": {
+                        "nodes_merged": nodes_processed,
+                        "relationships_merged": relationships_processed,
+                        "snapshot_id": snapshot.snapshot_id
+                    }
                 }
                 
             except Exception as e:
@@ -1043,8 +1049,8 @@ class MergeService:
                 await fail_merge(merge_id, error_msg, self.progress_tracker)
                 
                 return {
-                    "success": False,
-                    "error": error_msg
+                    "status": "failed",
+                    "reason": error_msg
                 }
                 
         except Exception as e:
@@ -1053,8 +1059,8 @@ class MergeService:
             await fail_merge(merge_id, error_msg, self.progress_tracker)
             
             return {
-                "success": False,
-                "error": error_msg
+                "status": "failed",
+                "reason": error_msg
             }
 
     async def cancel_merge(self, merge_id: str) -> bool:
@@ -2766,8 +2772,8 @@ class MergeService:
                 status="successful",
                 timestamp=datetime.now(timezone.utc),
                 details={
-                    "nodes_reverted": result.get("nodes_restored", 0),
-                    "relationships_reverted": result.get("relationships_restored", 0)
+                    "nodes_restored": result.get("nodes_restored", 0),
+                    "relationships_restored": result.get("relationships_restored", 0)
                 }
             )
             

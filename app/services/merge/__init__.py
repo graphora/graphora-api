@@ -15,7 +15,12 @@ from app.services.merge.flow_manager import (
 from app.services.merge.progress import ProgressTracker
 
 # Import models
-from app.services.merge.models import MergeStage, StageStatus
+from app.services.merge.models import (
+    MergeStage, MergeStatus, StageStatus, MergeProgress, 
+    ValidationResult, ValidationIssue, ValidationSeverity, ValidationIssueType,
+    EntityMappingResult, EntityMatch, MatchStrategy,
+    RollbackType, RollbackOptions, RollbackResponse, SnapshotData
+)
 
 # Import resolution learning service
 from app.services.merge.resolution_learning import ResolutionLearningService, ResolutionLearningConfig
@@ -29,6 +34,9 @@ from app.services.merge.validation import MergeValidationService
 # Import merge execution service
 from app.services.merge.execution_service import MergeExecutionService
 
+# Import merge logger
+from app.services.merge.merge_logger import MergeLogger
+
 __all__ = [
     "MergeService",
     "ConflictDetectionService",
@@ -40,7 +48,21 @@ __all__ = [
     "cancel_flow_run",
     "ProgressTracker",
     "MergeStage",
+    "MergeStatus",
     "StageStatus",
+    "MergeProgress",
+    "ValidationResult",
+    "ValidationIssue",
+    "ValidationSeverity",
+    "ValidationIssueType",
+    "EntityMappingResult",
+    "EntityMatch",
+    "MatchStrategy",
+    "RollbackType",
+    "RollbackOptions",
+    "RollbackResponse",
+    "SnapshotData",
+    "MergeLogger",
     "ResolutionLearningService",
     "ResolutionLearningConfig"
 ] 

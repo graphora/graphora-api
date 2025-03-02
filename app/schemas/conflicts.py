@@ -26,6 +26,7 @@ class ConflictType(str, Enum):
     RELATIONSHIP_DIRECTION = "relationship_direction"
     ENTITY_MATCH = "entity_match"
     DUPLICATE_ENTITY = "duplicate_entity"
+    ENTITY_TYPE = "entity_type"  # Entity type conflicts
     SCHEMA = "schema"
     OTHER = "other"
 

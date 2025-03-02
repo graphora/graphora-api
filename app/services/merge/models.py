@@ -22,6 +22,7 @@ class MergeStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    ROLLED_BACK = "rolled_back"
 
 class StageStatus(str, Enum):
     """Status of an individual stage"""
