@@ -226,20 +226,31 @@ class TestMergeServiceValidation:
         # Mock get_graph_by_transform_id
         merge_service.storage.get_graph_by_transform_id.return_value = valid_graph
         
-        # Act
-        result = await merge_service.execute_merge(merge_id, transform_id)
-        
-        # Assert
-        assert result["merge_id"] == merge_id
-        assert result["status"] == "completed"
-        assert result["nodes_merged"] == 3
-        assert result["edges_merged"] == 2
-        
-        # Verify mock calls
-        mock_validate_merge.assert_called_once_with(merge_id, transform_id, None, None)
-        merge_service.progress_tracker.start_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
-        merge_service.progress_tracker.complete_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
-        merge_service.progress_tracker.fail_stage.assert_not_called()
+        # Mock execution_service.execute_merge to return a specific result
+        with patch("app.services.merge.execution_service.MergeExecutionService") as mock_execution_service_class:
+            mock_execution_service = AsyncMock()
+            mock_execution_service.execute_merge.return_value = {
+                "merge_id": merge_id,
+                "status": "completed",
+                "nodes_merged": 3,
+                "edges_merged": 2
+            }
+            mock_execution_service_class.return_value = mock_execution_service
+            
+            # Act
+            result = await merge_service.execute_merge(merge_id, transform_id)
+            
+            # Assert
+            assert result["merge_id"] == merge_id
+            assert result["status"] == "completed"
+            assert result["nodes_merged"] == 3
+            assert result["edges_merged"] == 2
+            
+            # Verify mock calls
+            mock_validate_merge.assert_called_once_with(merge_id, transform_id, None, None)
+            merge_service.progress_tracker.start_merge_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
+            mock_execution_service.execute_merge.assert_called_once()
+            merge_service.progress_tracker.complete_stage.assert_not_called()  # This is handled by the execution service
     
     @pytest.mark.asyncio
     @patch("app.services.merge.service.MergeService.validate_merge")
@@ -276,12 +287,12 @@ class TestMergeServiceValidation:
         
         # Verify mock calls
         mock_validate_merge.assert_called_once_with(merge_id, transform_id, None, None)
-        merge_service.progress_tracker.start_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
+        merge_service.progress_tracker.start_merge_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
         
         # The fail_stage is called twice in the implementation:
         # 1. When validation fails
         # 2. When the exception is caught and logged
-        assert merge_service.progress_tracker.fail_stage.call_count == 2
+        assert merge_service.progress_tracker.fail_merge_stage.call_count == 2
         merge_service.progress_tracker.complete_stage.assert_not_called()
     
     @pytest.mark.asyncio
@@ -294,16 +305,27 @@ class TestMergeServiceValidation:
         # Mock get_graph_by_transform_id
         merge_service.storage.get_graph_by_transform_id.return_value = valid_graph
         
-        # Act
-        result = await merge_service.execute_merge(merge_id, transform_id, skip_validation=True)
-        
-        # Assert
-        assert result["merge_id"] == merge_id
-        assert result["status"] == "completed"
-        assert result["nodes_merged"] == 3
-        assert result["edges_merged"] == 2
-        
-        # Verify mock calls
-        merge_service.progress_tracker.start_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
-        merge_service.progress_tracker.complete_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
-        merge_service.progress_tracker.fail_stage.assert_not_called() 
+        # Mock execution_service.execute_merge to return a specific result
+        with patch("app.services.merge.execution_service.MergeExecutionService") as mock_execution_service_class:
+            mock_execution_service = AsyncMock()
+            mock_execution_service.execute_merge.return_value = {
+                "merge_id": merge_id,
+                "status": "completed",
+                "nodes_merged": 3,
+                "edges_merged": 2
+            }
+            mock_execution_service_class.return_value = mock_execution_service
+            
+            # Act
+            result = await merge_service.execute_merge(merge_id, transform_id, skip_validation=True)
+            
+            # Assert
+            assert result["merge_id"] == merge_id
+            assert result["status"] == "completed"
+            assert result["nodes_merged"] == 3
+            assert result["edges_merged"] == 2
+            
+            # Verify mock calls
+            merge_service.progress_tracker.start_merge_stage.assert_called_once_with(merge_id, MergeStage.MERGE)
+            mock_execution_service.execute_merge.assert_called_once()
+            merge_service.progress_tracker.fail_merge_stage.assert_not_called() 

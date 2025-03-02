@@ -26,10 +26,14 @@ from app.services.merge.conflict import ConflictDetectionService
 # Import merge validation service
 from app.services.merge.validation import MergeValidationService
 
+# Import merge execution service
+from app.services.merge.execution_service import MergeExecutionService
+
 __all__ = [
     "MergeService",
     "ConflictDetectionService",
     "MergeValidationService",
+    "MergeExecutionService",
     "create_resolution_pipeline_deployment",
     "run_resolution_pipeline",
     "get_flow_run_status",

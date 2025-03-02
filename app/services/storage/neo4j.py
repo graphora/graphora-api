@@ -112,8 +112,19 @@ class Neo4jStorage(GraphStorageInterface):
     def _build_node_query(self, node: BaseNode, transform_id: str) -> tuple[str, Dict]:
         """Build Cypher query for creating a node with properties"""
         # Extract properties excluding metadata
+        if isinstance(node, dict):
+            # Handle dictionary input
+            node_properties = node.get('properties', {})
+            node_type = node.get('type', '')
+            node_id = node.get('id', '')
+        else:
+            # Handle BaseNode input
+            node_properties = node.properties
+            node_type = node.type
+            node_id = node.id
+            
         properties = {
-            k: v for k, v in node.properties.items()
+            k: v for k, v in node_properties.items()
             if k not in ['id', 'type', 'transform_id']
         }
 
@@ -121,11 +132,11 @@ class Neo4jStorage(GraphStorageInterface):
         properties['transform_id'] = transform_id
 
         # Add provenance if present
-        if hasattr(node, 'provenance') and node.provenance:
+        if not isinstance(node, dict) and hasattr(node, 'provenance') and node.provenance:
             properties.update(node.provenance)
 
         # Build labels string
-        labels = [node.type] if node.type else []
+        labels = [node_type] if node_type else []
 
         # Build query
         query = (
@@ -135,29 +146,58 @@ class Neo4jStorage(GraphStorageInterface):
         )
 
         return query, {
-            "id": node.id,
+            "id": node_id,
             "properties": properties
         }
 
-    def _build_relationship_query(self, relationship: Edge) -> Tuple[str, Dict[str, Any]]:
-        """Build Cypher query for creating a relationship"""
-        query = f"""
-        MATCH (source {{id: $source}}), (target {{id: $target}})
-        MERGE (source)-[r:{relationship.type}]->(target)
-        SET r += $properties
+    def _build_relationship_query(self, rel: RelationshipInstance) -> Tuple[str, Dict[str, Any]]:
+        """Build a Cypher query for creating a relationship"""
+        if isinstance(rel, dict):
+            source_id = rel.get('source_id') or rel.get('source')
+            target_id = rel.get('target_id') or rel.get('target')
+            rel_id = rel.get('id', str(uuid.uuid4()))
+            rel_type = rel.get('type') or rel.get('relationship_type')
+            rel_properties = rel.get('properties', {})
+        else:
+            source_id = rel.source if hasattr(rel, 'source') else rel.source_id
+            target_id = rel.target if hasattr(rel, 'target') else rel.target_id
+            rel_id = rel.id
+            rel_type = rel.type if hasattr(rel, 'type') else rel.relationship_type
+            rel_properties = rel.properties
+
+        # Ensure rel_properties is a dict
+        if rel_properties is None:
+            rel_properties = {}
+            
+        # Sanitize properties
+        sanitized_properties = {}
+        for key, value in rel_properties.items():
+            if isinstance(value, (dict, list)):
+                sanitized_properties[key] = json.dumps(value)
+            elif value is None:
+                # Skip None values
+                continue
+            else:
+                sanitized_properties[key] = value
+        
+        # Add transform_id if it exists
+        if hasattr(rel, 'transform_id'):
+            sanitized_properties['transform_id'] = rel.transform_id
+        
+        query = """
+        MATCH (s), (t)
+        WHERE s.id = $source_id AND t.id = $target_id
+        CREATE (s)-[r:`{}`]->(t)
+        SET r = $properties, r.id = $rel_id
         RETURN r
-        """
+        """.format(rel_type)
         
-        # Extract properties, excluding null values
-        properties = {k: v for k, v in relationship.properties.items() if v is not None}
-        
-        params = {
-            "source": relationship.source,
-            "target": relationship.target,
-            "properties": properties
+        return query, {
+            "source_id": source_id,
+            "target_id": target_id,
+            "rel_id": rel_id,
+            "properties": sanitized_properties
         }
-        
-        return query, params
 
     async def store_nodes(
         self,
@@ -185,7 +225,12 @@ class Neo4jStorage(GraphStorageInterface):
             except (StorageError, DatabaseError) as e:
                 success = False
                 error_message = str(e)
-                logger.error(f"Failed to store node {node.id}: {error_message}")
+                if isinstance(node, dict):
+                    node_id = node.get('id', 'unknown')
+                else:
+                    node_id = node.id
+                logger.error(f"Failed to store node {node_id}: {error_message}")
+                warnings.append(f"Failed to store node {node_id}: {error_message}")
                 break
 
         # Only update checkpoint if at least one node was stored successfully
@@ -238,13 +283,18 @@ class Neo4jStorage(GraphStorageInterface):
                     async with self._get_session() as session:
                         query, params = self._build_relationship_query(rel)
                         await session.run(query, params)
-
+                
                 await self._execute_with_retry(_execute_query)
                 items_processed += 1
             except (StorageError, DatabaseError) as e:
                 success = False
                 error_message = str(e)
-                logger.error(f"Failed to store relationship {rel.id}: {error_message}")
+                if isinstance(rel, dict):
+                    rel_id = rel.get('id', 'unknown')
+                else:
+                    rel_id = rel.id
+                logger.error(f"Failed to store relationship {rel_id}: {error_message}")
+                warnings.append(f"Failed to store relationship {rel_id}: {error_message}")
                 break
 
         # Only update checkpoint if at least one relationship was stored successfully
@@ -363,6 +413,7 @@ class Neo4jStorage(GraphStorageInterface):
         transform_id: str
     ) -> TransformationResult:
         """Get all nodes and relationships for a transformation"""
+        print(f"DEBUG: Getting transformation data for transform_id: {transform_id}")
         async def _execute_query():
             async with self._get_session() as session:
                 # Get nodes
@@ -375,6 +426,8 @@ class Neo4jStorage(GraphStorageInterface):
                 node_records = []
                 async for record in node_result:
                     node_records.append(record)
+                
+                print(f"DEBUG: Found {len(node_records)} nodes for transform_id: {transform_id}")
                 
                 nodes = [
                     {
@@ -390,7 +443,7 @@ class Neo4jStorage(GraphStorageInterface):
                 
                 # Get relationships
                 rel_query = """
-                MATCH (source)-[r]-(target)
+                MATCH (source)-[r]->(target)
                 WHERE r.transform_id = $transform_id
                 RETURN source, r, target
                 """
@@ -398,6 +451,8 @@ class Neo4jStorage(GraphStorageInterface):
                 rel_records = []
                 async for record in rel_result:
                     rel_records.append(record)
+                
+                print(f"DEBUG: Found {len(rel_records)} relationships for transform_id: {transform_id}")
                 
                 relationships = [
                     {
@@ -408,6 +463,8 @@ class Neo4jStorage(GraphStorageInterface):
                     }
                     for record in rel_records
                 ]
+                
+                print(f"DEBUG: Returning {len(nodes)} nodes and {len(relationships)} relationships")
                 
                 return TransformationResult(
                     transform_id=transform_id,
@@ -642,10 +699,11 @@ class Neo4jStorage(GraphStorageInterface):
         properties: Dict[str, Any]
     ) -> Node:
         """Update an existing node"""
+        print(f"DEBUG: Updating node {node_id} with properties: {properties}")
         async def _execute_query():
             query = """
             MATCH (n)
-            WHERE id(n) = $id
+            WHERE n.id = $id
             SET n += $properties
             RETURN n
             """
@@ -658,11 +716,13 @@ class Neo4jStorage(GraphStorageInterface):
                 raise StorageError(f"Node {node_id} not found")
             
             node_data = records[0][0]
+            node_properties = dict(node_data.items())
+            print(f"DEBUG: Updated node {node_id}, new properties: {node_properties}")
             return Node(
                 id=str(node_data.id),
                 label=list(node_data.labels)[0],
                 type=node_data.get("type", ""),
-                properties=dict(node_data.items())
+                properties=node_properties
             )
         
         return await self._execute_with_retry(_execute_query)
@@ -675,23 +735,38 @@ class Neo4jStorage(GraphStorageInterface):
         properties: Dict[str, Any] = None
     ) -> Edge:
         """Create a relationship between nodes"""
+        # Ensure properties is a dict and not None
+        if properties is None:
+            properties = {}
+            
+        # Convert any complex objects in properties to strings
+        sanitized_properties = {}
+        for key, value in properties.items():
+            if isinstance(value, (dict, list)):
+                sanitized_properties[key] = json.dumps(value)
+            elif value is None:
+                # Skip None values as Neo4j doesn't handle them well
+                continue
+            else:
+                sanitized_properties[key] = value
+                
         async def _execute_query():
             query = """
             MATCH (s), (t)
-            WHERE id(s) = $source_id AND id(t) = $target_id
-            CREATE (s)-[r:$type]->(t)
+            WHERE s.id = $source_id AND t.id = $target_id
+            CREATE (s)-[r:`{}`]->(t)
             SET r = $properties
             RETURN r
-            """
+            """.format(rel_type)
+            
             records = await self._execute_query(query, {
                 "source_id": source_id,
                 "target_id": target_id,
-                "type": rel_type,
-                "properties": properties or {}
+                "properties": sanitized_properties
             })
             
             if not records:
-                raise StorageError("Failed to create relationship")
+                raise StorageError(f"Failed to create relationship between {source_id} and {target_id} of type {rel_type}")
             
             rel_data = records[0][0]
             return Edge(
@@ -706,22 +781,26 @@ class Neo4jStorage(GraphStorageInterface):
 
     async def get_node_by_id(self, node_id: str) -> Optional[Node]:
         """Get a node by its ID"""
+        print(f"DEBUG: Getting node by ID: {node_id}")
         query = """
                 MATCH (n)
-                WHERE elementId(n) = $id
+                WHERE n.id = $id
                 RETURN n
                 """
         records = await self._execute_query(query, {"id": node_id})
         if not records:
+            print(f"DEBUG: No node found with ID: {node_id}")
             return None
 
         record = records[0]
         labels = list(record[0].labels) if record[0].labels else []
+        properties = dict(record[0].items())
+        print(f"DEBUG: Found node with ID: {node_id}, properties: {properties}")
         return Node(
-            id=str(record[0].element_id),
+            id=str(record[0].id),
             label=labels[0] if labels else None,
             type=labels[0] if labels else None,
-            properties=dict(record[0].items())
+            properties=properties
         )
 
     async def get_edges_between(
@@ -732,7 +811,7 @@ class Neo4jStorage(GraphStorageInterface):
         """Get all edges between two nodes"""
         query = """
                 MATCH (s)-[r]->(t)
-                WHERE elementId(s) = $source_id AND elementId(t) = $target_id
+                WHERE s.id = $source_id AND t.id = $target_id
                 RETURN r
                 """
         records = await self._execute_query(query, {
@@ -743,13 +822,35 @@ class Neo4jStorage(GraphStorageInterface):
         edges = []
         for record in records:
             edges.append(Edge(
-                id=str(record[0].element_id),
-                source=str(record[0].start_node.element_id),
-                target=str(record[0].end_node.element_id),
+                id=str(record[0].id),
+                source=source_id,
+                target=target_id,
                 type=record[0].type,
                 properties=dict(record[0].items())
             ))
         return edges
+
+    async def delete_relationship(self, rel_id: str) -> bool:
+        """Delete a relationship by its ID
+        
+        Args:
+            rel_id: ID of the relationship to delete
+            
+        Returns:
+            True if the relationship was deleted, False otherwise
+        """
+        query = """
+                MATCH ()-[r]->()
+                WHERE r.id = $rel_id
+                DELETE r
+                RETURN count(r) as deleted_count
+                """
+        records = await self._execute_query(query, {"rel_id": rel_id})
+        
+        if not records:
+            return False
+            
+        return records[0][0] > 0
 
     async def close(self):
         """Close the database connection"""
