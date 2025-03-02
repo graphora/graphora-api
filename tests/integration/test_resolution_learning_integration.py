@@ -11,7 +11,11 @@ from app.services.merge.resolution_learning import ResolutionLearningService, Re
 from app.services.storage.vector_storage import ResolutionPattern, QdrantResolutionStorage
 from app.services.merge.resolution_search import ResolutionPatternSearchService
 from app.schemas.conflicts import Conflict, ConflictType, ResolutionOption, ConflictSeverity
-
+import os
+pytestmark = pytest.mark.skipif(
+    "INTEGRATION_TESTS" not in os.environ,
+    reason="Integration tests are skipped by default. Set INTEGRATION_TESTS=1 to run."
+)
 
 @pytest.fixture
 async def vector_storage():

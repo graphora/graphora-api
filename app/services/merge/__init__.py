@@ -20,8 +20,16 @@ from app.services.merge.models import MergeStage, StageStatus
 # Import resolution learning service
 from app.services.merge.resolution_learning import ResolutionLearningService, ResolutionLearningConfig
 
+# Import conflict detection service
+from app.services.merge.conflict import ConflictDetectionService
+
+# Import merge validation service
+from app.services.merge.validation import MergeValidationService
+
 __all__ = [
     "MergeService",
+    "ConflictDetectionService",
+    "MergeValidationService",
     "create_resolution_pipeline_deployment",
     "run_resolution_pipeline",
     "get_flow_run_status",

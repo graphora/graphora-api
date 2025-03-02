@@ -9,7 +9,12 @@ from datetime import datetime
 from app.schemas.conflicts import Conflict, ConflictType, ConflictSeverity
 from app.services.merge.resolution_search import ResolutionPatternSearchService, ResolutionEmbeddingGenerator
 from app.services.storage.vector_storage import QdrantResolutionStorage, ResolutionPattern
+import os
 
+pytestmark = pytest.mark.skipif(
+    "INTEGRATION_TESTS" not in os.environ,
+    reason="Integration tests are skipped by default. Set INTEGRATION_TESTS=1 to run."
+)
 
 @pytest.fixture
 async def vector_storage():
