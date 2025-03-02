@@ -43,8 +43,8 @@ class RelationshipConflictDetector(ConflictDetector):
             edge_conflicts = []
             
             # Get production matches for source and target
-            source_matches = production_entity_mapping.get(edge.source_id, [])
-            target_matches = production_entity_mapping.get(edge.target_id, [])
+            source_matches = production_entity_mapping.get(edge.source, [])
+            target_matches = production_entity_mapping.get(edge.target, [])
             
             if not source_matches or not target_matches:
                 return []
@@ -107,5 +107,5 @@ class RelationshipConflictDetector(ConflictDetector):
         """Get relationships where both endpoints are in entity_ids"""
         return [
             edge for edge in edges
-            if edge.source_id in entity_ids and edge.target_id in entity_ids
+            if edge.source in entity_ids and edge.target in entity_ids
         ]

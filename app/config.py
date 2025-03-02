@@ -282,6 +282,28 @@ class Settings(BaseSettings):
         description="Application logging level"
     )
     
+    # Merge Logging Settings
+    LOG_DIR: str = Field(
+        default="/tmp/graphit/logs",
+        description="Directory for storing log files"
+    )
+    LOG_TO_DATABASE: bool = Field(
+        default=True,
+        description="Whether to store logs in database"
+    )
+    LOG_ROTATION_DAYS: int = Field(
+        default=30,
+        description="Number of days to keep logs before rotation"
+    )
+    LOG_MAX_FILE_SIZE_MB: int = Field(
+        default=10,
+        description="Maximum log file size in MB before rotation"
+    )
+    LOG_BACKUP_COUNT: int = Field(
+        default=5,
+        description="Number of backup log files to keep"
+    )
+    
     # Qdrant Vector Database Settings
     QDRANT_URL: str = Field(
         default="http://localhost:6333",

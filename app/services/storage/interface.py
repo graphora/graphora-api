@@ -177,6 +177,34 @@ class GraphStorageInterface(ABC):
         pass
         
     @abstractmethod
+    async def update_relationship(
+        self,
+        rel_id: str,
+        properties: Dict[str, Any]
+    ) -> Edge:
+        """Update an existing relationship"""
+        pass
+        
+    @abstractmethod
+    async def get_relationship(
+        self,
+        source_id: str,
+        target_id: str,
+        rel_type: str
+    ) -> Optional[Edge]:
+        """Get a specific relationship between two nodes by type
+        
+        Args:
+            source_id: ID of the source node
+            target_id: ID of the target node
+            rel_type: Type of relationship to find
+            
+        Returns:
+            Edge if found, None otherwise
+        """
+        pass
+        
+    @abstractmethod
     async def get_node_by_id(self, node_id: str) -> Optional[Node]:
         """Get a node by its ID
         

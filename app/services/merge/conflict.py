@@ -69,7 +69,7 @@ class ConflictDetectionService:
                 # Process batch in parallel
                 batch_conflicts = await asyncio.gather(
                     *[
-                        self._detect_node_conflicts(node, production_matches)
+                        self._detect_node_conflicts(node, production_matches, merge_id)
                         for node in batch
                     ]
                 )
@@ -115,7 +115,8 @@ class ConflictDetectionService:
     async def _detect_node_conflicts(
         self,
         staging_node: Node,
-        production_matches: Dict[str, List[str]]
+        production_matches: Dict[str, List[str]],
+        merge_id: Optional[str] = None
     ) -> List[Conflict]:
         """Detect all conflicts for a single node"""
         conflicts = []
@@ -132,21 +133,21 @@ class ConflictDetectionService:
                 
         # Detect type conflicts
         type_conflicts = await self._detect_entity_type_conflicts(
-            staging_node, prod_nodes
+            staging_node, prod_nodes, merge_id
         )
         conflicts.extend(type_conflicts)
         
         # Detect property conflicts
         for prod_node in prod_nodes:
             prop_conflicts = await self.detect_property_conflicts(
-                staging_node, prod_node, staging_node.id
+                staging_node, prod_node, merge_id
             )
             conflicts.extend(prop_conflicts)
             
         # Detect duplicate conflicts if multiple matches
         if len(prod_nodes) > 1:
             conflicts.append(
-                self._create_duplicate_entity_conflict(staging_node, prod_nodes)
+                self._create_duplicate_entity_conflict(staging_node, prod_nodes, merge_id)
             )
             
         return conflicts
@@ -664,9 +665,10 @@ class ConflictDetectionService:
     async def _detect_entity_type_conflicts(
         self,
         staging_node: Node,
-        production_nodes: List[Node]
+        production_nodes: List[Node],
+        merge_id: Optional[str] = None
     ) -> List[Conflict]:
-        """Detect conflicts where entity types differ between staging and production"""
+        """Detect conflicts where the entity type (label) differs between staging and production"""
         conflicts = []
         
         for production_node in production_nodes:
@@ -674,6 +676,7 @@ class ConflictDetectionService:
                 conflict_id = f"type_{staging_node.id}_{production_node.id}"
                 conflicts.append(Conflict(
                     id=conflict_id,
+                    merge_id=merge_id,
                     conflict_type=ConflictType.ENTITY_TYPE,
                     severity=ConflictSeverity.CRITICAL,
                     staging_ids=[staging_node.id],
@@ -710,7 +713,8 @@ class ConflictDetectionService:
     def _create_duplicate_entity_conflict(
         self,
         staging_node: Node,
-        production_nodes: List[Node]
+        production_nodes: List[Node],
+        merge_id: Optional[str] = None
     ) -> Conflict:
         """Create a conflict for duplicate entity matches"""
         conflict_id = f"duplicate_{staging_node.id}"
@@ -725,6 +729,7 @@ class ConflictDetectionService:
         
         return Conflict(
             id=conflict_id,
+            merge_id=merge_id,
             conflict_type=ConflictType.DUPLICATE_ENTITY,
             severity=ConflictSeverity.CRITICAL,
             staging_ids=[staging_node.id],

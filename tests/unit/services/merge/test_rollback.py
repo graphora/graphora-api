@@ -36,6 +36,7 @@ def mock_progress_tracker():
     tracker = AsyncMock()
     tracker.get_merge_progress = AsyncMock()
     tracker.update_merge_progress = AsyncMock()
+    tracker.cancel_merge = AsyncMock()
     return tracker
 
 @pytest.fixture
@@ -244,12 +245,12 @@ class TestMergeRollback:
         assert response.rollback_id.startswith("rollback_")
         assert response.merge_id == merge_id
         assert response.status == "successful"
-        assert response.details["nodes_reverted"] == 2
-        assert response.details["relationships_reverted"] == 1
+        assert response.details["nodes_restored"] == 2
+        assert response.details["relationships_restored"] == 1
         
         # Verify method calls
         assert merge_service._apply_complete_rollback.call_count == 1
-        assert mock_progress_tracker.update_merge_progress.call_count == 1
+        assert mock_progress_tracker.cancel_merge.call_count == 1
     
     async def test_rollback_merge_partial(self, merge_service, mock_redis_client, mock_progress_tracker, sample_snapshot, sample_merge_progress):
         """Test rollback_merge with partial rollback"""
@@ -282,12 +283,12 @@ class TestMergeRollback:
         assert response.rollback_id.startswith("rollback_")
         assert response.merge_id == merge_id
         assert response.status == "successful"
-        assert response.details["nodes_reverted"] == 1
-        assert response.details["relationships_reverted"] == 0
+        assert response.details["nodes_restored"] == 1
+        assert response.details["relationships_restored"] == 0
         
         # Verify method calls
         assert merge_service._apply_partial_rollback.call_count == 1
-        assert mock_progress_tracker.update_merge_progress.call_count == 1
+        assert mock_progress_tracker.cancel_merge.call_count == 1
     
     async def test_rollback_merge_no_snapshot(self, merge_service, mock_redis_client):
         """Test rollback_merge when no snapshot exists"""
@@ -333,9 +334,7 @@ class TestMergeRollback:
         # Verify the key starts with rollback:
         assert call_args[0].startswith("rollback:")
         
-        # Parse the JSON data
-        data = json.loads(call_args[1])
-        
-        # Verify the status is failed
-        assert data["status"] == "failed"
-        assert data["error"] == error_message 
+        # Verify the value is a JSON string with status "failed"
+        value_dict = json.loads(call_args[1])
+        assert value_dict["status"] == "failed"
+        assert value_dict["error"] == error_message 

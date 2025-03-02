@@ -801,6 +801,57 @@ class Neo4jStorage(GraphStorageInterface):
         
         return await self._execute_with_retry(_execute_query)
 
+    async def update_relationship(
+        self,
+        rel_id: str,
+        properties: Dict[str, Any]
+    ) -> Edge:
+        """Update an existing relationship"""
+        # Ensure properties is a dict and not None
+        if properties is None:
+            properties = {}
+            
+        # Convert any complex objects in properties to strings
+        sanitized_properties = {}
+        for key, value in properties.items():
+            if isinstance(value, (dict, list)):
+                sanitized_properties[key] = json.dumps(value)
+            elif value is None:
+                # Skip None values as Neo4j doesn't handle them well
+                continue
+            else:
+                sanitized_properties[key] = value
+                
+        async def _execute_query():
+            query = """
+            MATCH ()-[r]->()
+            WHERE r.id = $rel_id
+            SET r += $properties
+            RETURN r, startNode(r) as source, endNode(r) as target
+            """
+            
+            records = await self._execute_query(query, {
+                "rel_id": rel_id,
+                "properties": sanitized_properties
+            })
+            
+            if not records:
+                raise StorageError(f"Relationship {rel_id} not found")
+            
+            rel_data = records[0][0]
+            source_node = records[0][1]
+            target_node = records[0][2]
+            
+            return Edge(
+                id=rel_id,
+                source=source_node.get("id", str(source_node.element_id)),
+                target=target_node.get("id", str(target_node.element_id)),
+                type=rel_data.type,
+                properties=dict(rel_data.items())
+            )
+        
+        return await self._execute_with_retry(_execute_query)
+
     async def get_node_by_id(self, node_id: str) -> Optional[Node]:
         """Get a node by its ID"""
         print(f"DEBUG: Getting node by ID: {node_id}")
@@ -851,6 +902,45 @@ class Neo4jStorage(GraphStorageInterface):
                 properties=dict(record[0].items())
             ))
         return edges
+
+    async def get_relationship(
+        self,
+        source_id: str,
+        target_id: str,
+        rel_type: str
+    ) -> Optional[Edge]:
+        """Get a specific relationship between two nodes by type
+        
+        Args:
+            source_id: ID of the source node
+            target_id: ID of the target node
+            rel_type: Type of relationship to find
+            
+        Returns:
+            Edge if found, None otherwise
+        """
+        query = """
+                MATCH (s)-[r:`{}`]->(t)
+                WHERE s.id = $source_id AND t.id = $target_id
+                RETURN r
+                """.format(rel_type)
+        
+        records = await self._execute_query(query, {
+            "source_id": source_id,
+            "target_id": target_id
+        })
+
+        if not records:
+            return None
+            
+        record = records[0]
+        return Edge(
+            id=str(record[0].element_id),
+            source=source_id,
+            target=target_id,
+            type=record[0].type,
+            properties=dict(record[0].items())
+        )
 
     async def delete_relationship(self, rel_id: str) -> bool:
         """Delete a relationship by its ID

@@ -288,4 +288,30 @@ class MockGraphStorage(GraphStorageInterface):
         return [
             edge for edge in self.edges.values()
             if edge.source == source_id and edge.target == target_id
-        ] 
+        ]
+    
+    async def get_relationship(
+        self,
+        source_id: str,
+        target_id: str,
+        rel_type: str
+    ) -> Optional[Edge]:
+        """Get a specific relationship between two nodes by type"""
+        edges = [
+            edge for edge in self.edges.values()
+            if edge.source == source_id and edge.target == target_id and edge.type == rel_type
+        ]
+        return edges[0] if edges else None
+    
+    async def update_relationship(
+        self,
+        rel_id: str,
+        properties: Dict[str, Any]
+    ) -> Edge:
+        """Update an existing relationship"""
+        if rel_id not in self.edges:
+            raise ValueError(f"Relationship {rel_id} not found")
+            
+        edge = self.edges[rel_id]
+        edge.properties.update(properties)
+        return edge 
