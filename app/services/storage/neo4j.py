@@ -29,18 +29,40 @@ logger = logging.getLogger(__name__)
 class Neo4jStorage(GraphStorageInterface):
     """Neo4j implementation of graph storage"""
     
-    def __init__(self, uri: str, username: str, password: str, database: str = "neo4j", max_retries: int = 3, test_mode: bool = False):
-        """Initialize Neo4j connection"""
+    def __init__(
+        self,
+        uri: str,
+        username: str,
+        password: str,
+        database: str = "neo4j",
+        max_retries: int = 3,
+        transaction_manager=None
+    ):
+        """Initialize Neo4j storage
+        
+        Args:
+            uri: Neo4j URI
+            username: Neo4j username
+            password: Neo4j password
+            database: Neo4j database name
+            max_retries: Maximum number of retries for operations
+            transaction_manager: Optional transaction manager
+        """
+        self.uri = uri
+        self.username = username
+        self.password = password
+        self.database = database
+        self.max_retries = max_retries
+        self.transaction_manager = transaction_manager
+
         try:
             # Create the async driver
             self.driver = AsyncGraphDatabase.driver(
                 uri,
                 auth=(username, password)
             )
-            self.database = database
-            self.max_retries = max_retries
 
-            if not test_mode:
+            if not transaction_manager:
                 # Create a synchronous driver for testing
                 sync_driver = GraphDatabase.driver(
                     uri,
@@ -491,7 +513,7 @@ class Neo4jStorage(GraphStorageInterface):
             
             return [
                 Node(
-                    id=str(record[0].id),
+                    id=str(record[0].element_id),
                     label=record[0].get("type", list(record[0].labels)[0]),  # Use type property if available, fallback to first label
                     type=record[0].get("type", list(record[0].labels)[0]),  # Use same value for type
                     properties={k: v for k, v in dict(record[0].items()).items() if k != "type"}
@@ -581,7 +603,7 @@ class Neo4jStorage(GraphStorageInterface):
             
             return [
                 Node(
-                    id=str(record[0].id),
+                    id=str(record[0].element_id),
                     label=record[0].get("type", list(record[0].labels)[0]),  # Use type property if available, fallback to first label
                     type=record[0].get("type", list(record[0].labels)[0]),  # Use same value for type
                     properties={k: v for k, v in dict(record[0].items()).items() if k != "type"}
@@ -685,7 +707,7 @@ class Neo4jStorage(GraphStorageInterface):
             
             node_data = records[0][0]
             return Node(
-                id=str(node_data.id),
+                id=properties.get("id", str(node_data.element_id)),
                 label=list(node_data.labels)[0],
                 type=node_data.get("type", ""),
                 properties=dict(node_data.items())
@@ -719,7 +741,7 @@ class Neo4jStorage(GraphStorageInterface):
             node_properties = dict(node_data.items())
             print(f"DEBUG: Updated node {node_id}, new properties: {node_properties}")
             return Node(
-                id=str(node_data.id),
+                id=str(node_data.element_id),
                 label=list(node_data.labels)[0],
                 type=node_data.get("type", ""),
                 properties=node_properties
@@ -770,9 +792,9 @@ class Neo4jStorage(GraphStorageInterface):
             
             rel_data = records[0][0]
             return Edge(
-                id=str(rel_data.id),
-                source=str(rel_data.start_node.id),
-                target=str(rel_data.end_node.id),
+                id=sanitized_properties.get("id", str(rel_data.element_id)),
+                source=source_id,
+                target=target_id,
                 type=rel_data.type,
                 properties=dict(rel_data.items())
             )
@@ -797,7 +819,7 @@ class Neo4jStorage(GraphStorageInterface):
         properties = dict(record[0].items())
         print(f"DEBUG: Found node with ID: {node_id}, properties: {properties}")
         return Node(
-            id=str(record[0].id),
+            id=properties.get("id", str(record[0].element_id)),
             label=labels[0] if labels else None,
             type=labels[0] if labels else None,
             properties=properties
@@ -822,7 +844,7 @@ class Neo4jStorage(GraphStorageInterface):
         edges = []
         for record in records:
             edges.append(Edge(
-                id=str(record[0].id),
+                id=str(record[0].element_id),
                 source=source_id,
                 target=target_id,
                 type=record[0].type,
@@ -880,15 +902,31 @@ class Neo4jStorage(GraphStorageInterface):
             # No event loop running, which is fine during interpreter shutdown
             pass
 
-    async def _execute_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Any]:
+    async def _execute_query(self, query: str, params: Optional[Dict[str, Any]] = None, tx=None) -> List[Any]:
         """Execute a Cypher query and return results"""
-        async with self._get_session() as session:
-            result = await session.run(query, parameters=params)
+        # Check if we have a transaction manager and an active transaction
+        if tx is None and self.transaction_manager:
+            tx_data = self.transaction_manager.get_current_transaction()
+            if tx_data:
+                tx = tx_data["tx"]
+        
+        if tx:
+            # Use the provided transaction
+            result = await tx.run(query, parameters=params)
             records = []
             async for record in result:
                 records.append(record)
             await result.consume()  # Ensure resources are released
             return records
+        else:
+            # Create a new session
+            async with self._get_session() as session:
+                result = await session.run(query, parameters=params)
+                records = []
+                async for record in result:
+                    records.append(record)
+                await result.consume()  # Ensure resources are released
+                return records
 
     async def clear_all(self) -> None:
         """Delete all nodes and relationships in the database"""

@@ -640,8 +640,27 @@ async def test_execute_merge_end_to_end(execution_service, mock_staging_storage,
     merge_id = "test_merge_id"
     transform_id = "test_transform_id"
     
-    # Mock _get_resolved_conflicts
-    execution_service._get_resolved_conflicts = AsyncMock(return_value=[])
+    # Mock _get_resolved_conflicts to return a non-empty list
+    mock_conflict = Conflict(
+        id="test_conflict_id",
+        merge_id=merge_id,
+        conflict_type=ConflictType.PROPERTY_VALUE,
+        severity=ConflictSeverity.MINOR,
+        description="Property value conflict",
+        entity_id="node1",
+        property_name="name",
+        staging_value="Alice",
+        production_value="Alice Smith",
+        resolved=True,
+        resolution=ResolutionOption(
+            id="test_resolution_id",
+            resolution_type="keep_staging",
+            resolution_data={},
+            description="Keep the staging value",
+            confidence=0.9
+        )
+    )
+    execution_service._get_resolved_conflicts = AsyncMock(return_value=[mock_conflict])
     
     # Mock _apply_resolutions
     original_apply_resolutions = execution_service._apply_resolutions
