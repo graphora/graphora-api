@@ -13,6 +13,7 @@ class MergeStage(str, Enum):
     CONFLICT_DETECTION = "conflict_detection"
     RESOLUTION = "resolution"
     MERGE = "merge"
+    APPLY_CHANGES = "apply_changes"
 
 class MergeStatus(str, Enum):
     """Status of a merge operation"""
@@ -26,6 +27,7 @@ class StageStatus(str, Enum):
     """Status of an individual stage"""
     PENDING = "pending"
     RUNNING = "running"
+    IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
     PAUSED = "paused"
@@ -207,3 +209,40 @@ class ValidationResult(BaseModel):
     total_edges: int
     validation_time_ms: float
     metadata: Dict[str, Any] = {}
+
+class RollbackType(str, Enum):
+    """Types of rollback operations"""
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+
+class RollbackOptions(BaseModel):
+    """Options for rollback operations"""
+    rollback_type: RollbackType = Field(..., description="Type of rollback to perform")
+    entity_ids: Optional[List[str]] = Field(None, description="Entity IDs to rollback (for partial rollback)")
+    auto_rollback_on_validation_failure: bool = Field(False, description="Whether to automatically rollback on validation failure")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata for the rollback")
+
+    @field_validator('entity_ids')
+    @classmethod
+    def validate_entity_ids(cls, v, values):
+        """Validate that entity_ids is provided for partial rollback"""
+        if values.data.get('rollback_type') == RollbackType.PARTIAL and (not v or len(v) == 0):
+            raise ValueError("entity_ids must be provided for partial rollback")
+        return v
+
+class RollbackResponse(BaseModel):
+    """Response for rollback operations"""
+    rollback_id: str = Field(..., description="ID of the rollback operation")
+    merge_id: str = Field(..., description="ID of the merge that was rolled back")
+    status: str = Field(..., description="Status of the rollback operation")
+    timestamp: datetime = Field(..., description="Timestamp of the rollback operation")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Details about the rollback operation")
+
+class SnapshotData(BaseModel):
+    """Data for a snapshot of the graph state before merge"""
+    snapshot_id: str = Field(..., description="ID of the snapshot")
+    merge_id: str = Field(..., description="ID of the merge operation")
+    nodes: List[Node] = Field(default_factory=list, description="Nodes in the snapshot")
+    relationships: List[Edge] = Field(default_factory=list, description="Relationships in the snapshot")
+    timestamp: datetime = Field(..., description="Timestamp when the snapshot was created")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata for the snapshot")

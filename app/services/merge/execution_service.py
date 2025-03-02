@@ -22,23 +22,31 @@ class MergeExecutionService:
     def __init__(
         self, 
         staging_storage: GraphStorageInterface = None,
-        prod_storage: GraphStorageInterface = None,
+        production_storage: GraphStorageInterface = None,
         progress_tracker: Optional[ProgressTracker] = None,
-        transaction_manager: Optional[TransactionManager] = None
+        transaction_manager: Optional[TransactionManager] = None,
+        prod_storage: GraphStorageInterface = None  # Alias for production_storage for backward compatibility
     ):
         """Initialize merge execution service
         
         Args:
             staging_storage: Storage interface for staging data
-            prod_storage: Storage interface for production data
+            production_storage: Storage interface for production data
             progress_tracker: Progress tracking service
             transaction_manager: Transaction manager for database operations
+            prod_storage: Alias for production_storage (for backward compatibility)
         """
         self.staging_storage = staging_storage
-        self.prod_storage = prod_storage
+        # Use prod_storage if provided, otherwise use production_storage
+        self.production_storage = prod_storage if prod_storage is not None else production_storage
         self.progress_tracker = progress_tracker or ProgressTracker()
         self.transaction_manager = transaction_manager
-        self.resolution_applicator = ResolutionApplicator(staging_storage, prod_storage) if staging_storage and prod_storage else None
+        self.resolution_applicator = ResolutionApplicator(staging_storage, self.production_storage) if staging_storage and self.production_storage else None
+        
+        # Initialize transaction manager if not provided
+        if not self.transaction_manager and self.production_storage:
+            if hasattr(self.production_storage, 'driver'):
+                self.transaction_manager = Neo4jTransactionManager(self.production_storage.driver)
         
     def _get_transaction_manager(self) -> TransactionManager:
         """Get transaction manager, creating one if needed
@@ -48,8 +56,8 @@ class MergeExecutionService:
         """
         if self.transaction_manager is None:
             # Create Neo4j transaction manager if prod_storage is Neo4j
-            if hasattr(self.prod_storage, 'driver'):
-                self.transaction_manager = Neo4jTransactionManager(self.prod_storage.driver)
+            if hasattr(self.production_storage, 'driver'):
+                self.transaction_manager = Neo4jTransactionManager(self.production_storage.driver)
             else:
                 # Fallback to a mock transaction manager for testing
                 from unittest.mock import AsyncMock
@@ -458,17 +466,17 @@ class MergeExecutionService:
             print(f"DEBUG: Processing node {node.id} with properties: {node.properties}")
             
             # Check if node already exists in production
-            existing_node = await self.prod_storage.get_node_by_id(node.id)
+            existing_node = await self.production_storage.get_node_by_id(node.id)
             
             try:
                 if existing_node:
                     print(f"DEBUG: Node {node.id} already exists, updating properties")
                     # Update existing node
-                    await self.prod_storage.update_node(node.id, node.properties)
+                    await self.production_storage.update_node(node.id, node.properties)
                 else:
                     print(f"DEBUG: Node {node.id} does not exist, creating new node")
                     # Create new node
-                    await self.prod_storage.create_node(
+                    await self.production_storage.create_node(
                         label=node.label,
                         properties={**node.properties, "id": node.id}
                     )
@@ -486,9 +494,9 @@ class MergeExecutionService:
                         await asyncio.sleep(retry_delay)
                         
                         if existing_node:
-                            await self.prod_storage.update_node(node.id, node.properties)
+                            await self.production_storage.update_node(node.id, node.properties)
                         else:
-                            await self.prod_storage.create_node(
+                            await self.production_storage.create_node(
                                 label=node.label,
                                 properties={**node.properties, "id": node.id}
                             )
@@ -531,8 +539,8 @@ class MergeExecutionService:
             # Check if source and target nodes exist in production
             logger.info(f"Checking nodes for edge {edge.id} from {edge.source} to {edge.target}")
             print(f"DEBUG: Checking nodes for edge {edge.id} from {edge.source} to {edge.target}")
-            source_node = await self.prod_storage.get_node_by_id(edge.source)
-            target_node = await self.prod_storage.get_node_by_id(edge.target)
+            source_node = await self.production_storage.get_node_by_id(edge.source)
+            target_node = await self.production_storage.get_node_by_id(edge.target)
             
             if not source_node:
                 logger.error(f"Source node {edge.source} not found for edge {edge.id}")
@@ -552,7 +560,7 @@ class MergeExecutionService:
             # Check if edge already exists
             logger.info(f"Checking if edge already exists between {edge.source} and {edge.target}")
             print(f"DEBUG: Checking if edge already exists between {edge.source} and {edge.target}")
-            existing_edges = await self.prod_storage.get_edges_between(edge.source, edge.target)
+            existing_edges = await self.production_storage.get_edges_between(edge.source, edge.target)
             existing_edge = next((e for e in existing_edges if e.type == edge.type), None)
             
             try:
@@ -562,14 +570,14 @@ class MergeExecutionService:
                     # Update existing edge properties
                     # Note: This assumes there's an update_edge method in the storage interface
                     # You might need to adapt this based on your actual storage interface
-                    if hasattr(self.prod_storage, 'update_edge'):
-                        await self.prod_storage.update_edge(existing_edge.id, edge.properties)
+                    if hasattr(self.production_storage, 'update_edge'):
+                        await self.production_storage.update_edge(existing_edge.id, edge.properties)
                     else:
                         # Alternative: delete and recreate
                         logger.info(f"Deleting existing edge {existing_edge.id} and recreating")
                         print(f"DEBUG: Deleting existing edge {existing_edge.id} and recreating")
-                        await self.prod_storage.delete_relationship(existing_edge.id)
-                        await self.prod_storage.create_relationship(
+                        await self.production_storage.delete_relationship(existing_edge.id)
+                        await self.production_storage.create_relationship(
                             source_id=edge.source,
                             target_id=edge.target,
                             rel_type=edge.type,
@@ -579,7 +587,7 @@ class MergeExecutionService:
                     # Create new edge
                     logger.info(f"Creating new edge from {edge.source} to {edge.target} of type {edge.type}")
                     print(f"DEBUG: Creating new edge from {edge.source} to {edge.target} of type {edge.type}")
-                    await self.prod_storage.create_relationship(
+                    await self.production_storage.create_relationship(
                         source_id=edge.source,
                         target_id=edge.target,
                         rel_type=edge.type,

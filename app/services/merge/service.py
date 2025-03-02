@@ -5,7 +5,7 @@ import logging
 import asyncio
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Set, Tuple, Union
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import redis.asyncio as redis
 import pytz
@@ -29,7 +29,11 @@ from app.services.merge.models import (
     EntityMatch,
     MatchStrategy,
     MergeStatus, 
-    StageStatus
+    StageStatus,
+    RollbackType,
+    RollbackOptions,
+    RollbackResponse,
+    SnapshotData
 )
 from app.services.merge.progress import ProgressTracker
 from prefect import flow, task, get_run_logger
@@ -761,6 +765,7 @@ class MergeService:
         self.resolution_history = ResolutionHistoryService()
         # Transaction manager
         self.transaction_manager = transaction_manager
+        self.redis_client = None
 
     def _get_transaction_manager(self) -> TransactionManager:
         """Get transaction manager, creating one if needed
@@ -826,10 +831,15 @@ class MergeService:
         """Get the current progress of a merge operation"""
         return await self.progress_tracker.get_progress(merge_id)
 
-    async def validate_merge(self, merge_id: str, transform_id: str, ontology_id: Optional[str] = None, 
-                            allowed_orphan_types: Optional[List[str]] = None) -> ValidationResult:
+    async def validate_merge(
+        self,
+        merge_id: str,
+        transform_id: str,
+        ontology_id: Optional[str] = None,
+        allowed_orphan_types: Optional[List[str]] = None,
+    ) -> ValidationResult:
         """
-        Validate a merge before executing it
+        Validate a merge operation
         
         Args:
             merge_id: ID of the merge operation
@@ -841,7 +851,11 @@ class MergeService:
             ValidationResult: Detailed validation results
         """
         # Create validation service
-        validation_service = MergeValidationService(storage_factory=self.get_storage)
+        validation_service = MergeValidationService(
+            storage=self.storage,
+            production_storage=self.production_storage,
+            merge_service=self
+        )
         
         # Run validation
         result = await validation_service.validate_merge(merge_id, transform_id, ontology_id)
@@ -849,8 +863,9 @@ class MergeService:
         # If allowed orphan types are provided, re-run orphaned nodes validation
         if allowed_orphan_types:
             # Get staging graph
-            staging_storage = self.get_storage(is_staging=True)
+            staging_storage = self.storage  # Use storage directly
             staging_graph = await staging_storage.get_graph_by_transform_id(transform_id)
+            
             
             # Remove existing orphaned node issues
             result.issues = [issue for issue in result.issues if issue.type != ValidationIssueType.ORPHANED_NODE]
@@ -884,71 +899,163 @@ class MergeService:
     
     async def execute_merge(self, merge_id: str, transform_id: str, ontology_id: Optional[str] = None, 
                            allowed_orphan_types: Optional[List[str]] = None, 
-                           skip_validation: bool = False) -> Dict[str, Any]:
-        """
-        Execute a merge operation
+                           skip_validation: bool = False,
+                           auto_rollback: bool = False,
+                           validation_service: Optional[Any] = None) -> Dict[str, Any]:
+        """Execute the merge process
         
         Args:
             merge_id: ID of the merge operation
-            transform_id: ID of the transform that produced the staging graph
-            ontology_id: Optional ID of the ontology to validate against
-            allowed_orphan_types: Optional list of node types that are allowed to be orphaned
-            skip_validation: Whether to skip validation (default: False)
+            transform_id: ID of the transformation to merge
+            ontology_id: Optional ontology ID for validation
+            allowed_orphan_types: Optional list of node types allowed to be orphans
+            skip_validation: Whether to skip validation
+            auto_rollback: Whether to automatically rollback on validation failure
+            validation_service: Optional validation service to use
             
         Returns:
             Dict containing merge results
-            
-        Raises:
-            ValueError: If validation fails and skip_validation is False
         """
+        logger.info(f"Executing merge {merge_id} for transform {transform_id}")
+        
         # Start merge stage
-        await self.progress_tracker.start_merge_stage(merge_id, MergeStage.MERGE)
+        await start_stage(merge_id, MergeStage.MERGE, self.progress_tracker)
         
         try:
-            # Validate merge if not skipped
+            # Extract staging graph
+            staging_graph = await extract_staging_graph(self.storage, transform_id)
+            
+            # Map production entities
+            entity_mapping = await map_production_entities(self.production_storage, staging_graph)
+            
+            # Get affected production nodes
+            affected_production_nodes = []
+            for match in entity_mapping.matches.values():
+                affected_production_nodes.extend(match.production_matches)
+            
+            # Create snapshot of affected production nodes before merge
+            snapshot = await self._create_snapshot(merge_id, affected_production_nodes)
+            logger.info(f"Created snapshot {snapshot.snapshot_id} for merge {merge_id}")
+            
+            # Validate if required
             if not skip_validation:
                 validation_result = await self.validate_merge(
-                    merge_id, transform_id, ontology_id, allowed_orphan_types
+                    merge_id, 
+                    transform_id, 
+                    ontology_id, 
+                    allowed_orphan_types
                 )
                 
-                # Block merge if validation fails
                 if not validation_result.valid:
-                    error_msg = f"Merge validation failed with {validation_result.critical_count} critical issues"
-                    await self.progress_tracker.fail_merge_stage(
-                        merge_id, MergeStage.MERGE, error_msg
-                    )
-                    raise ValueError(error_msg)
+                    error_msg = f"Validation failed with {validation_result.critical_count} critical issues"
+                    logger.error(error_msg)
+                    await fail_merge(merge_id, error_msg, self.progress_tracker)
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "validation_result": validation_result.model_dump()
+                    }
             
-            # Get storages
-            staging_storage = self.storage  # Use the staging storage from the service
-            prod_storage = self.production_storage  # Use the production storage from the service
-            
-            # Get transaction manager
+            # Apply merge changes
             transaction_manager = self._get_transaction_manager()
+            transaction_id = await transaction_manager.begin_transaction(merge_id)
             
-            # Create merge execution service
-            from app.services.merge.execution_service import MergeExecutionService
-            execution_service = MergeExecutionService(
-                staging_storage=staging_storage,
-                prod_storage=prod_storage,
-                progress_tracker=self.progress_tracker,
-                transaction_manager=transaction_manager
-            )
-            
-            # Execute the merge
-            merge_stats = await execution_service.execute_merge(
-                merge_id=merge_id,
-                transform_id=transform_id,
-                batch_size=100  # Default batch size
-            )
-            
-            return merge_stats
-            
+            try:
+                # Process nodes
+                nodes_processed = 0
+                for node in staging_graph.nodes:
+                    # Check if node exists in production
+                    match = entity_mapping.matches.get(node.id)
+                    if match and match.production_matches:
+                        # Update existing node
+                        prod_node_id = match.production_matches[0]
+                        await self.production_storage.update_node(prod_node_id, node.properties)
+                    else:
+                        # Create new node
+                        await self.production_storage.create_node(node.label, {
+                            **node.properties,
+                            "id": node.id
+                        })
+                    
+                    nodes_processed += 1
+                
+                # Process relationships
+                relationships_processed = 0
+                for edge in staging_graph.edges:
+                    # Map source and target to production IDs
+                    source_match = entity_mapping.matches.get(edge.source)
+                    target_match = entity_mapping.matches.get(edge.target)
+                    
+                    if source_match and source_match.production_matches and \
+                       target_match and target_match.production_matches:
+                        # Use first match for each
+                        prod_source_id = source_match.production_matches[0]
+                        prod_target_id = target_match.production_matches[0]
+                        
+                        # Check if relationship exists
+                        existing_edges = await self.production_storage.get_relationships_between(
+                            prod_source_id, 
+                            prod_target_id,
+                            edge.type
+                        )
+                        
+                        if not existing_edges:
+                            # Create new relationship
+                            await self.production_storage.create_relationship(
+                                prod_source_id,
+                                prod_target_id,
+                                edge.type,
+                                edge.properties
+                            )
+                    
+                    relationships_processed += 1
+                
+                # Commit transaction
+                await transaction_manager.commit_transaction(transaction_id)
+                
+                # Complete merge stage
+                await complete_merge_stage(
+                    merge_id, 
+                    MergeStage.MERGE, 
+                    self.progress_tracker,
+                    {
+                        "nodes_processed": nodes_processed,
+                        "relationships_processed": relationships_processed
+                    }
+                )
+                
+                # Complete merge
+                await complete_merge(merge_id, self.progress_tracker)
+                
+                return {
+                    "success": True,
+                    "nodes_processed": nodes_processed,
+                    "relationships_processed": relationships_processed,
+                    "snapshot_id": snapshot.snapshot_id
+                }
+                
+            except Exception as e:
+                # Rollback transaction
+                await transaction_manager.rollback_transaction(transaction_id)
+                
+                error_msg = f"Error during merge execution: {str(e)}"
+                logger.error(error_msg)
+                await fail_merge(merge_id, error_msg, self.progress_tracker)
+                
+                return {
+                    "success": False,
+                    "error": error_msg
+                }
+                
         except Exception as e:
-            error_msg = f"Error executing merge: {str(e)}"
+            error_msg = f"Error during merge: {str(e)}"
             logger.error(error_msg)
-            await self.progress_tracker.fail_merge_stage(merge_id, MergeStage.MERGE, error_msg)
-            raise
+            await fail_merge(merge_id, error_msg, self.progress_tracker)
+            
+            return {
+                "success": False,
+                "error": error_msg
+            }
 
     async def cancel_merge(self, merge_id: str) -> bool:
         """Cancel an in-progress merge operation
@@ -1448,7 +1555,7 @@ class MergeService:
             # Update the conflict with resolution information
             conflict.resolved = True
             conflict.resolution = resolution_option
-            conflict.resolution_timestamp = datetime.now(pytz.utc)
+            conflict.resolution_timestamp = datetime.now(timezone.utc)
             conflict.resolved_by = resolved_by
             
             # Store the updated conflict
@@ -1675,7 +1782,7 @@ class MergeService:
             "resolution_id": resolution_id,
             "confidence": confidence,
             "explanation": explanation,
-            "timestamp": datetime.datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         # Update conflict
@@ -2164,3 +2271,514 @@ class MergeService:
         )
         
         return result.resolved
+
+    async def _create_snapshot(self, merge_id: str, affected_nodes: List[str]) -> SnapshotData:
+        """Create a snapshot of the current state of affected nodes and their relationships
+        
+        Args:
+            merge_id: ID of the merge operation
+            affected_nodes: List of node IDs that will be affected by the merge
+            
+        Returns:
+            SnapshotData containing the snapshot information
+        """
+        logger.info(f"Creating snapshot for merge {merge_id} with {len(affected_nodes)} affected nodes")
+        
+        snapshot_id = f"snapshot_{uuid.uuid4().hex}"
+        nodes = []
+        relationships = []
+        
+        # Get all affected nodes
+        for node_id in affected_nodes:
+            node = await self.production_storage.get_node_by_id(node_id)
+            if node:
+                nodes.append(node)
+        
+        # Get all relationships between affected nodes
+        if nodes:
+            node_ids = [node.id for node in nodes]
+            edges = await self.production_storage.get_relationships_between_nodes(node_ids)
+            relationships.extend(edges)
+        
+        snapshot = SnapshotData(
+            snapshot_id=snapshot_id,
+            merge_id=merge_id,
+            nodes=nodes,
+            relationships=relationships,
+            timestamp=datetime.now(timezone.utc),
+            metadata={
+                "affected_node_count": len(affected_nodes),
+                "snapshot_node_count": len(nodes),
+                "snapshot_relationship_count": len(relationships)
+            }
+        )
+        
+        # Store the snapshot
+        await self._store_snapshot(snapshot)
+        
+        return snapshot
+    
+    async def _store_snapshot(self, snapshot: SnapshotData) -> None:
+        """Store a snapshot in Redis
+        
+        Args:
+            snapshot: SnapshotData to store
+        """
+        if not self.redis_client:
+            self.redis_client = await get_redis_client()
+        
+        # Store snapshot metadata
+        snapshot_key = f"snapshot:{snapshot.snapshot_id}"
+        merge_snapshot_key = f"merge:{snapshot.merge_id}:snapshot"
+        
+        # Store snapshot data
+        await self.redis_client.set(
+            snapshot_key,
+            snapshot.model_dump_json(),
+            ex=86400 * 7  # Expire after 7 days
+        )
+        
+        # Store reference from merge to snapshot
+        await self.redis_client.set(
+            merge_snapshot_key,
+            snapshot.snapshot_id,
+            ex=86400 * 7  # Expire after 7 days
+        )
+        
+        logger.info(f"Stored snapshot {snapshot.snapshot_id} for merge {snapshot.merge_id}")
+    
+    async def _get_merge_snapshot_id(self, merge_id: str) -> Optional[str]:
+        """Get the snapshot ID for a merge
+        
+        Args:
+            merge_id: ID of the merge operation
+            
+        Returns:
+            Snapshot ID if found, None otherwise
+        """
+        if not self.redis_client:
+            self.redis_client = await get_redis_client()
+        
+        merge_snapshot_key = f"merge:{merge_id}:snapshot"
+        snapshot_id = await self.redis_client.get(merge_snapshot_key)
+        
+        if snapshot_id:
+            return snapshot_id.decode('utf-8')
+        
+        return None
+    
+    async def _get_merge_metadata(self, merge_id: str) -> Optional[Dict[str, Any]]:
+        """Get metadata for a merge operation
+        
+        Args:
+            merge_id: ID of the merge operation
+            
+        Returns:
+            Dict containing merge metadata if found, None otherwise
+        """
+        if not self.redis_client:
+            self.redis_client = await get_redis_client()
+        
+        # Get snapshot ID
+        snapshot_id = await self._get_merge_snapshot_id(merge_id)
+        if not snapshot_id:
+            return None
+        
+        # Get merge progress
+        progress = await self.get_merge_progress(merge_id)
+        if not progress:
+            return None
+        
+        return {
+            "merge_id": merge_id,
+            "snapshot_id": snapshot_id,
+            "status": progress.overall_status,
+            "current_stage": progress.current_stage,
+            "start_time": progress.start_time,
+            "end_time": progress.end_time
+        }
+    
+    async def _load_snapshot(self, snapshot_id: str) -> Optional[SnapshotData]:
+        """Load a snapshot from Redis
+        
+        Args:
+            snapshot_id: ID of the snapshot to load
+            
+        Returns:
+            SnapshotData if found, None otherwise
+        """
+        if not self.redis_client:
+            self.redis_client = await get_redis_client()
+        
+        snapshot_key = f"snapshot:{snapshot_id}"
+        snapshot_data = await self.redis_client.get(snapshot_key)
+        
+        if not snapshot_data:
+            logger.warning(f"Snapshot {snapshot_id} not found")
+            return None
+        
+        try:
+            snapshot = SnapshotData.model_validate_json(snapshot_data.decode('utf-8'))
+            return snapshot
+        except Exception as e:
+            logger.error(f"Error loading snapshot {snapshot_id}: {str(e)}")
+            return None
+    
+    async def _apply_complete_rollback(self, snapshot: SnapshotData, rollback_id: str) -> Dict[str, Any]:
+        """Apply a complete rollback using the snapshot data
+        
+        Args:
+            snapshot: SnapshotData to use for rollback
+            rollback_id: ID of the rollback operation
+            
+        Returns:
+            Dict containing rollback results
+        """
+        logger.info(f"Applying complete rollback for merge {snapshot.merge_id}")
+        
+        # Get transaction manager
+        transaction_manager = self._get_transaction_manager()
+        
+        # Start transaction
+        transaction_id = await transaction_manager.begin_transaction(rollback_id)
+        
+        try:
+            # Restore nodes
+            restored_nodes = 0
+            for node in snapshot.nodes:
+                # Check if node exists
+                existing_node = await self.production_storage.get_node_by_id(node.id)
+                
+                if existing_node:
+                    # Update existing node
+                    await self.production_storage.update_node(node.id, node.properties)
+                else:
+                    # Node was deleted, recreate it
+                    await self.production_storage.create_node(node.label, {
+                        "id": node.id,
+                        **node.properties
+                    })
+                
+                restored_nodes += 1
+            
+            # Restore relationships
+            restored_relationships = 0
+            for edge in snapshot.relationships:
+                # Check if relationship exists
+                existing_edges = await self.production_storage.get_edges_between(edge.source, edge.target)
+                
+                # Find matching edge by ID
+                matching_edge = next((e for e in existing_edges if e.id == edge.id), None)
+                
+                if matching_edge:
+                    # Update existing relationship properties
+                    # Note: Most graph databases don't support updating relationship properties directly
+                    # We might need to delete and recreate the relationship
+                    pass
+                else:
+                    # Relationship was deleted, recreate it
+                    await self.production_storage.create_relationship(
+                        edge.source,
+                        edge.target,
+                        edge.type,
+                        edge.properties
+                    )
+                
+                restored_relationships += 1
+            
+            # Commit transaction
+            await transaction_manager.commit_transaction(transaction_id)
+            
+            return {
+                "nodes_restored": restored_nodes,
+                "relationships_restored": restored_relationships,
+                "success": True
+            }
+            
+        except Exception as e:
+            # Rollback transaction
+            await transaction_manager.rollback_transaction(transaction_id)
+            logger.error(f"Error during rollback: {str(e)}")
+            raise
+    
+    async def _apply_partial_rollback(self, snapshot: SnapshotData, entity_ids: List[str], rollback_id: str) -> Dict[str, Any]:
+        """Apply a partial rollback for specific entities
+        
+        Args:
+            snapshot: SnapshotData to use for rollback
+            entity_ids: List of entity IDs to rollback
+            rollback_id: ID of the rollback operation
+            
+        Returns:
+            Dict containing rollback results
+        """
+        logger.info(f"Applying partial rollback for merge {snapshot.merge_id} with {len(entity_ids)} entities")
+        
+        # Get transaction manager
+        transaction_manager = self._get_transaction_manager()
+        
+        # Start transaction
+        transaction_id = await transaction_manager.begin_transaction(rollback_id)
+        
+        try:
+            # Filter snapshot data to only include specified entities
+            nodes_to_restore = [node for node in snapshot.nodes if node.id in entity_ids]
+            
+            # For relationships, include those where both source and target are in entity_ids
+            relationships_to_restore = [
+                edge for edge in snapshot.relationships 
+                if edge.source in entity_ids and edge.target in entity_ids
+            ]
+            
+            # Restore nodes
+            restored_nodes = 0
+            for node in nodes_to_restore:
+                # Check if node exists
+                existing_node = await self.production_storage.get_node_by_id(node.id)
+                
+                if existing_node:
+                    # Update existing node
+                    await self.production_storage.update_node(node.id, node.properties)
+                else:
+                    # Node was deleted, recreate it
+                    await self.production_storage.create_node(node.label, {
+                        "id": node.id,
+                        **node.properties
+                    })
+                
+                restored_nodes += 1
+            
+            # Restore relationships
+            restored_relationships = 0
+            for edge in relationships_to_restore:
+                # Check if relationship exists
+                existing_edges = await self.production_storage.get_edges_between(edge.source, edge.target)
+                
+                # Find matching edge by ID
+                matching_edge = next((e for e in existing_edges if e.id == edge.id), None)
+                
+                if matching_edge:
+                    # Update existing relationship properties
+                    # Note: Most graph databases don't support updating relationship properties directly
+                    # We might need to delete and recreate the relationship
+                    pass
+                else:
+                    # Relationship was deleted, recreate it
+                    await self.production_storage.create_relationship(
+                        edge.source,
+                        edge.target,
+                        edge.type,
+                        edge.properties
+                    )
+                
+                restored_relationships += 1
+            
+            # Commit transaction
+            await transaction_manager.commit_transaction(transaction_id)
+            
+            return {
+                "nodes_restored": restored_nodes,
+                "relationships_restored": restored_relationships,
+                "success": True
+            }
+            
+        except Exception as e:
+            # Rollback transaction
+            await transaction_manager.rollback_transaction(transaction_id)
+            logger.error(f"Error during partial rollback: {str(e)}")
+            raise
+    
+    async def _log_rollback_operation(
+        self,
+        rollback_id: str,
+        merge_id: str,
+        options: RollbackOptions,
+        snapshot_id: str
+    ) -> None:
+        """Log a rollback operation
+        
+        Args:
+            rollback_id: ID of the rollback operation
+            merge_id: ID of the merge that was rolled back
+            options: Rollback options used
+            snapshot_id: ID of the snapshot used for rollback
+        """
+        if not self.redis_client:
+            self.redis_client = await get_redis_client()
+        
+        rollback_key = f"rollback:{rollback_id}"
+        merge_rollback_key = f"merge:{merge_id}:rollback"
+        
+        # Store rollback data
+        rollback_data = {
+            "rollback_id": rollback_id,
+            "merge_id": merge_id,
+            "options": options.model_dump(),
+            "snapshot_id": snapshot_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "status": "successful"
+        }
+        
+        await self.redis_client.set(
+            rollback_key,
+            json.dumps(rollback_data),
+            ex=86400 * 30  # Expire after 30 days
+        )
+        
+        # Store reference from merge to rollback
+        await self.redis_client.set(
+            merge_rollback_key,
+            rollback_id,
+            ex=86400 * 30  # Expire after 30 days
+        )
+        
+        logger.info(f"Logged rollback operation {rollback_id} for merge {merge_id}")
+    
+    async def _log_rollback_failure(
+        self,
+        rollback_id: str,
+        merge_id: str,
+        error: str
+    ) -> None:
+        """Log a failed rollback operation
+        
+        Args:
+            rollback_id: ID of the rollback operation
+            merge_id: ID of the merge that was rolled back
+            error: Error message
+        """
+        if not self.redis_client:
+            self.redis_client = await get_redis_client()
+        
+        rollback_key = f"rollback:{rollback_id}"
+        
+        # Store rollback data
+        rollback_data = {
+            "rollback_id": rollback_id,
+            "merge_id": merge_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "status": "failed",
+            "error": error
+        }
+        
+        await self.redis_client.set(
+            rollback_key,
+            json.dumps(rollback_data),
+            ex=86400 * 30  # Expire after 30 days
+        )
+        
+        logger.error(f"Logged failed rollback operation {rollback_id} for merge {merge_id}: {error}")
+    
+    async def _update_merge_status_after_rollback(self, merge_id: str, rollback_id: str) -> None:
+        """Update merge status after rollback
+        
+        Args:
+            merge_id: ID of the merge operation
+            rollback_id: ID of the rollback operation
+        """
+        # Get current progress
+        progress = await self.get_merge_progress(merge_id)
+        if not progress:
+            logger.warning(f"Merge {merge_id} not found, cannot update status after rollback")
+            return
+        
+        # Update merge status to CANCELLED using the cancel_merge method
+        reason = f"Merge rolled back by rollback operation {rollback_id}"
+        await self.progress_tracker.cancel_merge(
+            merge_id=merge_id,
+            reason=reason,
+            metadata={"rollback_id": rollback_id}
+        )
+    
+    async def rollback_merge(
+        self,
+        merge_id: str,
+        options: RollbackOptions
+    ) -> RollbackResponse:
+        """Rollback a merge operation
+        
+        Args:
+            merge_id: ID of the merge to rollback
+            options: Configuration options for rollback
+            
+        Returns:
+            RollbackResponse with rollback results
+            
+        Raises:
+            ValueError: If merge not found or has no snapshot
+        """
+        # Generate rollback ID
+        rollback_id = f"rollback_{uuid.uuid4().hex}"
+        
+        try:
+            # 1. Get merge metadata including snapshot locations
+            merge_data = await self._get_merge_metadata(merge_id)
+            if not merge_data or "snapshot_id" not in merge_data:
+                raise ValueError(f"Merge {merge_id} not found or has no snapshot")
+            
+            # 2. Load snapshot data
+            snapshot = await self._load_snapshot(merge_data["snapshot_id"])
+            if not snapshot:
+                raise ValueError(f"Snapshot {merge_data['snapshot_id']} not found for merge {merge_id}")
+            
+            # 3. Apply rollback based on options
+            if options.rollback_type == RollbackType.COMPLETE:
+                # Complete rollback - restore all changed entities
+                result = await self._apply_complete_rollback(snapshot, rollback_id)
+            elif options.rollback_type == RollbackType.PARTIAL:
+                # Partial rollback - restore specified entities
+                if not options.entity_ids:
+                    raise ValueError("entity_ids must be provided for partial rollback")
+                
+                result = await self._apply_partial_rollback(snapshot, options.entity_ids, rollback_id)
+            else:
+                raise ValueError(f"Unsupported rollback type: {options.rollback_type}")
+            
+            # 4. Log rollback operation
+            await self._log_rollback_operation(
+                rollback_id=rollback_id,
+                merge_id=merge_id,
+                options=options,
+                snapshot_id=merge_data["snapshot_id"]
+            )
+            
+            # 5. Update merge status
+            await self._update_merge_status_after_rollback(merge_id, rollback_id)
+            
+            # 6. Update progress tracker with rollback information
+            if self.progress_tracker:
+                await self.progress_tracker.update_merge_progress(
+                    merge_id=merge_id,
+                    stage=MergeStage.MERGE,  # Use MERGE stage for rollback updates
+                    items_processed=result.get("nodes_restored", 0) + result.get("relationships_restored", 0),
+                    items_total=result.get("nodes_restored", 0) + result.get("relationships_restored", 0),
+                    metrics={
+                        "rollback_id": rollback_id,
+                        "nodes_restored": result.get("nodes_restored", 0),
+                        "relationships_restored": result.get("relationships_restored", 0),
+                        "rollback_type": options.rollback_type.value
+                    }
+                )
+            
+            return RollbackResponse(
+                rollback_id=rollback_id,
+                merge_id=merge_id,
+                status="successful",
+                timestamp=datetime.now(timezone.utc),
+                details={
+                    "nodes_reverted": result.get("nodes_restored", 0),
+                    "relationships_reverted": result.get("relationships_restored", 0)
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Rollback failed: {str(e)}")
+            
+            # Log failure
+            await self._log_rollback_failure(
+                rollback_id=rollback_id,
+                merge_id=merge_id,
+                error=str(e)
+            )
+            
+            raise
