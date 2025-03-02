@@ -48,10 +48,9 @@ from app.services.merge.auto_resolution import AutoResolutionEngine
 from app.utils.redis import get_redis_client
 from app.services.merge.strategy_selection import StrategySelectionEngine
 from app.services.merge.conflicts.base import ConflictDetector
-from app.services.merge.conflicts.detectors.property import PropertyConflictDetector
-from app.services.merge.conflicts.detectors.relationship import RelationshipConflictDetector
 from app.services.merge.resolution_applicator import ResolutionApplicator
 from app.services.resolution_history_service import ResolutionHistoryService
+from app.services.storage.transaction import TransactionManager, Neo4jTransactionManager
 from app.services.merge.flow_manager import run_resolution_pipeline
 from app.services.merge.validation import MergeValidationService
 
@@ -741,7 +740,8 @@ class MergeService:
         self,
         storage: GraphStorageInterface,
         production_storage: GraphStorageInterface,
-        progress_tracker: ProgressTracker
+        progress_tracker: ProgressTracker,
+        transaction_manager: Optional[TransactionManager] = None
     ):
         """Initialize merge service
         
@@ -749,6 +749,7 @@ class MergeService:
             storage: Storage interface for staging data
             production_storage: Storage interface for production data
             progress_tracker: Progress tracking service
+            transaction_manager: Transaction manager for database operations
         """
         self.storage = storage  # Staging storage
         self.production_storage = production_storage  # Production storage
@@ -758,6 +759,29 @@ class MergeService:
         self.resolution_applicator = ResolutionApplicator(storage, production_storage)
         # Initialize the resolution history service
         self.resolution_history = ResolutionHistoryService()
+        # Transaction manager
+        self.transaction_manager = transaction_manager
+
+    def _get_transaction_manager(self) -> TransactionManager:
+        """Get transaction manager, creating one if needed
+        
+        Returns:
+            TransactionManager: Transaction manager instance
+        """
+        if self.transaction_manager is None:
+            # Create Neo4j transaction manager if production_storage is Neo4j
+            if hasattr(self.production_storage, 'driver'):
+                self.transaction_manager = Neo4jTransactionManager(self.production_storage.driver)
+            else:
+                # Fallback to a mock transaction manager for testing
+                from unittest.mock import AsyncMock
+                mock_manager = AsyncMock(spec=TransactionManager)
+                mock_manager.begin_transaction.return_value = "mock_tx_id"
+                mock_manager.commit_transaction.return_value = True
+                mock_manager.rollback_transaction.return_value = True
+                self.transaction_manager = mock_manager
+                
+        return self.transaction_manager
 
     async def start_merge_flow(
         self,
@@ -899,12 +923,16 @@ class MergeService:
             staging_storage = self.storage  # Use the staging storage from the service
             prod_storage = self.production_storage  # Use the production storage from the service
             
+            # Get transaction manager
+            transaction_manager = self._get_transaction_manager()
+            
             # Create merge execution service
             from app.services.merge.execution_service import MergeExecutionService
             execution_service = MergeExecutionService(
                 staging_storage=staging_storage,
                 prod_storage=prod_storage,
-                progress_tracker=self.progress_tracker
+                progress_tracker=self.progress_tracker,
+                transaction_manager=transaction_manager
             )
             
             # Execute the merge

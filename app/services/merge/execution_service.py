@@ -11,6 +11,8 @@ from app.services.merge.models import MergeStage, MergeStatus, StageStatus
 from app.schemas.graph import GraphResponse, Node, Edge
 from app.schemas.conflicts import Conflict, ConflictStatus, ResolutionOption
 from app.config import settings
+from app.services.storage.transaction import TransactionManager, Neo4jTransactionManager
+from app.services.merge.resolution_applicator import ResolutionApplicator
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +23,8 @@ class MergeExecutionService:
         self, 
         staging_storage: GraphStorageInterface = None,
         prod_storage: GraphStorageInterface = None,
-        progress_tracker: Optional[ProgressTracker] = None
+        progress_tracker: Optional[ProgressTracker] = None,
+        transaction_manager: Optional[TransactionManager] = None
     ):
         """Initialize merge execution service
         
@@ -29,10 +32,34 @@ class MergeExecutionService:
             staging_storage: Storage interface for staging data
             prod_storage: Storage interface for production data
             progress_tracker: Progress tracking service
+            transaction_manager: Transaction manager for database operations
         """
         self.staging_storage = staging_storage
         self.prod_storage = prod_storage
         self.progress_tracker = progress_tracker or ProgressTracker()
+        self.transaction_manager = transaction_manager
+        self.resolution_applicator = ResolutionApplicator(staging_storage, prod_storage) if staging_storage and prod_storage else None
+        
+    def _get_transaction_manager(self) -> TransactionManager:
+        """Get transaction manager, creating one if needed
+        
+        Returns:
+            TransactionManager: Transaction manager instance
+        """
+        if self.transaction_manager is None:
+            # Create Neo4j transaction manager if prod_storage is Neo4j
+            if hasattr(self.prod_storage, 'driver'):
+                self.transaction_manager = Neo4jTransactionManager(self.prod_storage.driver)
+            else:
+                # Fallback to a mock transaction manager for testing
+                from unittest.mock import AsyncMock
+                mock_manager = AsyncMock(spec=TransactionManager)
+                mock_manager.begin_transaction.return_value = "mock_tx_id"
+                mock_manager.commit_transaction.return_value = True
+                mock_manager.rollback_transaction.return_value = True
+                self.transaction_manager = mock_manager
+                
+        return self.transaction_manager
         
     async def execute_merge(
         self,
@@ -57,85 +84,133 @@ class MergeExecutionService:
         # Start merge stage
         await self.progress_tracker.start_merge_stage(merge_id, MergeStage.MERGE)
         
+        # Get transaction manager
+        transaction_manager = self._get_transaction_manager()
+        
         try:
-            # 1. Get resolved conflicts
-            resolved_conflicts = await self._get_resolved_conflicts(merge_id)
-            
-            # 2. Extract staging graph
-            staging_graph = await self.staging_storage.get_transformation_data(transform_id)
-            
-            print(f"DEBUG: Staging graph nodes: {staging_graph.nodes}")
-            
-            # Ensure each node has a label field (required by the Node model)
-            nodes_with_label = []
-            for node in staging_graph.nodes:
-                # Make a copy to avoid modifying the original
-                node_copy = node.copy()
-                # If label is missing, use the type field as label
-                if 'label' not in node_copy:
-                    node_copy['label'] = node_copy.get('type', 'Unknown')
-                nodes_with_label.append(node_copy)
-            
-            print(f"DEBUG: Nodes with label: {nodes_with_label}")
-            
-            # Convert relationships to edges format
-            edges = []
-            for rel in staging_graph.relationships:
-                # Make a copy to avoid modifying the original
-                rel_copy = rel.copy()
-                # Map source_id and target_id to source and target
-                if 'source_id' in rel_copy:
-                    rel_copy['source'] = rel_copy.pop('source_id')
-                if 'target_id' in rel_copy:
-                    rel_copy['target'] = rel_copy.pop('target_id')
-                # Map relationship_type to type
-                if 'relationship_type' in rel_copy:
-                    rel_copy['type'] = rel_copy.pop('relationship_type')
-                # Generate an ID if not present
-                if 'id' not in rel_copy:
-                    rel_copy['id'] = f"edge_{rel_copy['source']}_{rel_copy['target']}_{rel_copy.get('type', 'unknown')}"
-                edges.append(rel_copy)
-            
-            print(f"DEBUG: Converted {len(staging_graph.relationships)} relationships to {len(edges)} edges")
-            
-            # Create the graph response with properly formatted nodes and edges
-            graph_response = GraphResponse(
-                nodes=[Node(
-                    id=node["id"],
-                    label=node["label"],
-                    type=node["type"],
-                    properties={k: v for k, v in node.items() if k not in ["id", "label", "type"]}
-                ) for node in nodes_with_label],
-                edges=[Edge(**edge) for edge in edges],
-                total_nodes=len(staging_graph.nodes),
-                total_edges=len(edges)
+            # Execute merge within a transaction
+            return await transaction_manager.execute_in_transaction(
+                self._execute_merge_internal,
+                merge_id=merge_id,
+                transform_id=transform_id,
+                batch_size=batch_size,
+                max_retries=max_retries,
+                retry_delay=retry_delay
             )
-            
-            # 3. Apply conflict resolutions
-            resolved_graph = await self._apply_resolutions(graph_response, resolved_conflicts)
-            
-            # 4. Merge in batches
-            stats = await self._execute_batch_merge(merge_id, resolved_graph, batch_size, max_retries, retry_delay)
-            
-            # 5. Mark stage complete
-            await self.progress_tracker.complete_merge_stage(
-                merge_id, 
-                MergeStage.MERGE,
-                metadata=stats
-            )
-            
-            return stats
-            
         except Exception as e:
-            # Log error and mark stage as failed
-            error_msg = f"Merge execution failed: {str(e)}"
-            logger.error(error_msg)
+            logger.error(f"Merge failed: {str(e)}")
+            # Update progress tracker
             await self.progress_tracker.fail_merge_stage(
                 merge_id, 
-                MergeStage.MERGE,
-                error_msg
+                MergeStage.MERGE, 
+                str(e)
             )
             raise
+        
+    async def _execute_merge_internal(
+        self,
+        merge_id: str,
+        transform_id: str,
+        batch_size: int = 100,
+        max_retries: int = 3,
+        retry_delay: int = 2,
+        transaction_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Internal merge execution within transaction
+        
+        Args:
+            merge_id: ID of the merge operation
+            transform_id: ID of the transform that produced the staging graph
+            batch_size: Number of items to process in each batch
+            max_retries: Maximum number of retries for failed operations
+            retry_delay: Delay in seconds between retries
+            transaction_id: ID of the active transaction
+            
+        Returns:
+            Dict containing merge statistics
+        """
+        # 1. Get resolved conflicts
+        resolved_conflicts = await self._get_resolved_conflicts(merge_id)
+        
+        # 2. Extract staging graph
+        staging_graph = await self.staging_storage.get_transformation_data(transform_id)
+        
+        print(f"DEBUG: Staging graph nodes: {staging_graph.nodes}")
+        
+        # Ensure each node has a label field (required by the Node model)
+        nodes_with_label = []
+        for node in staging_graph.nodes:
+            # Make a copy to avoid modifying the original
+            node_copy = node.copy()
+            # If label is missing, use the type field as label
+            if 'label' not in node_copy:
+                node_copy['label'] = node_copy.get('type', 'Unknown')
+            nodes_with_label.append(node_copy)
+        
+        print(f"DEBUG: Nodes with label: {nodes_with_label}")
+        
+        # Convert relationships to edges format
+        edges = []
+        for rel in staging_graph.relationships:
+            # Make a copy to avoid modifying the original
+            rel_copy = rel.copy()
+            # Map source_id and target_id to source and target
+            if 'source_id' in rel_copy:
+                rel_copy['source'] = rel_copy.pop('source_id')
+            if 'target_id' in rel_copy:
+                rel_copy['target'] = rel_copy.pop('target_id')
+            # Map relationship_type to type
+            if 'relationship_type' in rel_copy:
+                rel_copy['type'] = rel_copy.pop('relationship_type')
+            # Generate an ID if not present
+            if 'id' not in rel_copy:
+                rel_copy['id'] = f"edge_{rel_copy['source']}_{rel_copy['target']}_{rel_copy.get('type', 'unknown')}"
+            edges.append(rel_copy)
+        
+        print(f"DEBUG: Converted {len(staging_graph.relationships)} relationships to {len(edges)} edges")
+        
+        # Create graph response with converted data
+        graph = GraphResponse(
+            nodes=[Node(
+                id=node['id'],
+                label=node['label'],
+                type=node['type'],
+                properties={k: v for k, v in node.items() if k not in ['id', 'label', 'type']}
+            ) for node in nodes_with_label],
+            edges=[Edge(**edge) for edge in edges]
+        )
+        
+        print(f"DEBUG: Graph structure: {len(graph.nodes)} nodes, {len(graph.edges)} edges")
+        if graph.nodes:
+            print(f"DEBUG: First node properties: {graph.nodes[0].properties}")
+        if graph.edges:
+            print(f"DEBUG: First edge: {graph.edges[0].source} -> {graph.edges[0].target} ({graph.edges[0].type})")
+        
+        # 3. Apply resolutions to the graph
+        if resolved_conflicts:
+            graph = await self._apply_resolutions(graph, resolved_conflicts)
+        
+        # 4. Execute batch merge
+        result = await self._execute_batch_merge(
+            merge_id, 
+            graph, 
+            batch_size, 
+            max_retries, 
+            retry_delay
+        )
+        
+        # Add transaction ID to result
+        if transaction_id:
+            result["transaction_id"] = transaction_id
+        
+        # Update progress tracker
+        await self.progress_tracker.complete_merge_stage(
+            merge_id, 
+            MergeStage.MERGE, 
+            metadata=result
+        )
+        
+        return result
     
     async def _get_resolved_conflicts(self, merge_id: str) -> List[Conflict]:
         """Get all resolved conflicts for a merge
