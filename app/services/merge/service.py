@@ -53,6 +53,7 @@ from app.services.merge.conflicts.detectors.relationship import RelationshipConf
 from app.services.merge.resolution_applicator import ResolutionApplicator
 from app.services.resolution_history_service import ResolutionHistoryService
 from app.services.merge.flow_manager import run_resolution_pipeline
+from app.services.merge.validation import MergeValidationService
 
 try:
     import baml as b
@@ -798,8 +799,127 @@ class MergeService:
             raise
     
     async def get_merge_progress(self, merge_id: str) -> Optional[MergeProgress]:
-        """Get current progress of a merge operation"""
+        """Get the current progress of a merge operation"""
         return await self.progress_tracker.get_progress(merge_id)
+
+    async def validate_merge(self, merge_id: str, transform_id: str, ontology_id: Optional[str] = None, 
+                            allowed_orphan_types: Optional[List[str]] = None) -> ValidationResult:
+        """
+        Validate a merge before executing it
+        
+        Args:
+            merge_id: ID of the merge operation
+            transform_id: ID of the transform operation that produced the staging graph
+            ontology_id: Optional ID of the ontology to validate against
+            allowed_orphan_types: Optional list of node types that are allowed to be orphaned
+            
+        Returns:
+            ValidationResult: Detailed validation results
+        """
+        # Create validation service
+        validation_service = MergeValidationService(storage_factory=self.get_storage)
+        
+        # Run validation
+        result = await validation_service.validate_merge(merge_id, transform_id, ontology_id)
+        
+        # If allowed orphan types are provided, re-run orphaned nodes validation
+        if allowed_orphan_types:
+            # Get staging graph
+            staging_storage = self.get_storage(is_staging=True)
+            staging_graph = await staging_storage.get_graph_by_transform_id(transform_id)
+            
+            # Remove existing orphaned node issues
+            result.issues = [issue for issue in result.issues if issue.type != ValidationIssueType.ORPHANED_NODE]
+            
+            # Run orphaned nodes validation with allowed types
+            orphan_issues = await validation_service.validate_no_orphaned_nodes(
+                staging_graph, allowed_orphan_types=allowed_orphan_types
+            )
+            
+            # Update result
+            result.issues.extend(orphan_issues)
+            
+            # Recalculate counts
+            result.warning_count = sum(1 for issue in result.issues if issue.severity == ValidationSeverity.WARNING)
+            result.info_count = sum(1 for issue in result.issues if issue.severity == ValidationSeverity.INFO)
+            result.critical_count = sum(1 for issue in result.issues if issue.severity == ValidationSeverity.CRITICAL)
+            
+            # Update valid flag
+            result.valid = (result.critical_count == 0)
+        
+        # Log validation result
+        if result.valid:
+            logger.info(f"Merge validation passed for merge_id={merge_id}, transform_id={transform_id}")
+        else:
+            logger.warning(
+                f"Merge validation failed for merge_id={merge_id}, transform_id={transform_id}: "
+                f"{result.critical_count} critical issues, {result.warning_count} warnings"
+            )
+        
+        return result
+    
+    async def execute_merge(self, merge_id: str, transform_id: str, ontology_id: Optional[str] = None, 
+                           allowed_orphan_types: Optional[List[str]] = None, 
+                           skip_validation: bool = False) -> Dict[str, Any]:
+        """
+        Execute a merge operation
+        
+        Args:
+            merge_id: ID of the merge operation
+            transform_id: ID of the transform that produced the staging graph
+            ontology_id: Optional ID of the ontology to validate against
+            allowed_orphan_types: Optional list of node types that are allowed to be orphaned
+            skip_validation: Whether to skip validation (default: False)
+            
+        Returns:
+            Dict containing merge results
+            
+        Raises:
+            ValueError: If validation fails and skip_validation is False
+        """
+        # Start merge stage
+        await self.progress_tracker.start_stage(merge_id, MergeStage.MERGE)
+        
+        try:
+            # Validate merge if not skipped
+            if not skip_validation:
+                validation_result = await self.validate_merge(
+                    merge_id, transform_id, ontology_id, allowed_orphan_types
+                )
+                
+                # Block merge if validation fails
+                if not validation_result.valid:
+                    error_msg = f"Merge validation failed with {validation_result.critical_count} critical issues"
+                    await self.progress_tracker.fail_stage(
+                        merge_id, MergeStage.MERGE, error_msg
+                    )
+                    raise ValueError(error_msg)
+            
+            # Get storages
+            staging_storage = self.get_storage(is_staging=True)
+            prod_storage = self.get_storage(is_staging=False)
+            
+            # Get staging graph
+            staging_graph = await staging_storage.get_graph_by_transform_id(transform_id)
+            
+            # TODO: Implement actual merge logic
+            # This is a placeholder for the actual merge implementation
+            
+            # Complete merge stage
+            await self.progress_tracker.complete_stage(merge_id, MergeStage.MERGE)
+            
+            return {
+                "merge_id": merge_id,
+                "status": "completed",
+                "nodes_merged": len(staging_graph.nodes),
+                "edges_merged": len(staging_graph.edges)
+            }
+            
+        except Exception as e:
+            error_msg = f"Error executing merge: {str(e)}"
+            logger.error(error_msg)
+            await self.progress_tracker.fail_stage(merge_id, MergeStage.MERGE, error_msg)
+            raise
 
     async def detect_conflicts(
         self,

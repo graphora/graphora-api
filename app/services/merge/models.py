@@ -181,6 +181,11 @@ class ValidationIssueType(str, Enum):
     ORPHANED_NODE = "orphaned_node"
     MISSING_REQUIRED_RELATIONSHIP = "missing_required_relationship"
     INVALID_RELATIONSHIP_TYPE = "invalid_relationship_type"
+    INVALID_RELATIONSHIP_REFERENCE = "invalid_relationship_reference"
+    INVALID_RELATIONSHIP_SOURCE = "invalid_relationship_source"
+    INVALID_RELATIONSHIP_TARGET = "invalid_relationship_target"
+    UNRESOLVED_CONFLICTS = "unresolved_conflicts"
+    VALIDATION_ERROR = "validation_error"
 
 class ValidationIssue(BaseModel):
     """Model for validation issues"""
