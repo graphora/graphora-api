@@ -251,7 +251,7 @@ class KnowledgeGraphBuilder:
                 source_type, rel_type = parts
                 
                 for rel_item in rel_list:
-                    if not hasattr(rel_item, 'source') or not hasattr(rel_item, 'target'):
+                    if not hasattr(rel_item, 'source_id') or not hasattr(rel_item, 'target_id'):
                         continue
                     
                     # Get source and target properties
@@ -984,7 +984,7 @@ class KnowledgeGraphBuilder:
                 
                 # Add triples for each relationship
                 for rel in rel_list:
-                    if not hasattr(rel, 'source') or not hasattr(rel, 'target'):
+                    if not hasattr(rel, 'source_id') or not hasattr(rel, 'target_id'):
                         continue
                         
                     source_id = rel.source_id
@@ -1319,9 +1319,9 @@ class KnowledgeGraphBuilder:
             target_entity = None
             
             for node in graph.nodes:
-                if node.id == edge.source:
+                if node.id == edge.source_id:
                     source_entity = node
-                elif node.id == edge.target:
+                elif node.id == edge.target_id:
                     target_entity = node
                     
                 if source_entity and target_entity:
@@ -1372,7 +1372,7 @@ class KnowledgeGraphBuilder:
                         edge.source_type == source_type and 
                         edge.target_type == target_type
                     ]
-                    existing_pairs = {(edge.source, edge.target) for edge in existing_rels}
+                    existing_pairs = {(edge.source_id, edge.target_id) for edge in existing_rels}
                     
                     # Look for potential new relationships between dangling nodes
                     source_entities = dangling_nodes[source_type]
@@ -1395,10 +1395,10 @@ class KnowledgeGraphBuilder:
                         if inferred:
                             print(f"Inferred {len(inferred)} new relationships")
                             for rel in inferred:
-                                if (rel.source, rel.target) not in existing_pairs:
+                                if (rel.source_id, rel.target_id) not in existing_pairs:
                                     # Find source and target nodes
-                                    source_node = next((n for n in source_entities if n.id == rel.source), None)
-                                    target_node = next((n for n in target_entities if n.id == rel.target), None)
+                                    source_node = next((n for n in source_entities if n.id == rel.source_id), None)
+                                    target_node = next((n for n in target_entities if n.id == rel.target_id), None)
                                     
                                     if source_node and target_node:
                                         # Create new edge with provenance
@@ -1418,7 +1418,7 @@ class KnowledgeGraphBuilder:
                                             provenance=provenance
                                         )
                                         graph.relationships.append(edge)
-                                        existing_pairs.add((edge.source, edge.target))
+                                        existing_pairs.add((edge.source_id, edge.target_id))
                             
                     except Exception as e:
                         traceback.print_exc()

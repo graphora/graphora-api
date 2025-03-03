@@ -75,7 +75,12 @@ async def store_knowledge_graph(
         StorageResult with metrics
     """
     logger = get_run_logger()
-    storage = Neo4jStorage()
+    storage = Neo4jStorage(
+        uri=settings.STAGING_NEO4J_URI,
+        username=settings.STAGING_NEO4J_USER,
+        password=settings.STAGING_NEO4J_PASSWORD,
+        database=settings.STAGING_NEO4J_DATABASE
+    )
     start_time = datetime.now()
     
     try:
@@ -280,4 +285,4 @@ async def store_knowledge_graph(
         raise
     
     finally:
-        storage.close()
+        await storage.close()

@@ -95,19 +95,20 @@ class TransformationResult(BaseModel):
     
     @property
     def node_types(self) -> List[str]:
-        return list(set(node['type'] for node in self.nodes))
+        return list(set(node.get('type', '') for node in self.nodes if node.get('type')))
     
     @property
     def relationship_types(self) -> List[str]:
         return list(set(
-            rel['relationship_type'] for rel in self.relationships
+            rel.get('relationship_type', '') for rel in self.relationships 
+            if rel.get('relationship_type')
         ))
     
     def get_nodes_by_type(self, node_type: str) -> List[Dict[str, Any]]:
         """Get all nodes of a specific type"""
         return [
             node for node in self.nodes
-            if node['type'] == node_type
+            if node.get('type', '') == node_type
         ]
     
     def get_relationships_by_type(
@@ -117,7 +118,7 @@ class TransformationResult(BaseModel):
         """Get all relationships of a specific type"""
         return [
             rel for rel in self.relationships
-            if rel['relationship_type'] == relationship_type
+            if rel.get('relationship_type', '') == relationship_type
         ]
 
 class StorageResult(BaseModel):
