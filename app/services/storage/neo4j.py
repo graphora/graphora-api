@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 import time
 
-import neo4j
+import traceback
 from neo4j import AsyncGraphDatabase, GraphDatabase
 from neo4j.exceptions import ServiceUnavailable, AuthError, DatabaseError, SessionExpired, TransientError
 
@@ -18,7 +18,6 @@ from .models import Node, Edge, StorageBatchResult, StorageCheckpoint, StorageSt
 from .exceptions import (
     StorageConnectionError,
     StorageAuthError,
-    StorageQueryError,
     StorageError
 )
 from app.services.transform.models import BaseNode, RelationshipInstance
@@ -245,6 +244,7 @@ class Neo4jStorage(GraphStorageInterface):
                 await self._execute_with_retry(_execute_query)
                 items_processed += 1
             except (StorageError, DatabaseError) as e:
+                traceback.print_exc()
                 success = False
                 error_message = str(e)
                 if isinstance(node, dict):
@@ -300,15 +300,20 @@ class Neo4jStorage(GraphStorageInterface):
 
         # First try to store all relationships
         for rel in relationships:
+            stored_rels = set()
             try:
+                if rel.id in stored_rels:
+                    continue
                 async def _execute_query():
                     async with self._get_session() as session:
                         query, params = self._build_relationship_query(rel)
                         await session.run(query, params)
+                        stored_rels.add(rel.id)
                 
                 await self._execute_with_retry(_execute_query)
                 items_processed += 1
             except (StorageError, DatabaseError) as e:
+                traceback.print_exc()
                 success = False
                 error_message = str(e)
                 if isinstance(rel, dict):
@@ -369,11 +374,21 @@ class Neo4jStorage(GraphStorageInterface):
                     return None
                     
                 checkpoint = records[0]["c"]
+                # Convert Neo4j DateTime to Python datetime if needed
+                timestamp = checkpoint["timestamp"]
+                if hasattr(timestamp, 'to_native'):
+                    timestamp = timestamp.to_native()
+                elif hasattr(timestamp, 'to_datetime'):
+                    timestamp = timestamp.to_datetime()
+                else:
+                    # Fallback to current time if conversion fails
+                    timestamp = datetime.now()
+                
                 return StorageCheckpoint(
                     transform_id=checkpoint["transform_id"],
                     last_processed_index=checkpoint["last_processed_index"],
                     stage=StorageStage(checkpoint["stage"]),
-                    timestamp=checkpoint["timestamp"]
+                    timestamp=timestamp
                 )
         
         return await self._execute_with_retry(_execute_query)
