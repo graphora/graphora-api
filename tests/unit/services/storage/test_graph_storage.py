@@ -130,6 +130,19 @@ class MockGraphStorage(GraphStorageInterface):
             timestamp=datetime.now()
         )
     
+    async def get_production_graph_for_transform(
+        self,
+        transform_id: str
+    ) -> TransformationResult:
+        """Get all nodes and relationships from production that were affected by a transform"""
+        # For testing, return all nodes and relationships
+        return TransformationResult(
+            transform_id=transform_id,
+            nodes=list(self.nodes.values()),
+            relationships=list(self.edges.values()),
+            timestamp=datetime.now()
+        )
+    
     async def get_nodes_by_property(
         self,
         property_name: str,

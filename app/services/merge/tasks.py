@@ -199,6 +199,7 @@ async def detect_merge_conflicts(
     merge_id: str,
     graph: GraphResponse,
     entity_mapping: EntityMappingResult,
+    storage: GraphStorageInterface,
     production_storage: GraphStorageInterface,
     progress_tracker: ProgressTracker
 ) -> None:

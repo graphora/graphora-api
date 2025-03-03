@@ -65,4 +65,22 @@ class MergeSummaryResponse(BaseModel):
     duration_seconds: Optional[float] = None
     nodes_affected: int
     relationships_affected: int
-    performed_by: str 
+    performed_by: str
+
+class VerificationCheckResponse(BaseModel):
+    """Response model for a verification check"""
+    check_type: str
+    success: bool
+    message: str
+    details: Dict[str, Any] = Field(default_factory=dict)
+    affected_entities: List[str] = Field(default_factory=list)
+
+class VerificationResultResponse(BaseModel):
+    """Response model for merge verification results"""
+    merge_id: str
+    transform_id: str
+    success: bool
+    checks: List[VerificationCheckResponse] = Field(default_factory=list)
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    verification_time_ms: float = 0.0 
