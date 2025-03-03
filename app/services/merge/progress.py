@@ -470,3 +470,181 @@ class ProgressTracker:
         except Exception as e:
             logger.error(f"Failed to pause merge {merge_id} at stage {stage.value}: {str(e)}")
             raise
+    
+    async def update_merge_stage(
+        self,
+        merge_id: str,
+        stage: MergeStage
+    ) -> Optional[MergeProgress]:
+        """Update the current stage of a merge operation
+        
+        Args:
+            merge_id: ID of the merge operation
+            stage: New stage to set
+            
+        Returns:
+            Updated MergeProgress if successful, None otherwise
+        """
+        try:
+            # Get current status
+            status_data = await self._redis_operation(
+                self.redis.get,
+                self._get_redis_key(merge_id, "status")
+            )
+            if not status_data:
+                return None
+            
+            # Parse and update status
+            status = MergeProgress.model_validate_json(status_data)
+            status.current_stage = stage
+            
+            # If stage is not already initialized, initialize it
+            if stage not in status.stages_progress:
+                status.stages_progress[stage] = MergeStageProgress(
+                    stage=stage,
+                    status=StageStatus.PENDING,
+                    percentage_complete=0.0
+                )
+            
+            # Store updated status
+            await self._redis_operation(
+                self.redis.set,
+                self._get_redis_key(merge_id, "status"),
+                status.model_dump_json()
+            )
+            
+            return status
+            
+        except Exception as e:
+            logger.error(f"Failed to update merge stage: {str(e)}")
+            return None
+    
+    async def update_stage_status(
+        self,
+        merge_id: str,
+        stage: MergeStage,
+        status_value: str
+    ) -> None:
+        """Update the status of a merge stage
+        
+        Args:
+            merge_id: ID of the merge operation
+            stage: Stage to update
+            status_value: New status value
+        """
+        try:
+            # Get current status
+            status_data = await self._redis_operation(
+                self.redis.get,
+                self._get_redis_key(merge_id, "status")
+            )
+            if not status_data:
+                return
+            
+            # Parse and update status
+            status = MergeProgress.model_validate_json(status_data)
+            
+            # Update stage status
+            if stage in status.stages_progress:
+                stage_progress = status.stages_progress[stage]
+                stage_progress.status = StageStatus(status_value)
+                
+                # Set start/end times based on status
+                if status_value == "in_progress" and not stage_progress.start_time:
+                    stage_progress.start_time = datetime.now()
+                elif status_value in ["completed", "failed"] and not stage_progress.end_time:
+                    stage_progress.end_time = datetime.now()
+            
+            # Update overall status if needed
+            if status_value == "failed":
+                status.overall_status = MergeStatus.FAILED
+            elif status_value == "completed" and stage == MergeStage.VERIFICATION:
+                status.overall_status = MergeStatus.COMPLETED
+                status.end_time = datetime.now()
+            
+            # Store updated status
+            await self._redis_operation(
+                self.redis.set,
+                self._get_redis_key(merge_id, "status"),
+                status.model_dump_json()
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to update stage status: {str(e)}")
+    
+    async def initialize_merge_progress(self, merge_id: str) -> MergeProgress:
+        """Initialize merge progress tracking for verification
+        
+        This is a simplified version of initialize_merge that can be used
+        when only verification is needed, without going through the full merge process.
+        
+        Args:
+            merge_id: ID of the merge operation
+            
+        Returns:
+            MergeProgress object
+        """
+        try:
+            # Check if merge progress already exists
+            existing_progress = await self.get_progress(merge_id)
+            if existing_progress:
+                return existing_progress
+            
+            # Create initial stage progress
+            stages_progress = {
+                stage: MergeStageProgress(
+                    stage=stage,
+                    status=StageStatus.PENDING,
+                    percentage_complete=0.0
+                )
+                for stage in MergeStage
+            }
+            
+            # Create initial status
+            status = MergeProgress(
+                merge_id=merge_id,
+                overall_status=MergeStatus.RUNNING,
+                current_stage=MergeStage.VERIFICATION,
+                stages_progress=stages_progress,
+                start_time=datetime.now(),
+                resource_metrics=self._get_resource_metrics()
+            )
+            
+            # Store in Redis
+            await self._redis_operation(
+                self.redis.set,
+                self._get_redis_key(merge_id, "status"),
+                status.model_dump_json()
+            )
+            
+            return status
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize merge progress: {str(e)}")
+            raise
+    
+    async def get_merge_progress(self, merge_id: str) -> Optional[MergeProgress]:
+        """Get the current progress of a merge operation
+        
+        Args:
+            merge_id: ID of the merge operation
+            
+        Returns:
+            MergeProgress if found, None otherwise
+        """
+        try:
+            # Get current status
+            status_data = await self._redis_operation(
+                self.redis.get,
+                self._get_redis_key(merge_id, "status")
+            )
+            if not status_data:
+                return None
+            
+            # Parse status
+            status = MergeProgress.model_validate_json(status_data)
+            return status
+            
+        except Exception as e:
+            logger.error(f"Failed to get merge progress: {str(e)}")
+            return None

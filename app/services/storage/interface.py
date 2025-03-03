@@ -59,6 +59,21 @@ class GraphStorageInterface(ABC):
         pass
     
     @abstractmethod
+    async def get_production_graph_for_transform(
+        self,
+        transform_id: str
+    ) -> TransformationResult:
+        """Get all nodes and relationships from production that were affected by a transform
+        
+        Args:
+            transform_id: ID of the transformation
+            
+        Returns:
+            TransformationResult containing nodes and relationships from production
+        """
+        pass
+    
+    @abstractmethod
     async def get_nodes_by_property(
         self,
         property_name: str,

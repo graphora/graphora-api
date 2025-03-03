@@ -14,6 +14,7 @@ class MergeStage(str, Enum):
     RESOLUTION = "resolution"
     MERGE = "merge"
     APPLY_CHANGES = "apply_changes"
+    VERIFICATION = "verification"
 
 class MergeStatus(str, Enum):
     """Status of a merge operation"""
@@ -247,3 +248,30 @@ class SnapshotData(BaseModel):
     relationships: List[Edge] = Field(default_factory=list, description="Relationships in the snapshot")
     timestamp: datetime = Field(..., description="Timestamp when the snapshot was created")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata for the snapshot")
+
+class VerificationCheckType(str, Enum):
+    """Types of verification checks"""
+    NODE_COUNT = "node_count"
+    RELATIONSHIP_COUNT = "relationship_count"
+    PROPERTY_VALUES = "property_values"
+    ORPHANED_NODES = "orphaned_nodes"
+    ONTOLOGY_CONSTRAINTS = "ontology_constraints"
+
+class VerificationCheck(BaseModel):
+    """Model for a single verification check"""
+    check_type: VerificationCheckType
+    success: bool
+    message: str
+    details: Dict[str, Any] = Field(default_factory=dict)
+    affected_entities: List[str] = Field(default_factory=list)
+
+class VerificationResult(BaseModel):
+    """Result of post-merge verification"""
+    merge_id: str
+    transform_id: str
+    success: bool
+    checks: List[VerificationCheck] = Field(default_factory=list)
+    started_at: datetime = Field(default_factory=lambda: datetime.now())
+    completed_at: Optional[datetime] = None
+    verification_time_ms: float = 0.0
+    metadata: Dict[str, Any] = Field(default_factory=dict)

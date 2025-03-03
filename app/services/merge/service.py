@@ -57,14 +57,19 @@ from app.services.resolution_history_service import ResolutionHistoryService
 from app.services.storage.transaction import TransactionManager, Neo4jTransactionManager
 from app.services.merge.flow_manager import run_resolution_pipeline
 from app.services.merge.validation import MergeValidationService
+from app.services.merge.verification import PostMergeVerifier
 from app.schemas.merge import (
     MergeProgressResponse,
     MergeStatisticsResponse,
     NodeStatistics,
     RelationshipStatistics,
     MergeSummaryResponse,
-    MergeStage as ApiMergeStage
+    MergeStage as ApiMergeStage,
+    VerificationResultResponse,
+    VerificationCheckResponse
 )
+from app.services.merge.verification import PostMergeVerifier
+from app.services.merge.models import VerificationResult
 
 try:
     import baml as b
@@ -573,6 +578,7 @@ async def detect_merge_conflicts(
     graph: GraphResponse,
     entity_mapping: EntityMappingResult,
     storage: GraphStorageInterface,
+    production_storage: GraphStorageInterface,
     progress_tracker: ProgressTracker
 ) -> None:
     """Detect conflicts between staging and production graphs"""
@@ -581,7 +587,7 @@ async def detect_merge_conflicts(
         await progress_tracker.start_merge_stage(merge_id, MergeStage.CONFLICT_DETECTION)
         
         # Initialize conflict detection service
-        conflict_service = ConflictDetectionService(storage)
+        conflict_service = ConflictDetectionService(production_storage)
         
         # Create production entity mapping dict
         production_entity_mapping = {
@@ -720,6 +726,7 @@ async def merge_flow(
             graph=graph,
             entity_mapping=mapping,
             storage=storage,
+            production_storage=storage,
             progress_tracker=progress_tracker
         )
         
@@ -758,21 +765,18 @@ class MergeService:
         """Initialize merge service
         
         Args:
-            storage: Storage interface for staging data
-            production_storage: Storage interface for production data
+            storage: Storage service for staging graph
+            production_storage: Storage service for production graph
             progress_tracker: Progress tracking service
-            transaction_manager: Transaction manager for database operations
+            transaction_manager: Optional transaction manager
         """
-        self.storage = storage  # Staging storage
-        self.production_storage = production_storage  # Production storage
+        self.storage = storage
+        self.production_storage = production_storage
         self.progress_tracker = progress_tracker
-        self.conflict_detection = ConflictDetectionService(production_storage)
-        # Initialize the resolution applicator
+        self._transaction_manager = transaction_manager
+        self.conflict_detector = ConflictDetectionService(self.production_storage)
         self.resolution_applicator = ResolutionApplicator(storage, production_storage)
-        # Initialize the resolution history service
         self.resolution_history = ResolutionHistoryService()
-        # Transaction manager
-        self.transaction_manager = transaction_manager
         self.redis_client = None
 
     def _get_transaction_manager(self) -> TransactionManager:
@@ -781,10 +785,10 @@ class MergeService:
         Returns:
             TransactionManager: Transaction manager instance
         """
-        if self.transaction_manager is None:
+        if self._transaction_manager is None:
             # Create Neo4j transaction manager if production_storage is Neo4j
             if hasattr(self.production_storage, 'driver'):
-                self.transaction_manager = Neo4jTransactionManager(self.production_storage.driver)
+                self._transaction_manager = Neo4jTransactionManager(self.production_storage.driver)
             else:
                 # Fallback to a mock transaction manager for testing
                 from unittest.mock import AsyncMock
@@ -792,9 +796,9 @@ class MergeService:
                 mock_manager.begin_transaction.return_value = "mock_tx_id"
                 mock_manager.commit_transaction.return_value = True
                 mock_manager.rollback_transaction.return_value = True
-                self.transaction_manager = mock_manager
+                self._transaction_manager = mock_manager
                 
-        return self.transaction_manager
+        return self._transaction_manager
 
     async def start_merge_flow(
         self,
@@ -1463,7 +1467,7 @@ class MergeService:
     ) -> List[Conflict]:
         """Detect property conflicts between two nodes"""
         # Use conflict detection service to detect property conflicts
-        return await self.conflict_detection.detect_property_conflicts(
+        return await self.conflict_detector.detect_property_conflicts(
             staging_node,
             production_node,
             merge_id
@@ -1894,6 +1898,7 @@ class MergeService:
                 graph,
                 mapping_result,
                 self.storage,
+                self.production_storage,
                 self.progress_tracker
             )
             
@@ -2989,4 +2994,123 @@ class MergeService:
                 error=str(e)
             )
             
+            raise
+
+    async def verify_merge(
+        self,
+        merge_id: str,
+        transform_id: str
+    ) -> VerificationResultResponse:
+        """Verify the integrity of a merge operation
+        
+        Args:
+            merge_id: ID of the merge operation
+            transform_id: ID of the transformation
+            
+        Returns:
+            VerificationResultResponse with verification results
+        """
+        logger.info(f"Starting post-merge verification for merge {merge_id}")
+        
+        # Update progress
+        await self.progress_tracker.start_stage(merge_id, MergeStage.VERIFICATION)
+        
+        try:
+            # Create verifier
+            verifier = PostMergeVerifier(
+                merge_id=merge_id,
+                transform_id=transform_id,
+                storage_service=self.production_storage
+            )
+            
+            # Run verification
+            verification_result = await verifier.verify_merge()
+            
+            # Update progress
+            if verification_result.success:
+                await self.progress_tracker.complete_stage(merge_id, MergeStage.VERIFICATION)
+            else:
+                await self.progress_tracker.fail_stage(
+                    merge_id, 
+                    MergeStage.VERIFICATION,
+                    error="Verification failed. See verification result for details."
+                )
+            
+            # Convert to API response
+            response = VerificationResultResponse(
+                merge_id=verification_result.merge_id,
+                transform_id=verification_result.transform_id,
+                success=verification_result.success,
+                started_at=verification_result.started_at,
+                completed_at=verification_result.completed_at,
+                verification_time_ms=verification_result.verification_time_ms,
+                checks=[
+                    VerificationCheckResponse(
+                        check_type=check.check_type.value,
+                        success=check.success,
+                        message=check.message,
+                        details=check.details,
+                        affected_entities=check.affected_entities
+                    )
+                    for check in verification_result.checks
+                ]
+            )
+            
+            return response
+        except Exception as e:
+            logger.error(f"Error during merge verification: {str(e)}")
+            await self.progress_tracker.fail_stage(
+                merge_id, 
+                MergeStage.VERIFICATION,
+                error=f"Error during verification: {str(e)}"
+            )
+            raise
+
+    async def verify_merge(self, merge_id: str, transform_id: str) -> VerificationResult:
+        """Verify a merge operation
+        
+        Args:
+            merge_id: ID of the merge operation
+            transform_id: ID of the transformation to verify
+            
+        Returns:
+            VerificationResult with verification results
+        """
+        logger.info(f"Verifying merge {merge_id} for transform {transform_id}")
+        
+        # Update progress
+        await self.progress_tracker.update_merge_stage(merge_id, MergeStage.VERIFICATION)
+        await self.progress_tracker.update_stage_status(
+            merge_id, 
+            MergeStage.VERIFICATION, 
+            "in_progress"
+        )
+        
+        try:
+            # Create verifier
+            verifier = PostMergeVerifier(
+                merge_id=merge_id,
+                transform_id=transform_id,
+                storage_service=self.production_storage
+            )
+            
+            # Run verification
+            verification_result = await verifier.verify_merge()
+            
+            # Update progress based on verification result
+            status = "completed" if verification_result.success else "failed"
+            await self.progress_tracker.update_stage_status(
+                merge_id, 
+                MergeStage.VERIFICATION, 
+                status
+            )
+            
+            return verification_result
+        except Exception as e:
+            logger.error(f"Error verifying merge {merge_id}: {str(e)}")
+            await self.progress_tracker.update_stage_status(
+                merge_id, 
+                MergeStage.VERIFICATION, 
+                "failed"
+            )
             raise

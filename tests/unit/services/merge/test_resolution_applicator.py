@@ -106,6 +106,15 @@ class MockGraphStorage:
             rel for rel in self.relationships.values()
             if rel.source == node_id
         ]
+        
+    async def get_production_graph_for_transform(self, transform_id):
+        """Get all nodes and relationships from production that were affected by a transform"""
+        from app.services.storage.models import TransformationResult
+        # For testing, return all nodes and relationships
+        return TransformationResult(
+            nodes=list(self.nodes.values()),
+            relationships=list(self.relationships.values())
+        )
 
 @pytest.fixture
 def applicator_with_mocks():

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Body, Qu
 import logging
 import uuid
 from prefect import get_client
+from fastapi import status
 
 from app.services.merge.service import MergeService, merge_flow
 from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress, MergeStage, RollbackOptions, RollbackResponse
@@ -22,7 +23,12 @@ from app.dependencies import get_progress_tracker, get_merge_service
 from app.config import settings
 from pydantic import BaseModel, Field
 from app.schemas.resolution_history import ResolutionHistoryEntry
-from app.schemas.merge import MergeProgressResponse, MergeStatisticsResponse, MergeSummaryResponse
+from app.schemas.merge import (
+    MergeProgressResponse,
+    MergeStatisticsResponse,
+    MergeSummaryResponse,
+    VerificationResultResponse
+)
 
 logger = logging.getLogger(__name__)
 
@@ -960,3 +966,36 @@ async def get_merge_history(
         offset=offset
     )
     return history
+
+@router.post(
+    "/{merge_id}/verify",
+    response_model=VerificationResultResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Verify a merge operation",
+    description="Verify the integrity of a merge operation by checking that all nodes and relationships were correctly merged."
+)
+async def verify_merge(
+    merge_id: str,
+    transform_id: str = Query(..., description="ID of the transformation to verify")
+):
+    """Verify a merge operation
+    
+    Args:
+        merge_id: ID of the merge operation
+        transform_id: ID of the transformation
+        
+    Returns:
+        VerificationResultResponse with verification results
+    """
+    try:
+        # Get merge service
+        async with get_merge_service() as merge_service:
+            # Verify merge
+            verification_result = await merge_service.verify_merge(merge_id, transform_id)
+            return verification_result
+    except Exception as e:
+        logger.error(f"Error verifying merge {merge_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error verifying merge: {str(e)}"
+        )

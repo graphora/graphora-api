@@ -435,67 +435,109 @@ class Neo4jStorage(GraphStorageInterface):
         transform_id: str
     ) -> TransformationResult:
         """Get all nodes and relationships for a transformation"""
-        print(f"DEBUG: Getting transformation data for transform_id: {transform_id}")
-        async def _execute_query():
-            async with self._get_session() as session:
-                # Get nodes
-                node_query = """
-                MATCH (n)
-                WHERE n.transform_id = $transform_id
-                RETURN n
-                """
-                node_result = await session.run(node_query, {"transform_id": transform_id})
-                node_records = []
-                async for record in node_result:
-                    node_records.append(record)
-                
-                print(f"DEBUG: Found {len(node_records)} nodes for transform_id: {transform_id}")
-                
-                nodes = [
-                    {
-                        **dict(record["n"]),
-                        "type": next(
-                            label for label in record["n"].labels
-                            if label != "Checkpoint"
-                        )
-                    }
-                    for record in node_records
-                    if "Checkpoint" not in record["n"].labels
-                ]
-                
-                # Get relationships
-                rel_query = """
-                MATCH (source)-[r]->(target)
-                WHERE r.transform_id = $transform_id
-                RETURN source, r, target
-                """
-                rel_result = await session.run(rel_query, {"transform_id": transform_id})
-                rel_records = []
-                async for record in rel_result:
-                    rel_records.append(record)
-                
-                print(f"DEBUG: Found {len(rel_records)} relationships for transform_id: {transform_id}")
-                
-                relationships = [
-                    {
-                        "source_id": record["source"]["id"],
-                        "target_id": record["target"]["id"],
-                        "relationship_type": type(record["r"]).__name__,
-                        "properties": dict(record["r"])
-                    }
-                    for record in rel_records
-                ]
-                
-                print(f"DEBUG: Returning {len(nodes)} nodes and {len(relationships)} relationships")
-                
-                return TransformationResult(
-                    transform_id=transform_id,
-                    nodes=nodes,
-                    relationships=relationships,
-                    timestamp=datetime.now()
-                )
-        
-        return await self._execute_with_retry(_execute_query)
+        try:
+            # Get nodes
+            query = """
+            MATCH (n)
+            WHERE n.transform_id = $transform_id
+            RETURN n, ID(n) as node_id
+            """
+            
+            nodes = []
+            async with self.driver.session() as session:
+                result = await session.run(query, transform_id=transform_id)
+                async for record in result:
+                    node = record["n"]
+                    node_dict = dict(node)
+                    # Add the id field if it doesn't exist
+                    if "id" not in node_dict:
+                        node_dict["id"] = node_dict.get("id", str(record["node_id"]))
+                    nodes.append(node_dict)
+            
+            # Get relationships
+            query = """
+            MATCH (s)-[r]->(t)
+            WHERE r.transform_id = $transform_id
+            RETURN r, ID(r) as rel_id, ID(s) as source_id, ID(t) as target_id
+            """
+            
+            relationships = []
+            async with self.driver.session() as session:
+                result = await session.run(query, transform_id=transform_id)
+                async for record in result:
+                    rel = record["r"]
+                    rel_dict = dict(rel)
+                    # Add the id field if it doesn't exist
+                    if "id" not in rel_dict:
+                        rel_dict["id"] = rel_dict.get("id", str(record["rel_id"]))
+                    rel_dict["source"] = str(record["source_id"])
+                    rel_dict["target"] = str(record["target_id"])
+                    relationships.append(rel_dict)
+            
+            return TransformationResult(
+                transform_id=transform_id,
+                nodes=nodes,
+                relationships=relationships,
+                timestamp=datetime.now()
+            )
+        except Exception as e:
+            logger.error(f"Error getting transformation data: {str(e)}")
+            raise DatabaseError(f"Failed to get transformation data: {str(e)}")
+
+    async def get_production_graph_for_transform(
+        self,
+        transform_id: str
+    ) -> TransformationResult:
+        """Get all nodes and relationships from production that were affected by a transform"""
+        try:
+            # Get nodes that were affected by the transform
+            # This includes nodes that were created or updated during the merge
+            query = """
+            MATCH (n)
+            WHERE n.transform_id = $transform_id OR n.affected_by_transform = $transform_id
+            RETURN n, ID(n) as node_id
+            """
+            
+            nodes = []
+            async with self.driver.session() as session:
+                result = await session.run(query, transform_id=transform_id)
+                async for record in result:
+                    node = record["n"]
+                    node_dict = dict(node)
+                    # Add the id field if it doesn't exist
+                    if "id" not in node_dict:
+                        node_dict["id"] = node_dict.get("id", str(record["node_id"]))
+                    nodes.append(node_dict)
+            
+            # Get relationships that were affected by the transform
+            query = """
+            MATCH (s)-[r]->(t)
+            WHERE r.transform_id = $transform_id OR r.affected_by_transform = $transform_id
+            RETURN r, ID(r) as rel_id, ID(s) as source_id, ID(t) as target_id
+            """
+            
+            relationships = []
+            async with self.driver.session() as session:
+                result = await session.run(query, transform_id=transform_id)
+                async for record in result:
+                    rel = record["r"]
+                    rel_dict = dict(rel)
+                    # Add the id field if it doesn't exist
+                    if "id" not in rel_dict:
+                        rel_dict["id"] = rel_dict.get("id", str(record["rel_id"]))
+                    rel_dict["source"] = str(record["source_id"])
+                    rel_dict["target"] = str(record["target_id"])
+                    relationships.append(rel_dict)
+            
+            return TransformationResult(
+                transform_id=transform_id,
+                nodes=nodes,
+                relationships=relationships,
+                timestamp=datetime.now()
+            )
+        except Exception as e:
+            logger.error(f"Error getting production graph for transform: {str(e)}")
+            raise DatabaseError(f"Failed to get production graph for transform: {str(e)}")
 
     async def get_nodes_by_property(
         self,

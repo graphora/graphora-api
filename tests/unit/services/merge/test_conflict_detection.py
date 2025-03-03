@@ -190,7 +190,7 @@ class TestConflictDetection:
         )
         
         # Act
-        conflicts = await merge_service_with_conflicts.conflict_detection.detect_relationship_conflicts(
+        conflicts = await merge_service_with_conflicts.conflict_detector.detect_relationship_conflicts(
             staging_edge,
             production_edge,
             "test-merge-id"
