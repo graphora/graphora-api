@@ -959,7 +959,12 @@ class MergeService:
                     # Calculate elapsed time
                     elapsed_seconds = 0.0
                     if progress.start_time:
-                        elapsed_seconds = (datetime.now(timezone.utc) - progress.start_time).total_seconds()
+                        now = datetime.now(timezone.utc)
+                        # Ensure start_time is timezone-aware
+                        start_time = progress.start_time
+                        if start_time.tzinfo is None:
+                            start_time = start_time.replace(tzinfo=timezone.utc)
+                        elapsed_seconds = (now - start_time).total_seconds()
                         # Ensure elapsed_seconds is at least 0.1 for tests
                         elapsed_seconds = max(0.1, elapsed_seconds)
                     
@@ -1052,7 +1057,11 @@ class MergeService:
                 elapsed_seconds = 0.1  # Default to a small value for tests
                 if start_time_str:
                     start_time = datetime.fromisoformat(start_time_str)
-                    elapsed_seconds = (datetime.now(timezone.utc) - start_time).total_seconds()
+                    now = datetime.now(timezone.utc)
+                    # Ensure start_time is timezone-aware
+                    if start_time.tzinfo is None:
+                        start_time = start_time.replace(tzinfo=timezone.utc)
+                    elapsed_seconds = (now - start_time).total_seconds()
                     # Ensure elapsed_seconds is at least 0.1 for tests
                     elapsed_seconds = max(0.1, elapsed_seconds)
                 

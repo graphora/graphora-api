@@ -438,42 +438,42 @@ class ResolutionHistoryService:
             type_matches = self.redis.smembers(
                 f"resolution_index:conflict_type:{filter_params.conflict_type.value}"
             )
-            filter_sets.append({m.decode('utf-8') for m in type_matches})
+            filter_sets.append({m.decode('utf-8') if isinstance(m, bytes) else m for m in type_matches})
         
         # Filter by resolution type
         if filter_params.resolution_type:
             type_matches = self.redis.smembers(
                 f"resolution_index:resolution_type:{filter_params.resolution_type}"
             )
-            filter_sets.append({m.decode('utf-8') for m in type_matches})
+            filter_sets.append({m.decode('utf-8') if isinstance(m, bytes) else m for m in type_matches})
         
         # Filter by entity type
         if filter_params.entity_type:
             entity_matches = self.redis.smembers(
                 f"resolution_index:entity_type:{filter_params.entity_type}"
             )
-            filter_sets.append({m.decode('utf-8') for m in entity_matches})
+            filter_sets.append({m.decode('utf-8') if isinstance(m, bytes) else m for m in entity_matches})
         
         # Filter by property name
         if filter_params.property_name:
             prop_matches = self.redis.smembers(
                 f"resolution_index:property_name:{filter_params.property_name}"
             )
-            filter_sets.append({m.decode('utf-8') for m in prop_matches})
+            filter_sets.append({m.decode('utf-8') if isinstance(m, bytes) else m for m in prop_matches})
         
         # Filter by relationship type
         if filter_params.relationship_type:
             rel_matches = self.redis.smembers(
                 f"resolution_index:relationship_type:{filter_params.relationship_type}"
             )
-            filter_sets.append({m.decode('utf-8') for m in rel_matches})
+            filter_sets.append({m.decode('utf-8') if isinstance(m, bytes) else m for m in rel_matches})
         
         # Filter by user
         if filter_params.user:
             user_matches = self.redis.smembers(
                 f"resolution_index:user:{filter_params.user}"
             )
-            filter_sets.append({m.decode('utf-8') for m in user_matches})
+            filter_sets.append({m.decode('utf-8') if isinstance(m, bytes) else m for m in user_matches})
         
         # Intersect all filter sets
         if filter_sets:
