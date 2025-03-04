@@ -15,6 +15,7 @@ class MergeStage(str, Enum):
     MERGE = "merge"
     APPLY_CHANGES = "apply_changes"
     VERIFICATION = "verification"
+    ROLLBACK = "rollback"
 
 class MergeStatus(str, Enum):
     """Status of a merge operation"""
@@ -237,6 +238,9 @@ class RollbackResponse(BaseModel):
     rollback_id: str = Field(..., description="ID of the rollback operation")
     merge_id: str = Field(..., description="ID of the merge that was rolled back")
     status: str = Field(..., description="Status of the rollback operation")
+    rollback_type: str = Field(..., description="Type of rollback operation (complete or partial)")
+    nodes_restored: int = Field(default=0, description="Number of nodes restored during rollback")
+    relationships_restored: int = Field(default=0, description="Number of relationships restored during rollback")
     timestamp: datetime = Field(..., description="Timestamp of the rollback operation")
     details: Dict[str, Any] = Field(default_factory=dict, description="Details about the rollback operation")
 

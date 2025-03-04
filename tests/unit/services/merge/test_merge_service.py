@@ -19,7 +19,9 @@ from app.services.merge.models import (
     StageStatus,
     EntityMappingResult,
     EntityMatch,
-    MatchStrategy
+    MatchStrategy,
+    MergeProgress,
+    MergeStageProgress
 )
 from app.services.merge.progress import ProgressTracker
 from app.services.merge.conflict import ConflictDetectionService
@@ -511,32 +513,62 @@ class TestMergeService:
         """Test getting merge progress"""
         # Arrange
         merge_id = "merge-123"
+
+        # Create mock progress data
+        start_time = datetime.datetime.now(timezone.utc) - datetime.timedelta(minutes=5)
+        mock_progress = MergeProgress(
+            merge_id=merge_id,
+            overall_status="running",
+            start_time=start_time,
+            end_time=None,
+            current_stage=MergeStage.EXTRACT,
+            stages_progress={
+                MergeStage.EXTRACT: MergeStageProgress(
+                    stage=MergeStage.EXTRACT,
+                    status=StageStatus.RUNNING,
+                    percentage_complete=50.0,
+                    start_time=start_time,
+                    end_time=None,
+                    metrics={}
+                )
+            }
+        )
+        
+        # Setup mock progress tracker to return the mock progress
+        merge_service.progress_tracker.get_progress = AsyncMock(return_value=mock_progress)
+        
+        # Mock Redis client
         mock_redis = AsyncMock()
-        mock_status_data = {
-            "transform_id": "transform-123",
+        mock_redis.get.return_value = json.dumps({
             "status": "running",
-            "current_stage": "validation",
-            "validation_progress": 0.5,
-            "execution_progress": 0.0,
-            "started_at": datetime.datetime.now(timezone.utc).isoformat()
-        }
-        mock_redis.get.return_value = json.dumps(mock_status_data)
+            "current_stage": "extract",
+            "overall_progress": 50.0,
+            "start_time": start_time.isoformat(),
+            "stages": {
+                "extract": {
+                    "status": "running",
+                    "percentage_complete": 50.0,
+                    "start_time": start_time.isoformat(),
+                    "end_time": None
+                }
+            }
+        })
         
-        # Mock Redis context manager
-        mock_redis_cm = AsyncMock()
-        mock_redis_cm.__aenter__.return_value = mock_redis
-        
-        # Patch Redis
-        with patch('app.services.merge.service.redis.Redis.from_url', return_value=mock_redis_cm):
+        with patch('redis.asyncio.Redis.from_url') as mock_redis_factory:
+            mock_redis_factory.return_value.__aenter__.return_value = mock_redis
+            
             # Act
             result = await merge_service.get_merge_progress(merge_id)
             
             # Assert
-            mock_redis.get.assert_called_once_with(f"merge:{merge_id}:status")
+            merge_service.progress_tracker.get_progress.assert_called_once_with(merge_id)
             assert result is not None
             assert result.merge_id == merge_id
-            assert result.status == "running"
-            assert result.current_stage == "validation"
+            assert result.overall_status == "running"
+            assert result.current_stage == MergeStage.EXTRACT
+            assert result.progress_percentage > 0.0
+            assert result.start_time == start_time
+            assert result.end_time is None
 
 
 class TestMergeServiceAutoResolution:

@@ -16,26 +16,57 @@ from app.schemas.merge import (
 async def test_get_merge_progress():
     """Test getting merge progress"""
     # Arrange
-    mock_redis = AsyncMock()
-    merge_status = {
-        "transform_id": "transform_123",
-        "status": "running",
-        "current_stage": "validation",
-        "execution_progress": 0.5,  # 50% of execution stage
-        "started_at": datetime.now(timezone.utc).isoformat()
-    }
+    mock_progress_tracker = AsyncMock()
     
-    # Setup mock Redis get method to return serialized data
-    mock_redis.get.return_value = json.dumps(merge_status)
+    # Create mock progress data
+    from app.services.merge.models import MergeProgress, MergeStageProgress, StageStatus, MergeStage
+    
+    start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    mock_progress = MergeProgress(
+        merge_id="merge_123",
+        overall_status="running",
+        start_time=start_time,
+        end_time=None,
+        current_stage=MergeStage.EXTRACT,
+        stages_progress={
+            MergeStage.EXTRACT: MergeStageProgress(
+                stage=MergeStage.EXTRACT,
+                status=StageStatus.RUNNING,
+                percentage_complete=50.0,
+                start_time=start_time,
+                end_time=None,
+                metrics={}
+            )
+        }
+    )
+    
+    # Setup mock progress tracker to return the mock progress
+    mock_progress_tracker.get_progress.return_value = mock_progress
     
     # Create mock service
     merge_service = MergeService(
         storage=MagicMock(),
         production_storage=MagicMock(),
-        progress_tracker=MagicMock()
+        progress_tracker=mock_progress_tracker
     )
     
     # Mock Redis client
+    mock_redis = AsyncMock()
+    mock_redis.get.return_value = json.dumps({
+        "status": "running",
+        "current_stage": "extract",
+        "overall_progress": 50.0,
+        "start_time": start_time.isoformat(),
+        "stages": {
+            "extract": {
+                "status": "running",
+                "percentage_complete": 50.0,
+                "start_time": start_time.isoformat(),
+                "end_time": None
+            }
+        }
+    })
+    
     with patch('redis.asyncio.Redis.from_url') as mock_redis_factory:
         mock_redis_factory.return_value.__aenter__.return_value = mock_redis
         
@@ -45,10 +76,13 @@ async def test_get_merge_progress():
         # Assert
         assert result is not None
         assert result.merge_id == "merge_123"
-        assert result.transform_id == "transform_123"
-        assert result.current_stage == MergeStage.VALIDATION
-        assert result.progress_percentage >= 0.0
-        assert result.is_active == True
+        assert result.overall_status == "running"
+        assert result.current_stage == MergeStage.EXTRACT
+        assert result.progress_percentage > 0.0
+        assert result.start_time == start_time
+        assert result.end_time is None
+        assert result.elapsed_time_seconds > 0.0
+        assert MergeStage.EXTRACT in result.stages_progress
 
 @pytest.mark.asyncio
 async def test_get_merge_statistics():
@@ -247,11 +281,9 @@ async def test_merge_progress_not_found():
     with patch('redis.asyncio.Redis.from_url') as mock_redis_factory:
         mock_redis_factory.return_value.__aenter__.return_value = mock_redis
         
-        # Act
-        result = await merge_service.get_merge_progress("nonexistent_id")
-        
-        # Assert
-        assert result is None
+        # Act & Assert
+        with pytest.raises(ValueError, match="Merge nonexistent_id not found"):
+            await merge_service.get_merge_progress("nonexistent_id")
 
 @pytest.mark.asyncio
 async def test_merge_statistics_not_found():

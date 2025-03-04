@@ -265,7 +265,8 @@ class ResolutionPatternExtractor:
         # Get full pattern objects
         patterns = []
         for pattern_id in candidates:
-            pattern_json = self.redis.get(f"resolution_pattern:{pattern_id.decode('utf-8')}")
+            pattern_id_str = pattern_id.decode('utf-8') if isinstance(pattern_id, bytes) else pattern_id
+            pattern_json = self.redis.get(f"resolution_pattern:{pattern_id_str}")
             if pattern_json:
                 pattern = ResolutionPattern.model_validate_json(pattern_json)
                 # Get embedding

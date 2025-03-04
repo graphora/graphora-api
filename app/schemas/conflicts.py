@@ -26,6 +26,7 @@ class ConflictType(str, Enum):
     RELATIONSHIP_DIRECTION = "relationship_direction"
     ENTITY_MATCH = "entity_match"
     DUPLICATE_ENTITY = "duplicate_entity"
+    DUPLICATE_RELATIONSHIP = "duplicate_relationship"
     ENTITY_TYPE = "entity_type"  # Entity type conflicts
     SCHEMA = "schema"
     OTHER = "other"
@@ -48,6 +49,7 @@ class ResolutionStrategy(str, Enum):
     KEEP_STAGING_REL = "keep_staging_rel"  # Keep staging relationship
     KEEP_PRODUCTION_REL = "keep_production_rel"  # Keep production relationship
     KEEP_BOTH_RELS = "keep_both_relationships"  # Keep both relationships
+    KEEP_ALL_RELS = "keep_all_relationships"  # Keep all relationships (for multiple matches)
     REVERSE_RELATIONSHIP = "reverse_relationship"  # Reverse relationship direction
     MERGE_REL_PROPS = "merge_rel_props"  # Merge relationship properties
     MATCH_ENTITY = "match_entity"  # Match with a specific production entity

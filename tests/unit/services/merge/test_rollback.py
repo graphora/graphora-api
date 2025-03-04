@@ -46,6 +46,18 @@ def mock_transaction_manager():
     manager.begin_transaction = AsyncMock(return_value="transaction-123")
     manager.commit_transaction = AsyncMock(return_value=True)
     manager.rollback_transaction = AsyncMock(return_value=True)
+    
+    # Create a mock context manager for start_transaction
+    class MockTransactionContext:
+        async def __aenter__(self):
+            return "mock-tx-context"
+            
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            return False  # Don't suppress exceptions
+    
+    # Make start_transaction return the mock context manager
+    manager.start_transaction = AsyncMock(return_value=MockTransactionContext())
+    
     return manager
 
 @pytest.fixture
@@ -65,6 +77,9 @@ def merge_service(mock_storage, mock_progress_tracker, mock_transaction_manager,
         progress_tracker=mock_progress_tracker,
         transaction_manager=mock_transaction_manager
     )
+    
+    # Set the transaction manager directly
+    service._transaction_manager = mock_transaction_manager
     
     # Mock the redis_client
     service.redis_client = mock_redis_client
@@ -240,7 +255,7 @@ class TestMergeRollback:
         assert mock_transaction_manager.commit_transaction.call_count == 1
         
         # Verify storage calls - only node1 should be updated
-        mock_storage.update_node.assert_called_once_with("node1", {"name": "John", "age": 30})
+        mock_storage.update_node.assert_called_once_with("node1", {"name": "John", "age": 30}, tx="transaction-123")
     
     async def test_rollback_merge_complete(self, merge_service, mock_redis_client, mock_progress_tracker, sample_snapshot, sample_merge_progress):
         """Test rollback_merge with complete rollback"""
@@ -270,11 +285,15 @@ class TestMergeRollback:
         assert response.rollback_id.startswith("rollback_")
         assert response.merge_id == merge_id
         assert response.status == "successful"
-        assert response.details["nodes_restored"] == 2
-        assert response.details["relationships_restored"] == 1
+        assert response.rollback_type == RollbackType.COMPLETE.value
+        assert response.nodes_restored == 2
+        assert response.relationships_restored == 1
         
-        # Verify method calls
-        assert merge_service._apply_complete_rollback.call_count == 1
+        # Verify progress tracker was updated
+        mock_progress_tracker.update_merge_status.assert_called_once_with(
+            merge_id=merge_id,
+            status=MergeStatus.ROLLED_BACK
+        )
     
     async def test_rollback_merge_partial(self, merge_service, mock_redis_client, mock_progress_tracker, sample_snapshot, sample_merge_progress):
         """Test rollback_merge with partial rollback"""
@@ -307,11 +326,15 @@ class TestMergeRollback:
         assert response.rollback_id.startswith("rollback_")
         assert response.merge_id == merge_id
         assert response.status == "successful"
-        assert response.details["nodes_restored"] == 1
-        assert response.details["relationships_restored"] == 0
+        assert response.rollback_type == RollbackType.PARTIAL.value
+        assert response.nodes_restored == 1
+        assert response.relationships_restored == 0
         
-        # Verify method calls
-        assert merge_service._apply_partial_rollback.call_count == 1
+        # Verify progress tracker was updated
+        mock_progress_tracker.update_merge_status.assert_called_once_with(
+            merge_id=merge_id,
+            status=MergeStatus.ROLLED_BACK
+        )
     
     async def test_rollback_merge_no_snapshot(self, merge_service, mock_redis_client):
         """Test rollback_merge when no snapshot exists"""

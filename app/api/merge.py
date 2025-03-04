@@ -6,6 +6,7 @@ import logging
 import uuid
 from prefect import get_client
 from fastapi import status
+import traceback
 
 from app.services.merge.service import MergeService, merge_flow
 from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress, MergeStage, RollbackOptions, RollbackResponse
@@ -47,7 +48,6 @@ class StartMergeRequest(BaseModel):
 async def start_merge(
     session_id: str,
     transform_id: str,
-    request: StartMergeRequest,
     background_tasks: BackgroundTasks
 ) -> MergeInitResponse:
     """Start a new merge process"""
@@ -69,18 +69,14 @@ async def start_merge(
         # Define background task
         async def run_merge_flow():
             try:
-                client = get_client()
                 # Create flow run directly
-                flow_run = await client.create_flow_run(
-                    flow=merge_flow,
-                    parameters={
-                        "merge_id": merge_id,
-                        "session_id": session_id,
-                        "transform_id": transform_id,
-                        "ontology_id": request.ontology_id
-                    }
+                flow_run = await merge_flow(
+                    merge_id=merge_id,
+                    session_id=session_id,
+                    transform_id=transform_id,
+                    ontology_id=session_id
                 )
-                logger.info(f"Started flow run {flow_run.id} for merge {merge_id}")
+                logger.info(f"Started flow run {flow_run} for merge {merge_id}")
             except Exception as e:
                 logger.error(f"Failed to start merge flow: {str(e)}")
                 async with get_progress_tracker() as progress_tracker:
@@ -120,6 +116,7 @@ async def get_merge_status(merge_id: str) -> MergeProgress:
     except HTTPException:
         raise
     except Exception as e:
+        traceback.print_exc()
         logger.error(f"Failed to get merge status: {str(e)}")
         raise HTTPException(
             status_code=500,
@@ -912,20 +909,33 @@ async def rollback_merge(
             detail=f"Failed to rollback merge: {str(e)}"
         )
 
-@router.get(
-    "/progress/{merge_id}",
-    response_model=MergeProgressResponse,
-    description="Get progress of an active merge operation"
-)
+@router.get("/progress/{merge_id}", response_model=MergeProgressResponse)
 async def get_merge_progress(
     merge_id: str,
     merge_service: MergeService = Depends(get_merge_service)
-) -> MergeProgressResponse:
-    """Get current progress of a merge operation"""
-    progress = await merge_service.get_merge_progress(merge_id)
-    if not progress:
-        raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
-    return progress
+):
+    """
+    Get the current progress of an active merge operation
+    """
+    try:
+        progress = await merge_service.get_merge_progress(merge_id)
+        return progress
+    except ValueError as e:
+        # Check if this is a "not found" error
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
+        # For other value errors, return a 400
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Log the error
+        logger.error(f"Error getting merge progress: {str(e)}")
+        # Try to rollback if needed
+        try:
+            await merge_service.rollback_merge(merge_id)
+        except Exception as rollback_error:
+            logger.error(f"Rollback failed: {str(rollback_error)}")
+        # Return a 500 error
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get(
     "/statistics/{merge_id}",
@@ -937,10 +947,22 @@ async def get_merge_statistics(
     merge_service: MergeService = Depends(get_merge_service)
 ) -> MergeStatisticsResponse:
     """Get detailed statistics of a merge operation"""
-    statistics = await merge_service.get_merge_statistics(merge_id)
-    if not statistics:
-        raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
-    return statistics
+    try:
+        statistics = await merge_service.get_merge_statistics(merge_id)
+        if not statistics:
+            raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
+        return statistics
+    except ValueError as e:
+        # Check if this is a "not found" error
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
+        # For other value errors, return a 400
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Log the error
+        logger.error(f"Error getting merge statistics: {str(e)}")
+        # Return a 500 error
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get(
     "/history",

@@ -20,23 +20,24 @@ class MockMergeService:
     async def get_merge_progress(self, merge_id: str) -> Optional[MergeProgressResponse]:
         """Mock implementation of get_merge_progress"""
         if merge_id == "nonexistent_id":
-            return None
+            raise ValueError(f"Merge {merge_id} not found")
+        start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
         return MergeProgressResponse(
             merge_id=merge_id,
-            transform_id="test_transform_id",
-            status="running",
-            current_stage=MergeStage.EXECUTION,
+            overall_status="running",
+            current_stage=MergeStage.EXTRACT,
             progress_percentage=45.0,
-            started_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            start_time=start_time,
+            end_time=None,
             estimated_completion_time=datetime.now(timezone.utc) + timedelta(minutes=5),
             elapsed_time_seconds=300.0,
-            is_active=True
+            stages_progress={}
         )
     
     async def get_merge_statistics(self, merge_id: str) -> Optional[MergeStatisticsResponse]:
         """Mock implementation of get_merge_statistics"""
         if merge_id == "nonexistent_id":
-            return None
+            raise ValueError(f"Merge {merge_id} not found")
         return MergeStatisticsResponse(
             merge_id=merge_id,
             transform_id="test_transform_id",
@@ -138,7 +139,8 @@ def test_merge_progress_api_endpoint(test_client):
     assert response.status_code == 200
     data = response.json()
     assert data["merge_id"] == "test_merge_id"
-    assert data["status"] == "running"
+    assert data["overall_status"] == "running"
+    assert data["current_stage"] == "extract"
     assert data["progress_percentage"] == 45.0
 
 def test_merge_statistics_api_endpoint(test_client):

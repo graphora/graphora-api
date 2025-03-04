@@ -243,7 +243,7 @@ class ResolutionHistoryService:
             )
         
         # Convert to list of strings
-        candidate_ids = [c.decode('utf-8') for c in candidates]
+        candidate_ids = [c.decode('utf-8') if isinstance(c, bytes) else c for c in candidates]
         
         if not candidate_ids:
             return []
@@ -358,7 +358,7 @@ class ResolutionHistoryService:
             # Get all resolutions for this merge ID
             merge_entry_ids = self.redis.smembers(f"resolution_index:merge_id:{merge_id}")
             if merge_entry_ids:
-                filter_sets.append({m.decode('utf-8') for m in merge_entry_ids})
+                filter_sets.append({m.decode('utf-8') if isinstance(m, bytes) else m for m in merge_entry_ids})
             else:
                 # If no entries found for this merge ID, return empty list
                 return []
@@ -367,13 +367,13 @@ class ResolutionHistoryService:
             type_matches = self.redis.smembers(
                 f"resolution_index:conflict_type:{conflict_type.value}"
             )
-            filter_sets.append({m.decode('utf-8') for m in type_matches})
+            filter_sets.append({m.decode('utf-8') if isinstance(m, bytes) else m for m in type_matches})
         
         if entity_type:
             entity_matches = self.redis.smembers(
                 f"resolution_index:entity_type:{entity_type}"
             )
-            filter_sets.append({m.decode('utf-8') for m in entity_matches})
+            filter_sets.append({m.decode('utf-8') if isinstance(m, bytes) else m for m in entity_matches})
         
         # Intersect all filter sets
         if filter_sets:
@@ -388,7 +388,7 @@ class ResolutionHistoryService:
                     match=f"resolution_history:*",
                     count=1000
                 )
-                all_entries.extend([k.decode('utf-8').split(':')[1] for k in keys])
+                all_entries.extend([k.decode('utf-8').split(':')[1] if isinstance(k, bytes) else k.split(':')[1] for k in keys])
                 if cursor == 0:
                     break
             result_ids = set(all_entries)
@@ -488,7 +488,7 @@ class ResolutionHistoryService:
                     match=f"resolution_history:*",
                     count=1000
                 )
-                all_entries.extend([k.decode('utf-8').split(':')[1] for k in keys])
+                all_entries.extend([k.decode('utf-8').split(':')[1] if isinstance(k, bytes) else k.split(':')[1] for k in keys])
                 if cursor == 0:
                     break
             result_ids = set(all_entries)

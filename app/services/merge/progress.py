@@ -7,7 +7,7 @@ import logging
 import asyncio
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError, TimeoutError
-import json
+import traceback
 
 from app.services.merge.models import (
     MergeStage,
@@ -17,6 +17,7 @@ from app.services.merge.models import (
     MergeStageProgress,
     ResourceMetrics
 )
+from app.schemas.conflicts import ConflictType, ConflictSeverity
 from app.config import settings
 from app.utils.redis import DateTimeEncoder
 
@@ -204,6 +205,69 @@ class ProgressTracker:
         except Exception as e:
             logger.error(f"Failed to update merge progress: {str(e)}")
     
+    async def update_conflicts(
+        self,
+        merge_id: str,
+        conflict_batch: 'ConflictBatch'
+    ) -> None:
+        """Update conflict information in the progress tracker
+        
+        Args:
+            merge_id: ID of the merge operation
+            conflict_batch: Batch of conflicts detected during merge
+        """
+        try:
+            # Get current status
+            status_data = await self._redis_operation(
+                self.redis.get,
+                self._get_redis_key(merge_id, "status")
+            )
+            if not status_data:
+                return
+            
+            # Parse status
+            status = MergeProgress.model_validate_json(status_data)
+            
+            # Update conflict detection stage with conflict metrics
+            if MergeStage.CONFLICT_DETECTION in status.stages_progress:
+                stage_progress = status.stages_progress[MergeStage.CONFLICT_DETECTION]
+                
+                # Add conflict metrics
+                conflict_metrics = {
+                    "total_conflicts": conflict_batch.total_conflicts,
+                    "conflict_types": {
+                        conflict_type.value: sum(1 for c in conflict_batch.conflicts if c.conflict_type == conflict_type)
+                        for conflict_type in ConflictType
+                    },
+                    "conflict_severities": {
+                        severity.value: sum(1 for c in conflict_batch.conflicts if c.severity == severity)
+                        for severity in ConflictSeverity
+                    },
+                    "conflict_groups": len(conflict_batch.conflict_groups)
+                }
+                
+                # Update stage metrics
+                if "metrics" not in stage_progress.metrics:
+                    stage_progress.metrics["metrics"] = {}
+                stage_progress.metrics["metrics"].update(conflict_metrics)
+            
+            # Store updated status
+            await self._redis_operation(
+                self.redis.set,
+                self._get_redis_key(merge_id, "status"),
+                status.model_dump_json()
+            )
+            
+            # Store conflict batch ID for reference
+            await self._redis_operation(
+                self.redis.set,
+                self._get_redis_key(merge_id, "conflict_batch_id"),
+                conflict_batch.batch_id
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to update conflicts in progress tracker: {str(e)}")
+    
     async def complete_merge_stage(
         self,
         merge_id: str,
@@ -222,16 +286,37 @@ class ProgressTracker:
             
             # Parse and update status
             status = MergeProgress.model_validate_json(status_data)
-            status.complete_stage(stage)
+            
+            # Update stage status
+            if stage in status.stages_progress:
+                stage_progress = status.stages_progress[stage]
+                stage_progress.status = StageStatus.COMPLETED
+                stage_progress.end_time = datetime.now(timezone.utc)
+                
+                # Calculate percentage complete if items_total is available
+                if stage_progress.items_total is not None and stage_progress.items_total > 0:
+                    stage_progress.percentage_complete = 100
+                    stage_progress.items_processed = stage_progress.items_total
             
             # Update stage metrics
             if metadata and stage in status.stages_progress:
-                status.stages_progress[stage].metrics.update(metadata)
+                if not stage_progress.metrics:
+                    stage_progress.metrics = {}
+                stage_progress.metrics.update(metadata)
             
             # Update overall status if this was the final stage
-            if stage == MergeStage.MERGE:
-                status.overall_status = MergeStatus.COMPLETED
-                status.end_time = datetime.now()
+            if stage == MergeStage.VERIFICATION or stage == MergeStage.MERGE:
+                # Check if all stages are completed or if this is the final stage
+                all_completed = all(
+                    s.status == StageStatus.COMPLETED 
+                    for s in status.stages_progress.values() 
+                    if s.status != StageStatus.PENDING
+                )
+                
+                if all_completed:
+                    status.overall_status = MergeStatus.COMPLETED
+                    status.end_time = datetime.now(timezone.utc)
+                    logger.info(f"Merge {merge_id} completed successfully")
             
             # Store updated status
             await self._redis_operation(
@@ -241,6 +326,7 @@ class ProgressTracker:
             )
             
         except Exception as e:
+            traceback.print_exc()
             logger.error(f"Failed to complete merge stage: {str(e)}")
     
     async def fail_merge(
@@ -648,3 +734,43 @@ class ProgressTracker:
         except Exception as e:
             logger.error(f"Failed to get merge progress: {str(e)}")
             return None
+    
+    async def update_merge_status(
+        self,
+        merge_id: str,
+        status: MergeStatus
+    ) -> None:
+        """Update the overall status of a merge operation
+        
+        Args:
+            merge_id: ID of the merge operation
+            status: New merge status
+        """
+        try:
+            # Get current status
+            status_data = await self._redis_operation(
+                self.redis.get,
+                self._get_redis_key(merge_id, "status")
+            )
+            if not status_data:
+                return
+            
+            # Parse and update status
+            progress = MergeProgress.model_validate_json(status_data)
+            progress.overall_status = status
+            
+            # If status is terminal, set end time
+            if status in [MergeStatus.COMPLETED, MergeStatus.FAILED, MergeStatus.ROLLED_BACK]:
+                progress.end_time = datetime.now(timezone.utc)
+            
+            # Store updated status
+            await self._redis_operation(
+                self.redis.set,
+                self._get_redis_key(merge_id, "status"),
+                progress.model_dump_json()
+            )
+            
+            logger.info(f"Updated merge {merge_id} status to {status.value}")
+            
+        except Exception as e:
+            logger.error(f"Failed to update merge status: {str(e)}")
