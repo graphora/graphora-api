@@ -775,21 +775,73 @@ class Neo4jStorage(GraphStorageInterface):
     async def update_node(
         self,
         node_id: str,
-        properties: Dict[str, Any]
+        properties: Dict[str, Any],
+        tx=None
     ) -> Node:
-        """Update an existing node"""
+        """Update an existing node
+        
+        Args:
+            node_id: ID of the node to update
+            properties: Properties to update
+            tx: Optional transaction object
+            
+        Returns:
+            Updated Node object
+        """
         print(f"DEBUG: Updating node {node_id} with properties: {properties}")
-        async def _execute_query():
+        async def _execute_query(node_id, properties={}, tx=None):
             query = """
             MATCH (n)
             WHERE n.id = $id
             SET n += $properties
             RETURN n
             """
-            records = await self._execute_query(query, {
-                "id": node_id,
-                "properties": properties
-            })
+            
+            # If a transaction is provided, use it
+            if tx:
+                if isinstance(tx, str):
+                    # If tx is a transaction ID, we need to get the actual transaction object
+                    if self.transaction_manager:
+                        tx_data = self.transaction_manager.get_transaction(tx)
+                        if tx_data and "tx" in tx_data:
+                            tx = tx_data["tx"]
+                        else:
+                            logger.warning(f"Transaction ID {tx} not found, creating new session")
+                            # Fall back to creating a new session
+                            async with self._get_session() as session:
+                                result = await session.run(query, {
+                                    "id": node_id,
+                                    "properties": properties
+                                })
+                                records = []
+                                async for record in result:
+                                    records.append(record)
+                                await result.consume()  # Ensure resources are released
+                                return records
+                    else:
+                        logger.warning("Transaction manager not available, creating new session")
+                        # Fall back to creating a new session
+                        async with self._get_session() as session:
+                            result = await session.run(query, {
+                                "id": node_id,
+                                "properties": properties
+                            })
+                            records = []
+                            async for record in result:
+                                records.append(record)
+                            await result.consume()  # Ensure resources are released
+                            return records
+                records = await tx.run(query, {
+                    "id": node_id,
+                    "properties": properties
+                })
+                records = await records.values()
+            else:
+                # Otherwise use the standard query execution
+                records = await self._execute_query(query, {
+                    "id": node_id,
+                    "properties": properties
+                })
             
             if not records:
                 raise StorageError(f"Node {node_id} not found")
@@ -804,16 +856,33 @@ class Neo4jStorage(GraphStorageInterface):
                 properties=node_properties
             )
         
-        return await self._execute_with_retry(_execute_query)
+        # If transaction is provided, execute directly without retry
+        if tx:
+            return await _execute_query(node_id, properties, tx)
+        
+        # Otherwise use retry mechanism
+        return await self._execute_with_retry(lambda: _execute_query(node_id, properties, tx))
 
     async def create_relationship(
         self,
         source_id: str,
         target_id: str,
         rel_type: str,
-        properties: Dict[str, Any] = None
+        properties: Dict[str, Any] = None,
+        tx=None
     ) -> Edge:
-        """Create a relationship between nodes"""
+        """Create a relationship between nodes
+        
+        Args:
+            source_id: The ID of the source node
+            target_id: The ID of the target node
+            rel_type: The type of the relationship
+            properties: Optional properties for the relationship
+            tx: Optional transaction object or ID to use for this operation
+            
+        Returns:
+            Edge: The created relationship
+        """
         # Ensure properties is a dict and not None
         if properties is None:
             properties = {}
@@ -842,7 +911,7 @@ class Neo4jStorage(GraphStorageInterface):
                 "source_id": source_id,
                 "target_id": target_id,
                 "properties": sanitized_properties
-            })
+            }, tx=tx)
             
             if not records:
                 raise StorageError(f"Failed to create relationship between {source_id} and {target_id} of type {rel_type}")
@@ -856,7 +925,11 @@ class Neo4jStorage(GraphStorageInterface):
                 properties=dict(rel_data.items())
             )
         
-        return await self._execute_with_retry(_execute_query)
+        # If we have a transaction, don't use retry mechanism
+        if tx:
+            return await _execute_query()
+        else:
+            return await self._execute_with_retry(_execute_query)
 
     async def update_relationship(
         self,
@@ -1058,7 +1131,35 @@ class Neo4jStorage(GraphStorageInterface):
                 tx = tx_data["tx"]
         
         if tx:
-            # Use the provided transaction
+            # Handle the case where tx is a string (transaction ID)
+            if isinstance(tx, str):
+                # If tx is a transaction ID, we need to get the actual transaction object
+                if self.transaction_manager:
+                    tx_data = self.transaction_manager.get_transaction(tx)
+                    if tx_data and "tx" in tx_data:
+                        tx = tx_data["tx"]
+                    else:
+                        logger.warning(f"Transaction ID {tx} not found, creating new session")
+                        # Fall back to creating a new session
+                        async with self._get_session() as session:
+                            result = await session.run(query, parameters=params)
+                            records = []
+                            async for record in result:
+                                records.append(record)
+                            await result.consume()  # Ensure resources are released
+                            return records
+                else:
+                    logger.warning("Transaction manager not available, creating new session")
+                    # Fall back to creating a new session
+                    async with self._get_session() as session:
+                        result = await session.run(query, parameters=params)
+                        records = []
+                        async for record in result:
+                            records.append(record)
+                        await result.consume()  # Ensure resources are released
+                        return records
+            
+            # Use the provided transaction object
             result = await tx.run(query, parameters=params)
             records = []
             async for record in result:

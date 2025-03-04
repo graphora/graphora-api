@@ -4,26 +4,58 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
+from app.services.merge.models import MergeStage as ModelMergeStage
+
 class MergeStage(str, Enum):
     """Stages of the merge process"""
     VALIDATION = "validation"
     EXECUTION = "execution"
+    EXTRACT = "extract"
+    ANALYZE = "analyze"
+    CONFLICT_DETECTION = "conflict_detection"
+    RESOLUTION = "resolution"
+    MERGE = "merge"
+    APPLY_CHANGES = "apply_changes"
     VERIFICATION = "verification"
     COMPLETED = "completed"
     FAILED = "failed"
     ROLLBACK = "rollback"
 
+class MergeStageProgressResponse(BaseModel):
+    """Response model for merge stage progress"""
+    stage: str
+    status: str
+    percentage_complete: float = Field(ge=0.0, le=100.0)
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+
+# Add StageProgressResponse as an alias for MergeStageProgressResponse
+class StageProgressResponse(BaseModel):
+    """Response model for stage progress"""
+    status: str
+    percentage_complete: float = Field(ge=0.0, le=100.0)
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    error: Optional[str] = None
+
 class MergeProgressResponse(BaseModel):
     """Response model for merge progress"""
     merge_id: str
-    transform_id: str
-    status: str
-    current_stage: MergeStage
+    overall_status: str
+    current_stage: Optional[ModelMergeStage] = None
     progress_percentage: float = Field(ge=0.0, le=100.0)
-    started_at: datetime
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
     estimated_completion_time: Optional[datetime] = None
-    elapsed_time_seconds: float
-    is_active: bool
+    estimated_time_remaining_seconds: Optional[float] = None
+    elapsed_time_seconds: float = 0.0
+    stages_progress: Dict[str, StageProgressResponse] = Field(default_factory=dict)
+    
+    @property
+    def is_active(self) -> bool:
+        """Check if merge is still active"""
+        return self.overall_status not in ["completed", "failed", "cancelled", "rolled_back"]
 
 class NodeStatistics(BaseModel):
     """Statistics for nodes in merge operation"""

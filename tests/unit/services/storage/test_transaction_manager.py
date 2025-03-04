@@ -1,10 +1,9 @@
 """Unit tests for transaction management"""
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
 from datetime import datetime
-
+from typing import Optional, Dict, Any
 from app.services.storage.transaction import TransactionManager, Neo4jTransactionManager
 
 
@@ -44,6 +43,10 @@ class MockTransactionManager(TransactionManager):
             del self.active_transactions[transaction_id]
             return True
         return False
+    
+    def get_transaction(self, transaction_id: str) -> Optional[Dict[str, Any]]:
+        """Get transaction data by ID"""
+        return self.active_transactions.get(transaction_id)
 
 
 class TestTransactionManager:
