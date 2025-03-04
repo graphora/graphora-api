@@ -319,24 +319,6 @@ class TestMergeRollbackIntegration:
         # Wait a moment for async operations to complete
         await asyncio.sleep(1)
         
-        # Manually update the merge status in Redis
-        async with redis.Redis.from_url(settings.REDIS_URL) as conn:
-            # Check if the status was updated by the rollback operation
-            status_json = await conn.get(f"merge:{merge_id}:status")
-            if status_json:
-                status_data = json.loads(status_json)
-                if status_data.get("status") != MergeStatus.ROLLED_BACK.value:
-                    # Only update if not already set to rolled_back
-                    status_data = {
-                        "transform_id": transform_id,
-                        "status": MergeStatus.ROLLED_BACK.value,
-                        "current_stage": "rollback",
-                        "validation_progress": 1.0,
-                        "execution_progress": 0.5,
-                        "started_at": datetime.now(timezone.utc).isoformat()
-                    }
-                    await conn.set(f"merge:{merge_id}:status", json.dumps(status_data))
-
         # Assert - Verify rollback response
         assert rollback_response.rollback_id.startswith("rollback_")
         assert rollback_response.merge_id == merge_id
@@ -427,6 +409,9 @@ class TestMergeRollbackIntegration:
         # Wait a moment for async operations to complete
         await asyncio.sleep(1)
         
+        # Remove the manual status update in Redis since rollback_merge should handle it
+        # The partial rollback test doesn't have this code, but adding this comment for consistency
+
         # Assert - Verify rollback response
         assert rollback_response.rollback_id.startswith("rollback_")
         assert rollback_response.merge_id == merge_id
