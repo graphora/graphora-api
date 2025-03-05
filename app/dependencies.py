@@ -53,7 +53,7 @@ async def get_merge_service():
               get_progress_tracker() as progress_tracker:
         
         service = MergeService(
-            storage=staging_storage,
+            staging_storage=staging_storage,
             production_storage=production_storage,
             progress_tracker=progress_tracker
         )

@@ -156,7 +156,7 @@ class ConflictDetectionService:
         self,
         staging_node: Node,
         production_matches: Dict[str, List[str]],
-        merge_id: Optional[str] = None
+        merge_id: str
     ) -> List[Conflict]:
         """Detect all conflicts for a single node"""
         conflicts = []
@@ -170,7 +170,7 @@ class ConflictDetectionService:
             prod_node = await self.storage.get_node_by_id(prod_id)
             if prod_node:
                 prod_nodes.append(prod_node)
-                
+        
         # Detect type conflicts
         type_conflicts = await self._detect_entity_type_conflicts(
             staging_node, prod_nodes, merge_id

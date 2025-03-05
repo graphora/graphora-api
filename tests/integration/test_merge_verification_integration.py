@@ -9,11 +9,9 @@ from unittest.mock import patch, AsyncMock
 
 from app.services.merge.service import MergeService
 from app.services.merge.verification import PostMergeVerifier
-from app.services.merge.models import (
-    VerificationResult,
-    VerificationCheck,
-    VerificationCheckType,
-    MergeStage
+from app.services.transform.models import (
+    BaseNode,
+    RelationshipInstance
 )
 from app.services.merge.progress import ProgressTracker
 from app.services.storage.neo4j import Neo4jStorage
@@ -68,40 +66,40 @@ async def test_data():
     
     # Create nodes
     nodes = [
-        {
-            "id": f"person-{uuid.uuid4()}",
-            "label": "Person",
-            "type": "Person",
-            "properties": {
+        BaseNode(
+            id=f"person-{uuid.uuid4()}",
+            type="Person",
+            properties={
                 "name": "John Doe",
                 "age": 30,
                 "transform_id": transform_id
             }
-        },
-        {
-            "id": f"company-{uuid.uuid4()}",
-            "label": "Company",
-            "type": "Company",
-            "properties": {
+        ),
+        BaseNode(
+            id=f"company-{uuid.uuid4()}",
+            type="Company",
+            properties={
                 "name": "Acme Inc",
                 "founded": 1990,
                 "transform_id": transform_id
             }
-        }
+        )
     ]
     
     # Create relationships
     relationships = [
-        {
-            "id": f"works_at-{uuid.uuid4()}",
-            "source": nodes[0]["id"],
-            "target": nodes[1]["id"],
-            "type": "WORKS_AT",
-            "properties": {
+        RelationshipInstance(
+            id=f"works_at-{uuid.uuid4()}",
+            type="WORKS_AT",
+            source_id=nodes[0].id,
+            target_id=nodes[1].id,
+            source_type=nodes[0].type,
+            target_type=nodes[1].type,
+            properties={
                 "since": 2020,
                 "transform_id": transform_id
             }
-        }
+        )
     ]
     
     return {
