@@ -304,7 +304,7 @@ async def validate_graph(
         ontology = await load_ontology(ontology_id)
         
         # Define internal node types to skip validation
-        INTERNAL_NODE_TYPES = {"Checkpoint"}
+        INTERNAL_NODE_TYPES = {"__Checkpoint__"}
         
         # Validate nodes
         for node in graph.nodes:

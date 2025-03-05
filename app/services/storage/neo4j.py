@@ -574,10 +574,9 @@ class Neo4jStorage(GraphStorageInterface):
             RETURN n
             """
             records = await self._execute_query(query, {"value": property_value})
-            
             return [
                 Node(
-                    id=str(record[0].id),
+                    id=dict(record[0].items()).get("id", str(uuid.uuid4())),
                     label=record[0].get("type", list(record[0].labels)[0]),  # Use type property if available, fallback to first label
                     type=record[0].get("type", list(record[0].labels)[0]),  # Use same value for type
                     properties={k: v for k, v in dict(record[0].items()).items() if k != "type"}

@@ -51,7 +51,7 @@ class OntologyDefinition(BaseModel):
 class NodeProvenance(BaseModel):
     """Information about where a node came from"""
     chunk_ids: List[str] = Field(default_factory=list)
-    extraction_timestamp: str
+    extraction_timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
     confidence_score: Optional[float] = None
 
 class BaseNode(BaseModel):
