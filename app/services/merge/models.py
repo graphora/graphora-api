@@ -15,6 +15,8 @@ class MergeStage(str, Enum):
     MERGE = "merge"
     APPLY_CHANGES = "apply_changes"
     VERIFICATION = "verification"
+    VALIDATION = "validation"
+    ENTITY_MAPPING = "entity_mapping"
     ROLLBACK = "rollback"
 
 class MergeStatus(str, Enum):

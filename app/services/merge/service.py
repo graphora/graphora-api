@@ -4,25 +4,25 @@ import time
 import logging
 import asyncio
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Set, Tuple, Union
-from datetime import datetime, timezone, timedelta
+import traceback
+from typing import Optional, List, Dict, Any, Set, Tuple
+from datetime import datetime, timezone
 import json
 import redis.asyncio as redis
 import pytz
 from app.config import settings
 from app.schemas.conflicts import (
     Conflict, ConflictSeverity, ConflictType, ResolutionOption, ResolutionStrategy,
-    ConflictResolutionResult, BulkResolutionResult, ConflictStatus
+    ConflictResolutionResult, BulkResolutionResult
 )
+from app.services.storage.models import StorageStage
 from app.services.storage.neo4j import Neo4jStorage
 from app.services.merge.progress import ProgressTracker
 from app.services.storage.interface import GraphStorageInterface
-from app.services.storage.models import Node, Edge
 from app.schemas.graph import Node as SchemaNode, Edge as SchemaEdge, GraphResponse
 from app.services.merge.conflict import ConflictDetectionService
 from app.services.merge.models import (
     MergeStage,
-    MergeProgress,
     ValidationResult,
     ValidationIssue,
     ValidationSeverity,
@@ -50,32 +50,24 @@ from app.services.merge.tasks import (
 )
 from app.services.ontology import load_ontology
 from prefect.cache_policies import NO_CACHE
-from app.services.merge.auto_resolution import AutoResolutionEngine
 from app.utils.redis import get_redis_client
 from app.services.merge.strategy_selection import StrategySelectionEngine
-from app.services.merge.conflicts.base import ConflictDetector
 from app.services.merge.resolution_applicator import ResolutionApplicator
 from app.services.resolution_history_service import ResolutionHistoryService
 from app.services.storage.transaction import TransactionManager, Neo4jTransactionManager
 from app.services.merge.flow_manager import run_resolution_pipeline
 from app.services.merge.validation import MergeValidationService
-from app.services.merge.verification import PostMergeVerifier
 from app.schemas.merge import (
     MergeProgressResponse,
     MergeStatisticsResponse,
     NodeStatistics,
     RelationshipStatistics,
     MergeSummaryResponse,
-    MergeStage as ApiMergeStage,
-    VerificationResultResponse,
-    VerificationCheckResponse,
-    MergeStageProgressResponse,
     StageProgressResponse,
     ModelMergeStage
 )
 from app.services.merge.verification import PostMergeVerifier
 from app.services.merge.models import VerificationResult
-
 
 try:
     import baml as b
@@ -100,6 +92,22 @@ def custom_cache_key_fn(context, parameters):
 
 @task(name="extract_staging_graph", cache_key_fn=custom_cache_key_fn)
 async def extract_staging_graph(
+    storage: GraphStorageInterface,
+    transform_id: str
+) -> GraphResponse:
+    """
+    Extract graph from staging area
+    
+    Args:
+        storage: Graph storage interface
+        transform_id: Transform ID to extract
+        
+    Returns:
+        GraphResponse containing nodes and edges
+    """
+    return await _extract_staging_graph(storage=storage, transform_id=transform_id)
+
+async def _extract_staging_graph(
     storage: GraphStorageInterface,
     transform_id: str
 ) -> GraphResponse:
@@ -233,7 +241,7 @@ async def get_matching_nodes(
         # Start with most specific matching strategy
         strategy = MatchStrategy.EXACT_ID
         matches = []
-        
+        logger.info(node)
         # Try ID-based matching first
         if "id" in node.properties:
             matches = await storage.find_nodes_by_property_value(
@@ -241,6 +249,7 @@ async def get_matching_nodes(
                 property_name="id",
                 property_value=node.properties["id"]
             )
+            logger.info(matches)
             
         # Fall back to name-based matching
         if not matches and "name" in node.properties:
@@ -250,6 +259,7 @@ async def get_matching_nodes(
                 property_name="name",
                 property_value=node.properties["name"]
             )
+            logger.info(matches)
             
         # Use property similarity as last resort
         if not matches:
@@ -259,6 +269,7 @@ async def get_matching_nodes(
                 properties=node.properties,
                 similarity_threshold=similarity_threshold
             )
+            logger.info(matches)
         
         # Calculate confidence based on strategy and number of matches
         confidence = 1.0 if strategy == MatchStrategy.EXACT_ID else (
@@ -286,7 +297,7 @@ async def validate_graph(
     graph: GraphResponse,
     ontology_id: str,
     progress_tracker: ProgressTracker
-) -> List[ValidationIssue]:
+) -> bool:
     """Validate graph against ontology"""
     try:
         # Load ontology
@@ -632,7 +643,7 @@ async def detect_merge_conflicts(
     storage: GraphStorageInterface,
     production_storage: GraphStorageInterface,
     progress_tracker: ProgressTracker
-) -> None:
+) -> int:
     """Detect conflicts between staging and production graphs"""
     try:
         # Start conflict detection stage
@@ -642,10 +653,14 @@ async def detect_merge_conflicts(
         conflict_service = ConflictDetectionService(production_storage)
         
         # Create production entity mapping dict
+        print("entity_mapping", ">>"*20)
+        print(entity_mapping)
         production_entity_mapping = {
             staging_id: match.production_matches
             for staging_id, match in entity_mapping.matches.items()
         }
+        print(">>"*20)
+        print(production_entity_mapping)
         
         # Detect conflicts
         conflict_batch = await conflict_service.detect_conflicts(
@@ -678,6 +693,7 @@ async def detect_merge_conflicts(
                 }
             }
         )
+        return conflict_batch.total_conflicts
         
     except Exception as e:
         error_msg = f"Failed to detect conflicts: {str(e)}"
@@ -721,19 +737,6 @@ async def merge_flow(
             retry_delay_seconds=5
         )(staging_storage, transform_id)
         
-        await complete_merge_stage(
-            merge_id,
-            MergeStage.EXTRACT,
-            progress_tracker,
-            {
-                "total_nodes": graph.total_nodes,
-                "total_edges": graph.total_edges
-            }
-        )
-        
-        # Analyze Stage
-        await start_stage(merge_id, MergeStage.ANALYZE, progress_tracker)
-        
         # Run mapping and validation in parallel
         prod_storage = Neo4jStorage(
             uri=settings.NEO4J_URI,
@@ -746,6 +749,19 @@ async def merge_flow(
             retries=2,
             retry_delay_seconds=5
         )(prod_storage, graph)
+        
+        await complete_merge_stage(
+            merge_id,
+            MergeStage.EXTRACT,
+            progress_tracker,
+            {
+                "total_nodes": graph.total_nodes,
+                "total_edges": graph.total_edges
+            }
+        )
+        
+        # Analyze Stage
+        await start_stage(merge_id, MergeStage.ANALYZE, progress_tracker)
         
         validation_task = validate_graph.with_options(
             name="validate_graph",
@@ -785,7 +801,7 @@ async def merge_flow(
             return
             
         # Conflict Detection Stage
-        await detect_merge_conflicts(
+        conflict_count = await detect_merge_conflicts(
             merge_id=merge_id,
             graph=graph,
             entity_mapping=mapping,
@@ -794,14 +810,8 @@ async def merge_flow(
             progress_tracker=progress_tracker
         )
         
-        # Continue with other stages...
-        # This will be expanded in subsequent user stories
-        
-        # Mark merge as complete
-        await complete_merge(
-            merge_id,
-            progress_tracker
-        )
+        if conflict_count <= 0:
+            await start_stage(merge_id, MergeStage.APPLY_CHANGES, progress_tracker)
         
     except Exception as e:
         error_msg = f"Merge flow failed: {str(e)}"
@@ -818,7 +828,7 @@ class MergeService:
     
     def __init__(
         self,
-        storage: GraphStorageInterface,
+        staging_storage: GraphStorageInterface,
         production_storage: GraphStorageInterface,
         progress_tracker: ProgressTracker,
         transaction_manager: Optional[TransactionManager] = None
@@ -826,17 +836,17 @@ class MergeService:
         """Initialize merge service
         
         Args:
-            storage: Storage service for staging graph
+            staging_storage: Storage service for staging graph
             production_storage: Storage service for production graph
             progress_tracker: Progress tracking service
             transaction_manager: Optional transaction manager
         """
-        self.storage = storage
+        self.staging_storage = staging_storage
         self.production_storage = production_storage
         self.progress_tracker = progress_tracker
         self._transaction_manager = transaction_manager
         self.conflict_detector = ConflictDetectionService(self.production_storage)
-        self.resolution_applicator = ResolutionApplicator(storage, production_storage)
+        self.resolution_applicator = ResolutionApplicator(self.staging_storage, self.production_storage)
         self.resolution_history = ResolutionHistoryService()
         self.redis_client = None
 
@@ -849,7 +859,7 @@ class MergeService:
         if self._transaction_manager is None:
             # Create Neo4j transaction manager if production_storage is Neo4j
             if hasattr(self.production_storage, 'driver'):
-                self._transaction_manager = Neo4jTransactionManager(self.production_storage.driver)
+                self._transaction_manager = Neo4jTransactionManager(self.staging_storage.driver)
             else:
                 # Fallback to a mock transaction manager for testing
                 from unittest.mock import AsyncMock
@@ -1259,7 +1269,7 @@ class MergeService:
         """
         # Create validation service
         validation_service = MergeValidationService(
-            storage=self.storage,
+            storage=self.staging_storage,
             production_storage=self.production_storage,
             merge_service=self
         )
@@ -1270,7 +1280,7 @@ class MergeService:
         # If allowed orphan types are provided, re-run orphaned nodes validation
         if allowed_orphan_types:
             # Get staging graph
-            staging_storage = self.storage  # Use storage directly
+            staging_storage = self.staging_storage  # Use storage directly
             staging_graph = await staging_storage.get_graph_by_transform_id(transform_id)
             
             
@@ -1327,7 +1337,7 @@ class MergeService:
         
         try:
             # Extract staging graph
-            staging_graph = await extract_staging_graph(self.storage, transform_id)
+            staging_graph = await extract_staging_graph(self.staging_storage, transform_id)
             
             # Map production entities
             entity_mapping = await map_production_entities(self.production_storage, staging_graph)
@@ -1494,7 +1504,7 @@ class MergeService:
             # Create merge execution service
             from app.services.merge.execution_service import MergeExecutionService
             execution_service = MergeExecutionService(
-                staging_storage=self.storage,
+                staging_storage=self.staging_storage,
                 prod_storage=self.production_storage,
                 progress_tracker=self.progress_tracker
             )
@@ -1542,7 +1552,7 @@ class MergeService:
         
         try:
             # Extract staging graph
-            staging_graph = await extract_staging_graph(self.storage, transform_id)
+            staging_graph = await extract_staging_graph(self.staging_storage, transform_id)
             
             # Get production entity matches
             await self.progress_tracker.update_merge_progress(
@@ -1552,7 +1562,7 @@ class MergeService:
                 {"task": "entity_mapping"}
             )
             entity_mapping_result = await map_production_entities(
-                self.storage,
+                self.staging_storage,
                 staging_graph,
                 similarity_threshold=0.7
             )
@@ -2076,7 +2086,7 @@ class MergeService:
             await start_stage(merge_id, MergeStage.ENTITY_MAPPING, self.progress_tracker)
             
             mapping_result = await map_production_entities(
-                self.storage,
+                self.staging_storage,
                 graph
             )
             
@@ -2098,7 +2108,7 @@ class MergeService:
                 merge_id,
                 graph,
                 mapping_result,
-                self.storage,
+                self.staging_storage,
                 self.production_storage,
                 self.progress_tracker
             )
@@ -3019,23 +3029,23 @@ class MergeService:
                 nodes_restored = 0
                 for node in snapshot.nodes:
                     # Get current node to see if it needs updating
-                    current_node = await self.storage.get_node_by_id(node.id)
+                    current_node = await self.staging_storage.get_node_by_id(node.id)
                     if current_node and current_node.properties != node.properties:
                         # Update node properties
-                        await self.storage.update_node(node.id, node.properties, tx=tx_id)
+                        await self.staging_storage.update_node(node.id, node.properties, tx=tx_id)
                         nodes_restored += 1
                 
                 # Restore all edges
                 edges_restored = 0
                 for edge in snapshot.relationships:
                     # Check if edge exists
-                    existing_edges = await self.storage.get_edges_between(
+                    existing_edges = await self.staging_storage.get_edges_between(
                         edge.source, edge.target, edge.type
                     )
                     
                     if not existing_edges:
                         # Create edge if it doesn't exist
-                        await self.storage.create_relationship(
+                        await self.staging_storage.create_relationship(
                             edge.source, edge.target, edge.type, edge.properties, tx=tx_id
                         )
                         edges_restored += 1
@@ -3059,7 +3069,7 @@ class MergeService:
         except Exception as e:
             logger.error(f"Error during complete rollback {rollback_id}: {str(e)}")
             raise
-
+        
     async def _apply_partial_rollback(self, snapshot: SnapshotData, entity_ids: List[str], rollback_id: str) -> Dict[str, Any]:
         """
         Apply a partial rollback for specific entities
@@ -3089,10 +3099,10 @@ class MergeService:
                 nodes_restored = 0
                 for node in nodes_to_restore:
                     # Get current node to see if it needs updating
-                    current_node = await self.storage.get_node_by_id(node.id)
+                    current_node = await self.staging_storage.get_node_by_id(node.id)
                     if current_node and current_node.properties != node.properties:
                         # Update node properties
-                        await self.storage.update_node(node.id, node.properties, tx=tx_id)
+                        await self.staging_storage.update_node(node.id, node.properties, tx=tx_id)
                         nodes_restored += 1
                 
                 # Filter edges to restore (only if both source and target are in entity_ids)
@@ -3105,13 +3115,13 @@ class MergeService:
                 edges_restored = 0
                 for edge in edges_to_restore:
                     # Check if edge exists
-                    existing_edges = await self.storage.get_edges_between(
+                    existing_edges = await self.staging_storage.get_edges_between(
                         edge.source, edge.target, edge.type
                     )
                     
                     if not existing_edges:
                         # Create edge if it doesn't exist
-                        await self.storage.create_relationship(
+                        await self.staging_storage.create_relationship(
                             edge.source, edge.target, edge.type, edge.properties, tx=tx_id
                         )
                         edges_restored += 1
@@ -3136,3 +3146,288 @@ class MergeService:
         except Exception as e:
             logger.error(f"Error during partial rollback {rollback_id}: {str(e)}")
             raise
+
+    async def finalise_and_verify_merge(self, merge_id: str, session_id: str, transform_id: str) -> VerificationResult:
+        """Verify a merge operation
+        
+        Args:
+            merge_id: ID of the merge operation
+            transform_id: ID of the transformation
+        
+        Returns:
+            VerificationResult with verification results
+        """
+        logger.info(f"Verifying merge {merge_id} for session {session_id} and transform {transform_id}")
+        
+        staging_graph = await _extract_staging_graph(self.staging_storage, transform_id)
+        prod_storage_result = await self.store_to_prod(graph=staging_graph, transform_id=transform_id)
+        
+        await complete_merge_stage(
+            merge_id,
+            MergeStage.APPLY_CHANGES,
+            self.progress_tracker,
+            prod_storage_result
+        )
+            
+        # Update progress
+        await self.progress_tracker.update_merge_stage(merge_id, MergeStage.VERIFICATION)
+        await self.progress_tracker.update_stage_status(
+            merge_id, 
+            MergeStage.VERIFICATION, 
+            "in_progress"
+        )
+        try:
+            # Create verifier
+            verifier = PostMergeVerifier(
+                merge_id=merge_id,
+                session_id=session_id,
+                transform_id=transform_id,
+                staging_storage_service=self.staging_storage,
+                prod_storage_service=self.production_storage
+            )
+            
+            # Run verification
+            verification_result = await verifier.verify_merge()
+            # Update progress based on verification result
+            status = "completed" if verification_result.success else "failed"
+            await self.progress_tracker.update_stage_status(
+                merge_id, 
+                MergeStage.VERIFICATION, 
+                status
+            )
+            print(verification_result)
+            return verification_result
+        except Exception as e:
+            traceback.print_exc()
+            logger.error(f"Error verifying merge {merge_id}: {str(e)}")
+            await self.progress_tracker.update_stage_status(
+                merge_id, 
+                MergeStage.VERIFICATION, 
+                "failed"
+            )
+            raise
+    
+    async def store_to_prod(
+        self,
+        graph: GraphResponse,
+        transform_id: str,
+        checkpoint_size: int = settings.STORAGE_BATCH_SIZE
+    ) -> Dict[str, Any]:
+        """
+        Store knowledge graph in Production Neo4j with checkpointing
+        
+        Args:
+            graph: Knowledge graph to store
+            transform_id: Transform ID for tracking
+            checkpoint_size: Number of items per batch
+            
+        Returns:
+            Dict with metrics
+        """
+        storage = self.production_storage
+        start_time = datetime.now()
+        def chunk_list(items: List, size: int) -> List[List]:
+            """Split list into chunks of specified size"""
+            return [
+                items[i:i + size]
+                for i in range(0, len(items), size)
+            ]
+        
+        try:
+            # Initialize result
+            result = {
+                "transform_id": transform_id,
+                "nodes_stored": 0,
+                "relationships_stored": 0,
+                "start_time": start_time,
+                "status": "NODES",
+                "metrics": {
+                    "nodes_processed": 0,
+                    "relationships_processed": 0,
+                    "batch_timings": [],
+                    "errors": [],
+                    "checkpoint_count": 0,
+                    "storage_time_ms": 0.0,
+                    "peak_memory_mb": 0.0
+                }
+            }
+            
+            # Get current status
+            status = await storage.get_storage_status(transform_id)
+            start_from = status.last_processed_index if status else 0
+            current_stage = status.stage if status else StorageStage.NODES
+            
+            # Convert nodes to list if needed
+            nodes = (
+                list(graph.nodes)
+                if isinstance(graph.nodes, dict)
+                else graph.nodes
+            )
+            
+            # Process nodes if not completed
+            if current_stage == StorageStage.NODES:
+                logger.info(
+                    f"Processing nodes from index {start_from}",
+                    extra={"transform_id": transform_id}
+                )
+                node_batches = chunk_list(
+                    nodes[start_from:],
+                    checkpoint_size
+                )
+                
+                for batch_idx, node_batch in enumerate(
+                    node_batches,
+                    start=start_from
+                ):
+                    try:
+                        # Store batch
+                        print("##"*20)
+                        print(node_batch)
+                        print("##"*20)
+                        batch_result = await storage.store_nodes(
+                            node_batch,
+                            batch_idx,
+                            transform_id
+                        )
+                        
+                        # Update metrics
+                        result["nodes_stored"] += batch_result.items_processed
+                        result["metrics"]["nodes_processed"] += batch_result.items_processed
+                        result["metrics"]["batch_timings"].append(batch_result.processing_time_ms)
+                        
+                        if batch_result.warnings:
+                            for warning in batch_result.warnings:
+                                result["metrics"]["errors"].append({
+                                    "error": warning,
+                                    "batch_idx": batch_idx,
+                                    "stage": "NODES"
+                                })
+                        
+                        # Update checkpoint
+                        await storage.update_checkpoint(
+                            transform_id,
+                            batch_idx * checkpoint_size + len(node_batch),
+                            StorageStage.NODES
+                        )
+                        result["metrics"]["checkpoint_count"] += 1
+                        
+                        logger.info(
+                            f"Stored node batch {batch_idx}",
+                            extra={
+                                "transform_id": transform_id,
+                                "processed": batch_result.items_processed,
+                                "time_ms": batch_result.processing_time_ms
+                            }
+                        )
+                        
+                    except Exception as e:
+                        logger.error(
+                            f"Failed at node batch {batch_idx}: {str(e)}",
+                            extra={"transform_id": transform_id}
+                        )
+                        raise
+                    
+                # Update stage
+                current_stage = StorageStage.RELATIONSHIPS
+                await storage.update_checkpoint(
+                    transform_id,
+                    0,  # Reset index for relationships
+                    current_stage
+                )
+            
+            # Process relationships if not completed
+            if current_stage == StorageStage.RELATIONSHIPS:
+                logger.info(
+                    f"Processing relationships from index {start_from}",
+                    extra={"transform_id": transform_id}
+                )
+                
+                rel_batches = chunk_list(
+                    graph.edges[start_from:],
+                    checkpoint_size
+                )
+                
+                for batch_idx, rel_batch in enumerate(
+                    rel_batches,
+                    start=start_from
+                ):
+                    try:
+                        # Store batch
+                        batch_result = await storage.store_relationships(
+                            rel_batch,
+                            batch_idx,
+                            transform_id
+                        )
+                        
+                        # Update metrics
+                        result["relationships_stored"] += batch_result.items_processed
+                        result["metrics"]["relationships_processed"] += (
+                            batch_result.items_processed
+                        )
+                        result["metrics"]["batch_timings"].append(batch_result.processing_time_ms)
+                        
+                        if batch_result.warnings:
+                            for warning in batch_result.warnings:
+                                result["metrics"]["errors"].append({
+                                    "error": warning,
+                                    "batch_idx": batch_idx,
+                                    "stage": "RELATIONSHIPS"
+                                })
+                        
+                        # Update checkpoint
+                        await storage.update_checkpoint(
+                            transform_id,
+                            batch_idx * checkpoint_size + len(rel_batch),
+                            StorageStage.RELATIONSHIPS
+                        )
+                        result["metrics"]["checkpoint_count"] += 1
+                        
+                        logger.info(
+                            f"Stored relationship batch {batch_idx}",
+                            extra={
+                                "transform_id": transform_id,
+                                "processed": batch_result.items_processed,
+                                "time_ms": batch_result.processing_time_ms
+                            }
+                        )
+                        
+                    except Exception as e:
+                        logger.error(
+                            f"Failed at relationship batch {batch_idx}: {str(e)}",
+                            extra={"transform_id": transform_id}
+                        )
+                        raise
+            
+            # Finalize result
+            result["status"] = "COMPLETED"
+            result["metrics"]["storage_time_ms"] = (
+                datetime.now() - start_time
+            ).total_seconds() * 1000
+            result["metrics"]["peak_memory_mb"] = (
+                0.0
+            )
+            
+            # Log metrics
+            logger.info(
+                "Storage metrics",
+                extra={
+                    "transform_id": transform_id,
+                    "nodes_stored": result["nodes_stored"],
+                    "relationships_stored": result["relationships_stored"],
+                    "storage_time_ms": result["metrics"]["storage_time_ms"],
+                    "peak_memory_mb": result["metrics"]["peak_memory_mb"]
+                }
+            )
+            
+            return result
+            
+        except Exception as e:
+            traceback.print_exc()
+            logger.error(
+                f"Storage failed: {str(e)}",
+                extra={"transform_id": transform_id}
+            )
+            raise
+        
+        finally:
+            await storage.close()

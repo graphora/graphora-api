@@ -23,19 +23,24 @@ class PostMergeVerifier:
     def __init__(
         self,
         merge_id: str,
+        session_id: str,
         transform_id: str,
-        storage_service: GraphStorageInterface
+        staging_storage_service: GraphStorageInterface,
+        prod_storage_service: GraphStorageInterface
     ):
         """Initialize the verifier
         
         Args:
             merge_id: ID of the merge operation
             transform_id: ID of the transformation
-            storage_service: Storage service for accessing graph data
+            staging_storage_service: Storage service for accessing staging graph data
+            prod_storage_service: Storage service for accessing production graph data
         """
         self.merge_id = merge_id
         self.transform_id = transform_id
-        self.storage_service = storage_service
+        self.session_id = session_id
+        self.staging_storage_service = staging_storage_service
+        self.prod_storage_service = prod_storage_service
         self.resolution_service = ResolutionHistoryService()
         
     async def verify_merge(self) -> VerificationResult:
@@ -55,8 +60,11 @@ class PostMergeVerifier:
         
         try:
             # Get staging and production graphs
-            staging_graph = await self.storage_service.get_transformation_data(self.transform_id)
-            production_graph = await self.storage_service.get_production_graph_for_transform(self.transform_id)
+            staging_graph = await self.staging_storage_service.get_transformation_data(self.transform_id)
+            production_graph = await self.prod_storage_service.get_production_graph_for_transform(self.transform_id)
+            
+            print(production_graph)
+            print(staging_graph)
             
             # Get conflict resolutions
             resolutions = await self._get_resolutions()
@@ -94,7 +102,8 @@ class PostMergeVerifier:
             # Check 5: Verify ontology constraints
             ontology_verification = await self._verify_ontology_constraints(
                 production_graph.nodes, 
-                production_graph.relationships
+                production_graph.relationships,
+                session_id=self.session_id
             )
             verification_result.checks.append(ontology_verification)
             
@@ -423,7 +432,8 @@ class PostMergeVerifier:
     async def _verify_ontology_constraints(
         self, 
         nodes: List[Dict[str, Any]], 
-        relationships: List[Dict[str, Any]]
+        relationships: List[Dict[str, Any]],
+        session_id: str
     ) -> VerificationCheck:
         """Verify ontology constraints are maintained
         
@@ -436,13 +446,15 @@ class PostMergeVerifier:
         """
         try:
             # Load ontology
-            ontology = await load_ontology(ontology_id="default")
+            ontology = await load_ontology(ontology_id=session_id)
+            ontology_entities = ontology.get("entities", {})
+            ontology_entities['__Checkpoint__'] = {}
             
             # Verify node types
             invalid_node_types = []
             for node in nodes:
                 node_type = node.get("type")
-                if node_type not in ontology.get("node_types", {}):
+                if node_type not in ontology_entities:
                     invalid_node_types.append({
                         "id": node.get("id"),
                         "type": node_type
@@ -473,7 +485,8 @@ class PostMergeVerifier:
                 target_type = target_node.get("type")
                 
                 # Check if relationship type is valid
-                if rel_type not in ontology.get("relationship_types", {}):
+                ontology_relationships = ontology_entities.get(source_type, {}).get("relationships", {})
+                if rel_type not in ontology_relationships:
                     invalid_relationships.append({
                         "id": rel.get("id"),
                         "type": rel_type,
@@ -484,8 +497,8 @@ class PostMergeVerifier:
                     continue
                 
                 # Check if relationship direction is valid
-                valid_connections = ontology.get("relationship_types", {}).get(rel_type, {}).get("valid_connections", [])
-                if not any(conn.get("source") == source_type and conn.get("target") == target_type for conn in valid_connections):
+                valid_target = ontology_relationships.get(rel_type, {}).get("target", '')
+                if not valid_target == target_type:
                     invalid_relationships.append({
                         "id": rel.get("id"),
                         "type": rel_type,
@@ -493,7 +506,7 @@ class PostMergeVerifier:
                         "target": target_id,
                         "source_type": source_type,
                         "target_type": target_type,
-                        "error": "Invalid relationship direction"
+                        "error": "Invalid relationship"
                     })
             
             # Combine results

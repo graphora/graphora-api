@@ -72,7 +72,12 @@ class Neo4jStorage(GraphStorageInterface):
                         session.run("RETURN 1")
                     logger.info(f"Successfully initialized Neo4j connection to {uri}")
                 finally:
-                    sync_driver.close()
+                    if sync_driver:
+                        try:
+                            sync_driver.close()
+                        except Exception as e:
+                            traceback.print_exc()
+                            logger.error(f"Error closing session: {str(e)}")
 
         except AuthError as e:
             logger.error(f"Authentication failed for Neo4j connection: {str(e)}")
@@ -105,6 +110,7 @@ class Neo4jStorage(GraphStorageInterface):
                 try:
                     await session.close()
                 except Exception as e:
+                    traceback.print_exc()
                     logger.error(f"Error closing session: {str(e)}")
 
     async def _execute_with_retry(self, operation):
@@ -133,11 +139,12 @@ class Neo4jStorage(GraphStorageInterface):
     def _build_node_query(self, node: BaseNode, transform_id: str) -> tuple[str, Dict]:
         """Build Cypher query for creating a node with properties"""
         # Extract properties excluding metadata
+        print(node)
         if isinstance(node, dict):
             # Handle dictionary input
             node_properties = node.get('properties', {})
             node_type = node.get('type', '')
-            node_id = node.get('id', '')
+            node_id = node.get('id', str(uuid.uuid4()))
         else:
             # Handle BaseNode input
             node_properties = node.properties
@@ -200,10 +207,6 @@ class Neo4jStorage(GraphStorageInterface):
                 continue
             else:
                 sanitized_properties[key] = value
-        
-        # Add transform_id if it exists
-        if hasattr(rel, 'transform_id'):
-            sanitized_properties['transform_id'] = rel.transform_id
         
         query = """
         MATCH (s), (t)
@@ -362,7 +365,7 @@ class Neo4jStorage(GraphStorageInterface):
         async def _execute_query():
             async with self._get_session() as session:
                 query = """
-                MATCH (c:Checkpoint {transform_id: $transform_id})
+                MATCH (c:__Checkpoint__ {transform_id: $transform_id})
                 RETURN c ORDER BY c.timestamp DESC LIMIT 1
                 """
                 result = await session.run(query, {"transform_id": transform_id})
@@ -410,7 +413,7 @@ class Neo4jStorage(GraphStorageInterface):
             async with self._get_session() as session:
                 try:
                     query = """
-                    MERGE (c:Checkpoint {transform_id: $transform_id})
+                    MERGE (c:__Checkpoint__ {transform_id: $transform_id})
                     SET c.last_processed_index = $last_index,
                         c.stage = $stage,
                         c.timestamp = datetime()
@@ -455,7 +458,7 @@ class Neo4jStorage(GraphStorageInterface):
             query = """
             MATCH (n)
             WHERE n.transform_id = $transform_id
-            RETURN n, ID(n) as node_id
+            RETURN n, n.id as node_id, labels(n) as labels
             """
             
             nodes = []
@@ -467,13 +470,14 @@ class Neo4jStorage(GraphStorageInterface):
                     # Add the id field if it doesn't exist
                     if "id" not in node_dict:
                         node_dict["id"] = node_dict.get("id", str(record["node_id"]))
+                    node_dict["type"] = str(record["labels"][0])
                     nodes.append(node_dict)
             
             # Get relationships
             query = """
             MATCH (s)-[r]->(t)
-            WHERE r.transform_id = $transform_id
-            RETURN r, ID(r) as rel_id, ID(s) as source_id, ID(t) as target_id
+            WHERE s.transform_id = $transform_id OR t.transform_id = $transform_id
+            RETURN r, r.id as rel_id, s.id as source_id, t.id as target_id, type(r) as type
             """
             
             relationships = []
@@ -487,6 +491,7 @@ class Neo4jStorage(GraphStorageInterface):
                         rel_dict["id"] = rel_dict.get("id", str(record["rel_id"]))
                     rel_dict["source"] = str(record["source_id"])
                     rel_dict["target"] = str(record["target_id"])
+                    rel_dict["type"] = str(record["type"])
                     relationships.append(rel_dict)
             
             return TransformationResult(
@@ -510,7 +515,7 @@ class Neo4jStorage(GraphStorageInterface):
             query = """
             MATCH (n)
             WHERE n.transform_id = $transform_id OR n.affected_by_transform = $transform_id
-            RETURN n, ID(n) as node_id
+            RETURN n, n.id as node_id, labels(n) as labels
             """
             
             nodes = []
@@ -522,13 +527,14 @@ class Neo4jStorage(GraphStorageInterface):
                     # Add the id field if it doesn't exist
                     if "id" not in node_dict:
                         node_dict["id"] = node_dict.get("id", str(record["node_id"]))
+                    node_dict["type"] = str(record["labels"][0])
                     nodes.append(node_dict)
             
             # Get relationships that were affected by the transform
             query = """
             MATCH (s)-[r]->(t)
-            WHERE r.transform_id = $transform_id OR r.affected_by_transform = $transform_id
-            RETURN r, ID(r) as rel_id, ID(s) as source_id, ID(t) as target_id
+            WHERE s.transform_id = $transform_id OR t.transform_id = $transform_id
+            RETURN r, r.id as rel_id, s.id as source_id, t.id as target_id
             """
             
             relationships = []
@@ -542,6 +548,7 @@ class Neo4jStorage(GraphStorageInterface):
                         rel_dict["id"] = rel_dict.get("id", str(record["rel_id"]))
                     rel_dict["source"] = str(record["source_id"])
                     rel_dict["target"] = str(record["target_id"])
+                    rel_dict["type"] = str(record["type"])
                     relationships.append(rel_dict)
             
             return TransformationResult(
@@ -570,7 +577,7 @@ class Neo4jStorage(GraphStorageInterface):
             
             return [
                 Node(
-                    id=str(record[0].element_id),
+                    id=str(record[0].id),
                     label=record[0].get("type", list(record[0].labels)[0]),  # Use type property if available, fallback to first label
                     type=record[0].get("type", list(record[0].labels)[0]),  # Use same value for type
                     properties={k: v for k, v in dict(record[0].items()).items() if k != "type"}
@@ -588,7 +595,7 @@ class Neo4jStorage(GraphStorageInterface):
         """Get all relationships between two nodes"""
         query = """
                 MATCH (s)-[r]->(t)
-                WHERE elementId(s) = $source_id AND elementId(t) = $target_id
+                WHERE s.id = $source_id AND t.id = $target_id
                 RETURN r
                 """
         records = await self._execute_query(query, {
@@ -614,7 +621,7 @@ class Neo4jStorage(GraphStorageInterface):
         """Get all relationships between a set of nodes"""
         query = """
                 MATCH (s)-[r]->(t)
-                WHERE elementId(s) IN $node_ids AND elementId(t) IN $node_ids
+                WHERE s.id = $node_ids AND t.id = $node_ids
                 RETURN r
                 """
         records = await self._execute_query(query, {"node_ids": node_ids})
@@ -693,10 +700,15 @@ class Neo4jStorage(GraphStorageInterface):
 
         property_conditions = []
         for idx, (key, value) in enumerate(properties.items()):
-            if key != "id":  # Skip id property for similarity calculation
+            if key not in ["id", "chunk_ids", "confidence_score", "transform_id", "affected_by_transform", "extraction_timestamp"]:
                 param_key = f"value{idx}"
                 params[param_key] = str(value)  # Convert all values to strings
-                property_conditions.append(f"apoc.text.levenshteinSimilarity(toString(coalesce(n.{key}, '')), ${param_key})")
+                if type(value) == list:
+                    property_conditions.append(f"apoc.text.levenshteinSimilarity(apoc.text.join([x IN n.{key} | toString(x)], ','), ${param_key})")
+                elif type(value) == dict:
+                    property_conditions.append(f"apoc.text.levenshteinSimilarity(apoc.convert.toJson(props[key]), ${param_key})")
+                else:
+                    property_conditions.append(f"apoc.text.levenshteinSimilarity(toString(coalesce(n.{key}, '')), ${param_key})")
 
         # Build final query with conditional relationship score calculation
         query = f"""
@@ -713,10 +725,10 @@ class Neo4jStorage(GraphStorageInterface):
         if has_source_id and include_relationships:
             query += """
             WITH n, property_score,
-                 size([(n)-[r]->() WHERE type(r) IN [(s)-[sr]->() WHERE elementId(s) = $source_id | type(sr)] | r]) * 1.0 /
+                 size([(n)-[r]->() WHERE type(r) IN [(s)-[sr]->() WHERE s.id = $source_id | type(sr)] | r]) * 1.0 /
                  CASE 
-                    WHEN size([(s)-[sr]->() WHERE elementId(s) = $source_id | sr]) > 0 
-                    THEN size([(s)-[sr]->() WHERE elementId(s) = $source_id | sr])
+                    WHEN size([(s)-[sr]->() WHERE s.id = $source_id | sr]) > 0 
+                    THEN size([(s)-[sr]->() WHERE s.id = $source_id | sr])
                     ELSE 1.0
                  END as relationship_score
             WITH n, property_score, relationship_score,
@@ -733,7 +745,6 @@ class Neo4jStorage(GraphStorageInterface):
         ORDER BY similarity_score DESC
         LIMIT $max_results
         """
-
         records = await self._execute_query(query, params)
 
         return [
@@ -984,7 +995,7 @@ class Neo4jStorage(GraphStorageInterface):
 
     async def get_node_by_id(self, node_id: str) -> Optional[Node]:
         """Get a node by its ID"""
-        print(f"DEBUG: Getting node by ID: {node_id}")
+        # print(f"DEBUG: Getting node by ID: {node_id}")
         query = """
                 MATCH (n)
                 WHERE n.id = $id
@@ -992,13 +1003,13 @@ class Neo4jStorage(GraphStorageInterface):
                 """
         records = await self._execute_query(query, {"id": node_id})
         if not records:
-            print(f"DEBUG: No node found with ID: {node_id}")
+            # print(f"DEBUG: No node found with ID: {node_id}")
             return None
 
         record = records[0]
         labels = list(record[0].labels) if record[0].labels else []
         properties = dict(record[0].items())
-        print(f"DEBUG: Found node with ID: {node_id}, properties: {properties}")
+        # print(f"DEBUG: Found node with ID: {node_id}, properties: {properties}")
         return Node(
             id=properties.get("id", str(record[0].element_id)),
             label=labels[0] if labels else None,
@@ -1096,13 +1107,12 @@ class Neo4jStorage(GraphStorageInterface):
 
     async def close(self):
         """Close the database connection"""
-        if hasattr(self, 'driver'):
+        if hasattr(self, 'driver') and self.driver:
             try:
                 await self.driver.close()
             except Exception as e:
+                traceback.print_exc()
                 logger.error(f"Error closing Neo4j driver: {str(e)}")
-            finally:
-                self.driver = None
     
     async def __aenter__(self):
         """Async context manager entry"""
@@ -1110,8 +1120,13 @@ class Neo4jStorage(GraphStorageInterface):
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit"""
-        await self.close()
-    
+        if self:
+            try:
+                await self.close()
+            except Exception as e:
+                traceback.print_exc()
+                logger.error(f"Error closing session: {str(e)}")
+        
     def __del__(self):
         """Cleanup when object is deleted"""
         try:
@@ -1119,6 +1134,7 @@ class Neo4jStorage(GraphStorageInterface):
             if not loop.is_closed():
                 loop.create_task(self.close())
         except RuntimeError:
+            traceback.print_exc()
             # No event loop running, which is fine during interpreter shutdown
             pass
 

@@ -9,7 +9,7 @@ from fastapi import status
 import traceback
 
 from app.services.merge.service import MergeService, merge_flow
-from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress, MergeStage, RollbackOptions, RollbackResponse
+from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress, MergeStage, RollbackOptions, RollbackResponse, VerificationResult
 from app.services.merge.batch_resolver import BatchResolver
 from app.services.merge.resolution_search import ResolutionPatternSearchService
 from app.services.storage.vector_storage import QdrantResolutionStorage
@@ -990,32 +990,36 @@ async def get_merge_history(
     return history
 
 @router.post(
-    "/{merge_id}/verify",
+    "/{merge_id}/{session_id}/{transform_id}/finalise",
     response_model=VerificationResultResponse,
     status_code=status.HTTP_200_OK,
-    summary="Verify a merge operation",
-    description="Verify the integrity of a merge operation by checking that all nodes and relationships were correctly merged."
+    summary="Finalise a merge operation",
+    description="Finalise the merge operation by storing the merged data in the database."
 )
-async def verify_merge(
+async def finalise_merge(
     merge_id: str,
-    transform_id: str = Query(..., description="ID of the transformation to verify")
-):
-    """Verify a merge operation
+    session_id: str,
+    transform_id: str,
+    merge_service: MergeService = Depends(get_merge_service)
+) -> VerificationResult:
+    """Finalise a merge operation
     
     Args:
         merge_id: ID of the merge operation
+        session_id: ID of the session
         transform_id: ID of the transformation
         
     Returns:
-        VerificationResultResponse with verification results
+        VerificationResult with verification results
     """
     try:
         # Get merge service
         async with get_merge_service() as merge_service:
             # Verify merge
-            verification_result = await merge_service.verify_merge(merge_id, transform_id)
+            verification_result = await merge_service.finalise_and_verify_merge(merge_id, session_id, transform_id)
             return verification_result
     except Exception as e:
+        traceback.print_exc()
         logger.error(f"Error verifying merge {merge_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
