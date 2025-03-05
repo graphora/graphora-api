@@ -347,7 +347,6 @@ async def validate_graph(
                 continue
                 
             # Check if relationship type exists in ontology
-            print(ontology["entities"][source_type])
             rel_def = ontology["entities"][source_type].get("relationships", {})
             if edge.type not in rel_def:
                 raise ValueError(f"Invalid relationship type: {edge.type}")
@@ -3224,6 +3223,9 @@ class MergeService:
         Returns:
             Dict with metrics
         """
+        print("##"*20)
+        print(graph)
+        print("##"*20)
         storage = self.production_storage
         start_time = datetime.now()
         def chunk_list(items: List, size: int) -> List[List]:
@@ -3281,9 +3283,6 @@ class MergeService:
                 ):
                     try:
                         # Store batch
-                        print("##"*20)
-                        print(node_batch)
-                        print("##"*20)
                         batch_result = await storage.store_nodes(
                             node_batch,
                             batch_idx,

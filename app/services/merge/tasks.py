@@ -19,6 +19,7 @@ from app.services.storage.interface import GraphStorageInterface
 from app.services.ontology import load_ontology
 from app.schemas.graph import Node as SchemaNode, Edge as SchemaEdge
 from app.schemas.conflicts import ConflictType, ConflictSeverity
+from app.services.merge.conflict import ConflictDetectionService
 
 logger = logging.getLogger(__name__)
 
@@ -490,8 +491,6 @@ async def detect_merge_conflicts(
     try:
         # Start tracking progress
         await progress_tracker.start_merge_stage(merge_id, MergeStage.CONFLICT_DETECTION)
-        
-        from app.services.merge.conflict import ConflictDetectionService
         
         # Initialize conflict detection service
         conflict_service = ConflictDetectionService(production_storage)

@@ -393,6 +393,7 @@ class PostMergeVerifier:
         """
         # Get all node IDs
         node_ids = set(node.get("id") for node in nodes)
+        INTERNAL_NODE_TYPES = {"__Checkpoint__"}
         
         # Get all node IDs that participate in relationships
         connected_node_ids = set()
@@ -406,6 +407,8 @@ class PostMergeVerifier:
         # Get details for orphaned nodes
         orphaned_nodes = []
         for node in nodes:
+            if node.get("type") in INTERNAL_NODE_TYPES:
+                continue
             if node.get("id") in orphaned_node_ids:
                 orphaned_nodes.append({
                     "id": node.get("id"),

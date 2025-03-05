@@ -168,7 +168,7 @@ class Neo4jStorage(GraphStorageInterface):
 
         # Build query
         query = (
-            f"CREATE (n:{':'.join(labels)} {{id: $id}}) "
+            f"MERGE (n:{':'.join(labels)} {{id: $id}}) "
             "SET n += $properties "
             "RETURN n"
         )
@@ -534,7 +534,7 @@ class Neo4jStorage(GraphStorageInterface):
             query = """
             MATCH (s)-[r]->(t)
             WHERE s.transform_id = $transform_id OR t.transform_id = $transform_id
-            RETURN r, r.id as rel_id, s.id as source_id, t.id as target_id
+            RETURN r, r.id as rel_id, s.id as source_id, t.id as target_id, type(r) as type
             """
             
             relationships = []
@@ -604,10 +604,12 @@ class Neo4jStorage(GraphStorageInterface):
 
         edges = []
         for record in records:
+            source_id = dict(record[0].start_node.items()).get("id", '')
+            target_id = dict(record[0].end_node.items()).get("id", '')
             edges.append(Edge(
-                id=str(record[0].element_id),
-                source=str(record[0].start_node.element_id),
-                target=str(record[0].end_node.element_id),
+                id=dict(record[0].items()).get("id", str(uuid.uuid4())),
+                source=source_id,
+                target=target_id,
                 type=record[0].type,
                 properties=dict(record[0].items())
             ))
@@ -620,17 +622,19 @@ class Neo4jStorage(GraphStorageInterface):
         """Get all relationships between a set of nodes"""
         query = """
                 MATCH (s)-[r]->(t)
-                WHERE s.id = $node_ids AND t.id = $node_ids
-                RETURN r
+                WHERE s.id IN $node_ids OR t.id IN $node_ids
+                RETURN r, s as start_node, t as end_node
                 """
         records = await self._execute_query(query, {"node_ids": node_ids})
 
         edges = []
         for record in records:
+            source_id = dict(record[0].start_node.items()).get("id", '')
+            target_id = dict(record[0].end_node.items()).get("id", '')
             edges.append(Edge(
-                id=str(record[0].element_id),
-                source=str(record[0].start_node.element_id),
-                target=str(record[0].end_node.element_id),
+                id=dict(record[0].items()).get("id", str(uuid.uuid4())),
+                source=source_id,
+                target=target_id,
                 type=record[0].type,
                 properties=dict(record[0].items())
             ))
@@ -666,7 +670,7 @@ class Neo4jStorage(GraphStorageInterface):
             
             return [
                 Node(
-                    id=str(record[0].element_id),
+                    id=dict(record[0].items()).get("id", ''),
                     label=record[0].get("type", list(record[0].labels)[0]),  # Use type property if available, fallback to first label
                     type=record[0].get("type", list(record[0].labels)[0]),  # Use same value for type
                     properties={k: v for k, v in dict(record[0].items()).items() if k != "type"}
@@ -748,7 +752,7 @@ class Neo4jStorage(GraphStorageInterface):
 
         return [
             Node(
-                id=str(record[0].element_id),
+                id=dict(record[0].items()).get("id", ''),
                 label=list(record[0].labels)[0] if record[0].labels else None,
                 type=list(record[0].labels)[0] if record[0].labels else None,
                 properties=dict(record[0].items())
@@ -774,7 +778,7 @@ class Neo4jStorage(GraphStorageInterface):
             
             node_data = records[0][0]
             return Node(
-                id=properties.get("id", str(node_data.element_id)),
+                id=properties.get("id", str(uuid.uuid4())),
                 label=list(node_data.labels)[0],
                 type=node_data.get("type", ""),
                 properties=dict(node_data.items())
@@ -860,7 +864,7 @@ class Neo4jStorage(GraphStorageInterface):
             node_properties = dict(node_data.items())
             print(f"DEBUG: Updated node {node_id}, new properties: {node_properties}")
             return Node(
-                id=str(node_data.element_id),
+                id=node_data.get("id", ''),
                 label=list(node_data.labels)[0],
                 type=node_data.get("type", ""),
                 properties=node_properties
@@ -928,7 +932,7 @@ class Neo4jStorage(GraphStorageInterface):
             
             rel_data = records[0][0]
             return Edge(
-                id=sanitized_properties.get("id", str(rel_data.element_id)),
+                id=sanitized_properties.get("id", str(uuid.uuid4())),
                 source=source_id,
                 target=target_id,
                 type=rel_data.type,
@@ -984,8 +988,8 @@ class Neo4jStorage(GraphStorageInterface):
             
             return Edge(
                 id=rel_id,
-                source=source_node.get("id", str(source_node.element_id)),
-                target=target_node.get("id", str(target_node.element_id)),
+                source=source_node.get("id", ''),
+                target=target_node.get("id", ''),
                 type=rel_data.type,
                 properties=dict(rel_data.items())
             )
@@ -1010,7 +1014,7 @@ class Neo4jStorage(GraphStorageInterface):
         properties = dict(record[0].items())
         # print(f"DEBUG: Found node with ID: {node_id}, properties: {properties}")
         return Node(
-            id=properties.get("id", str(record[0].element_id)),
+            id=properties.get("id", ''),
             label=labels[0] if labels else None,
             type=labels[0] if labels else None,
             properties=properties
@@ -1035,7 +1039,7 @@ class Neo4jStorage(GraphStorageInterface):
         edges = []
         for record in records:
             edges.append(Edge(
-                id=str(record[0].element_id),
+                id=dict(record[0].items()).get("id", ''),
                 source=source_id,
                 target=target_id,
                 type=record[0].type,
@@ -1075,7 +1079,7 @@ class Neo4jStorage(GraphStorageInterface):
             
         record = records[0]
         return Edge(
-            id=str(record[0].element_id),
+            id=dict(record[0].items()).get("id", ''),
             source=source_id,
             target=target_id,
             type=record[0].type,

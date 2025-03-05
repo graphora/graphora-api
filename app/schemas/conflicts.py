@@ -133,7 +133,7 @@ class BulkResolutionResponse(BaseModel):
 class Conflict(BaseModel):
     """Conflict model representing a detected conflict between staging and production graphs"""
     id: str
-    merge_id: str
+    merge_id: Optional[str] = None
     conflict_type: ConflictType
     severity: ConflictSeverity
     entity_id: Optional[str] = None
@@ -175,7 +175,7 @@ class PendingConflictsResponse(BaseModel):
 class ConflictGroup(BaseModel):
     """Group of related conflicts"""
     id: str
-    merge_id: str
+    merge_id: Optional[str] = None
     conflicts: List[Conflict]
     pattern: Optional[str] = None
     description: Optional[str] = None
