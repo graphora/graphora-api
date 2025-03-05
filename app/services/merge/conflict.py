@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from redis import Redis
 from app.baml_client import b
 
-from app.baml_client.types import ConflictGroupAnalysis, EntitySimilarityAnalysis, PropertyConflictAnalysis
+from app.baml_client.types import ConflictGroupAnalysis, RelationshipConflictAnalysis, PropertyConflictAnalysis
 from app.schemas.conflicts import (
     Conflict,
     ConflictType,
@@ -24,6 +24,8 @@ from app.schemas.conflicts import (
 from app.schemas.graph import GraphResponse, Node, Edge
 from app.services.storage.interface import GraphStorageInterface
 from app.config import settings
+from app.utils.constants import INTERNAL_NODE_TYPES, SYSTEM_PROPERTIES
+from app.utils.redis import to_json
 logger = logging.getLogger(__name__)
 
 class PropertyConflictKey(NamedTuple):
@@ -380,6 +382,48 @@ class ConflictDetectionService:
             "risks": analysis.potential_risks
         }
         
+    async def _analyze_rel_property_conflict(
+        self,
+        staging_edge: Edge,
+        production_edge: Edge,
+        property_name: str,
+        staging_value: Any,
+        production_value: Any
+    ) -> Dict[str, Any]:
+        """Use BAML to analyze a property conflict"""
+        # Get historical resolutions
+        history = await self._get_resolution_history(
+            staging_edge.type,
+            property_name
+        )
+        
+        # Format historical resolutions
+        history_str = "\n".join(
+            f"Resolution {i+1}:\n"
+            f"  Strategy: {h['strategy']}\n"
+            f"  Success: {h['success']}\n"
+            f"  Reason: {h.get('reason', 'N/A')}"
+            for i, h in enumerate(history)
+        )
+        
+        # Get BAML analysis
+        analysis: RelationshipConflictAnalysis = b.AnalyzeRelationshipPropertyConflict(
+            relationship_type=staging_edge.type,
+            property_name=property_name,
+            staging_value=str(staging_value),
+            production_value=str(production_value),
+            value_type=type(staging_value).__name__,
+            graph_context=history_str
+        )
+        
+        return {
+            "strategy": analysis.recommended_strategy,
+            "confidence": analysis.confidence,
+            "explanation": analysis.explanation,
+            "can_auto_resolve": analysis.can_auto_resolve,
+            "risks": analysis.risks
+        }
+        
     async def _get_resolution_history(
         self,
         entity_type: str,
@@ -410,7 +454,7 @@ class ConflictDetectionService:
         # Store batch in Redis
         self.redis.set(
             self._get_redis_key(merge_id, f"batch:{batch_id}"),
-            batch.model_dump_json(),
+            to_json(batch),
             ex=settings.CONFLICT_BATCH_TTL
         )
         
@@ -521,6 +565,13 @@ class ConflictDetectionService:
             
         # Default comparison
         return value1 == value2
+    
+    def remove_system_properties(
+        self, keys: List[str], props: Dict[str, Any]) -> Dict[str, Any]:
+        for key in keys:
+            if key in props:
+                del props[key]
+        return props
 
     async def detect_property_conflicts(
         self,
@@ -536,11 +587,9 @@ class ConflictDetectionService:
         production_props = production_node.properties or {}
         
         # Skip transform_id property
-        if "transform_id" in staging_props:
-            del staging_props["transform_id"]
-        if "transform_id" in production_props:
-            del production_props["transform_id"]
-            
+        staging_props = self.remove_system_properties(SYSTEM_PROPERTIES, staging_props)
+        production_props = self.remove_system_properties(SYSTEM_PROPERTIES, production_props)
+        
         # Get all unique property keys
         all_keys = set(staging_props.keys()) | set(production_props.keys())
         
@@ -660,7 +709,10 @@ class ConflictDetectionService:
         # Check property conflicts
         all_props = set(staging_edge.properties.keys()) | set(production_edge.properties.keys())
         
+        
         for prop_name in all_props:
+            if prop_name in SYSTEM_PROPERTIES:
+                continue
             staging_value = staging_edge.properties.get(prop_name)
             prod_value = production_edge.properties.get(prop_name)
             
@@ -1046,7 +1098,7 @@ class ConflictDetectionService:
             ]
         )
         
-    def _create_relationship_property_conflict(
+    async def _create_relationship_property_conflict(
         self,
         staging_edge: Edge,
         production_edge: Edge,
@@ -1059,13 +1111,14 @@ class ConflictDetectionService:
         conflict_id = f"rel_prop_{staging_edge.id}_{production_edge.id}_{property_name}"
         
         # Get BAML analysis
-        analysis = self._analyze_property_conflict(
+        analysis = await self._analyze_rel_property_conflict(
             staging_edge, production_edge,
             property_name, staging_value, production_value
         )
         
         return Conflict(
             id=conflict_id,
+            merge_id=merge_id,
             conflict_type=ConflictType.RELATIONSHIP_PROPERTY,
             severity=ConflictSeverity.MAJOR,
             staging_ids=[staging_edge.id],
@@ -1223,6 +1276,8 @@ class ConflictDetectionService:
         """Group nodes by their type"""
         grouped = {}
         for node in nodes:
+            if node.type in INTERNAL_NODE_TYPES:
+                continue
             if node.type not in grouped:
                 grouped[node.type] = []
             grouped[node.type].append(node)

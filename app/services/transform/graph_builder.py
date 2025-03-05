@@ -600,7 +600,7 @@ class KnowledgeGraphBuilder:
             
             if matching_node:
                 # Merge with existing node
-                merged_node = self.merge_nodes(matching_node, node)
+                merged_node = self._merge_nodes(matching_node, node)
                 self._update_node_in_graph(merged_node)
                 self.metrics.merged_nodes += 1
             else:
@@ -621,123 +621,241 @@ class KnowledgeGraphBuilder:
     def _add_node_to_graph(self, node: BaseNode) -> None:
         """Add a node to the appropriate list in the graph"""
         entity_type = node.type
-        entity_list_field = f"{entity_type}_list"
         
-        if not hasattr(self.graph, entity_list_field):
-            setattr(self.graph, entity_list_field, [])
-        
-        entity_list = getattr(self.graph, entity_list_field)
-        entity_list.append(node)
+        if hasattr(self.graph, 'nodes'):
+            self.graph.nodes.append(node)
+        else:
+            entity_list_field = f"{entity_type}_list"
+            if not hasattr(self.graph, entity_list_field):
+                setattr(self.graph, entity_list_field, [])
+            
+            entity_list = getattr(self.graph, entity_list_field)
+            entity_list.append(node)
     
     def _update_node_in_graph(self, node: BaseNode) -> None:
         """Update a node in the graph"""
         entity_type = node.type
-        entity_list_field = f"{entity_type}_list"
         
-        if not hasattr(self.graph, entity_list_field):
-            setattr(self.graph, entity_list_field, [node])
-            return
-        
-        entity_list = getattr(self.graph, entity_list_field)
-        
-        # Find the node to update
-        for i, existing_node in enumerate(entity_list):
-            if existing_node.id == node.id:
-                entity_list[i] = node
+        if hasattr(self.graph, 'nodes'):
+            for i, existing_node in enumerate(self.graph.nodes):
+                if existing_node.id == node.id:
+                    self.graph.nodes[i] = node
+                    return
+            self.graph.nodes.append(node)
+        else:
+            entity_list_field = f"{entity_type}_list"
+            if not hasattr(self.graph, entity_list_field):
+                setattr(self.graph, entity_list_field, [node])
                 return
-        
-        # If node not found, append it
-        entity_list.append(node)
+            
+            entity_list = getattr(self.graph, entity_list_field)
+            
+            # Find the node to update
+            for i, existing_node in enumerate(entity_list):
+                if existing_node.id == node.id:
+                    entity_list[i] = node
+                    return
+            
+            # If node not found, append it
+            entity_list.append(node)
     
     def _add_relationship_to_graph(self, relationship: RelationshipInstance) -> None:
         """Add a relationship to the graph"""
         source_type = relationship.source_type
         rel_type = relationship.type
-        rel_field = f"{source_type}_{rel_type}"
         
-        if not hasattr(self.graph, rel_field):
-            setattr(self.graph, rel_field, [])
-        
-        rel_list = getattr(self.graph, rel_field)
-        rel_list.append(relationship)
+        if hasattr(self.graph, 'relationships'):
+            self.graph.relationships.append(relationship)
+        else:
+            rel_field = f"{source_type}_{rel_type}"
+            if not hasattr(self.graph, rel_field):
+                setattr(self.graph, rel_field, [])
+            
+            rel_list = getattr(self.graph, rel_field)
+            rel_list.append(relationship)
     
     def _update_relationship_in_graph(self, relationship: RelationshipInstance) -> None:
         """Update a relationship in the graph"""
         source_type = relationship.source_type
         rel_type = relationship.type
-        rel_field = f"{source_type}_{rel_type}"
         
-        if not hasattr(self.graph, rel_field):
-            setattr(self.graph, rel_field, [relationship])
-            return
-        
-        rel_list = getattr(self.graph, rel_field)
-        
-        # Find the relationship to update
-        for i, existing_rel in enumerate(rel_list):
-            if existing_rel.id == relationship.id:
-                rel_list[i] = relationship
+        if hasattr(self.graph, 'relationships'):
+            for i, existing_rel in enumerate(self.graph.relationships):
+                if existing_rel.id == relationship.id:
+                    self.graph.relationships[i] = relationship
+                    return
+            self.graph.relationships.append(relationship)
+        else:
+            rel_field = f"{source_type}_{rel_type}"
+            if not hasattr(self.graph, rel_field):
+                setattr(self.graph, rel_field, [relationship])
                 return
-        
-        # If relationship not found, append it
-        rel_list.append(relationship)
+            
+            rel_list = getattr(self.graph, rel_field)
+            
+            # Find the relationship to update
+            for i, existing_rel in enumerate(rel_list):
+                if existing_rel.id == relationship.id:
+                    rel_list[i] = relationship
+                    return
+            
+            # If relationship not found, append it
+            rel_list.append(relationship)
     
     async def finalize_graph(self) -> DocumentKnowledgeGraph:
         """Validate and finalize the graph"""
-        # Prune orphaned nodes (empty nodes not in relationships)
-        self._prune_orphaned_nodes()
         
-        # Validate relationships
+        # First validate relationships to ensure we have valid connections
         self._validate_relationships()
         
         # Set final metrics
         self.graph.tokens_used = self.metrics.total_tokens
         self.graph.confidence_score = self._calculate_average_confidence()
         self.graph.extraction_timestamp = datetime.now(timezone.utc).isoformat()
-        self.graph = await self.post_process_graph(self.graph)
+        
+        # Post process the graph (includes entity resolution and relationship enhancement)
+        processed_graph = await self.post_process_graph(self.graph)
+        
+        # Update self.graph to match processed_graph structure
+        self.graph = processed_graph
+        
+        # Finally prune any orphaned nodes after all processing is complete
+        self._prune_orphaned_nodes()
+        
         return self.graph
     
     def _prune_orphaned_nodes(self) -> None:
         """Remove nodes with no ontology-defined properties that aren't referenced in any relationship"""
-        # Build set of node IDs used in relationships
-        nodes_in_relationships = []
+        # Build set of node IDs used in relationships (both source and target)
+        nodes_in_relationships = set()
         
-        # Check all relationship fields
-        for field_name in dir(self.graph):
-            if field_name.endswith('_list') or not '_' in field_name or field_name.startswith('_'):
-                continue
+        # Check relationships list for DocumentKnowledgeGraph
+        if hasattr(self.graph, 'relationships'):
+            for rel in self.graph.relationships:
+                nodes_in_relationships.add(rel.source_id)
+                nodes_in_relationships.add(rel.target_id)
+        else:
+            # Check all relationship fields for KnowledgeGraph
+            for field_name in dir(self.graph):
+                if field_name.endswith('_list') or not '_' in field_name or field_name.startswith('_'):
+                    continue
+                rel_list = getattr(self.graph, field_name)
+                if isinstance(rel_list, list):
+                    for rel in rel_list:
+                        nodes_in_relationships.add(rel.source_id)
+                        nodes_in_relationships.add(rel.target_id)
+
+        # Get all nodes
+        all_nodes = self.graph.nodes if hasattr(self.graph, 'nodes') else []
+        if not all_nodes:
+            for field_name in dir(self.graph):
+                if not field_name.endswith('_list') or field_name.startswith('_'):
+                    continue
+                node_list = getattr(self.graph, field_name)
+                if isinstance(node_list, list):
+                    all_nodes.extend(node_list)
+
+        # Find orphaned nodes and try to link them
+        orphaned_nodes = []
+        for node in all_nodes:
+            if node.id not in nodes_in_relationships:
+                # Check if this node type has only one possible relationship type in ontology
+                node_type = node.type
+                possible_rels = self._get_possible_relationships_for_type(node_type)
                 
-            rel_list = getattr(self.graph, field_name)
-            if not isinstance(rel_list, list):
-                continue
+                if len(possible_rels) == 1:
+                    # Get the single relationship type and direction
+                    rel_type = list(possible_rels.keys())[0]
+                    rel_info = possible_rels[rel_type]
+                    
+                    # Find potential nodes to link with
+                    potential_nodes = []
+                    for other_node in all_nodes:
+                        if other_node.id != node.id:
+                            # Check both source->target and target->source possibilities
+                            if (rel_info['source'] == node_type and rel_info['target'] == other_node.type) or \
+                               (rel_info['target'] == node_type and rel_info['source'] == other_node.type):
+                                potential_nodes.append(other_node)
+                    
+                    # If we found exactly one potential node, create the relationship
+                    if len(potential_nodes) == 1:
+                        other_node = potential_nodes[0]
+                        # Determine direction based on ontology
+                        if rel_info['source'] == node_type:
+                            source_id, target_id = node.id, other_node.id
+                            source_type, target_type = node_type, other_node.type
+                        else:
+                            source_id, target_id = other_node.id, node.id
+                            source_type, target_type = other_node.type, node_type
+                            
+                        # Create relationship
+                        rel_id = f"{source_id}_{rel_type}_{target_id}"
+                        new_rel = RelationshipInstance(
+                            id=rel_id,
+                            type=rel_type,
+                            source_id=source_id,
+                            target_id=target_id,
+                            source_type=source_type,
+                            target_type=target_type,
+                            properties={},
+                            provenance=NodeProvenance(
+                                chunk_ids=[],
+                                extraction_timestamp=datetime.now(timezone.utc).isoformat(),
+                                confidence_score=0.9
+                            )
+                        )
+                        
+                        # Add to relationships
+                        if hasattr(self.graph, 'relationships'):
+                            self.graph.relationships.append(new_rel)
+                        else:
+                            rel_field = f"{source_type.lower()}_{rel_type.lower()}_{target_type.lower()}"
+                            if not hasattr(self.graph, rel_field):
+                                setattr(self.graph, rel_field, [])
+                            getattr(self.graph, rel_field).append(new_rel)
+                            
+                        # Node is no longer orphaned since it's now in a relationship
+                        continue
                 
-            for rel in rel_list:
-                nodes_in_relationships.append((rel.source_type, rel.source_id))
-                nodes_in_relationships.append((rel.target_type, rel.target_id))
+                # If we couldn't auto-link, add to orphaned list
+                orphaned_nodes.append(node)
+
+        # Remove orphaned nodes that couldn't be linked
+        if hasattr(self.graph, 'nodes'):
+            self.graph.nodes = [n for n in self.graph.nodes if n not in orphaned_nodes]
+        else:
+            for field_name in dir(self.graph):
+                if not field_name.endswith('_list') or field_name.startswith('_'):
+                    continue
+                node_list = getattr(self.graph, field_name)
+                if isinstance(node_list, list):
+                    setattr(self.graph, field_name, [n for n in node_list if n not in orphaned_nodes])
+    
+    def _get_possible_relationships_for_type(self, node_type: str) -> Dict[str, Dict[str, str]]:
+        """Get all possible relationship types for a given node type from ontology"""
+        possible_rels = {}
         
-        # Prune nodes
-        for entity_type in self.entity_models:
-            entity_list_field = f"{entity_type}_list"
-            if not hasattr(self.graph, entity_list_field):
-                continue
-                
-            entity_list = getattr(self.graph, entity_list_field)
-            pruned_list = []
+        # Use the ontology passed to the builder
+        ontology = self.ontology_parser.parsed_ontology
             
-            for node in entity_list:
-                # Re-filter properties by ontology (in case they weren't filtered before)
-                if hasattr(node, 'properties') and node.properties:
-                    node.properties = self._filter_properties_by_ontology(entity_type, node.properties)
-                
-                # Keep if has ontology-defined properties or is referenced in relationships
-                if self._is_node_valuable(entity_type, node.properties) or (entity_type, node.id) in nodes_in_relationships:
-                    pruned_list.append(node)
-                else:
-                    logger.debug(f"Pruning node of type {entity_type} with ID {node.id} - no ontology-defined properties")
-            
-            # Update entity list
-            setattr(self.graph, entity_list_field, pruned_list)
+        # Get relationships where this type is either source or target
+        entity_def = ontology.get('entities', {}).get(node_type, {})
+        if not entity_def:
+            return {}
         
+        relationships = entity_def.get('relationships', {})
+        for rel_type, rel_info in relationships.items():
+            source_type = node_type
+            target_type = rel_info.get('target')
+            
+            if source_type == node_type or target_type == node_type:
+                possible_rels[rel_type] = {
+                    'source': source_type,
+                    'target': target_type
+                }
+        
+        return possible_rels
+
     def _validate_relationships(self) -> None:
         """Ensure all relationships point to existing nodes"""
         # For each relationship type
@@ -1101,15 +1219,19 @@ class KnowledgeGraphBuilder:
                 
                 final_nodes.append(base_node)
 
-        # Update relationships with merged node IDs
+        # Update relationships with merged node IDs and remove invalid ones
         final_relationships = []
         for rel in doc_graph.relationships:
-            # Check if source or target nodes were merged
+            # Get final node IDs after merging
             source_id = merged_nodes.get(rel.source_id, rel.source_id)
             target_id = merged_nodes.get(rel.target_id, rel.target_id)
             
-            # Skip if either node was dropped
-            if source_id and target_id:
+            # Check if both nodes still exist in final_nodes
+            source_exists = any(n.id == source_id for n in final_nodes)
+            target_exists = any(n.id == target_id for n in final_nodes)
+            
+            # Only keep relationships where both nodes exist
+            if source_exists and target_exists:
                 rel.source_id = source_id
                 rel.target_id = target_id
                 final_relationships.append(rel)
@@ -1204,11 +1326,11 @@ class KnowledgeGraphBuilder:
             
             # Check if any nodes were missed (safeguard)
             included_nodes = [node for group in resolved_groups for node in group]
-            missed_nodes = [node for node in nodes if node not in included_nodes]
             
             # Add missed nodes as single-node groups
-            for node in missed_nodes:
-                resolved_groups.append([node])
+            for node in nodes:
+                if node not in included_nodes:
+                    resolved_groups.append([node])
             
             return resolved_groups
             

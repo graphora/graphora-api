@@ -1,4 +1,5 @@
 """Redis utility functions for the application"""
+from pydantic import BaseModel
 import redis.asyncio as redis
 from app.config import settings
 import json
@@ -17,6 +18,20 @@ async def get_redis_client() -> redis.Redis:
         encoding="utf-8",
         decode_responses=True
     )
+    
+def is_serializable(value) -> bool:
+    try:
+        json.dumps(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+    
+def to_json(model: BaseModel) -> str: 
+    data = model.model_dump()
+    serializable_data = {k: v for k, v in data.items() if is_serializable(v)}
+    json_output = json.dumps(serializable_data)
+    
+    return json_output
 
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj: Any) -> Any:

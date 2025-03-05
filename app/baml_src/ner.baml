@@ -13,7 +13,7 @@ function ExtractChunk(chunk: string, context: string) -> DynamicContainer {
     1. For each entity type, include a list field named "<entity_type>_list" containing all instances
     2. For each relationship type, include a list field named "<source>_<relationship>_<target>" containing all instances
     3. Include metadata fields:
-      - extraction_timestamp: Current timestamp
+      - extraction_timestamp: Current timestamp in ISOformat string
       - tokens_used: Number of tokens used (if available)
       - confidence_score: Overall confidence in extraction (0.0 to 1.0)
     4. Omit optional fields if information is not clearly present
