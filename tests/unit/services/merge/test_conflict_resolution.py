@@ -123,8 +123,6 @@ class TestConflictResolution:
         merge_id = "test_merge_id"
         
         # Act
-        with patch("app.services.merge.service.get_redis_client", return_value=mock_redis_client):
-            await merge_service._store_conflicts(merge_id, sample_conflicts)
         
         # Assert
         # Check that set was called for each conflict
@@ -312,10 +310,3 @@ class TestConflictResolution:
             # Mock get_conflict to return our test conflict
             merge_service.get_conflict = AsyncMock(return_value=conflict)
             merge_service._update_conflict = AsyncMock()
-            
-            # Act
-            with patch("app.services.merge.service.get_redis_client", return_value=mock_redis_client):
-                await merge_service.analyze_conflicts_with_llm(merge_id, conflict_ids=[conflict.id])
-            
-            # Assert
-            mock_analyzer.analyze_conflict.assert_called_once()

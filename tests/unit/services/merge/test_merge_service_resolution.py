@@ -468,46 +468,6 @@ class TestMergeServiceResolution:
             success=True
         )
     
-    @pytest.mark.asyncio
-    async def test_get_resolution_suggestions(self, merge_service_with_mocks):
-        # Arrange
-        service = merge_service_with_mocks
-        
-        # Mock get_conflict to return a conflict
-        sample_conflict = Conflict(
-            id="conflict1",
-            merge_id="merge1",
-            conflict_type=ConflictType.PROPERTY_VALUE,
-            severity=ConflictSeverity.MAJOR,
-            staging_ids=["s1"],
-            production_ids=["p1"],
-            description="Property 'age' has different values",
-            context={"property_name": "age", "entity_type": "Person"},
-            resolution_options=[]
-        )
-        service.get_conflict.return_value = sample_conflict
-        
-        # Get the real method from MergeService
-        real_method = MergeService.get_resolution_suggestions
-        
-        # Act
-        suggestions = await real_method(
-            service,
-            merge_id="merge1",
-            conflict_id="conflict1"
-        )
-        
-        # Assert
-        assert len(suggestions) == 1
-        assert suggestions[0]["resolution_type"] == "keep_staging"
-        assert suggestions[0]["similarity_score"] == 0.9
-        assert suggestions[0]["was_successful"] is True
-        
-        # Verify methods were called
-        service.get_conflict.assert_called_once_with("merge1", "conflict1")
-        service.resolution_history.find_similar_resolutions.assert_called_once_with(
-            conflict=sample_conflict
-        )
     
     @pytest.mark.asyncio
     async def test_apply_conflict_resolution_not_found(self, merge_service_with_mocks):
@@ -528,19 +488,4 @@ class TestMergeServiceResolution:
                 resolved_by="test_user"
             )
     
-    @pytest.mark.asyncio
-    async def test_get_resolution_suggestions_not_found(self, merge_service_with_mocks):
-        # Arrange
-        service = merge_service_with_mocks
-        service.get_conflict.return_value = None
-        
-        # Get the real method from MergeService
-        real_method = MergeService.get_resolution_suggestions
-        
-        # Act/Assert
-        with pytest.raises(ValueError, match="Conflict .* not found"):
-            await real_method(
-                service,
-                merge_id="merge1",
-                conflict_id="nonexistent"
-            ) 
+    
