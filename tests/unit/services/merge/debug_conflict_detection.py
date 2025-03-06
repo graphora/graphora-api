@@ -192,13 +192,13 @@ async def debug_property_conflicts():
             
             # Determine conflict type and description
             if staging_value is None:
-                conflict_type = ConflictType.PROPERTY
+                conflict_type = ConflictType.PROPERTY_VALUE 
                 description = f"Property '{prop_name}' exists in production but is missing in staging"
             elif prod_value is None:
-                conflict_type = ConflictType.PROPERTY
+                conflict_type = ConflictType.PROPERTY_VALUE
                 description = f"Property '{prop_name}' exists in staging but is missing in production"
             else:
-                conflict_type = ConflictType.PROPERTY
+                conflict_type = ConflictType.PROPERTY_VALUE
                 description = f"Property '{prop_name}' has different values in staging and production"
                 
             # Create conflict

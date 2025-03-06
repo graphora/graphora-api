@@ -173,7 +173,7 @@ class MockDataGenerator:
         # Default conflict types if none specified
         if conflict_types is None:
             conflict_types = [
-                ConflictType.PROPERTY,
+                ConflictType.PROPERTY_VALUE,
                 ConflictType.RELATIONSHIP_TYPE,
                 ConflictType.DUPLICATE_ENTITY
             ]
@@ -243,11 +243,11 @@ class MockDataGenerator:
         # Create expected conflicts
         conflicts = []
         
-        if ConflictType.PROPERTY in conflict_types:
+        if ConflictType.PROPERTY_VALUE in conflict_types:
             conflicts.append(Conflict(
                 id=f"conflict_prop_{person1.id}",
                 merge_id="test_merge",
-                conflict_type=ConflictType.PROPERTY,
+                conflict_type=ConflictType.PROPERTY_VALUE,
                 severity=ConflictSeverity.MINOR,
                 description=f"Property 'age' has different values",
                 staging_value=person1.properties.get("age"),

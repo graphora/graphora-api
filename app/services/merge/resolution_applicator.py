@@ -5,7 +5,7 @@ from datetime import datetime
 import pytz
 import uuid
 
-from app.schemas.conflicts import Conflict, ResolutionOption, ConflictType
+from app.schemas.conflicts import Conflict, ResolutionOption, ConflictType, ResolutionStrategy
 from app.schemas.graph import Node, Edge
 from app.services.storage.interface import GraphStorageInterface
 
@@ -92,12 +92,11 @@ class ResolutionApplicator:
         staging_id = conflict.staging_ids[0]
         
         # Apply based on resolution type
-        if resolution.resolution_type == "keep_staging":
+        if resolution.resolution_type == ResolutionStrategy.KEEP_STAGING:
             # Update production with staging value
-            await self.production_storage.update_node_property(
+            await self.production_storage.update_node(
                 prod_id, 
-                prop_name, 
-                staging_value
+                {prop_name: staging_value}
             )
             return {
                 "property": prop_name,
@@ -106,7 +105,7 @@ class ResolutionApplicator:
                 "action": "updated_production"
             }
             
-        elif resolution.resolution_type == "keep_production":
+        elif resolution.resolution_type == ResolutionStrategy.KEEP_PRODUCTION:
             # No changes needed
             return {
                 "property": prop_name,
@@ -129,10 +128,9 @@ class ResolutionApplicator:
                 # Default to custom value from resolution data
                 merged_value = resolution.resolution_data.get("custom_value", staging_value)
                 
-            await self.production_storage.update_node_property(
+            await self.production_storage.update_node(
                 prod_id, 
-                prop_name, 
-                merged_value
+                {prop_name: merged_value}
             )
             
             return {
@@ -178,7 +176,7 @@ class ResolutionApplicator:
             value = staging_node.properties.get(prop_name)
             
             # Add property to production
-            await self.production_storage.update_node_property(prod_id, prop_name, value)
+            await self.production_storage.update_node(prod_id, {prop_name: value})
             
             return {
                 "property": prop_name,
@@ -188,7 +186,7 @@ class ResolutionApplicator:
             
         elif resolution.resolution_type == "remove_from_production" and missing_in == "staging":
             # Remove property from production
-            await self.production_storage.remove_node_property(prod_id, prop_name)
+            await self.production_storage.update_node(prod_id, {prop_name: ''})
             
             return {
                 "property": prop_name,

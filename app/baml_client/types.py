@@ -40,6 +40,12 @@ def all_succeeded(checks: Dict[CheckName, Check]) -> bool:
 
 
 
+class ResolutionStrategy(str, Enum):
+    
+    KEEP_STAGING = "KEEP_STAGING"
+    KEEP_PRODUCTION = "KEEP_PRODUCTION"
+    MERGE_VALUES = "MERGE_VALUES"
+
 class ConflictAnalysis(BaseModel):
     description: str
     potential_causes: List[str]
@@ -55,7 +61,7 @@ class ConflictClassification(BaseModel):
 class ConflictGroupAnalysis(BaseModel):
     pattern: str
     batch_resolvable: bool
-    recommended_strategy: str
+    recommended_strategy: "ResolutionStrategy"
     confidence: float
     risks: List[str]
 
@@ -73,14 +79,14 @@ class EntitySimilarityAnalysis(BaseModel):
     reasoning: str
 
 class PropertyConflictAnalysis(BaseModel):
-    recommended_strategy: str
+    recommended_strategy: "ResolutionStrategy"
     confidence: float
     explanation: str
     can_auto_resolve: bool
     potential_risks: List[str]
 
 class RelationshipConflictAnalysis(BaseModel):
-    recommended_strategy: str
+    recommended_strategy: "ResolutionStrategy"
     confidence: float
     explanation: str
     can_auto_resolve: bool

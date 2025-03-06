@@ -72,6 +72,8 @@ class ProgressTracker:
                 
     def _get_redis_key(self, merge_id: str, suffix: str) -> str:
         """Get Redis key for merge data"""
+        # Remove any existing merge: prefix to avoid double prefixing
+        merge_id = merge_id.replace("merge:", "")
         return f"merge:{merge_id}:{suffix}"
     
     def _get_resource_metrics(self) -> ResourceMetrics:
@@ -217,12 +219,16 @@ class ProgressTracker:
             conflict_batch: Batch of conflicts detected during merge
         """
         try:
+            logger.info(f"Updating conflicts for merge {merge_id}")
+            logger.info(f"Conflict batch ID: {conflict_batch.batch_id}")
+            logger.info(f"Total conflicts: {conflict_batch.total_conflicts}")
+
             # Get current status
             status_data = await self._redis_operation(
-                self.redis.get,
-                self._get_redis_key(merge_id, "status")
+                lambda: self.redis.get(self._get_redis_key(merge_id, "status"))
             )
             if not status_data:
+                logger.warning(f"No status data found for merge {merge_id}")
                 return
             
             # Parse status
@@ -250,23 +256,40 @@ class ProgressTracker:
                 if "metrics" not in stage_progress.metrics:
                     stage_progress.metrics["metrics"] = {}
                 stage_progress.metrics["metrics"].update(conflict_metrics)
+                logger.info(f"Updated conflict metrics: {conflict_metrics}")
             
             # Store updated status
             await self._redis_operation(
-                self.redis.set,
-                self._get_redis_key(merge_id, "status"),
-                status.model_dump_json()
+                lambda: self.redis.set(
+                    self._get_redis_key(merge_id, "status"),
+                    status.model_dump_json()
+                )
             )
             
-            # Store conflict batch ID for reference
+            # Store conflict batch ID and data for reference
+            batch_key = self._get_redis_key(merge_id, f"conflicts:batch:{conflict_batch.batch_id}")
+            logger.info(f"Storing conflict batch at key: {batch_key}")
             await self._redis_operation(
-                self.redis.set,
-                self._get_redis_key(merge_id, "conflict_batch_id"),
-                conflict_batch.batch_id
+                lambda: self.redis.set(
+                    batch_key,
+                    conflict_batch.model_dump_json(),
+                    ex=settings.CONFLICT_BATCH_TTL
+                )
             )
+            
+            # Store reference to batch ID
+            await self._redis_operation(
+                lambda: self.redis.set(
+                    self._get_redis_key(merge_id, "conflict_batch_id"),
+                    conflict_batch.batch_id
+                )
+            )
+            
+            logger.info("Successfully updated conflicts in progress tracker")
             
         except Exception as e:
             logger.error(f"Failed to update conflicts in progress tracker: {str(e)}")
+            raise
     
     async def complete_merge_stage(
         self,

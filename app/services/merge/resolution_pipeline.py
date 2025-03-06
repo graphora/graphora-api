@@ -80,7 +80,7 @@ async def analyze_conflict(state: ConflictState) -> ConflictState:
         # Select the appropriate BAML function based on conflict type
         analysis_result = None
         
-        if conflict.conflict_type == ConflictType.PROPERTY:
+        if conflict.conflict_type == ConflictType.PROPERTY_VALUE:
             analysis_result = await b.AnalyzePropertyConflictWithOntology(
                 conflict=conflict.model_dump(),
                 ontology=ontology_data
@@ -127,7 +127,7 @@ async def generate_options(state: ConflictState) -> ConflictState:
         # Select the appropriate BAML function based on conflict type
         options_result = None
         
-        if conflict.conflict_type == ConflictType.PROPERTY:
+        if conflict.conflict_type == ConflictType.PROPERTY_VALUE:
             options_result = await b.GeneratePropertyResolutionOptions(
                 conflict=conflict.model_dump(),
                 analysis=conflict.analysis,

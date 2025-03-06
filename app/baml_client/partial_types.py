@@ -49,7 +49,7 @@ class ConflictClassification(BaseModel):
 class ConflictGroupAnalysis(BaseModel):
     pattern: Optional[str] = None
     batch_resolvable: Optional[bool] = None
-    recommended_strategy: Optional[str] = None
+    recommended_strategy: Optional[types.ResolutionStrategy] = None
     confidence: Optional[float] = None
     risks: List[str]
 
@@ -67,14 +67,14 @@ class EntitySimilarityAnalysis(BaseModel):
     reasoning: Optional[str] = None
 
 class PropertyConflictAnalysis(BaseModel):
-    recommended_strategy: Optional[str] = None
+    recommended_strategy: Optional[types.ResolutionStrategy] = None
     confidence: Optional[float] = None
     explanation: Optional[str] = None
     can_auto_resolve: Optional[bool] = None
     potential_risks: List[str]
 
 class RelationshipConflictAnalysis(BaseModel):
-    recommended_strategy: Optional[str] = None
+    recommended_strategy: Optional[types.ResolutionStrategy] = None
     confidence: Optional[float] = None
     explanation: Optional[str] = None
     can_auto_resolve: Optional[bool] = None

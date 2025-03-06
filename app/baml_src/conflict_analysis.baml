@@ -3,6 +3,12 @@ type JsonValue = int | string | bool | float | JsonObject | JsonArray
 type JsonObject = map<string, JsonValue>
 type JsonArray = JsonValue[]
 
+enum ResolutionStrategy {
+  KEEP_STAGING
+  KEEP_PRODUCTION
+  MERGE_VALUES
+}
+
 // Output types
 class ConflictAnalysis {
   description string @description(#"
@@ -44,9 +50,8 @@ class ConflictClassification {
 }
 
 class PropertyConflictAnalysis {
-  recommended_strategy string @description(#"
-    Recommended resolution strategy.
-    E.g: 'keep_staging', 'keep_production', 'merge_values'
+  recommended_strategy ResolutionStrategy @description(#"
+    Recommended resolution strategy
   "#)
   confidence float @description(#"
     Confidence score for the recommendation (0-1).
@@ -75,9 +80,8 @@ class ConflictGroupAnalysis {
     Whether these conflicts can be resolved as a batch.
     E.g: true
   "#)
-  recommended_strategy string @description(#"
-    Recommended batch resolution strategy.
-    E.g: 'keep_staging', 'merge_values'
+  recommended_strategy ResolutionStrategy @description(#"
+    Recommended batch resolution strategy
   "#)
   confidence float @description(#"
     Confidence in the batch resolution recommendation (0-1).
@@ -90,9 +94,8 @@ class ConflictGroupAnalysis {
 }
 
 class RelationshipConflictAnalysis {
-  recommended_strategy string @description(#"
-    Recommended resolution strategy.
-    E.g: 'keep_staging_rel', 'keep_production_rel', 'merge_rel_props'
+  recommended_strategy ResolutionStrategy @description(#"
+    Recommended resolution strategy
   "#)
   confidence float @description(#"
     Confidence score for the recommendation (0-1).

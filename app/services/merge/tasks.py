@@ -5,7 +5,7 @@ from prefect.tasks import NO_CACHE
 from datetime import datetime, timezone
 import logging
 import time
-
+from redis import Redis
 from app.services.merge.models import (
     MergeStage,
     GraphResponse,
@@ -20,6 +20,7 @@ from app.services.ontology import load_ontology
 from app.schemas.graph import Node as SchemaNode, Edge as SchemaEdge
 from app.schemas.conflicts import ConflictType, ConflictSeverity
 from app.services.merge.conflict import ConflictDetectionService
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -488,12 +489,27 @@ async def detect_merge_conflicts(
     progress_tracker: ProgressTracker
 ) -> None:
     """Detect conflicts between staging and production graphs"""
+    redis_client = None
+    conflict_service = None
+    
     try:
         # Start tracking progress
         await progress_tracker.start_merge_stage(merge_id, MergeStage.CONFLICT_DETECTION)
         
+        # Initialize Redis client
+        redis_client = Redis(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            db=settings.REDIS_DB,
+            password=settings.REDIS_PASSWORD,
+            decode_responses=True,
+            socket_timeout=5,
+            socket_connect_timeout=5,
+            retry_on_timeout=True
+        )
+        
         # Initialize conflict detection service
-        conflict_service = ConflictDetectionService(production_storage)
+        conflict_service = ConflictDetectionService(production_storage, redis_client)
         
         # Update progress after initialization
         await progress_tracker.update_merge_progress(
@@ -572,4 +588,11 @@ async def detect_merge_conflicts(
             f"Failed to detect conflicts: {str(e)}"
         )
         
-        raise 
+        raise
+        
+    finally:
+        # Clean up resources
+        if conflict_service and hasattr(conflict_service, 'executor'):
+            conflict_service.executor.shutdown(wait=False)
+        if redis_client:
+            redis_client.close()
