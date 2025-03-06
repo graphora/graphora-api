@@ -108,6 +108,9 @@ class ConflictResolutionResult(BaseModel):
     conflict_id: str
     success: bool
     resolved: bool
+    resolution_id: Optional[str]
+    verification: Dict[str, Any]
+    changes: Dict[str, Any]
     error: Optional[str] = None
 
 class BulkResolutionRequest(BaseModel):

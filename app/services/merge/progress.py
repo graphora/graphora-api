@@ -17,7 +17,7 @@ from app.services.merge.models import (
     MergeStageProgress,
     ResourceMetrics
 )
-from app.schemas.conflicts import ConflictType, ConflictSeverity
+from app.schemas.conflicts import ConflictBatch, ConflictType, ConflictSeverity
 from app.config import settings
 from app.utils.redis import DateTimeEncoder
 
@@ -210,7 +210,7 @@ class ProgressTracker:
     async def update_conflicts(
         self,
         merge_id: str,
-        conflict_batch: 'ConflictBatch'
+        conflict_batch: ConflictBatch
     ) -> None:
         """Update conflict information in the progress tracker
         

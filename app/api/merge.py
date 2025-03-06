@@ -227,50 +227,6 @@ async def get_conflict_detail(
             detail=f"Error retrieving conflict: {str(e)}"
         )
 
-@router.post(
-    "/conflicts/{merge_id}/{conflict_id}/resolve",
-    response_model=ResolutionResult,
-    description="Apply a resolution to a conflict"
-)
-async def resolve_conflict(
-    merge_id: str,
-    conflict_id: str,
-    resolution: ResolutionRequest,
-    merge_service: MergeService = Depends(get_merge_service)
-) -> ResolutionResult:
-    """
-    Apply a specific resolution to a conflict
-    
-    Parameters:
-    - merge_id: ID of the merge process
-    - conflict_id: ID of the conflict to resolve
-    - resolution: Resolution request with resolution_id
-    
-    Returns:
-    - Result of the resolution application with verification status
-    """
-    try:
-        async with get_merge_service() as merge_service:
-            result = await merge_service.apply_conflict_resolution(
-                merge_id=merge_id,
-                conflict_id=conflict_id,
-                resolution_id=resolution.resolution_id
-            )
-        
-            return ResolutionResult(**result)
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=404,
-            detail=str(e)
-        )
-    except Exception as e:
-        logger.error(f"Error resolving conflict: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error resolving conflict: {str(e)}"
-        )
-
 @router.post("/{merge_id}/conflicts/analyze", response_model=Dict[str, Any])
 async def analyze_conflicts_with_llm(
     merge_id: str,
@@ -351,7 +307,7 @@ async def apply_selected_strategies(
         )
 
 @router.get(
-    "/merge/{merge_id}/pending-conflicts",
+    "/{merge_id}/pending-conflicts",
     response_model=PendingConflictsResponse,
     summary="Get pending conflicts requiring human review",
     description="Retrieves a list of conflicts that require human review, with filtering and pagination options."
@@ -439,7 +395,7 @@ async def batch_resolve_conflicts(
         )
 
 @router.post(
-    "/merge/{merge_id}/conflicts/bulk-resolve",
+    "/{merge_id}/conflicts/bulk-resolve",
     response_model=BulkResolutionResponse,
     description="Apply the same resolution to multiple conflicts"
 )
@@ -486,7 +442,7 @@ async def bulk_resolve_conflicts(
         )
 
 @router.post(
-    "/merge/{merge_id}/conflicts/{conflict_id}/resolve",
+    "/{merge_id}/conflicts/{conflict_id}/resolve",
     response_model=ConflictResolutionResponse,
     description="Apply a resolution to a specific conflict"
 )
@@ -512,6 +468,7 @@ async def resolve_conflict(
             result = await merge_service.apply_conflict_resolution(
                 merge_id=merge_id,
                 conflict_id=conflict_id,
+                resolution_id=request.resolution_id,
                 resolution_type=request.resolution_type,
                 resolution_data=request.additional_data,
                 resolved_by=request.resolved_by
@@ -864,7 +821,7 @@ async def batch_find_similar_resolutions(
         )
 
 @router.post(
-    "/merge/{merge_id}/rollback", 
+    "/{merge_id}/rollback", 
     response_model=RollbackResponse,
     description="Rollback a merge operation"
 )

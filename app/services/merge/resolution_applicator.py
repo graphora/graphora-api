@@ -5,7 +5,7 @@ from datetime import datetime
 import pytz
 import uuid
 
-from app.schemas.conflicts import Conflict, ResolutionOption, ConflictType, ResolutionStrategy
+from app.schemas.conflicts import Conflict, ConflictResolutionResult, ResolutionOption, ConflictType, ResolutionStrategy
 from app.schemas.graph import Node, Edge
 from app.services.storage.interface import GraphStorageInterface
 
@@ -26,7 +26,7 @@ class ResolutionApplicator:
         self, 
         conflict: Conflict, 
         resolution_option: ResolutionOption
-    ) -> Dict[str, Any]:
+    ) -> ConflictResolutionResult:
         """
         Apply a resolution option to a conflict
         Returns result of resolution application with verification status
@@ -48,23 +48,27 @@ class ResolutionApplicator:
                 
             # Verify resolution was applied correctly
             verification = await self._verify_resolution(conflict, resolution_option, result)
-            
-            return {
-                "applied": True,
-                "conflict_id": conflict.id,
-                "resolution_id": resolution_option.id,
-                "verification": verification,
-                "changes": result
-            }
+            return ConflictResolutionResult(
+                conflict_id=conflict.id,
+                resolution_id=resolution_option.id,
+                verification=verification,
+                changes=result,
+                success=True,
+                resolved=True,
+                error=None
+            )
             
         except Exception as e:
             logger.error(f"Failed to apply resolution for conflict {conflict.id}: {str(e)}")
-            return {
-                "applied": False,
-                "conflict_id": conflict.id,
-                "resolution_id": resolution_option.id if resolution_option else None,
-                "error": str(e)
-            }
+            return ConflictResolutionResult(
+                conflict_id=conflict.id,
+                resolution_id=resolution_option.id if resolution_option else None,
+                verification={"verified": False, "error": str(e)},
+                changes={},
+                success=False,
+                resolved=False,
+                error=str(e)
+            )
             
     async def _apply_property_value_resolution(
         self, 
