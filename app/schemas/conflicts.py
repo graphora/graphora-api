@@ -39,20 +39,20 @@ class ConflictSeverity(str, Enum):
 
 class ResolutionStrategy(str, Enum):
     """Available strategies for conflict resolution"""
-    KEEP_STAGING = "keep_staging"  # Use staging value/entity
-    KEEP_PRODUCTION = "keep_production"  # Use production value/entity
-    MERGE_VALUES = "merge_values"  # Combine values (e.g., concat arrays)
-    CREATE_NEW = "create_new"  # Create new entity with merged properties
-    CUSTOM = "custom"  # Custom resolution logic
-    IGNORE = "ignore"  # Ignore conflict
-    KEEP_BOTH = "keep_both"  # Keep both values
-    KEEP_STAGING_REL = "keep_staging_rel"  # Keep staging relationship
-    KEEP_PRODUCTION_REL = "keep_production_rel"  # Keep production relationship
-    KEEP_BOTH_RELS = "keep_both_relationships"  # Keep both relationships
-    KEEP_ALL_RELS = "keep_all_relationships"  # Keep all relationships (for multiple matches)
-    REVERSE_RELATIONSHIP = "reverse_relationship"  # Reverse relationship direction
-    MERGE_REL_PROPS = "merge_rel_props"  # Merge relationship properties
-    MATCH_ENTITY = "match_entity"  # Match with a specific production entity
+    KEEP_STAGING = "KEEP_STAGING"  # Use staging value/entity
+    KEEP_PRODUCTION = "KEEP_PRODUCTION"  # Use production value/entity
+    MERGE_VALUES = "MERGE_VALUES"  # Combine values (e.g., concat arrays)
+    CREATE_NEW = "CREATE_NEW"  # Create new entity with merged properties
+    CUSTOM = "CUSTOM"  # Custom resolution logic
+    IGNORE = "IGNORE"  # Ignore conflict
+    KEEP_BOTH = "KEEP_BOTH"  # Keep both values
+    KEEP_STAGING_REL = "KEEP_STAGING"  # Keep staging relationship
+    KEEP_PRODUCTION_REL = "KEEP_PRODUCTION"  # Keep production relationship
+    KEEP_BOTH_RELS = "KEEP_BOTH_RELS"  # Keep both relationships
+    KEEP_ALL_RELS = "KEEP_ALL_RELS"  # Keep all relationships (for multiple matches)
+    REVERSE_RELATIONSHIP = "REVERSE_RELATIONSHIP"  # Reverse relationship direction
+    MERGE_REL_PROPS = "MERGE_REL_PROPS"  # Merge relationship properties
+    MATCH_ENTITY = "MATCH_ENTITY"  # Match with a specific production entity
 
 class StrategyType(str, Enum):
     """Types of resolution strategies"""
@@ -74,6 +74,7 @@ class ResolutionOption(BaseModel):
     reasoning: Optional[str] = Field(default=None, description="Reasoning behind this resolution option")
     requires_review: bool = Field(default=True, description="Whether this resolution needs human review")
     auto_resolvable: bool = Field(default=False, description="Whether this can be auto-resolved")
+    risks: Optional[List[str]] = Field(default=None, description="Potential risks associated with this resolution")
 
 class StrategyResult(BaseModel):
     """Result of applying a resolution strategy"""

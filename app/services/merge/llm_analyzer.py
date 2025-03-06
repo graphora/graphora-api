@@ -32,7 +32,7 @@ class LLMConflictAnalyzer:
         """
         try:
             # Route to the appropriate analysis method based on conflict type
-            if conflict.conflict_type == ConflictType.PROPERTY:
+            if conflict.conflict_type == ConflictType.PROPERTY_VALUE:
                 return await self.analyze_property_conflict(conflict, ontology)
             elif conflict.conflict_type == ConflictType.RELATIONSHIP:
                 return await self.analyze_relationship_conflict(conflict, ontology)
@@ -298,7 +298,7 @@ class LLMConflictAnalyzer:
         """
         options = []
         
-        if conflict.conflict_type == ConflictType.PROPERTY:
+        if conflict.conflict_type == ConflictType.PROPERTY_VALUE:
             # Default options for property conflicts
             options.append(ResolutionOption(
                 id=f"default_staging_{uuid.uuid4().hex[:8]}",

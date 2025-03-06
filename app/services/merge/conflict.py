@@ -25,7 +25,6 @@ from app.schemas.graph import GraphResponse, Node, Edge
 from app.services.storage.interface import GraphStorageInterface
 from app.config import settings
 from app.utils.constants import INTERNAL_NODE_TYPES, SYSTEM_PROPERTIES
-from app.utils.redis import to_json
 logger = logging.getLogger(__name__)
 
 class PropertyConflictKey(NamedTuple):
@@ -47,9 +46,22 @@ class ConflictDetectionService:
         self.redis = redis_client or Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
-            db=settings.REDIS_DB
+            db=settings.REDIS_DB,
+            password=settings.REDIS_PASSWORD,
+            decode_responses=True,  # Important: Ensure responses are decoded
+            socket_timeout=5,
+            socket_connect_timeout=5,
+            retry_on_timeout=True
         )
         self.executor = ThreadPoolExecutor(max_workers=settings.CONFLICT_DETECTION_WORKERS)
+        
+        # Test Redis connection
+        try:
+            self.redis.ping()
+            logger.info("Successfully connected to Redis")
+        except Exception as e:
+            logger.error(f"Failed to connect to Redis: {str(e)}")
+            raise
         
     async def detect_conflicts(
         self,
@@ -78,9 +90,13 @@ class ConflictDetectionService:
         total_items = len(staging_nodes) + len(staging_edges)
         processed_items = 0
         
+        logger.info(f"Starting conflict detection for merge {merge_id}")
+        logger.info(f"Processing {len(staging_nodes)} nodes and {len(staging_edges)} edges")
+        
         # Process nodes in batches
         staging_nodes_by_type = self._group_nodes_by_type(staging_nodes)
         for node_type, nodes in staging_nodes_by_type.items():
+            logger.info(f"Processing {len(nodes)} nodes of type {node_type}")
             for i in range(0, len(nodes), batch_size):
                 batch = nodes[i:i + batch_size]
                 
@@ -99,6 +115,7 @@ class ConflictDetectionService:
                     for conflict in node_conflicts
                 ]
                 all_conflicts.extend(node_conflicts)
+                logger.info(f"Found {len(node_conflicts)} conflicts in batch of {len(batch)} nodes")
                 
                 # Update processed count
                 processed_items += len(batch)
@@ -146,6 +163,7 @@ class ConflictDetectionService:
         conflict_groups = await self._group_similar_conflicts(all_conflicts)
         
         # Create and store conflict batch
+        batch_id = f"batch_{uuid.uuid4().hex}"
         batch = await self.create_conflict_batch(
             merge_id=merge_id,
             conflicts=all_conflicts,
@@ -347,7 +365,7 @@ class ConflictDetectionService:
         property_name: str,
         staging_value: Any,
         production_value: Any
-    ) -> Dict[str, Any]:
+    ) -> PropertyConflictAnalysis:
         """Use BAML to analyze a property conflict"""
         # Get historical resolutions
         history = await self._get_resolution_history(
@@ -374,13 +392,7 @@ class ConflictDetectionService:
             historical_resolutions=history_str
         )
         
-        return {
-            "strategy": analysis.recommended_strategy,
-            "confidence": analysis.confidence,
-            "explanation": analysis.explanation,
-            "can_auto_resolve": analysis.can_auto_resolve,
-            "risks": analysis.potential_risks
-        }
+        return analysis
         
     async def _analyze_rel_property_conflict(
         self,
@@ -431,7 +443,9 @@ class ConflictDetectionService:
     ) -> List[Dict[str, Any]]:
         """Get historical conflict resolutions"""
         key = f"resolution_history:{entity_type}:{property_name}"
-        history = self.redis.lrange(key, 0, -1)
+        history = await self._redis_operation(
+            lambda: self.redis.lrange(key, 0, -1)
+        )
         return [eval(h) for h in history] if history else []
 
     async def create_conflict_batch(
@@ -440,9 +454,8 @@ class ConflictDetectionService:
         conflicts: List[Conflict],
         conflict_groups: List[ConflictGroup]
     ) -> ConflictBatch:
-        """Create a new batch of conflicts"""
+        """Create and store a batch of conflicts"""
         batch_id = f"batch_{uuid.uuid4().hex}"
-        
         batch = ConflictBatch(
             batch_id=batch_id,
             merge_id=merge_id,
@@ -451,19 +464,75 @@ class ConflictDetectionService:
             total_conflicts=len(conflicts)
         )
         
-        # Store batch in Redis
-        self.redis.set(
-            self._get_redis_key(merge_id, f"batch:{batch_id}"),
-            to_json(batch),
-            ex=settings.CONFLICT_BATCH_TTL
-        )
+        # Store the batch in Redis
+        await self._store_conflict_batch(batch)
         
         return batch
         
+    async def _store_conflict_batch(self, batch: ConflictBatch) -> None:
+        """Store a conflict batch in Redis"""
+        # Store each conflict
+        for conflict in batch.conflicts:
+            key = f"merge:{batch.merge_id}:conflict:{conflict.id}"
+            self.redis.set(key, conflict.model_dump_json())
+            
+        # Store list of conflict IDs
+        conflict_ids = [conflict.id for conflict in batch.conflicts]
+        self.redis.set(
+            f"merge:{batch.merge_id}:conflict_ids",
+            json.dumps(conflict_ids)
+        )
+        
+        # Store conflict groups
+        for group in batch.conflict_groups:
+            key = f"merge:{batch.merge_id}:group:{group.id}"
+            self.redis.set(key, group.model_dump_json())
+            
+        # Store group IDs
+        group_ids = [group.id for group in batch.conflict_groups]
+        self.redis.set(
+            f"merge:{batch.merge_id}:group_ids",
+            json.dumps(group_ids)
+        )
+        
+        # Store counts by type and severity
+        counts = {
+            "total": len(batch.conflicts),
+            "by_type": {},
+            "by_severity": {},
+            "resolved": 0,
+            "unresolved": len(batch.conflicts)
+        }
+        
+        for conflict in batch.conflicts:
+            # Count by type
+            type_key = conflict.conflict_type.value
+            counts["by_type"][type_key] = counts["by_type"].get(type_key, 0) + 1
+            
+            # Count by severity
+            severity_key = conflict.severity.value
+            counts["by_severity"][severity_key] = counts["by_severity"].get(severity_key, 0) + 1
+            
+        self.redis.set(
+            f"merge:{batch.merge_id}:conflict_counts",
+            json.dumps(counts)
+        )
+        
+        # Set TTL for cleanup (30 days)
+        ttl = 30 * 24 * 60 * 60  # 30 days in seconds
+        for key in [
+            f"merge:{batch.merge_id}:conflict_ids",
+            f"merge:{batch.merge_id}:group_ids",
+            f"merge:{batch.merge_id}:conflict_counts"
+        ] + [f"merge:{batch.merge_id}:conflict:{c.id}" for c in batch.conflicts] + [f"merge:{batch.merge_id}:group:{g.id}" for g in batch.conflict_groups]:
+            self.redis.expire(key, ttl)
+
     def _get_redis_key(self, merge_id: str, suffix: str) -> str:
         """Get Redis key for conflict data"""
+        # Remove any existing merge: prefix to avoid double prefixing
+        merge_id = merge_id.replace("merge:", "")
         return f"merge:{merge_id}:conflicts:{suffix}"
-        
+
     async def get_conflicts(
         self,
         merge_id: str,
@@ -472,18 +541,45 @@ class ConflictDetectionService:
         offset: int = 0
     ) -> List[Conflict]:
         """Get conflicts for a merge operation with filtering"""
+        logger.info(f"Getting conflicts for merge {merge_id}")
+        
         # Get all conflict batches for merge
-        batch_keys = self.redis.keys(
-            self._get_redis_key(merge_id, "batch:*")
+        pattern = self._get_redis_key(merge_id, "batch:*")
+        logger.info(f"Searching for conflict batches with pattern: {pattern}")
+        
+        # List all keys to debug
+        all_keys = await self._redis_operation(
+            lambda: self.redis.keys("merge:*")
         )
+        logger.info(f"All merge-related Redis keys: {all_keys}")
+        
+        batch_keys = await self._redis_operation(
+            lambda: self.redis.keys(pattern)
+        )
+        logger.info(f"Found {len(batch_keys)} conflict batches")
         
         all_conflicts = []
         for key in batch_keys:
-            batch_data = self.redis.get(key)
-            if batch_data:
-                batch = ConflictBatch.model_validate_json(batch_data)
-                all_conflicts.extend(batch.conflicts)
-                
+            logger.info(f"Retrieving conflict batch from key: {key}")
+            try:
+                batch_data = await self._redis_operation(
+                    lambda: self.redis.get(key)
+                )
+                if batch_data:
+                    try:
+                        batch = ConflictBatch.model_validate_json(batch_data)
+                        all_conflicts.extend(batch.conflicts)
+                        logger.info(f"Retrieved {len(batch.conflicts)} conflicts from batch")
+                    except Exception as e:
+                        logger.error(f"Failed to parse conflict batch data: {str(e)}")
+                        logger.error(f"Raw batch data: {batch_data[:200]}...")  # Log first 200 chars
+                else:
+                    logger.warning(f"No data found for conflict batch key: {key}")
+            except Exception as e:
+                logger.error(f"Failed to retrieve conflict batch: {str(e)}")
+        
+        logger.info(f"Total conflicts found before filtering: {len(all_conflicts)}")
+        
         # Apply filters if provided
         if filter_criteria:
             all_conflicts = self._apply_conflict_filters(
@@ -634,7 +730,7 @@ class ConflictDetectionService:
         conflict_id = f"prop_{staging_node.id}_{production_node.id}_{property_name}"
         
         # Get BAML analysis
-        analysis = await self._analyze_property_conflict(
+        analysis: PropertyConflictAnalysis = await self._analyze_property_conflict(
             staging_node,
             production_node,
             property_name,
@@ -642,10 +738,66 @@ class ConflictDetectionService:
             production_value
         )
         
+        # Create resolution options from analysis
+        recommended_strategy = analysis.recommended_strategy
+        
+        # Initialize base options list
+        resolution_options = []
+        
+        # Define all strategies with default values
+        strategies = [
+            (ResolutionStrategy.KEEP_STAGING.value, f"Keep staging value: {staging_value}"),
+            (ResolutionStrategy.KEEP_PRODUCTION.value, f"Keep production value: {production_value}"),
+            (ResolutionStrategy.MERGE_VALUES.value, f"Merge both values: {staging_value} + {production_value}")
+        ]
+        
+        # Add options based on recommended strategy
+        for strategy, description in strategies:
+            confidence = 0.5
+            reasoning = ""
+            risks = []
+            
+            # If this strategy matches recommendation, use analysis values
+            if strategy == recommended_strategy:
+                confidence = analysis.confidence or 0.5
+                reasoning = analysis.explanation
+                risks = analysis.potential_risks
+            
+            # Determine value based on strategy
+            if strategy == ResolutionStrategy.KEEP_STAGING:
+                value = staging_value
+            elif strategy == ResolutionStrategy.KEEP_PRODUCTION:
+                value = production_value
+            else:  # MERGE_VALUES
+                # For now, concatenate values if they're strings, otherwise keep staging
+                if isinstance(staging_value, str) and isinstance(production_value, str):
+                    value = f"{staging_value} {production_value}"
+                else:
+                    value = staging_value
+            
+            option = ResolutionOption(
+                id=f"{conflict_id}_{strategy}",
+                description=description,
+                resolution_type=strategy,
+                resolution_data={
+                    "property_name": property_name,
+                    "value": value
+                },
+                confidence=confidence,
+                reasoning=reasoning,
+                auto_resolvable=analysis.can_auto_resolve or False,
+                risks=risks
+            )
+            resolution_options.append(option)
+        
+        # Sort options to ensure recommended strategy is first
+        if recommended_strategy:
+            resolution_options.sort(key=lambda x: x.resolution_type != recommended_strategy)
+            
         return Conflict(
             id=conflict_id,
             merge_id=merge_id,
-            conflict_type=ConflictType.PROPERTY,
+            conflict_type=ConflictType.PROPERTY_VALUE,
             severity=ConflictSeverity.MINOR,
             staging_ids=[staging_node.id],
             production_ids=[production_node.id],
@@ -660,32 +812,7 @@ class ConflictDetectionService:
                 "value_type": type(staging_value).__name__ if staging_value is not None else type(production_value).__name__,
                 "analysis": analysis
             },
-            resolution_options=[
-                ResolutionOption(
-                    id=f"{conflict_id}_staging",
-                    description=f"Keep staging value: {staging_value}",
-                    resolution_type=ResolutionStrategy.KEEP_STAGING,
-                    resolution_data={
-                        "property_name": property_name,
-                        "value": staging_value
-                    },
-                    confidence=analysis.get("confidence", 0.5),
-                    reasoning=analysis.get("explanation", ""),
-                    auto_resolvable=analysis.get("can_auto_resolve", False)
-                ),
-                ResolutionOption(
-                    id=f"{conflict_id}_prod",
-                    description=f"Keep production value: {production_value}",
-                    resolution_type=ResolutionStrategy.KEEP_PRODUCTION,
-                    resolution_data={
-                        "property_name": property_name,
-                        "value": production_value
-                    },
-                    confidence=analysis.get("confidence", 0.5),
-                    reasoning=analysis.get("explanation", ""),
-                    auto_resolvable=analysis.get("can_auto_resolve", False)
-                )
-            ]
+            resolution_options=resolution_options
         )
         
     async def detect_relationship_conflicts(
@@ -1282,3 +1409,8 @@ class ConflictDetectionService:
                 grouped[node.type] = []
             grouped[node.type].append(node)
         return grouped
+
+    async def _redis_operation(self, func):
+        """Perform Redis operation with async handling"""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, func)

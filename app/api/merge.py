@@ -207,15 +207,16 @@ async def get_conflict_detail(
     """Get detailed information about a specific conflict"""
     try:
         # Get conflict
-        conflict = await merge_service.get_conflict(merge_id, conflict_id)
-        
-        if not conflict:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Conflict {conflict_id} not found for merge {merge_id}"
-            )
+        async with get_merge_service() as merge_service:
+            conflict = await merge_service.get_conflict(merge_id, conflict_id)
             
-        return conflict
+            if not conflict:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Conflict {conflict_id} not found for merge {merge_id}"
+                )
+                
+            return conflict
         
     except HTTPException:
         raise
@@ -249,12 +250,14 @@ async def resolve_conflict(
     - Result of the resolution application with verification status
     """
     try:
-        result = await merge_service.apply_conflict_resolution(
-            conflict_id=conflict_id,
-            resolution_id=resolution.resolution_id
-        )
+        async with get_merge_service() as merge_service:
+            result = await merge_service.apply_conflict_resolution(
+                merge_id=merge_id,
+                conflict_id=conflict_id,
+                resolution_id=resolution.resolution_id
+            )
         
-        return ResolutionResult(**result)
+            return ResolutionResult(**result)
         
     except ValueError as e:
         raise HTTPException(
@@ -374,23 +377,24 @@ async def get_pending_conflicts(
     """
     try:
         # Get conflicts that are not resolved
-        conflicts, total_count = await merge_service.get_conflicts(
-            merge_id=merge_id,
-            conflict_type=conflict_type,
-            severity=severity,
-            entity_type=entity_type,
-            resolved=False,
-            limit=limit,
-            offset=offset
-        )
-        
-        return PendingConflictsResponse(
-            merge_id=merge_id,
-            conflicts=conflicts,
-            total=total_count,
-            limit=limit,
-            offset=offset
-        )
+        async with get_merge_service() as merge_service:
+            conflicts, total_count = await merge_service.get_conflicts(
+                merge_id=merge_id,
+                conflict_type=conflict_type,
+                severity=severity,
+                entity_type=entity_type,
+                resolved=False,
+                limit=limit,
+                offset=offset
+            )
+            
+            return PendingConflictsResponse(
+                merge_id=merge_id,
+                conflicts=conflicts,
+                total=total_count,
+                limit=limit,
+                offset=offset
+            )
     except Exception as e:
         logger.error(f"Error getting pending conflicts: {str(e)}")
         raise HTTPException(
@@ -419,12 +423,13 @@ async def batch_resolve_conflicts(
     - Summary of resolution application results
     """
     try:
-        result = await merge_service.apply_batch_resolutions(
-            merge_id=merge_id,
-            resolutions=resolutions.resolutions
-        )
-        
-        return BatchResolutionResult(**result)
+        async with get_merge_service() as merge_service:
+            result = await merge_service.apply_batch_resolutions(
+                merge_id=merge_id,
+                resolutions=resolutions.resolutions
+            )
+            
+            return BatchResolutionResult(**result)
         
     except Exception as e:
         logger.error(f"Error in batch resolution: {str(e)}")
@@ -454,23 +459,24 @@ async def bulk_resolve_conflicts(
     - Summary of resolution application results
     """
     try:
-        results = await merge_service.apply_bulk_conflict_resolution(
-            merge_id=merge_id,
-            conflict_ids=request.conflict_ids,
-            resolution_type=request.resolution_type,
-            resolution_data=request.additional_data,
-            resolved_by=request.resolved_by
-        )
-        
-        # Count resolved conflicts
-        resolved_count = sum(1 for r in results if r.resolved)
-        
-        return BulkResolutionResponse(
-            merge_id=merge_id,
-            total=len(request.conflict_ids),
-            resolved=resolved_count,
-            results=results
-        )
+        async with get_merge_service() as merge_service:
+            results = await merge_service.apply_bulk_conflict_resolution(
+                merge_id=merge_id,
+                conflict_ids=request.conflict_ids,
+                resolution_type=request.resolution_type,
+                resolution_data=request.additional_data,
+                resolved_by=request.resolved_by
+            )
+            
+            # Count resolved conflicts
+            resolved_count = sum(1 for r in results if r.resolved)
+            
+            return BulkResolutionResponse(
+                merge_id=merge_id,
+                total=len(request.conflict_ids),
+                resolved=resolved_count,
+                results=results
+            )
         
     except Exception as e:
         logger.error(f"Error in bulk resolution: {str(e)}")
@@ -502,22 +508,23 @@ async def resolve_conflict(
     - Result of the resolution application
     """
     try:
-        result = await merge_service.apply_conflict_resolution(
-            merge_id=merge_id,
-            conflict_id=conflict_id,
-            resolution_type=request.resolution_type,
-            resolution_data=request.additional_data,
-            resolved_by=request.resolved_by
-        )
+        async with get_merge_service() as merge_service:
+            result = await merge_service.apply_conflict_resolution(
+                merge_id=merge_id,
+                conflict_id=conflict_id,
+                resolution_type=request.resolution_type,
+                resolution_data=request.additional_data,
+                resolved_by=request.resolved_by
+            )
         
-        return ConflictResolutionResponse(
-            merge_id=merge_id,
-            conflict_id=conflict_id,
-            resolution_id=request.resolution_id,
-            success=result.success,
-            resolved=result.resolved,
-            error=result.error
-        )
+            return ConflictResolutionResponse(
+                merge_id=merge_id,
+                conflict_id=conflict_id,
+                resolution_id=request.resolution_id,
+                success=result.success,
+                resolved=result.resolved,
+                error=result.error
+            )
         
     except Exception as e:
         logger.error(f"Error resolving conflict: {str(e)}")
@@ -550,14 +557,14 @@ async def get_resolution_history(
                 status_code=400,
                 detail=f"Invalid conflict type: {conflict_type}"
             )
-    
-    return await merge_service.resolution_history.get_resolution_history(
-        merge_id=merge_id,
-        conflict_type=conflict_type_enum,
-        entity_type=entity_type,
-        limit=limit,
-        offset=offset
-    )
+    async with get_merge_service() as merge_service:
+        return await merge_service.resolution_history.get_resolution_history(
+            merge_id=merge_id,
+            conflict_type=conflict_type_enum,
+            entity_type=entity_type,
+            limit=limit,
+            offset=offset
+        )
 
 @router.get(
     "/resolution/stats",
@@ -580,10 +587,11 @@ async def get_resolution_suggestions(
 ) -> List[Dict[str, Any]]:
     """Get resolution suggestions based on similar past resolutions"""
     try:
-        return await merge_service.get_resolution_suggestions(
-            merge_id=merge_id,
-            conflict_id=conflict_id
-        )
+        async with get_merge_service() as merge_service:
+            return await merge_service.get_resolution_suggestions(
+                merge_id=merge_id,
+                conflict_id=conflict_id
+            )
     except ValueError as e:
         raise HTTPException(
             status_code=404,
@@ -607,11 +615,12 @@ async def update_resolution_feedback(
     merge_service: MergeService = Depends(get_merge_service)
 ) -> Dict[str, bool]:
     """Update success status and feedback for a resolution"""
-    result = await merge_service.resolution_history.update_resolution_success(
-        resolution_id=resolution_id,
-        success=success,
-        feedback=feedback
-    )
+    async with get_merge_service() as merge_service:    
+        result = await merge_service.resolution_history.update_resolution_success(
+            resolution_id=resolution_id,
+            success=success,
+            feedback=feedback
+        )
     
     if not result:
         raise HTTPException(
@@ -725,50 +734,51 @@ async def find_similar_resolutions(
     """Find similar past resolutions for a conflict"""
     try:
         # Get the conflict
-        conflict = await merge_service.get_conflict(request.conflict_id)
-        if not conflict:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Conflict with ID {request.conflict_id} not found"
+        async with get_merge_service() as merge_service:
+            conflict = await merge_service.get_conflict(request.conflict_id)
+            if not conflict:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Conflict with ID {request.conflict_id} not found"
+                )
+            
+            # Initialize the resolution pattern search service
+            vector_storage = QdrantResolutionStorage()
+            search_service = ResolutionPatternSearchService(
+                vector_storage=vector_storage,
+                similarity_threshold=request.min_similarity
             )
-        
-        # Initialize the resolution pattern search service
-        vector_storage = QdrantResolutionStorage()
-        search_service = ResolutionPatternSearchService(
-            vector_storage=vector_storage,
-            similarity_threshold=request.min_similarity
-        )
-        
-        # Find similar resolutions
-        similar_results = await search_service.find_similar_resolutions(
-            conflict=conflict,
-            limit=request.limit,
-            filters=request.filters
-        )
-        
-        # Format the response
-        similar_resolutions = []
-        for pattern, score in similar_results:
-            similar_resolutions.append({
-                "id": pattern.id,
-                "similarity_score": score,
-                "conflict_type": pattern.conflict_type,
-                "entity_types": pattern.entity_types,
-                "property_names": pattern.property_names,
-                "relationship_types": pattern.relationship_types,
-                "resolution_strategy": pattern.resolution_strategy,
-                "resolution_data": pattern.resolution_data,
-                "confidence": pattern.confidence,
-                "original_conflict_id": pattern.original_conflict_id,
-                "original_merge_id": pattern.original_merge_id,
-                "created_at": pattern.created_at.isoformat() if pattern.created_at else None
-            })
-        
-        return SimilarResolutionResponse(
-            conflict_id=request.conflict_id,
-            similar_resolutions=similar_resolutions,
-            total_found=len(similar_resolutions)
-        )
+            
+            # Find similar resolutions
+            similar_results = await search_service.find_similar_resolutions(
+                conflict=conflict,
+                limit=request.limit,
+                filters=request.filters
+            )
+            
+            # Format the response
+            similar_resolutions = []
+            for pattern, score in similar_results:
+                similar_resolutions.append({
+                    "id": pattern.id,
+                    "similarity_score": score,
+                    "conflict_type": pattern.conflict_type,
+                    "entity_types": pattern.entity_types,
+                    "property_names": pattern.property_names,
+                    "relationship_types": pattern.relationship_types,
+                    "resolution_strategy": pattern.resolution_strategy,
+                    "resolution_data": pattern.resolution_data,
+                    "confidence": pattern.confidence,
+                    "original_conflict_id": pattern.original_conflict_id,
+                    "original_merge_id": pattern.original_merge_id,
+                    "created_at": pattern.created_at.isoformat() if pattern.created_at else None
+                })
+            
+            return SimilarResolutionResponse(
+                conflict_id=request.conflict_id,
+                similar_resolutions=similar_resolutions,
+                total_found=len(similar_resolutions)
+            )
     
     except Exception as e:
         logger.error(f"Error finding similar resolutions: {str(e)}")

@@ -31,6 +31,7 @@ OutputType = TypeVar('OutputType')
 class BamlCallOptions(TypedDict, total=False):
     tb: NotRequired[TypeBuilder]
     client_registry: NotRequired[baml_py.baml_py.ClientRegistry]
+    collector: NotRequired[Union[baml_py.baml_py.Collector, List[baml_py.baml_py.Collector]]]
 
 class BamlSyncClient:
     __runtime: baml_py.BamlRuntime
@@ -58,6 +59,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeConflict",
@@ -67,6 +70,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -81,6 +85,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeConflictGroup",
@@ -90,6 +96,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictGroupAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -104,6 +111,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeDuplicateEntityConflict",
@@ -113,6 +122,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -127,6 +137,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeEntityMatchConflict",
@@ -136,6 +148,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -150,6 +163,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeEntityMatchConflictWithOntology",
@@ -159,6 +174,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -173,6 +189,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeEntityMatchResolutionOption",
@@ -182,6 +200,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -196,6 +215,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeEntityMatchWithOntology",
@@ -205,6 +226,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -219,6 +241,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeEntitySimilarity",
@@ -228,6 +252,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.EntitySimilarityAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -242,6 +267,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeGenericConflictWithOntology",
@@ -251,6 +278,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -265,6 +293,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeMissingRelationshipConflict",
@@ -274,6 +304,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.RelationshipConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -288,6 +319,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzePropertyConflict",
@@ -297,6 +330,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.PropertyConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -311,6 +345,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzePropertyConflictWithOntology",
@@ -320,6 +356,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -334,6 +371,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeRelationshipConflict",
@@ -343,6 +382,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.RelationshipConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -357,6 +397,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeRelationshipConflictWithOntology",
@@ -366,6 +408,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -380,6 +423,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeRelationshipDirectionConflict",
@@ -389,6 +434,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.RelationshipConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -403,6 +449,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeRelationshipPropertyConflict",
@@ -412,6 +460,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.RelationshipConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -426,6 +475,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeRelationshipTypeConflict",
@@ -435,6 +486,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.RelationshipConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -449,6 +501,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeSchemaConflict",
@@ -458,6 +512,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -472,6 +527,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AnalyzeSchemaConflictWithOntology",
@@ -481,6 +538,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -495,6 +553,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "AssessResolutionComplexity",
@@ -504,6 +564,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(float, raw.cast_to(types, types, partial_types, False))
     
@@ -518,6 +579,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "BatchAnalyzeConflicts",
@@ -527,6 +590,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictGroupAnalysis, raw.cast_to(types, types, partial_types, False))
     
@@ -541,6 +605,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "ClassifyConflict",
@@ -550,6 +616,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ConflictClassification, raw.cast_to(types, types, partial_types, False))
     
@@ -564,6 +631,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "ExtractChunk",
@@ -573,6 +642,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.DynamicContainer, raw.cast_to(types, types, partial_types, False))
     
@@ -587,6 +657,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "GenerateEntityMatchResolutionOptions",
@@ -596,6 +668,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ResolutionOptions, raw.cast_to(types, types, partial_types, False))
     
@@ -610,6 +683,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "GenerateEntityMatchResolutionOptionsFromStagingAndProd",
@@ -619,6 +694,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(List[types.ResolutionOption], raw.cast_to(types, types, partial_types, False))
     
@@ -633,6 +709,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "GenerateGenericResolutionOptions",
@@ -642,6 +720,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ResolutionOptions, raw.cast_to(types, types, partial_types, False))
     
@@ -656,6 +735,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "GeneratePropertyResolutionOptions",
@@ -665,6 +746,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ResolutionOptions, raw.cast_to(types, types, partial_types, False))
     
@@ -679,6 +761,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "GenerateRelationshipResolutionOptions",
@@ -688,6 +772,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.ResolutionOptions, raw.cast_to(types, types, partial_types, False))
     
@@ -702,6 +787,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "GenerateResolutionOptions",
@@ -711,6 +798,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(List[types.ResolutionOption], raw.cast_to(types, types, partial_types, False))
     
@@ -725,6 +813,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "GenerateSchemaConflictResolutionOptions",
@@ -734,6 +824,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(List[types.ResolutionOption], raw.cast_to(types, types, partial_types, False))
     
@@ -748,6 +839,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "InferRelationship",
@@ -757,6 +850,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(List[types.RelationshipInference], raw.cast_to(types, types, partial_types, False))
     
@@ -771,6 +865,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "ResolveEntities",
@@ -780,6 +876,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(List[types.ResolvedEntities], raw.cast_to(types, types, partial_types, False))
     
@@ -794,6 +891,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "SelectBestResolution",
@@ -803,6 +902,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(types.SelectedResolution, raw.cast_to(types, types, partial_types, False))
     
@@ -817,6 +917,8 @@ class BamlSyncClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
         "StandardiseProperties",
@@ -826,6 +928,7 @@ class BamlSyncClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
       return cast(List[types.StandardisedProperties], raw.cast_to(types, types, partial_types, False))
     
@@ -852,6 +955,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeConflict",
@@ -866,6 +971,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -886,6 +992,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeConflictGroup",
@@ -900,6 +1008,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictGroupAnalysis, types.ConflictGroupAnalysis](
@@ -920,6 +1029,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeDuplicateEntityConflict",
@@ -934,6 +1045,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -954,6 +1066,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeEntityMatchConflict",
@@ -969,6 +1083,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -989,6 +1104,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeEntityMatchConflictWithOntology",
@@ -1000,6 +1117,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -1020,6 +1138,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeEntityMatchResolutionOption",
@@ -1035,6 +1155,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -1055,6 +1176,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeEntityMatchWithOntology",
@@ -1066,6 +1189,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -1086,6 +1210,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeEntitySimilarity",
@@ -1099,6 +1225,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.EntitySimilarityAnalysis, types.EntitySimilarityAnalysis](
@@ -1119,6 +1246,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeGenericConflictWithOntology",
@@ -1130,6 +1259,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -1150,6 +1280,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeMissingRelationshipConflict",
@@ -1166,6 +1298,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis](
@@ -1186,6 +1319,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzePropertyConflict",
@@ -1201,6 +1336,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.PropertyConflictAnalysis, types.PropertyConflictAnalysis](
@@ -1221,6 +1357,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzePropertyConflictWithOntology",
@@ -1232,6 +1370,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -1252,6 +1391,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeRelationshipConflict",
@@ -1266,6 +1407,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis](
@@ -1286,6 +1428,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeRelationshipConflictWithOntology",
@@ -1297,6 +1441,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -1317,6 +1462,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeRelationshipDirectionConflict",
@@ -1332,6 +1479,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis](
@@ -1352,6 +1500,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeRelationshipPropertyConflict",
@@ -1367,6 +1517,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis](
@@ -1387,6 +1538,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeRelationshipTypeConflict",
@@ -1403,6 +1556,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.RelationshipConflictAnalysis, types.RelationshipConflictAnalysis](
@@ -1423,6 +1577,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeSchemaConflict",
@@ -1437,6 +1593,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -1457,6 +1614,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AnalyzeSchemaConflictWithOntology",
@@ -1468,6 +1627,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictAnalysis, types.ConflictAnalysis](
@@ -1488,6 +1648,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "AssessResolutionComplexity",
@@ -1500,6 +1662,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[Optional[float], float](
@@ -1520,6 +1683,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "BatchAnalyzeConflicts",
@@ -1534,6 +1699,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictGroupAnalysis, types.ConflictGroupAnalysis](
@@ -1554,6 +1720,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "ClassifyConflict",
@@ -1565,6 +1733,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ConflictClassification, types.ConflictClassification](
@@ -1585,6 +1754,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "ExtractChunk",
@@ -1596,6 +1767,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer](
@@ -1616,6 +1788,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "GenerateEntityMatchResolutionOptions",
@@ -1628,6 +1802,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ResolutionOptions, types.ResolutionOptions](
@@ -1648,6 +1823,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "GenerateEntityMatchResolutionOptionsFromStagingAndProd",
@@ -1663,6 +1840,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[List[partial_types.ResolutionOption], List[types.ResolutionOption]](
@@ -1683,6 +1861,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "GenerateGenericResolutionOptions",
@@ -1695,6 +1875,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ResolutionOptions, types.ResolutionOptions](
@@ -1715,6 +1896,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "GeneratePropertyResolutionOptions",
@@ -1727,6 +1910,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ResolutionOptions, types.ResolutionOptions](
@@ -1747,6 +1931,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "GenerateRelationshipResolutionOptions",
@@ -1759,6 +1945,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.ResolutionOptions, types.ResolutionOptions](
@@ -1779,6 +1966,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "GenerateResolutionOptions",
@@ -1792,6 +1981,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[List[partial_types.ResolutionOption], List[types.ResolutionOption]](
@@ -1812,6 +2002,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "GenerateSchemaConflictResolutionOptions",
@@ -1825,6 +2017,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[List[partial_types.ResolutionOption], List[types.ResolutionOption]](
@@ -1845,6 +2038,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "InferRelationship",
@@ -1860,6 +2055,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[List[partial_types.RelationshipInference], List[types.RelationshipInference]](
@@ -1880,6 +2076,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "ResolveEntities",
@@ -1891,6 +2089,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[List[partial_types.ResolvedEntities], List[types.ResolvedEntities]](
@@ -1911,6 +2110,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "SelectBestResolution",
@@ -1923,6 +2124,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[partial_types.SelectedResolution, types.SelectedResolution](
@@ -1943,6 +2145,8 @@ class BamlStreamClient:
       else:
         tb = None
       __cr__ = baml_options.get("client_registry", None)
+      collector = baml_options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
         "StandardiseProperties",
@@ -1954,6 +2158,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
         tb,
         __cr__,
+        collectors,
       )
 
       return baml_py.BamlSyncStream[List[partial_types.StandardisedProperties], List[types.StandardisedProperties]](
