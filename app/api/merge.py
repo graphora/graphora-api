@@ -230,20 +230,6 @@ async def get_conflict_detail(
             detail=f"Error retrieving conflict: {str(e)}"
         )
 
-@router.post("/{merge_id}/conflicts/analyze", response_model=Dict[str, Any])
-async def analyze_conflicts_with_llm(
-    merge_id: str,
-    conflict_ids: Optional[List[str]] = Body(None),
-    merge_service: MergeService = Depends(get_merge_service)
-):
-    """
-    Analyze conflicts using LLM and generate intelligent resolution options.
-    
-    If conflict_ids is provided, only these specific conflicts will be analyzed.
-    Otherwise, all unresolved conflicts will be analyzed.
-    """
-    return await merge_service.analyze_conflicts_with_llm(merge_id, conflict_ids)
-
 @router.post(
     "/{merge_id}/auto-resolve",
     response_model=Dict[str, Any],
@@ -359,42 +345,6 @@ async def get_pending_conflicts(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get pending conflicts: {str(e)}"
-        )
-
-@router.post(
-    "/conflicts/{merge_id}/batch-resolve",
-    response_model=BatchResolutionResult,
-    description="Apply multiple resolutions at once"
-)
-async def batch_resolve_conflicts(
-    merge_id: str,
-    resolutions: BatchResolutionRequest,
-    merge_service: MergeService = Depends(get_merge_service)
-) -> BatchResolutionResult:
-    """
-    Apply multiple resolutions at once
-    
-    Parameters:
-    - merge_id: ID of the merge process
-    - resolutions: List of conflict_id/resolution_id pairs to apply
-    
-    Returns:
-    - Summary of resolution application results
-    """
-    try:
-        async with get_merge_service() as merge_service:
-            result = await merge_service.apply_batch_resolutions(
-                merge_id=merge_id,
-                resolutions=resolutions.resolutions
-            )
-            
-            return BatchResolutionResult(**result)
-        
-    except Exception as e:
-        logger.error(f"Error in batch resolution: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error in batch resolution: {str(e)}"
         )
 
 @router.post(
@@ -536,33 +486,6 @@ async def get_resolution_stats(
     """Get statistics about resolutions"""
     return await merge_service.resolution_history.get_resolution_stats()
 
-@router.get(
-    "/conflicts/{merge_id}/{conflict_id}/suggestions",
-    description="Get resolution suggestions for a conflict"
-)
-async def get_resolution_suggestions(
-    merge_id: str,
-    conflict_id: str,
-    merge_service: MergeService = Depends(get_merge_service)
-) -> List[Dict[str, Any]]:
-    """Get resolution suggestions based on similar past resolutions"""
-    try:
-        async with get_merge_service() as merge_service:
-            return await merge_service.get_resolution_suggestions(
-                merge_id=merge_id,
-                conflict_id=conflict_id
-            )
-    except ValueError as e:
-        raise HTTPException(
-            status_code=404,
-            detail=str(e)
-        )
-    except Exception as e:
-        logger.error(f"Error getting resolution suggestions: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error getting suggestions: {str(e)}"
-        )
 
 @router.post(
     "/resolution/{resolution_id}/feedback",

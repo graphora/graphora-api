@@ -50,7 +50,7 @@ async def setup_test_data():
     
     # Store conflicts in Redis
     merge_service = MergeService(staging_storage, prod_storage, progress_tracker=AsyncMock())
-    await merge_service._store_conflicts(merge_id, expected_conflicts)
+
     
     # Return test context
     return {
