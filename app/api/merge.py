@@ -8,6 +8,9 @@ from prefect import get_client
 from fastapi import status
 import traceback
 
+from app.api.graph import get_staging_graph_service
+from app.schemas.graph import GraphResponse
+from app.services.graph_service import GraphService
 from app.services.merge.service import MergeService, merge_flow
 from app.services.merge.models import MergeInitResponse, MergeStatus, MergeProgress, MergeStage, RollbackOptions, RollbackResponse, VerificationResult
 from app.services.merge.batch_resolver import BatchResolver
@@ -996,4 +999,52 @@ async def finalise_merge(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error verifying merge: {str(e)}"
+        )
+
+
+@router.get("/graph/{merge_id}/{transform_id}",
+         response_model=GraphResponse,
+         description="Retrieve nodes by transform ID and their relationships")
+async def get_graph_by_merge_transform_id(
+    merge_id: str,
+    transform_id: str,
+    limit: Optional[int] = 1000,
+    skip: Optional[int] = 0,
+    graph_service: GraphService = Depends(get_staging_graph_service)
+) -> GraphResponse:
+    try:
+        # Validate inputs
+        if limit < 0 or skip < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Limit and skip must be non-negative"
+            )
+        
+        if limit > 10000:
+            raise HTTPException(
+                status_code=400,
+                detail="Maximum limit is 10000 nodes"
+            )
+
+        # Get graph data
+        async with get_merge_service() as merge_service:
+            response = await merge_service.get_merge_graph(
+                graph_service=graph_service,
+                transform_id=transform_id,
+                merge_id=merge_id,
+                limit=limit,
+                skip=skip
+            )
+            
+            if not response.nodes:
+                logger.warning(f"No nodes found with transform_id: {transform_id}")
+                
+            return response
+        
+    except Exception as e:
+        traceback.print_exc()
+        logger.error(f"Error retrieving graph data: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving graph data: {str(e)}"
         )

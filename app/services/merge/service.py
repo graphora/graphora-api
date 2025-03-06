@@ -9,12 +9,12 @@ from typing import Optional, List, Dict, Any, Set, Tuple
 from datetime import datetime, timezone
 import json
 import redis.asyncio as redis
-import pytz
 from app.config import settings
 from app.schemas.conflicts import (
     Conflict, ConflictSeverity, ConflictType, ResolutionOption, ResolutionStrategy,
     ConflictResolutionResult, BulkResolutionResult
 )
+from app.services.graph_service import GraphService
 from app.services.storage.models import StorageStage
 from app.services.storage.neo4j import Neo4jStorage
 from app.services.merge.progress import ProgressTracker
@@ -3447,3 +3447,17 @@ class MergeService:
         
         finally:
             await storage.close()
+
+    async def get_merge_graph(
+        self, graph_service: GraphService,
+        merge_id: str, transform_id: str, 
+        limit: Optional[int] = 1000, 
+        skip: Optional[int] = 0
+    ) -> GraphResponse:
+        transformed_graph = graph_service.get_graph_by_transform_id(
+            transform_id=transform_id,
+            limit=limit,
+            skip=skip
+        )
+        
+        return transformed_graph
