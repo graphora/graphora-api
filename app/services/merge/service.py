@@ -1110,7 +1110,7 @@ class MergeService:
         try:
             async with redis.Redis.from_url(settings.REDIS_URL) as conn:
                 # Get merge statistics
-                stats_data = await conn.get(f"merge:{merge_id}:statistics")
+                stats_data = await conn.get(f"merge:{merge_id}:conflict_counts")
                 if not stats_data:
                     return None
                     
@@ -1204,7 +1204,7 @@ class MergeService:
                         continue
                     
                     # Get statistics for additional data
-                    stats_data = await conn.get(f"merge:{merge_id}:statistics")
+                    stats_data = await conn.get(f"merge:{merge_id}:conflict_counts")
                     stats = json.loads(stats_data) if stats_data else {}
                     
                     # Create summary response

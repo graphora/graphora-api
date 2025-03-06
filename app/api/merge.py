@@ -757,61 +757,62 @@ async def batch_find_similar_resolutions(
     """Find similar past resolutions for multiple conflicts"""
     try:
         # Get all conflicts
-        conflicts = []
-        for conflict_id in request.conflict_ids:
-            conflict = await merge_service.get_conflict(conflict_id)
-            if conflict:
-                conflicts.append(conflict)
-        
-        if not conflicts:
-            raise HTTPException(
-                status_code=404,
-                detail="No valid conflicts found"
-            )
-        
-        # Initialize the resolution pattern search service
-        vector_storage = QdrantResolutionStorage()
-        search_service = ResolutionPatternSearchService(
-            vector_storage=vector_storage,
-            similarity_threshold=request.min_similarity
-        )
-        
-        # Find similar resolutions for all conflicts
-        batch_results = await search_service.batch_find_similar_resolutions(
-            conflicts=conflicts,
-            limit_per_conflict=request.limit_per_conflict,
-            filters=request.filters
-        )
-        
-        # Format the response
-        response = {}
-        for conflict in conflicts:
-            similar_results = batch_results.get(conflict.id, [])
-            similar_resolutions = []
+        async with get_merge_service() as merge_service:
+            conflicts = []
+            for conflict_id in request.conflict_ids:
+                conflict = await merge_service.get_conflict(conflict_id)
+                if conflict:
+                    conflicts.append(conflict)
             
-            for pattern, score in similar_results:
-                similar_resolutions.append({
-                    "id": pattern.id,
-                    "similarity_score": score,
-                    "conflict_type": pattern.conflict_type,
-                    "entity_types": pattern.entity_types,
-                    "property_names": pattern.property_names,
-                    "relationship_types": pattern.relationship_types,
-                    "resolution_strategy": pattern.resolution_strategy,
-                    "resolution_data": pattern.resolution_data,
-                    "confidence": pattern.confidence,
-                    "original_conflict_id": pattern.original_conflict_id,
-                    "original_merge_id": pattern.original_merge_id,
-                    "created_at": pattern.created_at.isoformat() if pattern.created_at else None
-                })
+            if not conflicts:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No valid conflicts found"
+                )
             
-            response[conflict.id] = SimilarResolutionResponse(
-                conflict_id=conflict.id,
-                similar_resolutions=similar_resolutions,
-                total_found=len(similar_resolutions)
+            # Initialize the resolution pattern search service
+            vector_storage = QdrantResolutionStorage()
+            search_service = ResolutionPatternSearchService(
+                vector_storage=vector_storage,
+                similarity_threshold=request.min_similarity
             )
-        
-        return response
+            
+            # Find similar resolutions for all conflicts
+            batch_results = await search_service.batch_find_similar_resolutions(
+                conflicts=conflicts,
+                limit_per_conflict=request.limit_per_conflict,
+                filters=request.filters
+            )
+            
+            # Format the response
+            response = {}
+            for conflict in conflicts:
+                similar_results = batch_results.get(conflict.id, [])
+                similar_resolutions = []
+                
+                for pattern, score in similar_results:
+                    similar_resolutions.append({
+                        "id": pattern.id,
+                        "similarity_score": score,
+                        "conflict_type": pattern.conflict_type,
+                        "entity_types": pattern.entity_types,
+                        "property_names": pattern.property_names,
+                        "relationship_types": pattern.relationship_types,
+                        "resolution_strategy": pattern.resolution_strategy,
+                        "resolution_data": pattern.resolution_data,
+                        "confidence": pattern.confidence,
+                        "original_conflict_id": pattern.original_conflict_id,
+                        "original_merge_id": pattern.original_merge_id,
+                        "created_at": pattern.created_at.isoformat() if pattern.created_at else None
+                    })
+                
+                response[conflict.id] = SimilarResolutionResponse(
+                    conflict_id=conflict.id,
+                    similar_resolutions=similar_resolutions,
+                    total_found=len(similar_resolutions)
+                )
+            
+            return response
     
     except Exception as e:
         logger.error(f"Error finding similar resolutions in batch: {str(e)}")
@@ -841,24 +842,25 @@ async def rollback_merge(
         logger.info(f"Rollback requested for merge {merge_id}")
         
         # Check if merge exists
-        progress = await merge_service.get_merge_progress(merge_id)
-        if not progress:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Merge {merge_id} not found"
-            )
-        
-        # Check if rollback is already in progress
-        if progress.overall_status == MergeStatus.CANCELLED and "rollback" in (progress.error or ""):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Rollback already in progress for merge {merge_id}"
-            )
-        
-        # Execute rollback
-        result = await merge_service.rollback_merge(merge_id, options)
-        
-        return result
+        async with get_merge_service() as merge_service:
+            progress = await merge_service.get_merge_progress(merge_id)
+            if not progress:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Merge {merge_id} not found"
+                )
+            
+            # Check if rollback is already in progress
+            if progress.overall_status == MergeStatus.CANCELLED and "rollback" in (progress.error or ""):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Rollback already in progress for merge {merge_id}"
+                )
+            
+            # Execute rollback
+            result = await merge_service.rollback_merge(merge_id, options)
+            
+            return result
         
     except ValueError as e:
         # Handle validation errors
@@ -885,8 +887,9 @@ async def get_merge_progress(
     Get the current progress of an active merge operation
     """
     try:
-        progress = await merge_service.get_merge_progress(merge_id)
-        return progress
+        async with get_merge_service() as merge_service:
+            progress = await merge_service.get_merge_progress(merge_id)
+            return progress
     except ValueError as e:
         # Check if this is a "not found" error
         if "not found" in str(e).lower():
@@ -915,10 +918,11 @@ async def get_merge_statistics(
 ) -> MergeStatisticsResponse:
     """Get detailed statistics of a merge operation"""
     try:
-        statistics = await merge_service.get_merge_statistics(merge_id)
-        if not statistics:
-            raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
-        return statistics
+        async with get_merge_service() as merge_service:
+            statistics = await merge_service.get_merge_statistics(merge_id)
+            if not statistics:
+                raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
+            return statistics
     except ValueError as e:
         # Check if this is a "not found" error
         if "not found" in str(e).lower():
@@ -946,15 +950,16 @@ async def get_merge_history(
     merge_service: MergeService = Depends(get_merge_service)
 ) -> List[MergeSummaryResponse]:
     """Get history of merge operations with filtering"""
-    history = await merge_service.get_merge_history(
-        status=status,
-        start_date=start_date,
-        end_date=end_date,
-        transform_id=transform_id,
-        limit=limit,
-        offset=offset
-    )
-    return history
+    async with get_merge_service() as merge_service:
+        history = await merge_service.get_merge_history(
+            status=status,
+            start_date=start_date,
+            end_date=end_date,
+            transform_id=transform_id,
+            limit=limit,
+            offset=offset
+        )
+        return history
 
 @router.post(
     "/{merge_id}/{session_id}/{transform_id}/finalise",
