@@ -1973,7 +1973,7 @@ class MergeService:
         result = await self.resolution_applicator.apply_resolution(conflict, resolution_option)
         
         # If the resolution was applied successfully, update the conflict
-        if result.get("applied", False):
+        if result.success:
             # Update the conflict with resolution information
             conflict.resolved = True
             conflict.resolution = resolution_option
@@ -1993,6 +1993,7 @@ class MergeService:
                     success=True
                 )
             except Exception as e:
+                traceback.print_exc()
                 logger.error(f"Error storing resolution history: {str(e)}")
                 # Don't fail the resolution if history storage fails
         
@@ -2042,11 +2043,27 @@ class MergeService:
         
     async def _update_conflict(self, merge_id: str, conflict: Conflict) -> None:
         """Update a conflict in storage"""
-        key = f"merge:{merge_id}:conflict:{conflict.id}"
-        
-        # Store conflict as JSON in Redis
         redis_client = await get_redis_client()
+        
+        # Update conflict in Redis
+        key = f"merge:{merge_id}:conflict:{conflict.id}"
         await redis_client.set(key, conflict.model_dump_json())
+        
+        # Update conflict counts
+        counts_key = f"merge:{merge_id}:conflict_counts"
+        counts_json = await redis_client.get(counts_key)
+        if counts_json:
+            counts = json.loads(counts_json)
+            
+            # Update resolved/unresolved counts
+            if conflict.resolved:
+                counts["resolved"] = counts.get("resolved", 0) + 1
+                counts["unresolved"] = max(0, counts.get("unresolved", 0) - 1)
+            else:
+                counts["resolved"] = max(0, counts.get("resolved", 0) - 1)
+                counts["unresolved"] = counts.get("unresolved", 0) + 1
+                
+            await redis_client.set(counts_key, json.dumps(counts))
         
         # Set TTL for cleanup (30 days)
         ttl = 30 * 24 * 60 * 60  # 30 days in seconds
