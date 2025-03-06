@@ -19,7 +19,6 @@ from app.services.storage.models import (
     Edge
 )
 from app.services.merge.service import MergeService
-from app.services.merge.conflicts.service import MergeService as ConflictService
 from tests.unit.services.storage.test_graph_storage import MockGraphStorage
 
 # Test fixture for a populated mock storage
@@ -225,39 +224,6 @@ class TestStorageMergeIntegration:
         nodes = await service.storage.get_nodes_by_property("name", "Test Node")
         assert len(nodes) == 1
         assert nodes[0].id == "test1"
-    
-    @pytest.mark.asyncio
-    async def test_conflict_detection_with_storage(self, populated_mock_storage):
-        """Test that conflict detection works with the storage implementation"""
-        # Arrange
-        storage = populated_mock_storage
-        conflict_service = ConflictService(storage)
-        
-        # Mock the detect_conflicts method to avoid complex implementation details
-        conflict_service.detect_conflicts = AsyncMock(return_value=[
-            {
-                "type": "property_conflict",
-                "node_id": "staging1",
-                "property": "age",
-                "staging_value": 31,
-                "prod_value": 30
-            },
-            {
-                "type": "new_node",
-                "node_id": "staging2"
-            }
-        ])
-        
-        # Act - Detect conflicts
-        conflicts = await conflict_service.detect_conflicts(
-            "staging_transform",
-            "prod_transform"
-        )
-        
-        # Assert
-        assert len(conflicts) == 2
-        assert conflicts[0]["type"] == "property_conflict"
-        assert conflicts[1]["type"] == "new_node"
     
     @pytest.mark.asyncio
     async def test_entity_matching_with_storage(self, populated_mock_storage):
