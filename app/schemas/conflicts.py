@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
 import pytz
+from app.services.merge.models import GraphOperation
 
 class ConflictStatus(str, Enum):
     """Status of a conflict in the merge process"""
@@ -64,6 +65,13 @@ class StrategyType(str, Enum):
     CUSTOM = "custom"
     RULE_BASED = "rule_based"
 
+class ConflictResolutionAction(str, Enum):
+    """Actions that can be taken to resolve a conflict"""
+    UPDATE = "update"
+    CREATE = "create"
+    DELETE = "delete"
+    
+
 class ResolutionOption(BaseModel):
     """Resolution option for a conflict"""
     id: str = Field(..., description="Unique identifier for this resolution option")
@@ -103,6 +111,12 @@ class ConflictResolutionResponse(BaseModel):
     resolved: bool
     error: Optional[str] = None
 
+class ConflictResolutionChange(BaseModel):
+    property: str
+    old_value: Any
+    value: Any
+    action: ConflictResolutionAction
+
 class ConflictResolutionResult(BaseModel):
     """Result of applying a resolution to a conflict"""
     conflict_id: str
@@ -110,7 +124,7 @@ class ConflictResolutionResult(BaseModel):
     resolved: bool
     resolution_id: Optional[str]
     verification: Dict[str, Any]
-    changes: Dict[str, Any]
+    changes: List[GraphOperation]
     error: Optional[str] = None
 
 class BulkResolutionRequest(BaseModel):

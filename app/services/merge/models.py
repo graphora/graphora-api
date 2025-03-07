@@ -1,8 +1,9 @@
 """Models for merge operations"""
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, field_validator
+import uuid
 
 from app.services.storage.models import Node, Edge
 
@@ -11,12 +12,11 @@ class MergeStage(str, Enum):
     EXTRACT = "extract"
     ANALYZE = "analyze"
     CONFLICT_DETECTION = "conflict_detection"
-    RESOLUTION = "resolution"
+    CONFLICT_RESOLUTION = "conflict_resolution"
     MERGE = "merge"
     APPLY_CHANGES = "apply_changes"
     VERIFICATION = "verification"
     VALIDATION = "validation"
-    ENTITY_MAPPING = "entity_mapping"
     ROLLBACK = "rollback"
 
 class MergeStatus(str, Enum):
@@ -281,3 +281,112 @@ class VerificationResult(BaseModel):
     completed_at: Optional[datetime] = None
     verification_time_ms: float = 0.0
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+# Define operation types as an enum
+class OperationType(str, Enum):
+    UPDATE_NODE = "update_node"
+    CREATE_RELATIONSHIP = "create_relationship"
+    UPDATE_RELATIONSHIP_TYPE = "update_relationship_type"
+    DELETE_NODE = "delete_node"
+    DELETE_RELATIONSHIP = "delete_relationship"
+    UPDATE_RELATIONSHIP_DIRECTION = "update_relationship_direction"
+
+# Base operation model
+class GraphOperation(BaseModel):
+    operation_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    operation_type: OperationType
+    id: str
+    staging_id: str
+
+# Specific operation models
+class UpdateNodeOperation(GraphOperation):
+    operation_type: OperationType = OperationType.UPDATE_NODE
+    properties: Dict[str, Any]
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "operation_id": "123e4567-e89b-12d3-a456-426614174000",
+                "operation_type": "update_node",
+                "timestamp": "2025-03-06T12:00:00Z",
+                "entity_id": "node_123",
+                "properties": {"name": "New Name", "status": "active"}
+            }
+        }
+
+class CreateRelationshipOperation(GraphOperation):
+    operation_type: OperationType = OperationType.CREATE_RELATIONSHIP
+    source_id: str
+    target_id: str
+    rel_type: str
+    properties: Dict[str, Any] = {}
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "operation_id": "123e4567-e89b-12d3-a456-426614174001",
+                "operation_type": "create_relationship",
+                "timestamp": "2025-03-06T12:00:00Z",
+                "entity_id": "rel_456",
+                "source_id": "node_123",
+                "target_id": "node_456",
+                "rel_type": "KNOWS",
+                "properties": {"since": 2020}
+            }
+        }
+        
+class UpdateRelationshipDirectionOperation(GraphOperation):
+    operation_type: OperationType = OperationType.UPDATE_RELATIONSHIP_DIRECTION
+
+class UpdateRelationshipTypeOperation(GraphOperation):
+    operation_type: OperationType = OperationType.UPDATE_RELATIONSHIP_TYPE
+    old_type: str
+    new_type: str
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "operation_id": "123e4567-e89b-12d3-a456-426614174002",
+                "operation_type": "update_relationship_type",
+                "timestamp": "2025-03-06T12:00:00Z",
+                "entity_id": "rel_456",
+                "old_type": "FRNDS_WITH",
+                "new_type": "FRIENDS_WITH"
+            }
+        }
+
+class DeleteNodeOperation(GraphOperation):
+    operation_type: OperationType = OperationType.DELETE_NODE
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "operation_id": "123e4567-e89b-12d3-a456-426614174003",
+                "operation_type": "delete_node",
+                "timestamp": "2025-03-06T12:00:00Z",
+                "entity_id": "node_789"
+            }
+        }
+
+class DeleteRelationshipOperation(GraphOperation):
+    operation_type: OperationType = OperationType.DELETE_RELATIONSHIP
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "operation_id": "123e4567-e89b-12d3-a456-426614174004",
+                "operation_type": "delete_relationship",
+                "timestamp": "2025-03-06T12:00:00Z",
+                "entity_id": "rel_456"
+            }
+        }
+
+# Modified Resolution Result to include operations
+class ConflictResolutionResultWithOperations(BaseModel):
+    conflict_id: str
+    resolution_id: Optional[str]
+    verification: Dict[str, Any]
+    operations: List[GraphOperation]
+    success: bool
+    resolved: bool
+    error: Optional[str] = None

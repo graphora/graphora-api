@@ -3,7 +3,7 @@ import uuid
 import time
 import logging
 import asyncio
-from pathlib import Path
+import pytz
 import traceback
 from typing import Optional, List, Dict, Any, Set, Tuple
 from datetime import datetime, timezone
@@ -22,7 +22,15 @@ from app.services.storage.interface import GraphStorageInterface
 from app.schemas.graph import Node as SchemaNode, Edge as SchemaEdge, GraphResponse
 from app.services.merge.conflict import ConflictDetectionService
 from app.services.merge.models import (
+    CreateRelationshipOperation,
+    DeleteNodeOperation,
+    DeleteRelationshipOperation,
+    GraphOperation,
     MergeStage,
+    OperationType,
+    UpdateNodeOperation,
+    UpdateRelationshipDirectionOperation,
+    UpdateRelationshipTypeOperation,
     ValidationResult,
     ValidationIssue,
     ValidationSeverity,
@@ -759,8 +767,8 @@ async def merge_flow(
             }
         )
         
-        # Analyze Stage
-        await start_stage(merge_id, MergeStage.ANALYZE, progress_tracker)
+        # Validation Stage
+        await start_stage(merge_id, MergeStage.VALIDATION, progress_tracker)
         
         validation_task = validate_graph.with_options(
             name="validate_graph",
@@ -768,12 +776,24 @@ async def merge_flow(
             retry_delay_seconds=5
         )(graph, ontology_id, progress_tracker) if ontology_id else None
         
+        # Analyze Stage
+        await start_stage(merge_id, MergeStage.ANALYZE, progress_tracker)
+        
         # Wait for both tasks to complete
         if validation_task:
             mapping, validation = await asyncio.gather(mapping_task, validation_task)
         else:
             mapping = await mapping_task
             validation = True  # Skip validation if no ontology_id provided
+        
+        await complete_merge_stage(
+            merge_id,
+            MergeStage.VALIDATION,
+            progress_tracker,
+            {
+                "is_valid": validation
+            }
+        )
         
         await complete_merge_stage(
             merge_id,
@@ -1208,72 +1228,6 @@ class MergeService:
             logger.error(f"Error getting merge history: {str(e)}")
             return []
 
-    async def validate_merge(
-        self,
-        merge_id: str,
-        transform_id: str,
-        ontology_id: Optional[str] = None,
-        allowed_orphan_types: Optional[List[str]] = None,
-    ) -> ValidationResult:
-        """
-        Validate a merge operation
-        
-        Args:
-            merge_id: ID of the merge operation
-            transform_id: ID of the transform operation that produced the staging graph
-            ontology_id: Optional ID of the ontology to validate against
-            allowed_orphan_types: Optional list of node types that are allowed to be orphaned
-            
-        Returns:
-            ValidationResult: Detailed validation results
-        """
-        # Create validation service
-        validation_service = MergeValidationService(
-            storage=self.staging_storage,
-            production_storage=self.production_storage,
-            merge_service=self
-        )
-        
-        # Run validation
-        result = await validation_service.validate_merge(merge_id, transform_id, ontology_id)
-        
-        # If allowed orphan types are provided, re-run orphaned nodes validation
-        if allowed_orphan_types:
-            # Get staging graph
-            staging_storage = self.staging_storage  # Use storage directly
-            staging_graph = await staging_storage.get_graph_by_transform_id(transform_id)
-            
-            
-            # Remove existing orphaned node issues
-            result.issues = [issue for issue in result.issues if issue.type != ValidationIssueType.ORPHANED_NODE]
-            
-            # Run orphaned nodes validation with allowed types
-            orphan_issues = await validation_service.validate_no_orphaned_nodes(
-                staging_graph, allowed_orphan_types=allowed_orphan_types
-            )
-            
-            # Update result
-            result.issues.extend(orphan_issues)
-            
-            # Recalculate counts
-            result.warning_count = sum(1 for issue in result.issues if issue.severity == ValidationSeverity.WARNING)
-            result.info_count = sum(1 for issue in result.issues if issue.severity == ValidationSeverity.INFO)
-            result.critical_count = sum(1 for issue in result.issues if issue.severity == ValidationSeverity.CRITICAL)
-            
-            # Update valid flag
-            result.valid = (result.critical_count == 0)
-        
-        # Log validation result
-        if result.valid:
-            logger.info(f"Merge validation passed for merge_id={merge_id}, transform_id={transform_id}")
-        else:
-            logger.warning(
-                f"Merge validation failed for merge_id={merge_id}, transform_id={transform_id}: "
-                f"{result.critical_count} critical issues, {result.warning_count} warnings"
-            )
-        
-        return result
-
 
     async def get_conflicts(
         self,
@@ -1374,6 +1328,7 @@ class MergeService:
         Returns:
             Dict containing the result of the resolution application
         """
+        await self.progress_tracker.start_merge_stage(merge_id, MergeStage.CONFLICT_RESOLUTION)
         # Get the conflict
         conflict = await self.get_conflict(merge_id, conflict_id)
         if not conflict:
@@ -1421,8 +1376,12 @@ class MergeService:
             conflict.resolved_by = resolved_by
             
             # Store the updated conflict
-            await self._update_conflict(merge_id, conflict)
+            conflict_count_stats = await self._update_conflict(merge_id, conflict, result.changes)
             
+            if conflict_count_stats["unresolved"] == 0:
+                await self.progress_tracker.complete_merge_stage(
+                    merge_id, MergeStage.CONFLICT_RESOLUTION, conflict_count_stats)
+                await self.progress_tracker.start_merge_stage(merge_id, MergeStage.APPLY_CHANGES)
             # Store in resolution history
             try:
                 await self.resolution_history.store_resolution(
@@ -1481,9 +1440,18 @@ class MergeService:
             
         return results
         
-    async def _update_conflict(self, merge_id: str, conflict: Conflict) -> None:
+    async def _update_conflict(self, merge_id: str, conflict: Conflict, resolution: Optional[List[GraphOperation]] = None) -> Dict[str, Any]:
         """Update a conflict in storage"""
         redis_client = await get_redis_client()
+        
+        # Update resolution in Redis
+        if resolution:
+            key = f"merge:{merge_id}:resolutions"
+            resolutions_json = await redis_client.get(key)
+            resolutions_list = []
+            if resolutions_json:
+                resolutions_list = json.loads(resolutions_json)
+            await redis_client.set(key, json.dumps([model.model_dump() for model in resolutions_list + resolution]))
         
         # Update conflict in Redis
         key = f"merge:{merge_id}:conflict:{conflict.id}"
@@ -1508,6 +1476,7 @@ class MergeService:
         # Set TTL for cleanup (30 days)
         ttl = 30 * 24 * 60 * 60  # 30 days in seconds
         await redis_client.expire(key, ttl)
+        return counts
 
     async def select_resolution_strategies(self, merge_id: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Select best resolution strategies for conflicts"""
@@ -2407,15 +2376,127 @@ class MergeService:
             await storage.close()
 
     async def get_merge_graph(
-        self, graph_service: GraphService,
-        merge_id: str, transform_id: str, 
-        limit: Optional[int] = 1000, 
+        self,
+        graph_service: GraphService,
+        merge_id: str,
+        transform_id: str,
+        limit: Optional[int] = 1000,
         skip: Optional[int] = 0
     ) -> GraphResponse:
+        """
+        Get a merged graph by applying resolution operations on top of transformed staging data.
+        
+        Args:
+            graph_service: Service to fetch graph data
+            merge_id: Identifier for the merge operation
+            transform_id: Identifier for the transformed staging graph
+            limit: Maximum number of nodes/edges to return
+            skip: Number of nodes/edges to skip
+            
+        Returns:
+            GraphResponse: Merged graph with applied operations
+        """
+        # Get the base transformed graph (staging data)
         transformed_graph = graph_service.get_graph_by_transform_id(
             transform_id=transform_id,
             limit=limit,
             skip=skip
         )
         
-        return transformed_graph
+        # Get resolutions from Redis
+        key = f"merge:{merge_id}:resolutions"
+        redis_client = await get_redis_client()
+        resolutions_json = await redis_client.get(key)
+        
+        if not resolutions_json:
+            return transformed_graph
+            
+        # Parse resolutions into GraphOperation objects
+        resolutions_data = json.loads(resolutions_json)
+        operations: List[GraphOperation] = []
+        for op_data in resolutions_data:
+            op_type = op_data.get("operation_type")
+            if op_type == OperationType.UPDATE_NODE:
+                operations.append(UpdateNodeOperation(**op_data))
+            elif op_type == OperationType.CREATE_RELATIONSHIP:
+                operations.append(CreateRelationshipOperation(**op_data))
+            elif op_type == OperationType.UPDATE_RELATIONSHIP_TYPE:
+                operations.append(UpdateRelationshipTypeOperation(**op_data))
+            elif op_type == OperationType.DELETE_NODE:
+                operations.append(DeleteNodeOperation(**op_data))
+            elif op_type == OperationType.DELETE_RELATIONSHIP:
+                operations.append(DeleteRelationshipOperation(**op_data))
+            elif op_type == OperationType.UPDATE_RELATIONSHIP_DIRECTION:
+                operations.append(UpdateRelationshipDirectionOperation(**op_data))
+
+        # Create a copy of the graph to modify
+        merged_graph = GraphResponse(
+            nodes=transformed_graph.nodes.copy(),
+            edges=transformed_graph.edges.copy(),
+            total_nodes=transformed_graph.total_nodes,
+            total_edges=transformed_graph.total_edges,
+            metadata=transformed_graph.metadata.copy()
+        )
+
+        # Apply each operation
+        for operation in operations:
+            if operation.operation_type == OperationType.UPDATE_NODE:
+                # Find and update node
+                for node in merged_graph.nodes:
+                    if node.id == operation.staging_id:
+                        node.properties.update(operation.properties)
+                        node.updated_at = datetime.now(pytz.utc)
+                        node.properties['__status'] = 'modified'
+                        break
+                        
+            elif operation.operation_type == OperationType.CREATE_RELATIONSHIP:
+                # Create new edge
+                for edge in merged_graph.edges:
+                    if edge.id == operation.staging_id:
+                        new_edge = SchemaEdge(
+                            id=operation.id,
+                            source=edge.source,
+                            target=edge.target,
+                            type=edge.type,
+                            properties=operation.properties.copy(),
+                            created_at=datetime.now(pytz.utc),
+                            updated_at=datetime.now(pytz.utc)
+                        )
+                        new_edge.properties['__status'] = 'new'
+                        merged_graph.edges.append(new_edge)
+                        merged_graph.total_edges = merged_graph.total_edges + 1
+                        break
+                
+            elif operation.operation_type == OperationType.UPDATE_RELATIONSHIP_TYPE:
+                # Update relationship type
+                for edge in merged_graph.edges:
+                    if edge.id == operation.staging_id:
+                        edge.type = operation.new_type
+                        edge.properties['__status'] = 'modified'
+                        edge.updated_at = datetime.now(pytz.utc)
+                        break
+                        
+            elif operation.operation_type == OperationType.DELETE_NODE:
+                # Remove node and related edges
+                merged_graph.nodes = [n for n in merged_graph.nodes if n.id != operation.staging_id]
+                merged_graph.edges = [
+                    e for e in merged_graph.edges 
+                    if e.source != operation.staging_id and e.target != operation.staging_id
+                ]
+                merged_graph.total_nodes = merged_graph.total_nodes - 1
+                merged_graph.total_edges = len(merged_graph.edges)
+                
+            elif operation.operation_type == OperationType.DELETE_RELATIONSHIP:
+                # Remove edge
+                merged_graph.edges = [e for e in merged_graph.edges if e.id != operation.staging_id]
+                merged_graph.total_edges = merged_graph.total_edges - 1
+                
+            elif operation.operation_type == OperationType.UPDATE_RELATIONSHIP_DIRECTION:
+                # Reverse edge direction
+                for edge in merged_graph.edges:
+                    if edge.id == operation.staging_id:
+                        edge.source, edge.target = edge.target, edge.source
+                        edge.updated_at = datetime.now(pytz.utc)
+                        break
+
+        return merged_graph
