@@ -8,6 +8,7 @@ import asyncio
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError, TimeoutError
 import traceback
+import json
 
 from app.services.merge.models import (
     MergeStage,
@@ -17,7 +18,7 @@ from app.services.merge.models import (
     MergeStageProgress,
     ResourceMetrics
 )
-from app.schemas.conflicts import ConflictBatch, ConflictType, ConflictSeverity
+from app.schemas.conflicts import ConflictBatch, ConflictType, ConflictSeverity, ResolutionStrategy
 from app.config import settings
 from app.utils.redis import DateTimeEncoder
 
@@ -218,7 +219,7 @@ class ProgressTracker:
             merge_id: ID of the merge operation
             conflict_batch: Batch of conflicts detected during merge
         """
-        try:
+        try:    
             logger.info(f"Updating conflicts for merge {merge_id}")
             logger.info(f"Conflict batch ID: {conflict_batch.batch_id}")
             logger.info(f"Total conflicts: {conflict_batch.total_conflicts}")
@@ -234,22 +235,69 @@ class ProgressTracker:
             # Parse status
             status = MergeProgress.model_validate_json(status_data)
             
+            # Filter out identical duplicate groups and their conflicts
+            identical_groups = [
+                group for group in conflict_batch.conflict_groups
+                if group.batch_resolvable and 
+                group.recommended_strategy == ResolutionStrategy.IGNORE_DUPLICATE and
+                group.pattern in ["identical_duplicate_nodes", "identical_duplicate_relationships"]
+            ]
+            ignored_group_ids = {group.id for group in identical_groups}
+            
+            # Filter conflicts that aren't part of ignored groups
+            active_conflicts = [
+                conflict for conflict in conflict_batch.conflicts
+                if not conflict.is_identical
+            ]
+            
+            # Filter active conflict groups
+            active_groups = [
+                group for group in conflict_batch.conflict_groups
+                if group.id not in ignored_group_ids
+            ]
+            
+            # Log the filtering results
+            ignored_conflicts_count = conflict_batch.total_conflicts - len(active_conflicts)
+            logger.info(f"Filtered out {ignored_conflicts_count} identical duplicate conflicts "
+                    f"from {len(ignored_group_ids)} groups")
+            
+            # Store identical duplicate groups in a separate Redis key
+            identical_groups_key = self._get_redis_key(merge_id, "identical_duplicate_groups")
+            if identical_groups:
+                # Use Pydantic's json serialization with a custom encoder for datetime
+                identical_groups_json = json.dumps(
+                    [group.model_dump() for group in identical_groups],
+                    default=lambda o: o.isoformat() if isinstance(o, datetime) else str(o)
+                )
+                await self._redis_operation(
+                    lambda: self.redis.set(
+                        identical_groups_key,
+                        identical_groups_json,
+                        ex=settings.CONFLICT_BATCH_TTL
+                    )
+                )
+                logger.info(f"Stored {len(identical_groups)} identical duplicate groups at {identical_groups_key}")
+            
             # Update conflict detection stage with conflict metrics
             if MergeStage.CONFLICT_DETECTION in status.stages_progress:
                 stage_progress = status.stages_progress[MergeStage.CONFLICT_DETECTION]
                 
-                # Add conflict metrics
+                # Add conflict metrics for active conflicts only
                 conflict_metrics = {
-                    "total_conflicts": conflict_batch.total_conflicts,
+                    "total_conflicts": len(active_conflicts),
                     "conflict_types": {
-                        conflict_type.value: sum(1 for c in conflict_batch.conflicts if c.conflict_type == conflict_type)
+                        conflict_type.value: sum(1 for c in active_conflicts if c.conflict_type == conflict_type)
                         for conflict_type in ConflictType
                     },
                     "conflict_severities": {
-                        severity.value: sum(1 for c in conflict_batch.conflicts if c.severity == severity)
+                        severity.value: sum(1 for c in active_conflicts if c.severity == severity)
                         for severity in ConflictSeverity
                     },
-                    "conflict_groups": len(conflict_batch.conflict_groups)
+                    "conflict_groups": len(active_groups),
+                    "ignored_duplicates": {
+                        "count": ignored_conflicts_count,
+                        "groups": len(ignored_group_ids)
+                    }
                 }
                 
                 # Update stage metrics
@@ -266,7 +314,7 @@ class ProgressTracker:
                 )
             )
             
-            # Store conflict batch ID and data for reference
+            # Store conflict batch ID and FULL data (including ignored groups) for reference
             batch_key = self._get_redis_key(merge_id, f"conflicts:batch:{conflict_batch.batch_id}")
             logger.info(f"Storing conflict batch at key: {batch_key}")
             await self._redis_operation(

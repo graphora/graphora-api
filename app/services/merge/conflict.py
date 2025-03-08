@@ -62,6 +62,70 @@ class ConflictDetectionService:
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {str(e)}")
             raise
+    
+    async def _detect_node_conflicts(
+        self,
+        staging_node: Node,
+        production_matches: Dict[str, List[str]],
+        merge_id: str
+    ) -> List[Conflict]:
+        """Detect all conflicts for a single node"""
+        conflicts = []
+        
+        if staging_node.id not in production_matches:
+            return conflicts
+            
+        # Get production matches
+        prod_nodes = []
+        for prod_id in production_matches[staging_node.id]:
+            prod_node = await self.storage.get_node_by_id(prod_id)
+            if prod_node:
+                prod_nodes.append(prod_node)
+        
+        # Detect type conflicts
+        type_conflicts = await self._detect_entity_type_conflicts(
+            staging_node, prod_nodes, merge_id
+        )
+        conflicts.extend(type_conflicts)
+        
+        # Handle duplicate nodes
+        if len(prod_nodes) > 0:
+            # Check each production node
+            for prod_node in prod_nodes:
+                prop_conflicts = await self.detect_property_conflicts(
+                    staging_node, prod_node, merge_id
+                )
+                # If no property conflicts and types match, it's an identical duplicate
+                if not prop_conflicts and staging_node.label == prod_node.label:
+                    conflicts.append(
+                        self._create_duplicate_entity_conflict(
+                            staging_node, 
+                            [prod_node], 
+                            merge_id,
+                            is_identical=True
+                        )
+                    )
+                else:
+                    conflicts.extend(prop_conflicts)
+        
+        # Detect duplicate conflicts if multiple matches (only if not identical)
+        if len(prod_nodes) > 1:
+            # Check if all matches are identical to staging node
+            all_identical = True
+            for prod_node in prod_nodes:
+                props_equal = await self.detect_property_conflicts(staging_node, prod_node, merge_id)
+                if props_equal or staging_node.label != prod_node.label:
+                    all_identical = False
+                    break
+                    
+            if not all_identical:
+                conflicts.append(
+                    self._create_duplicate_entity_conflict(
+                        staging_node, prod_nodes, merge_id, is_identical=False
+                    )
+                )
+                
+        return conflicts
         
     async def detect_conflicts(
         self,
@@ -127,7 +191,7 @@ class ConflictDetectionService:
                         total_items,
                         len(all_conflicts)
                     )
-            
+        
         # Process edges in batches
         for i in range(0, len(staging_edges), batch_size):
             edge_batch = staging_edges[i:i + batch_size]
@@ -159,7 +223,7 @@ class ConflictDetectionService:
                     len(all_conflicts)
                 )
         
-        # Group similar conflicts
+        # Group similar conflicts including identical duplicates
         conflict_groups = await self._group_similar_conflicts(all_conflicts)
         
         # Create and store conflict batch
@@ -170,47 +234,14 @@ class ConflictDetectionService:
             conflict_groups=conflict_groups
         )
         
+        # Log the grouping results
+        logger.info(f"Created {len(conflict_groups)} conflict groups:")
+        for group in conflict_groups:
+            logger.info(f"Group {group.id}: {group.total_conflicts} conflicts, "
+                    f"batch_resolvable={group.batch_resolvable}, "
+                    f"pattern={group.pattern}")
+        
         return batch
-        
-    async def _detect_node_conflicts(
-        self,
-        staging_node: Node,
-        production_matches: Dict[str, List[str]],
-        merge_id: str
-    ) -> List[Conflict]:
-        """Detect all conflicts for a single node"""
-        conflicts = []
-        
-        if staging_node.id not in production_matches:
-            return conflicts
-            
-        # Get production matches
-        prod_nodes = []
-        for prod_id in production_matches[staging_node.id]:
-            prod_node = await self.storage.get_node_by_id(prod_id)
-            if prod_node:
-                prod_nodes.append(prod_node)
-        
-        # Detect type conflicts
-        type_conflicts = await self._detect_entity_type_conflicts(
-            staging_node, prod_nodes, merge_id
-        )
-        conflicts.extend(type_conflicts)
-        
-        # Detect property conflicts
-        for prod_node in prod_nodes:
-            prop_conflicts = await self.detect_property_conflicts(
-                staging_node, prod_node, merge_id
-            )
-            conflicts.extend(prop_conflicts)
-            
-        # Detect duplicate conflicts if multiple matches
-        if len(prod_nodes) > 1:
-            conflicts.append(
-                self._create_duplicate_entity_conflict(staging_node, prod_nodes, merge_id)
-            )
-            
-        return conflicts
         
     async def _detect_relationship_conflicts(
         self,
@@ -225,68 +256,81 @@ class ConflictDetectionService:
         source_has_match = staging_edge.source in production_matches
         target_has_match = staging_edge.target in production_matches
         
-        # If either source or target doesn't have a match, no conflicts to detect
         if not source_has_match or not target_has_match:
             return conflicts
             
-        # Get all possible source and target matches in production
         source_matches = production_matches.get(staging_edge.source, [])
         target_matches = production_matches.get(staging_edge.target, [])
         
-        # Find matching relationships in production
         matching_edges = []
-        
-        # Get all relationships between all possible source and target matches
-        all_node_ids = source_matches + target_matches
-        if all_node_ids:
+        if all_node_ids := (source_matches + target_matches):
             all_relationships = await self.storage.get_relationships_between_nodes(all_node_ids)
             
-            # Filter relationships to only include those between source and target matches
-            # and with the same relationship type (if needed)
             for edge in all_relationships:
                 if (edge.source in source_matches and 
                     edge.target in target_matches):
                     matching_edges.append(edge)
         
-        # If no matching relationships found, no conflicts to detect
         if not matching_edges:
             return conflicts
             
-        # Detect conflicts for each matching relationship
+        # Check each matching edge
         for prod_edge in matching_edges:
-            # Detect relationship type conflicts
-            if staging_edge.type != prod_edge.type:
-                conflict = self._create_relationship_type_conflict(
-                    staging_edge,
-                    prod_edge,
-                    merge_id
-                )
-                conflicts.append(conflict)
-                
-            # Detect property conflicts
             prop_conflicts = await self.detect_relationship_conflicts(
                 staging_edge, prod_edge, merge_id
             )
-            conflicts.extend(prop_conflicts)
-            
-        # Detect duplicate conflicts if multiple matches
-        if len(matching_edges) > 1:
-            conflicts.append(
-                self._create_duplicate_relationship_conflict(
-                    staging_edge, matching_edges, merge_id
+            # If no property conflicts and types match, it's an identical duplicate
+            if not prop_conflicts and staging_edge.type == prod_edge.type:
+                conflicts.append(
+                    self._create_duplicate_relationship_conflict(
+                        staging_edge, [prod_edge], merge_id, is_identical=True
+                    )
                 )
-            )
-            
+            else:
+                if staging_edge.type != prod_edge.type:
+                    conflict = self._create_relationship_type_conflict(
+                        staging_edge, prod_edge, merge_id
+                    )
+                    conflicts.append(conflict)
+                conflicts.extend(prop_conflicts)
+        
+        # Handle multiple matches
+        if len(matching_edges) > 1:
+            all_identical = True
+            for prod_edge in matching_edges:
+                props_equal = await self.detect_relationship_conflicts(staging_edge, prod_edge, merge_id)
+                if props_equal or staging_edge.type != prod_edge.type:
+                    all_identical = False
+                    break
+                    
+            if not all_identical:
+                conflicts.append(
+                    self._create_duplicate_relationship_conflict(
+                        staging_edge, matching_edges, merge_id, is_identical=False
+                    )
+                )
+                
         return conflicts
         
     async def _group_similar_conflicts(
         self,
         conflicts: List[Conflict]
     ) -> List[ConflictGroup]:
-        """Group similar conflicts for batch resolution"""
-        # Group property conflicts by type and name
-        property_groups = defaultdict(list)
+        """Group similar conflicts for batch resolution, including special handling for identical duplicates"""
+        # Separate identical duplicates from other conflicts
+        identical_duplicates = []
+        other_conflicts = []
+        
         for conflict in conflicts:
+            if (conflict.conflict_type in {ConflictType.DUPLICATE_ENTITY, ConflictType.DUPLICATE_RELATIONSHIP} and 
+                conflict.context.get("is_identical", False)):
+                identical_duplicates.append(conflict)
+            else:
+                other_conflicts.append(conflict)
+        
+        # Group property conflicts as before
+        property_groups = defaultdict(list)
+        for conflict in other_conflicts:
             if conflict.conflict_type in {
                 ConflictType.PROPERTY_VALUE,
                 ConflictType.PROPERTY_MISSING
@@ -297,9 +341,49 @@ class ConflictDetectionService:
                     value_type=conflict.context.get("value_type", "unknown")
                 )
                 property_groups[key].append(conflict)
-                
+        
         # Create conflict groups
         groups = []
+        
+        # Handle identical duplicate nodes
+        node_duplicates = defaultdict(list)
+        for conflict in identical_duplicates:
+            if conflict.conflict_type == ConflictType.DUPLICATE_ENTITY:
+                entity_type = conflict.context["entity_type"]
+                node_duplicates[entity_type].append(conflict)
+        
+        for entity_type, node_conflicts in node_duplicates.items():
+            if len(node_conflicts) >= 1:  # Create group even for single identical duplicate
+                group = ConflictGroup(
+                    id=f"identical_nodes_{entity_type}_{uuid.uuid4().hex}",
+                    conflicts=node_conflicts,   
+                    total_conflicts=len(node_conflicts),
+                    pattern="identical_duplicate_nodes",
+                    batch_resolvable=True,
+                    recommended_strategy=ResolutionStrategy.IGNORE_DUPLICATE
+                )
+                groups.append(group)
+        
+        # Handle identical duplicate relationships
+        rel_duplicates = defaultdict(list)
+        for conflict in identical_duplicates:
+            if conflict.conflict_type == ConflictType.DUPLICATE_RELATIONSHIP:
+                rel_type = conflict.context["staging_edge"]["type"]
+                rel_duplicates[rel_type].append(conflict)
+        
+        for rel_type, rel_conflicts in rel_duplicates.items():
+            if len(rel_conflicts) >= 1:  # Create group even for single identical duplicate
+                group = ConflictGroup(
+                    id=f"identical_rels_{rel_type}_{uuid.uuid4().hex}",
+                    conflicts=rel_conflicts,
+                    total_conflicts=len(rel_conflicts),
+                    pattern="identical_duplicate_relationships",
+                    batch_resolvable=True,
+                    recommended_strategy=ResolutionStrategy.IGNORE_DUPLICATE
+                )
+                groups.append(group)
+        
+        # Handle property conflict groups as before
         for key, group_conflicts in property_groups.items():
             if len(group_conflicts) > 1:  # Only group if multiple conflicts
                 # Get BAML analysis
@@ -308,19 +392,14 @@ class ConflictDetectionService:
                 # Create group
                 group = ConflictGroup(
                     id=f"group_{uuid.uuid4().hex}",
-                    entity_type=key.entity_type,
-                    property_name=key.property_name,
-                    value_type=key.value_type,
-                    conflict_ids=[c.id for c in group_conflicts],
+                    conflicts=group_conflicts,
                     total_conflicts=len(group_conflicts),
                     pattern=analysis.get("pattern", ""),
                     batch_resolvable=analysis.get("batch_resolvable", False),
                     recommended_strategy=analysis.get("strategy"),
-                    confidence=analysis.get("confidence", 0.0),
-                    risks=analysis.get("risks", [])
                 )
                 groups.append(group)
-                
+        
         return groups
         
     async def _analyze_conflict_group(
@@ -1000,7 +1079,8 @@ class ConflictDetectionService:
         self,
         staging_node: Node,
         production_nodes: List[Node],
-        merge_id: Optional[str] = None
+        merge_id: Optional[str] = None,
+        is_identical: bool = False
     ) -> Conflict:
         """Create a conflict for duplicate entity matches"""
         conflict_id = f"duplicate_{staging_node.id}"
@@ -1013,28 +1093,29 @@ class ConflictDetectionService:
             staging_node, production_nodes, key_props
         )
         
-        return Conflict(
-            id=conflict_id,
-            merge_id=merge_id,
-            conflict_type=ConflictType.DUPLICATE_ENTITY,
-            severity=ConflictSeverity.CRITICAL,
-            staging_ids=[staging_node.id],
-            production_ids=[node.id for node in production_nodes],
-            description=f"Multiple production matches found for {staging_node.label}",
-            context={
-                "entity_type": staging_node.label,
-                "staging_props": staging_node.properties,
-                "production_matches": [
-                    {
-                        "id": node.id,
-                        "properties": node.properties
-                    }
-                    for node in production_nodes
-                ],
-                "key_properties": key_props,
-                "property_comparison": prop_table
-            },
-            resolution_options=[
+        description = (
+            "Identical duplicate entity found" if is_identical else 
+            f"Multiple production matches found for {staging_node.label}"
+        )
+        severity = ConflictSeverity.INFO if is_identical else ConflictSeverity.CRITICAL
+        
+        resolution_options = []
+        if is_identical:
+            resolution_options.append(
+                ResolutionOption(
+                    id=f"{conflict_id}_ignore",
+                    description="Ignore duplicate (identical properties)",
+                    resolution_type=ResolutionStrategy.IGNORE_DUPLICATE,
+                    resolution_data={
+                        "staging_id": staging_node.id,
+                        "production_ids": [node.id for node in production_nodes]
+                    },
+                    confidence=0.95,
+                    auto_resolvable=True
+                )
+            )
+        else:
+            resolution_options = [
                 ResolutionOption(
                     id=f"{conflict_id}_merge",
                     description="Merge all matching entities",
@@ -1072,6 +1153,31 @@ class ConflictDetectionService:
                     for node in production_nodes
                 ]
             ]
+        
+        return Conflict(
+            id=conflict_id,
+            merge_id=merge_id,
+            is_identical=is_identical,
+            conflict_type=ConflictType.DUPLICATE_ENTITY,
+            severity=severity,
+            staging_ids=[staging_node.id],
+            production_ids=[node.id for node in production_nodes],
+            description=description,
+            context={
+                "entity_type": staging_node.label,
+                "staging_props": staging_node.properties,
+                "production_matches": [
+                    {
+                        "id": node.id,
+                        "properties": node.properties
+                    }
+                    for node in production_nodes
+                ],
+                "key_properties": key_props,
+                "property_comparison": prop_table,
+                "is_identical": is_identical
+            },
+            resolution_options=resolution_options
         )
         
     def _get_key_properties(
@@ -1088,7 +1194,8 @@ class ConflictDetectionService:
         # Prioritize likely key properties
         key_indicators = {
             'id', 'name', 'key', 'code', 'identifier',
-            'email', 'phone', 'address', 'url'
+            'email', 'phone', 'address', 'url', 'label', 
+            'description'
         }
         
         key_props = []
@@ -1110,7 +1217,6 @@ class ConflictDetectionService:
         remaining = list(common_props - set(key_props))
         remaining.sort()  # For consistent ordering
         key_props.extend(remaining)
-        
         return key_props
         
     def _format_property_comparison(
@@ -1304,98 +1410,97 @@ class ConflictDetectionService:
         self,
         staging_edge: Edge,
         production_edges: List[Edge],
-        merge_id: Optional[str] = None
+        merge_id: Optional[str] = None,
+        is_identical: bool = False
     ) -> Conflict:
         """Create a duplicate relationship conflict when multiple matches are found"""
         conflict_id = f"duplicate_rel_{staging_edge.id}"
         
-        # Extract production edge IDs
         production_ids = [edge.id for edge in production_edges]
         
-        # Create description with relationship details
         description = (
-            f"Multiple matching relationships found in production for staging relationship "
-            f"'{staging_edge.id}' of type '{staging_edge.type}' between "
-            f"source '{staging_edge.source}' and target '{staging_edge.target}'. "
-            f"Found {len(production_edges)} potential matches."
+            "Identical duplicate relationship found" if is_identical else
+            f"Multiple matching relationships found for '{staging_edge.type}'"
         )
+        severity = ConflictSeverity.INFO if is_identical else ConflictSeverity.MAJOR
         
-        # Create context with relationship details
-        context = {
-            "staging_edge": {
-                "id": staging_edge.id,
-                "type": staging_edge.type,
-                "source": staging_edge.source,
-                "target": staging_edge.target,
-                "properties": staging_edge.properties
-            },
-            "production_edges": [
-                {
-                    "id": edge.id,
-                    "type": edge.type,
-                    "source": edge.source,
-                    "target": edge.target,
-                    "properties": edge.properties
-                }
-                for edge in production_edges
-            ]
-        }
-        
-        # Create resolution options
-        resolution_options = [
-            ResolutionOption(
-                id=f"{conflict_id}_staging",
-                description="Keep staging relationship",
-                resolution_type=ResolutionStrategy.KEEP_STAGING_REL,
-                resolution_data={
-                    "edge_id": staging_edge.id
-                },
-                confidence=0.4,
-                auto_resolvable=False
-            )
-        ]
-        
-        # Add option for each production edge
-        for i, prod_edge in enumerate(production_edges):
+        resolution_options = []
+        if is_identical:
             resolution_options.append(
                 ResolutionOption(
+                    id=f"{conflict_id}_ignore",
+                    description="Ignore duplicate (identical properties)",
+                    resolution_type=ResolutionStrategy.IGNORE_DUPLICATE,
+                    resolution_data={
+                        "staging_edge_id": staging_edge.id,
+                        "production_edge_ids": production_ids
+                    },
+                    confidence=0.95,
+                    auto_resolvable=True
+                )
+            )
+        else:
+            resolution_options = [
+                ResolutionOption(
+                    id=f"{conflict_id}_staging",
+                    description="Keep staging relationship",
+                    resolution_type=ResolutionStrategy.KEEP_STAGING_REL,
+                    resolution_data={"edge_id": staging_edge.id},
+                    confidence=0.4,
+                    auto_resolvable=False
+                ),
+                *[ResolutionOption(
                     id=f"{conflict_id}_prod_{i}",
                     description=f"Keep production relationship {i+1}: {prod_edge.id}",
                     resolution_type=ResolutionStrategy.KEEP_PRODUCTION_REL,
-                    resolution_data={
-                        "edge_id": prod_edge.id
-                    },
+                    resolution_data={"edge_id": prod_edge.id},
                     confidence=0.3,
                     auto_resolvable=False
+                ) for i, prod_edge in enumerate(production_edges)],
+                ResolutionOption(
+                    id=f"{conflict_id}_all",
+                    description="Keep all relationships",
+                    resolution_type=ResolutionStrategy.KEEP_ALL_RELS,
+                    resolution_data={
+                        "staging_edge_id": staging_edge.id,
+                        "production_edge_ids": production_ids
+                    },
+                    confidence=0.2,
+                    auto_resolvable=False
                 )
-            )
-        
-        # Add option to keep all
-        resolution_options.append(
-            ResolutionOption(
-                id=f"{conflict_id}_all",
-                description="Keep all relationships",
-                resolution_type=ResolutionStrategy.KEEP_ALL_RELS,
-                resolution_data={
-                    "staging_edge_id": staging_edge.id,
-                    "production_edge_ids": production_ids
-                },
-                confidence=0.2,
-                auto_resolvable=False
-            )
-        )
+            ]
         
         return Conflict(
             id=conflict_id,
-            merge_id=merge_id or "test-merge-id",  # Use default if not provided
+            is_identical=is_identical,
+            merge_id=merge_id or "test-merge-id",
             conflict_type=ConflictType.DUPLICATE_RELATIONSHIP,
-            severity=ConflictSeverity.MAJOR,
+            severity=severity,
             staging_ids=[staging_edge.id],
             production_ids=production_ids,
             staging_value=f"Relationship of type '{staging_edge.type}'",
             production_value=f"{len(production_edges)} matching relationships",
             description=description,
-            context=context,
+            context={
+                "staging_edge": {
+                    "id": staging_edge.id,
+                    "type": staging_edge.type,
+                    "source": staging_edge.source,
+                    "target": staging_edge.target,
+                    "properties": staging_edge.properties
+                },
+                "production_edges": [
+                    {
+                        "id": edge.id,
+                        "type": edge.type,
+                        "source": edge.source,
+                        "target": edge.target,
+                        "properties": edge.properties
+                    }
+                    for edge in production_edges
+                ],
+                "is_identical": is_identical
+            },
             resolution_options=resolution_options
         )
 

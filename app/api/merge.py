@@ -898,7 +898,8 @@ async def finalise_merge(
     merge_id: str,
     session_id: str,
     transform_id: str,
-    merge_service: MergeService = Depends(get_merge_service)
+    merge_service: MergeService = Depends(get_merge_service),
+    graph_service: GraphService = Depends(get_staging_graph_service)
 ) -> VerificationResult:
     """Finalise a merge operation
     
@@ -914,7 +915,12 @@ async def finalise_merge(
         # Get merge service
         async with get_merge_service() as merge_service:
             # Verify merge
-            verification_result = await merge_service.finalise_and_verify_merge(merge_id, session_id, transform_id)
+            verification_result = await merge_service.finalise_and_verify_merge(
+                graph_service=graph_service,
+                merge_id=merge_id,
+                session_id=session_id,
+                transform_id=transform_id
+            )
             return verification_result
     except Exception as e:
         traceback.print_exc()
