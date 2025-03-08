@@ -37,6 +37,7 @@ class ConflictSeverity(str, Enum):
     CRITICAL = "critical"  # Must be resolved manually
     MAJOR = "major"        # Can be auto-resolved but needs review
     MINOR = "minor"        # Can be auto-resolved with confidence
+    INFO = "info"          # Informational, no action required
 
 class ResolutionStrategy(str, Enum):
     """Available strategies for conflict resolution"""
@@ -54,6 +55,8 @@ class ResolutionStrategy(str, Enum):
     REVERSE_RELATIONSHIP = "REVERSE_RELATIONSHIP"  # Reverse relationship direction
     MERGE_REL_PROPS = "MERGE_REL_PROPS"  # Merge relationship properties
     MATCH_ENTITY = "MATCH_ENTITY"  # Match with a specific production entity
+    IGNORE_DUPLICATE = "IGNORE_DUPLICATE"  # Ignore duplicate
+
 
 class StrategyType(str, Enum):
     """Types of resolution strategies"""
@@ -151,6 +154,7 @@ class BulkResolutionResponse(BaseModel):
 class Conflict(BaseModel):
     """Conflict model representing a detected conflict between staging and production graphs"""
     id: str
+    is_identical: bool = False
     merge_id: Optional[str] = None
     conflict_type: ConflictType
     severity: ConflictSeverity
@@ -195,8 +199,11 @@ class ConflictGroup(BaseModel):
     id: str
     merge_id: Optional[str] = None
     conflicts: List[Conflict]
+    batch_resolvable: bool = False
+    recommended_strategy: Optional[ResolutionStrategy] = None
     pattern: Optional[str] = None
     description: Optional[str] = None
+    total_conflicts: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc))
 
 class ConflictBatch(BaseModel):

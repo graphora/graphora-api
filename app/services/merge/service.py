@@ -11,7 +11,7 @@ import json
 import redis.asyncio as redis
 from app.config import settings
 from app.schemas.conflicts import (
-    Conflict, ConflictSeverity, ConflictType, ResolutionOption, ResolutionStrategy,
+    Conflict, ConflictGroup, ConflictSeverity, ConflictType, ResolutionOption, ResolutionStrategy,
     ConflictResolutionResult, BulkResolutionResult
 )
 from app.services.graph_service import GraphService
@@ -53,8 +53,7 @@ from app.services.merge.tasks import (
     start_stage,
     complete_merge_stage,
     fail_merge,
-    map_production_entities,
-    detect_merge_conflicts
+    map_production_entities
 )
 from app.services.ontology import load_ontology
 from prefect.cache_policies import NO_CACHE
@@ -660,14 +659,10 @@ async def detect_merge_conflicts(
         conflict_service = ConflictDetectionService(production_storage)
         
         # Create production entity mapping dict
-        print("entity_mapping", ">>"*20)
-        print(entity_mapping)
         production_entity_mapping = {
             staging_id: match.production_matches
             for staging_id, match in entity_mapping.matches.items()
         }
-        print(">>"*20)
-        print(production_entity_mapping)
         
         # Detect conflicts
         conflict_batch = await conflict_service.detect_conflicts(
@@ -676,31 +671,56 @@ async def detect_merge_conflicts(
             staging_edges=graph.edges,
             production_matches=production_entity_mapping
         )
+        # Filter out identical duplicate groups and their conflicts for reporting
+        identical_groups = [
+            group for group in conflict_batch.conflict_groups
+            if group.batch_resolvable and 
+            group.recommended_strategy == ResolutionStrategy.IGNORE_DUPLICATE and
+            group.pattern in ["identical_duplicate_nodes", "identical_duplicate_relationships"]
+        ]
         
-        # Complete conflict detection stage
+        # Filter active conflicts (excluding identical duplicates)
+        active_conflicts = [
+            conflict for conflict in conflict_batch.conflicts
+            if not conflict.is_identical
+        ]
+        
+        # Calculate ignored conflicts count
+        ignored_conflicts_count = conflict_batch.total_conflicts - len(active_conflicts)
+        logger.info(f"Detected {conflict_batch.total_conflicts} total conflicts, "
+                   f"including {ignored_conflicts_count} identical duplicates to be ignored")
+        
+        # Update conflicts with the full batch (including identical duplicates)
+        await progress_tracker.update_conflicts(merge_id, conflict_batch)
+        
+        # Complete conflict detection stage with filtered metadata
         await progress_tracker.complete_merge_stage(
             merge_id,
             MergeStage.CONFLICT_DETECTION,
             metadata={
-                "total_conflicts": conflict_batch.total_conflicts,
+                "total_conflicts": len(active_conflicts),  # Only active conflicts
                 "batch_id": conflict_batch.batch_id,
                 "conflict_types": {
                     conflict_type.value: len([
-                        c for c in conflict_batch.conflicts
+                        c for c in active_conflicts  # Use active_conflicts here
                         if c.conflict_type == conflict_type
                     ])
                     for conflict_type in ConflictType
                 },
                 "severities": {
                     severity.value: len([
-                        c for c in conflict_batch.conflicts
+                        c for c in active_conflicts  # Use active_conflicts here
                         if c.severity == severity
                     ])
                     for severity in ConflictSeverity
+                },
+                "ignored_duplicates": {  # Add info about ignored duplicates
+                    "count": ignored_conflicts_count,
+                    "groups": len(identical_groups)
                 }
             }
         )
-        return conflict_batch.total_conflicts
+        return len(active_conflicts)  # Return only active conflict count
         
     except Exception as e:
         error_msg = f"Failed to detect conflicts: {str(e)}"
@@ -830,6 +850,8 @@ async def merge_flow(
         )
         
         if conflict_count <= 0:
+            await start_stage(merge_id, MergeStage.CONFLICT_RESOLUTION, progress_tracker)
+            await complete_merge_stage(merge_id, MergeStage.CONFLICT_RESOLUTION, progress_tracker, {})
             await start_stage(merge_id, MergeStage.APPLY_CHANGES, progress_tracker)
         
     except Exception as e:
@@ -2090,7 +2112,9 @@ class MergeService:
             logger.error(f"Error during partial rollback {rollback_id}: {str(e)}")
             raise
 
-    async def finalise_and_verify_merge(self, merge_id: str, session_id: str, transform_id: str) -> VerificationResult:
+    async def finalise_and_verify_merge(
+        self, graph_service: GraphService, 
+        merge_id: str, session_id: str, transform_id: str) -> VerificationResult:
         """Verify a merge operation
         
         Args:
@@ -2102,8 +2126,8 @@ class MergeService:
         """
         logger.info(f"Verifying merge {merge_id} for session {session_id} and transform {transform_id}")
         
-        staging_graph = await _extract_staging_graph(self.staging_storage, transform_id)
-        prod_storage_result = await self.store_to_prod(graph=staging_graph, transform_id=transform_id)
+        merged_graph = await self.get_merge_graph(graph_service, merge_id, transform_id)
+        prod_storage_result = await self.store_to_prod(graph=merged_graph, transform_id=transform_id)
         
         await complete_merge_stage(
             merge_id,
@@ -2376,12 +2400,12 @@ class MergeService:
             await storage.close()
 
     async def get_merge_graph(
-        self,
-        graph_service: GraphService,
-        merge_id: str,
-        transform_id: str,
-        limit: Optional[int] = 1000,
-        skip: Optional[int] = 0
+            self,
+            graph_service: GraphService,
+            merge_id: str,
+            transform_id: str,
+            limit: Optional[int] = 1000,
+            skip: Optional[int] = 0
     ) -> GraphResponse:
         """
         Get a merged graph by applying resolution operations on top of transformed staging data.
@@ -2403,19 +2427,59 @@ class MergeService:
             skip=skip
         )
         
+        # Get Redis client
+        redis_client = await get_redis_client()
+        
+        # Get identical duplicate groups
+        identical_groups_key = f"merge:{merge_id}:conflicts:identical_duplicate_groups"
+        identical_groups_json = await redis_client.get(identical_groups_key)
+        ignored_ids = set()
+        
+        if identical_groups_json:
+            identical_groups_data = json.loads(identical_groups_json)
+            identical_groups = [ConflictGroup(**data) for data in identical_groups_data]
+            
+            # Collect all staging IDs to ignore from identical duplicate groups
+            for group in identical_groups:
+                for conflict_id in group.conflicts:
+                    # Fetch the conflict to get staging IDs (assuming we can look up conflicts)
+                    conflict_key = f"merge:{merge_id}:conflict:{conflict_id}"
+                    conflict_json = await redis_client.get(conflict_key)
+                    if conflict_json:
+                        conflict = Conflict.model_validate_json(conflict_json)
+                        ignored_ids.update(conflict.staging_ids)
+            logger.info(f"Ignoring {len(ignored_ids)} entities marked as identical duplicates")
+        
+        # Filter out ignored nodes and edges from the base graph
+        filtered_nodes = [node for node in transformed_graph.nodes if node.id not in ignored_ids]
+        filtered_edges = [edge for edge in transformed_graph.edges if edge.id not in ignored_ids]
+        
         # Get resolutions from Redis
         key = f"merge:{merge_id}:resolutions"
-        redis_client = await get_redis_client()
         resolutions_json = await redis_client.get(key)
         
+        # Create initial merged graph with filtered data
+        merged_graph = GraphResponse(
+            nodes=filtered_nodes.copy(),
+            edges=filtered_edges.copy(),
+            total_nodes=len(filtered_nodes),
+            total_edges=len(filtered_edges),
+            metadata=transformed_graph.metadata.copy()
+        )
+        
         if not resolutions_json:
-            return transformed_graph
+            return merged_graph
             
         # Parse resolutions into GraphOperation objects
         resolutions_data = json.loads(resolutions_json)
         operations: List[GraphOperation] = []
         for op_data in resolutions_data:
             op_type = op_data.get("operation_type")
+            # Skip operations involving ignored IDs
+            staging_id = op_data.get("staging_id")
+            if staging_id in ignored_ids:
+                continue
+                
             if op_type == OperationType.UPDATE_NODE:
                 operations.append(UpdateNodeOperation(**op_data))
             elif op_type == OperationType.CREATE_RELATIONSHIP:
@@ -2429,19 +2493,9 @@ class MergeService:
             elif op_type == OperationType.UPDATE_RELATIONSHIP_DIRECTION:
                 operations.append(UpdateRelationshipDirectionOperation(**op_data))
 
-        # Create a copy of the graph to modify
-        merged_graph = GraphResponse(
-            nodes=transformed_graph.nodes.copy(),
-            edges=transformed_graph.edges.copy(),
-            total_nodes=transformed_graph.total_nodes,
-            total_edges=transformed_graph.total_edges,
-            metadata=transformed_graph.metadata.copy()
-        )
-
         # Apply each operation
         for operation in operations:
             if operation.operation_type == OperationType.UPDATE_NODE:
-                # Find and update node
                 for node in merged_graph.nodes:
                     if node.id == operation.staging_id:
                         node.properties.update(operation.properties)
@@ -2450,7 +2504,6 @@ class MergeService:
                         break
                         
             elif operation.operation_type == OperationType.CREATE_RELATIONSHIP:
-                # Create new edge
                 for edge in merged_graph.edges:
                     if edge.id == operation.staging_id:
                         new_edge = SchemaEdge(
@@ -2468,7 +2521,6 @@ class MergeService:
                         break
                 
             elif operation.operation_type == OperationType.UPDATE_RELATIONSHIP_TYPE:
-                # Update relationship type
                 for edge in merged_graph.edges:
                     if edge.id == operation.staging_id:
                         edge.type = operation.new_type
@@ -2477,7 +2529,6 @@ class MergeService:
                         break
                         
             elif operation.operation_type == OperationType.DELETE_NODE:
-                # Remove node and related edges
                 merged_graph.nodes = [n for n in merged_graph.nodes if n.id != operation.staging_id]
                 merged_graph.edges = [
                     e for e in merged_graph.edges 
@@ -2487,12 +2538,10 @@ class MergeService:
                 merged_graph.total_edges = len(merged_graph.edges)
                 
             elif operation.operation_type == OperationType.DELETE_RELATIONSHIP:
-                # Remove edge
                 merged_graph.edges = [e for e in merged_graph.edges if e.id != operation.staging_id]
                 merged_graph.total_edges = merged_graph.total_edges - 1
                 
             elif operation.operation_type == OperationType.UPDATE_RELATIONSHIP_DIRECTION:
-                # Reverse edge direction
                 for edge in merged_graph.edges:
                     if edge.id == operation.staging_id:
                         edge.source, edge.target = edge.target, edge.source
