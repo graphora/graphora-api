@@ -2162,7 +2162,20 @@ class MergeService:
                 MergeStage.VERIFICATION, 
                 status
             )
-            print(verification_result)
+            
+            if verification_result.success:
+                await start_stage(merge_id, MergeStage.MERGE, self.progress_tracker)
+                await complete_merge_stage(
+                    merge_id,
+                    MergeStage.MERGE,
+                    self.progress_tracker,
+                    prod_storage_result
+                )
+                await complete_merge(
+                    merge_id,
+                    self.progress_tracker
+                )
+            
             return verification_result
         except Exception as e:
             traceback.print_exc()
