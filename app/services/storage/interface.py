@@ -8,6 +8,7 @@ from app.services.storage.models import (
     Node,
     Edge
 )
+from app.services.transform.models import BaseNode, RelationshipInstance
 
 class GraphStorageInterface(ABC):
     """Abstract interface for graph storage"""
@@ -15,7 +16,7 @@ class GraphStorageInterface(ABC):
     @abstractmethod
     async def store_nodes(
         self,
-        nodes: List[Dict],
+        nodes: List[BaseNode],
         batch_index: int,
         transform_id: str,
         merge: bool = True
@@ -26,7 +27,7 @@ class GraphStorageInterface(ABC):
     @abstractmethod
     async def store_relationships(
         self,
-        relationships: List[Dict],
+        relationships: List[RelationshipInstance],
         batch_index: int,
         transform_id: str,
         merge: bool = True

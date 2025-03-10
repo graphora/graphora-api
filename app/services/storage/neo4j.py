@@ -181,11 +181,18 @@ class Neo4jStorage(GraphStorageInterface):
 
     def _build_relationship_query(self, rel: RelationshipInstance, merge: bool = True) -> Tuple[str, Dict[str, Any]]:
         """Build a Cypher query for creating a relationship"""
-        source_id = rel.source_id
-        target_id = rel.target_id
-        rel_id = rel.id
-        rel_type = rel.type
-        rel_properties = rel.properties
+        if isinstance(rel, dict):
+            source_id = rel.get('source_id') or rel.get('source')
+            target_id = rel.get('target_id') or rel.get('target')
+            rel_id = rel.get('id', str(uuid.uuid4()))
+            rel_type = rel.get('type') or rel.get('relationship_type')
+            rel_properties = rel.get('properties', {})
+        else:
+            source_id = rel.source if hasattr(rel, 'source') else rel.source_id
+            target_id = rel.target if hasattr(rel, 'target') else rel.target_id
+            rel_id = rel.id
+            rel_type = rel.type if hasattr(rel, 'type') else rel.relationship_type
+            rel_properties = rel.properties
 
         # Ensure rel_properties is a dict
         if rel_properties is None:
@@ -311,6 +318,7 @@ class Neo4jStorage(GraphStorageInterface):
                 
                 await self._execute_with_retry(_execute_query)
                 items_processed += 1
+                print(stored_rels)
             except (StorageError, DatabaseError) as e:
                 traceback.print_exc()
                 success = False

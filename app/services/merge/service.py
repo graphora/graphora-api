@@ -1358,7 +1358,16 @@ class MergeService:
         
         # Check if already resolved
         if conflict.resolved:
-            raise ValueError(f"Conflict {conflict_id} is already resolved")
+            # raise ValueError(f"Conflict {conflict_id} is already resolved")
+            return ConflictResolutionResult(
+                success=True,
+                conflict_id=conflict.id,
+                resolved=True,
+                resolution_id=None,
+                verification={},
+                changes=[],
+                error=None
+            )
         
         # Find the resolution option
         resolution_option = None
@@ -1709,7 +1718,7 @@ class MergeService:
             by_severity[severity] = by_severity.get(severity, 0) + 1
             
             # Check if this conflict can be auto-resolved
-            if conflict.severity == ConflictSeverity.MINOR and conflict.resolution_options:
+            if conflict.severity != ConflictSeverity.INFO and conflict.resolution_options:
                 # Get the highest confidence resolution option
                 best_option = max(conflict.resolution_options, key=lambda x: x.confidence)
                 
@@ -2205,9 +2214,6 @@ class MergeService:
         Returns:
             Dict with metrics
         """
-        print("##"*20)
-        print(graph)
-        print("##"*20)
         storage = self.production_storage
         start_time = datetime.now()
         def chunk_list(items: List, size: int) -> List[List]:
