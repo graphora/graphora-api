@@ -130,16 +130,17 @@ class Neo4jStorage(GraphStorageInterface):
                     continue
                 raise StorageError(f"Operation failed after {self.max_retries} retries: {str(e)}")
             except (DatabaseError, StorageConnectionError) as e:
+                traceback.print_exc()
                 # Don't retry database or connection errors, just propagate them
                 raise StorageError(str(e))
             except Exception as e:
+                traceback.print_exc()
                 # Don't retry other errors
                 raise StorageError(f"Unexpected error: {str(e)}")
 
-    def _build_node_query(self, node: BaseNode, transform_id: str) -> tuple[str, Dict]:
+    def _build_node_query(self, node: BaseNode, transform_id: str, merge: bool = True) -> tuple[str, Dict]:
         """Build Cypher query for creating a node with properties"""
         # Extract properties excluding metadata
-        print(node)
         if isinstance(node, dict):
             # Handle dictionary input
             node_properties = node.get('properties', {})
@@ -168,7 +169,7 @@ class Neo4jStorage(GraphStorageInterface):
 
         # Build query
         query = (
-            f"MERGE (n:{':'.join(labels)} {{id: $id}}) "
+            f"{'MERGE' if merge else 'CREATE'} (n:{':'.join(labels)} {{id: $id}}) "
             "SET n += $properties "
             "RETURN n"
         )
@@ -178,20 +179,13 @@ class Neo4jStorage(GraphStorageInterface):
             "properties": properties
         }
 
-    def _build_relationship_query(self, rel: RelationshipInstance) -> Tuple[str, Dict[str, Any]]:
+    def _build_relationship_query(self, rel: RelationshipInstance, merge: bool = True) -> Tuple[str, Dict[str, Any]]:
         """Build a Cypher query for creating a relationship"""
-        if isinstance(rel, dict):
-            source_id = rel.get('source_id') or rel.get('source')
-            target_id = rel.get('target_id') or rel.get('target')
-            rel_id = rel.get('id', str(uuid.uuid4()))
-            rel_type = rel.get('type') or rel.get('relationship_type')
-            rel_properties = rel.get('properties', {})
-        else:
-            source_id = rel.source if hasattr(rel, 'source') else rel.source_id
-            target_id = rel.target if hasattr(rel, 'target') else rel.target_id
-            rel_id = rel.id
-            rel_type = rel.type if hasattr(rel, 'type') else rel.relationship_type
-            rel_properties = rel.properties
+        source_id = rel.source_id
+        target_id = rel.target_id
+        rel_id = rel.id
+        rel_type = rel.type
+        rel_properties = rel.properties
 
         # Ensure rel_properties is a dict
         if rel_properties is None:
@@ -227,7 +221,8 @@ class Neo4jStorage(GraphStorageInterface):
         self,
         nodes: List[BaseNode],
         batch_index: int,
-        transform_id: str
+        transform_id: str,
+        merge: bool = True
     ) -> StorageBatchResult:
         """Store nodes in Neo4j"""
         start_time = time.time()
@@ -241,7 +236,8 @@ class Neo4jStorage(GraphStorageInterface):
             try:
                 async def _execute_query():
                     async with self._get_session() as session:
-                        query, params = self._build_node_query(node, transform_id)
+                        query, params = self._build_node_query(node, transform_id, merge=merge)
+                        print(query, params)
                         await session.run(query, params)
 
                 await self._execute_with_retry(_execute_query)
@@ -292,7 +288,8 @@ class Neo4jStorage(GraphStorageInterface):
         self,
         relationships: List[RelationshipInstance],
         batch_index: int,
-        transform_id: str
+        transform_id: str,
+        merge: bool = True
     ) -> StorageBatchResult:
         """Store relationships in Neo4j"""
         start_time = time.time()
@@ -309,7 +306,8 @@ class Neo4jStorage(GraphStorageInterface):
                     continue
                 async def _execute_query():
                     async with self._get_session() as session:
-                        query, params = self._build_relationship_query(rel)
+                        query, params = self._build_relationship_query(rel, merge=merge)
+                        print(query, params)
                         await session.run(query, params)
                         stored_rels.add(rel.id)
                 

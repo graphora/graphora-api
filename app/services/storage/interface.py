@@ -17,7 +17,8 @@ class GraphStorageInterface(ABC):
         self,
         nodes: List[Dict],
         batch_index: int,
-        transform_id: str
+        transform_id: str,
+        merge: bool = True
     ) -> StorageBatchResult:
         """Store nodes in batch"""
         pass
@@ -27,7 +28,8 @@ class GraphStorageInterface(ABC):
         self,
         relationships: List[Dict],
         batch_index: int,
-        transform_id: str
+        transform_id: str,
+        merge: bool = True
     ) -> StorageBatchResult:
         """Store relationships in batch"""
         pass

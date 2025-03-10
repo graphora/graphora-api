@@ -118,8 +118,8 @@ class ResolutionOptions(BaseModel):
 
 class ResolvedEntities(BaseModel):
     matching_ids: List[str]
-    confidence_scores: float
-    explanations: str
+    confidence_score: float
+    explanation: str
 
 class SelectedResolution(BaseModel):
     option_id: str

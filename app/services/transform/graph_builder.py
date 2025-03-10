@@ -1,4 +1,4 @@
-from typing import Dict, List, Any, Optional, Callable
+from typing import Dict, List, Any, Optional, Callable, Tuple
 import copy
 import asyncio
 import uuid
@@ -34,7 +34,7 @@ class KnowledgeGraphBuilder:
         self.pydantic_cls = self.ontology_parser.build_graph_model()
         self.graph = self.pydantic_cls()
         self.metrics = ExtractionMetrics(start_time=datetime.now())
-        self.extracted_triples = []
+        self.extracted_triples = set()
         self.entity_registry = {}
         self.llm_client = LLMClient()
         
@@ -219,7 +219,8 @@ class KnowledgeGraphBuilder:
                     node_key = self._generate_node_key(entity_type, properties)
                     
                     # Create node with stable ID based on key
-                    node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, node_key))
+                    # node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, node_key))
+                    node_id = str(uuid.uuid4())
                     node = BaseNode(
                         id=node_id,
                         type=entity_type,
@@ -343,9 +344,9 @@ class KnowledgeGraphBuilder:
                         rel_properties = extract_properties(rel_item.properties)
                     
                     # Create deterministic relationship ID
-                    rel_key = f"{source_id}:{target_id}:{rel_type}"
-                    rel_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, rel_key))
-                    
+                    # rel_key = f"{source_id}:{target_id}:{rel_type}"
+                    # rel_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, rel_key))
+                    rel_id = str(uuid.uuid4())
                     # Create relationship
                     rel = RelationshipInstance(
                         id=rel_id,
@@ -714,6 +715,9 @@ class KnowledgeGraphBuilder:
         self.graph.extraction_timestamp = datetime.now(timezone.utc).isoformat()
         
         # Post process the graph (includes entity resolution and relationship enhancement)
+        print('#'*20)
+        print(self.graph)
+        print('#'*20)
         processed_graph = await self.post_process_graph(self.graph)
         
         # Update self.graph to match processed_graph structure
@@ -959,7 +963,7 @@ class KnowledgeGraphBuilder:
         Includes entity summaries and relationship patterns.
         """
         if not hasattr(self, 'extracted_triples'):
-            self.extracted_triples = []
+            self.extracted_triples = set()
             
         if not self.extracted_triples:
             return ""
@@ -1003,7 +1007,7 @@ class KnowledgeGraphBuilder:
         
         # 3. Most recent extractions
         context_parts.append("\n# Most recent extractions:")
-        recent_triples = self.extracted_triples[-max_triples:]
+        recent_triples = list(self.extracted_triples)[-max_triples:]
         context_parts.extend(recent_triples)
         
         return "\n".join(context_parts)
@@ -1019,7 +1023,7 @@ class KnowledgeGraphBuilder:
     def _update_extracted_triples(self, result: Dict[str, Any]) -> None:
         """Update RDF triple context from extraction result"""
         if not hasattr(self, 'extracted_triples'):
-            self.extracted_triples = []
+            self.extracted_triples = set()
             
         # Process nodes first
         for node in result.get('nodes', []):
@@ -1032,7 +1036,7 @@ class KnowledgeGraphBuilder:
                     # Format as: <entity_type>(<entity_id>) <property> <value>
                     safe_value = self._create_safe_property_value(prop_value)
                     triple = f"{entity_type}({entity_id}) hasProperty:{prop_name} {safe_value}"
-                    self.extracted_triples.append(triple)
+                    self.extracted_triples.add(triple)
         
         # Process relationships
         for rel in result.get('relationships', []):
@@ -1044,7 +1048,7 @@ class KnowledgeGraphBuilder:
             
             # Format as: <source_type>(<source_id>) <relationship> <target_type>(<target_id>)
             triple = f"{source_type}({source_id}) {rel_type} {target_type}({target_id})"
-            self.extracted_triples.append(triple)
+            self.extracted_triples.add(triple)
             
             # Add relationship properties if any
             if hasattr(rel, 'properties') and rel.properties:
@@ -1053,12 +1057,12 @@ class KnowledgeGraphBuilder:
                         # Format as: Relationship(<rel_id>) <property> <value>
                         safe_value = self._create_safe_property_value(prop_value)
                         rel_triple = f"Relationship({rel.id}) hasProperty:{prop_name} {safe_value}"
-                        self.extracted_triples.append(rel_triple)
+                        self.extracted_triples.add(rel_triple)
                         
     def _update_final_triples(self):
         """Update RDF triples based on the final state of the graph"""
         # Clear existing triples to rebuild from current graph state
-        self.extracted_triples = []
+        self.extracted_triples = set()
         
         # Process all entity types in the graph
         for entity_type in self.entity_models.keys():
@@ -1084,7 +1088,7 @@ class KnowledgeGraphBuilder:
                         # Use safe string replacement
                         value_str = str(prop_value).replace('"', r'\"')
                         triple = f"{entity_type}({entity_id}) hasProperty:{prop_name} \"{value_str}\""
-                        self.extracted_triples.append(triple)
+                        self.extracted_triples.add(triple)
         
         # Process all relationship types
         for field_name in dir(self.graph):
@@ -1111,7 +1115,7 @@ class KnowledgeGraphBuilder:
                     
                     # Format as: <source_type>(<source_id>) <relationship> <target_type>(<target_id>)
                     triple = f"{source_type}({source_id}) {rel_type} {target_type}({target_id})"
-                    self.extracted_triples.append(triple)
+                    self.extracted_triples.add(triple)
                     
                     # Add relationship properties if any
                     if hasattr(rel, 'properties') and rel.properties:
@@ -1120,7 +1124,7 @@ class KnowledgeGraphBuilder:
                                 # Format as: Relationship(<rel_id>) <property> <value>
                                 value_str = str(prop_value).replace('"', r'\"')
                                 rel_triple = f"Relationship({rel.id}) hasProperty:{prop_name} \"{value_str}\""
-                                self.extracted_triples.append(rel_triple)
+                                self.extracted_triples.add(rel_triple)
         
         # Limit total number of triples to avoid context explosion
         max_triples = 500  # Adjust based on your model's context window
@@ -1184,8 +1188,31 @@ class KnowledgeGraphBuilder:
             entity_type = node.type
             if entity_type not in entity_groups:
                 entity_groups[entity_type] = []
-            entity_groups[entity_type].append(node)
+            if node.id not in [n.id for n in entity_groups[entity_type]]:
+                entity_groups[entity_type].append(node)
+            else:
+                #merge nodes with same id
+                base_node = [n for n in entity_groups[entity_type] if n.id == node.id][0]
+                entity_groups[entity_type].remove(base_node)
+                base_node = self._merge_nodes(base_node, node)
+                entity_groups[entity_type].append(base_node)
+        
+        # Enhance property consistency
+        doc_graph = self._enhance_property_consistency(doc_graph)
+            
+        # Process each entity group
+        standardised_entity_groups = await asyncio.gather(
+            *[
+                self._standardize_entity_group(entity_type, entities)
+                for entity_type, entities in entity_groups.items()
+            ]
+        )
+        for (entity_type, standardized_entities) in standardised_entity_groups:
+            entity_groups[entity_type] = standardized_entities
 
+        print('^'*20)
+        print(entity_groups)
+        print('^'*20)
         # Process each entity type group for resolution
         merged_nodes = {}  # old_id -> new_id mapping
         final_nodes = []
@@ -1207,7 +1234,7 @@ class KnowledgeGraphBuilder:
                     
                 # Sort by confidence score to use highest confidence node as base
                 sorted_nodes = sorted(group, 
-                                    key=lambda x: x.provenance.confidence_score if hasattr(x, 'provenance') and x.provenance else 0, 
+                                    key=lambda x: x.confidence_score if x.confidence_score else 0, 
                                     reverse=True)
                 
                 # Use highest confidence node as base and merge others into it
@@ -1219,6 +1246,9 @@ class KnowledgeGraphBuilder:
                 
                 final_nodes.append(base_node)
 
+        print('@'*20)
+        print(final_nodes)
+        print('@'*20)
         # Update relationships with merged node IDs and remove invalid ones
         final_relationships = []
         for rel in doc_graph.relationships:
@@ -1239,29 +1269,13 @@ class KnowledgeGraphBuilder:
         # Update graph with resolved entities
         doc_graph.nodes = final_nodes
         doc_graph.relationships = final_relationships
-            
-        # Continue with existing post-processing steps
-        # Standardize entity values
-        entity_groups = {}
-        for node in doc_graph.nodes:
-            entity_type = node.__class__.__name__
-            if entity_type not in entity_groups:
-                entity_groups[entity_type] = []
-            entity_groups[entity_type].append(node.model_dump())
-        
-        # Enhance property consistency
-        self._enhance_property_consistency(doc_graph)
-            
-        # Process each entity group
-        await asyncio.gather(
-            *[
-                self._standardize_entity_group(entity_type, entities)
-                for entity_type, entities in entity_groups.items()
-            ]
-        )
+
+        print('*'*20)
+        print(doc_graph)
+        print('*'*20)
         
         # Validate relationship consistency
-        self._validate_relationship_consistency(doc_graph)
+        doc_graph = self._validate_relationship_consistency(doc_graph)
         
         # Enhance relationship confidence
         self._enhance_relationship_confidence(doc_graph)
@@ -1291,7 +1305,7 @@ class KnowledgeGraphBuilder:
             node_dict = {
                 "id": node.id,
                 "properties": node.properties,
-                "confidence": node.provenance.confidence_score if hasattr(node, 'provenance') and node.provenance else None
+                "confidence": node.confidence_score if node.confidence_score else 0.3
             }
             node_dicts.append(node_dict)
             
@@ -1316,13 +1330,15 @@ class KnowledgeGraphBuilder:
                 node_group = []
                 for matching_node_id in result.matching_ids:
                     if matching_node_id in node_map:
-                        node_group.append(node_map[matching_node_id])
+                        _node = node_map[matching_node_id]
+                        _node.confidence_score = result.confidence_score
+                        node_group.append(_node)
                 if node_group:  # Only add non-empty groups
                     resolved_groups.append(node_group)
                     
                     # Log explanation if available
-                    if result.explanations:
-                        logger.info(f"Entity resolution group {node_group[0].type}: {result.explanations}")
+                    if result.explanation:
+                        logger.info(f"Entity resolution group {node_group[0].type}: {result.explanation}")
             
             # Check if any nodes were missed (safeguard)
             included_nodes = [node for group in resolved_groups for node in group]
@@ -1340,36 +1356,38 @@ class KnowledgeGraphBuilder:
             # Fallback: treat each node as separate group
             return [[node] for node in nodes]
 
-    async def _standardize_entity_group(self, entity_type: str, entity_data: List[Dict]) -> Optional[List[Dict]]:
+    async def _standardize_entity_group(self, entity_type: str, entity_data: List[BaseNode]) -> Tuple[str, List[BaseNode]]:
         """
         Use LLM to standardize property values across similar entities
         """
         if not entity_data:
-            return None
+            return (entity_type, [])
             
         # Sort by confidence score to prioritize high-confidence entities
-        sorted_entities = sorted(entity_data, key=lambda e: e.get('confidence', 0), reverse=True)
+        sorted_entities = sorted(entity_data, 
+                                 key=lambda e: e.confidence_score if e.confidence_score is not None else 0.0, 
+                                 reverse=True)
         
         # Call LLM for standardization
         try:
             results = await self.llm_client.standardise_properties(
                 entity_group_type=entity_type, 
-                entities_json=json.dumps(sorted_entities, indent=2))
-            if not results:
-                entity_map = { entity.get('id'): entity for entity in entity_data }
+                entities_json=json.dumps([entity.model_dump() for entity in sorted_entities], indent=2))
+            if results:
+                entity_map = { entity.id: entity for entity in entity_data }
                 for result in results:
                     std_props = result.properties
-                    entity_map[result.entity_id].update(std_props)
-                return list(entity_map.values())
+                    entity_map[result.entity_id].properties.update(std_props)
+                return (entity_type, list(entity_map.values()))
                     
-            return entity_data
+            return (entity_type, entity_data)
             
         except Exception as e:
             logger.warning(f"Error in LLM standardization: {str(e)}")
             traceback.print_exc()
-            return None
+            return (entity_type, entity_data)
     
-    def _enhance_property_consistency(self, graph: DocumentKnowledgeGraph) -> None:
+    def _enhance_property_consistency(self, graph: DocumentKnowledgeGraph) -> DocumentKnowledgeGraph:
         """
         Enhance property naming consistency across entity types.
         This uses the ontology definitions to ensure property names match expectations.
@@ -1378,7 +1396,7 @@ class KnowledgeGraphBuilder:
         
         # Process all nodes
         for node in graph.nodes:
-            entity_type = node.__class__.__name__
+            entity_type = node.type
             entity_def = ontology.get('entities', {}).get(entity_type, {})
             property_defs = entity_def.get('properties', {})
             if not property_defs:
@@ -1399,8 +1417,10 @@ class KnowledgeGraphBuilder:
                 normalized_props[final_name] = prop_value
                 
             node.properties = normalized_props
+        
+        return graph
     
-    def _validate_relationship_consistency(self, graph: DocumentKnowledgeGraph) -> None:
+    def _validate_relationship_consistency(self, graph: DocumentKnowledgeGraph) -> DocumentKnowledgeGraph:
         """
         Ensure relationships are consistent with ontology definitions.
         """
@@ -1423,8 +1443,10 @@ class KnowledgeGraphBuilder:
         
         # Update edges with only valid relationships
         graph.relationships = valid_edges
+
+        return graph
     
-    def _enhance_relationship_confidence(self, graph: DocumentKnowledgeGraph) -> None:
+    def _enhance_relationship_confidence(self, graph: DocumentKnowledgeGraph) -> DocumentKnowledgeGraph:
         """
         Enhance relationship confidence scores based on connected entities.
         """
@@ -1458,6 +1480,8 @@ class KnowledgeGraphBuilder:
             
             # Average of entity confidences
             edge.provenance.confidence_score = (source_conf + target_conf) / 2
+
+        return graph
 
     async def _infer_missing_relationships(self, graph: DocumentKnowledgeGraph) -> None:
         """

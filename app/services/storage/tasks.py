@@ -100,11 +100,7 @@ async def store_knowledge_graph(
         current_stage = status.stage if status else StorageStage.NODES
         
         # Convert nodes to list if needed
-        nodes = (
-            list(graph.nodes.values())
-            if isinstance(graph.nodes, dict)
-            else graph.nodes
-        )
+        nodes = graph.nodes
         
         # Process nodes if not completed
         if current_stage == StorageStage.NODES:
@@ -126,7 +122,8 @@ async def store_knowledge_graph(
                     batch_result = await storage.store_nodes(
                         node_batch,
                         batch_idx,
-                        transform_id
+                        transform_id,
+                        merge=False
                     )
                     
                     # Update metrics

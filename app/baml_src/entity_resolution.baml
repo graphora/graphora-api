@@ -3,11 +3,11 @@ class ResolvedEntities {
     IDs of entities that match.
     E.g: ['2e89f864-0e7e', '572077c6-a044', '587a-bfb7-4ec535f1a005'],  # Example: entities with IDs '2e89f864-0e7e', '572077c6-a044', '587a-bfb7-4ec535f1a005' match
   "#)
-  confidence_scores float @description(#"
-    Confidence scores the matching group.
+  confidence_score float @description(#"
+    Confidence score the matching group.
     E.g: 0.95
   "#)
-  explanations string @description(#"
+  explanation string @description(#"
     Explanations for each matching group.
     E.g: These entities share the same name with minor variations and have overlapping properties
   "#)
