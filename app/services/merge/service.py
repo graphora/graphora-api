@@ -1473,7 +1473,8 @@ class MergeService:
             resolutions_list = []
             if resolutions_json:
                 resolutions_list = json.loads(resolutions_json)
-            await redis_client.set(key, json.dumps([model.model_dump() for model in resolutions_list + resolution]))
+            new_res = [model.model_dump() for model in resolution]
+            await redis_client.set(key, json.dumps(resolutions_list + new_res))
         
         # Update conflict in Redis
         key = f"merge:{merge_id}:conflict:{conflict.id}"

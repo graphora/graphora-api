@@ -715,9 +715,6 @@ class KnowledgeGraphBuilder:
         self.graph.extraction_timestamp = datetime.now(timezone.utc).isoformat()
         
         # Post process the graph (includes entity resolution and relationship enhancement)
-        print('#'*20)
-        print(self.graph)
-        print('#'*20)
         processed_graph = await self.post_process_graph(self.graph)
         
         # Update self.graph to match processed_graph structure
@@ -1210,9 +1207,6 @@ class KnowledgeGraphBuilder:
         for (entity_type, standardized_entities) in standardised_entity_groups:
             entity_groups[entity_type] = standardized_entities
 
-        print('^'*20)
-        print(entity_groups)
-        print('^'*20)
         # Process each entity type group for resolution
         merged_nodes = {}  # old_id -> new_id mapping
         final_nodes = []
@@ -1246,9 +1240,6 @@ class KnowledgeGraphBuilder:
                 
                 final_nodes.append(base_node)
 
-        print('@'*20)
-        print(final_nodes)
-        print('@'*20)
         # Update relationships with merged node IDs and remove invalid ones
         final_relationships = []
         for rel in doc_graph.relationships:
@@ -1270,9 +1261,6 @@ class KnowledgeGraphBuilder:
         doc_graph.nodes = final_nodes
         doc_graph.relationships = final_relationships
 
-        print('*'*20)
-        print(doc_graph)
-        print('*'*20)
         
         # Validate relationship consistency
         doc_graph = self._validate_relationship_consistency(doc_graph)

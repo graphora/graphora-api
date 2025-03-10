@@ -237,7 +237,6 @@ class Neo4jStorage(GraphStorageInterface):
                 async def _execute_query():
                     async with self._get_session() as session:
                         query, params = self._build_node_query(node, transform_id, merge=merge)
-                        print(query, params)
                         await session.run(query, params)
 
                 await self._execute_with_retry(_execute_query)
@@ -307,7 +306,6 @@ class Neo4jStorage(GraphStorageInterface):
                 async def _execute_query():
                     async with self._get_session() as session:
                         query, params = self._build_relationship_query(rel, merge=merge)
-                        print(query, params)
                         await session.run(query, params)
                         stored_rels.add(rel.id)
                 

@@ -437,6 +437,7 @@ async def resolve_conflict(
             )
         
     except Exception as e:
+        traceback.print_exc()
         logger.error(f"Error resolving conflict: {str(e)}")
         raise HTTPException(
             status_code=500,
