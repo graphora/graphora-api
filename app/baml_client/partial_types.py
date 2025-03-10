@@ -106,8 +106,8 @@ class ResolutionOptions(BaseModel):
 
 class ResolvedEntities(BaseModel):
     matching_ids: List[str]
-    confidence_scores: Optional[float] = None
-    explanations: Optional[str] = None
+    confidence_score: Optional[float] = None
+    explanation: Optional[str] = None
 
 class SelectedResolution(BaseModel):
     option_id: Optional[str] = None

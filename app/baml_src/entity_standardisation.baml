@@ -21,9 +21,9 @@ function StandardiseProperties(entity_group_type: string, entities_json: string)
     {{ entities_json }}
     
     Please standardize the properties by:
-    1. Using the most accurate/complete value for each property
-    2. Fixing capitalization and formatting inconsistencies 
-    3. Using proper business terminology
+    1. Using the most accurate/complete VALUE (NOT PROPERTY NAME) for each property
+    2. Fixing capitalization and formatting inconsistencies for values
+    3. DO NOT CHANGE THE PROPERTY NAMES
     4. Include only the standardised properties & the corresponding entity IDs in the output
 
     {{ ctx.output_format }}

@@ -302,17 +302,6 @@ class GraphOperation(BaseModel):
 class UpdateNodeOperation(GraphOperation):
     operation_type: OperationType = OperationType.UPDATE_NODE
     properties: Dict[str, Any]
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "operation_id": "123e4567-e89b-12d3-a456-426614174000",
-                "operation_type": "update_node",
-                "timestamp": "2025-03-06T12:00:00Z",
-                "entity_id": "node_123",
-                "properties": {"name": "New Name", "status": "active"}
-            }
-        }
 
 class CreateRelationshipOperation(GraphOperation):
     operation_type: OperationType = OperationType.CREATE_RELATIONSHIP
@@ -320,20 +309,6 @@ class CreateRelationshipOperation(GraphOperation):
     target_id: str
     rel_type: str
     properties: Dict[str, Any] = {}
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "operation_id": "123e4567-e89b-12d3-a456-426614174001",
-                "operation_type": "create_relationship",
-                "timestamp": "2025-03-06T12:00:00Z",
-                "entity_id": "rel_456",
-                "source_id": "node_123",
-                "target_id": "node_456",
-                "rel_type": "KNOWS",
-                "properties": {"since": 2020}
-            }
-        }
         
 class UpdateRelationshipDirectionOperation(GraphOperation):
     operation_type: OperationType = OperationType.UPDATE_RELATIONSHIP_DIRECTION
@@ -342,44 +317,12 @@ class UpdateRelationshipTypeOperation(GraphOperation):
     operation_type: OperationType = OperationType.UPDATE_RELATIONSHIP_TYPE
     old_type: str
     new_type: str
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "operation_id": "123e4567-e89b-12d3-a456-426614174002",
-                "operation_type": "update_relationship_type",
-                "timestamp": "2025-03-06T12:00:00Z",
-                "entity_id": "rel_456",
-                "old_type": "FRNDS_WITH",
-                "new_type": "FRIENDS_WITH"
-            }
-        }
 
 class DeleteNodeOperation(GraphOperation):
     operation_type: OperationType = OperationType.DELETE_NODE
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "operation_id": "123e4567-e89b-12d3-a456-426614174003",
-                "operation_type": "delete_node",
-                "timestamp": "2025-03-06T12:00:00Z",
-                "entity_id": "node_789"
-            }
-        }
 
 class DeleteRelationshipOperation(GraphOperation):
     operation_type: OperationType = OperationType.DELETE_RELATIONSHIP
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "operation_id": "123e4567-e89b-12d3-a456-426614174004",
-                "operation_type": "delete_relationship",
-                "timestamp": "2025-03-06T12:00:00Z",
-                "entity_id": "rel_456"
-            }
-        }
 
 # Modified Resolution Result to include operations
 class ConflictResolutionResultWithOperations(BaseModel):
