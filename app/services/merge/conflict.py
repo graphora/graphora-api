@@ -584,6 +584,10 @@ class ConflictDetectionService:
         }
         
         for conflict in batch.conflicts:
+            if conflict.severity == ConflictSeverity.INFO:
+                counts["resolved"] = counts["resolved"] + 1
+                counts["unresolved"] = counts["unresolved"] - 1
+            
             # Count by type
             type_key = conflict.conflict_type.value
             counts["by_type"][type_key] = counts["by_type"].get(type_key, 0) + 1

@@ -1,6 +1,7 @@
 """Service for applying conflict resolutions to the production graph"""
 from typing import List
 import logging
+import traceback
 import uuid
 
 from app.schemas.conflicts import Conflict, ConflictResolutionResult, ResolutionOption, ConflictType, ResolutionStrategy
@@ -39,6 +40,8 @@ class ResolutionApplicator:
                 result = await self._apply_relationship_type_resolution(conflict, resolution_option)
             elif conflict.conflict_type == ConflictType.RELATIONSHIP_DIRECTION:
                 result = await self._apply_relationship_direction_resolution(conflict, resolution_option)
+            elif conflict.conflict_type == ConflictType.DUPLICATE_ENTITY:
+                result = await self._apply_duplicate_entity_resolution(conflict, resolution_option)
             else:
                 raise ValueError(f"Unsupported conflict type: {conflict.conflict_type}")
             
@@ -53,6 +56,7 @@ class ResolutionApplicator:
             )
             
         except Exception as e:
+            traceback.print_exc()
             logger.error(f"Failed to apply resolution for conflict {conflict.id}: {str(e)}")
             return ConflictResolutionResult(
                 conflict_id=conflict.id,
@@ -122,7 +126,7 @@ class ResolutionApplicator:
                 "action": "no_change"
             }
             
-        elif resolution.resolution_type == "merge_values":
+        elif resolution.resolution_type == ResolutionStrategy.MERGE_VALUES:
             # Merge values based on type
             strategy = resolution.resolution_data.get("strategy", "concat")
             
@@ -155,6 +159,156 @@ class ResolutionApplicator:
         else:
             raise ValueError(f"Unsupported resolution type: {resolution.resolution_type}")
         
+        return operations
+    
+    async def _apply_duplicate_entity_resolution(
+        self, 
+        conflict: Conflict, 
+        resolution: ResolutionOption
+    ) -> List[GraphOperation]:
+        """Apply resolution for duplicate entity conflict"""
+        # Extract necessary information from conflict context
+        staging_id = conflict.staging_ids[0] if conflict.staging_ids else None
+        production_ids = conflict.production_ids
+        
+        if not staging_id:
+            raise ValueError("Missing staging entity ID in conflict")
+            
+        if not production_ids or len(production_ids) == 0:
+            raise ValueError("No production entity IDs in conflict")
+            
+        operations = []
+        
+        # Get the staging node
+        staging_node = await self.staging_storage.get_node_by_id(staging_id)
+        if not staging_node:
+            raise ValueError(f"Staging node {staging_id} not found")
+            
+        # Handle different resolution strategies
+        if resolution.resolution_type == ResolutionStrategy.IGNORE_DUPLICATE:
+            # No changes needed, just ignore the duplicate
+            # Add an empty operation to record the decision
+            operations.append(UpdateNodeOperation(
+                id=production_ids[0],
+                staging_id=staging_id,
+                properties={}  # Empty update to record the "ignore" decision
+            ))
+            operations[-1].dict()["changes"] = {
+                "staging_id": staging_id,
+                "production_ids": production_ids,
+                "action": "ignore_duplicate"
+            }
+            return operations
+            
+        elif resolution.resolution_type == ResolutionStrategy.KEEP_PRODUCTION:
+            # Keep only one specific production entity
+            production_id = resolution.resolution_data.get("production_id")
+            if not production_id:
+                raise ValueError("Missing production_id in resolution data")
+                
+            # Get the selected production node
+            production_node = await self.production_storage.get_node_by_id(production_id)
+            if not production_node:
+                raise ValueError(f"Production node {production_id} not found")
+                
+            # Add an empty operation to record the decision
+            operations.append(UpdateNodeOperation(
+                id=production_id,
+                staging_id=staging_id,
+                properties=production_node.properties
+            ))
+            operations[-1].dict()["changes"] = {
+                "staging_id": staging_id,
+                "production_id": production_id,
+                "properties": production_node.properties,
+                "action": "keep_production"
+            }
+            return operations
+            
+        elif resolution.resolution_type == ResolutionStrategy.MERGE_VALUES:
+            # Merge properties from staging node into the first production node
+            production_id = production_ids[0]
+            
+            # Get the production node
+            production_node = await self.production_storage.get_node_by_id(production_id)
+            if not production_node:
+                raise ValueError(f"Production node {production_id} not found")
+                
+            # Merge properties (prefer staging values for conflicts)
+            merged_properties = {}
+            for prop_name, prop_value in staging_node.properties.items():
+                # Skip system properties
+                if prop_name.startswith('_'):
+                    continue
+                    
+                # Only add properties that don't exist or have different values
+                if prop_name not in production_node.properties or production_node.properties[prop_name] != prop_value:
+                    merged_properties[prop_name] = prop_value
+            
+            if merged_properties:
+                operations.append(UpdateNodeOperation(
+                    id=production_id,
+                    staging_id=staging_id,
+                    properties=merged_properties
+                ))
+                operations[-1].dict()["changes"] = {
+                    "staging_id": staging_id,
+                    "production_id": production_id,
+                    "properties": merged_properties,
+                    "action": "merge_values"
+                }
+                
+            return operations
+            
+        elif resolution.resolution_type == ResolutionStrategy.CREATE_NEW:
+            # Create a new entity with merged properties from both staging and production
+            # First, determine which production node to merge with
+            production_id = resolution.resolution_data.get("production_id")
+            if not production_id and len(production_ids) > 0:
+                # If no specific production ID is provided, use the first one
+                production_id = production_ids[0]
+                
+            # Get the production node
+            production_node = await self.production_storage.get_node_by_id(production_id)
+            if not production_node:
+                raise ValueError(f"Production node {production_id} not found")
+                
+            # Create a new node with merged properties
+            # Start with production properties
+            merged_properties = dict(production_node.properties)
+            
+            # Add or override with staging properties
+            for prop_name, prop_value in staging_node.properties.items():
+                # Skip system properties
+                if prop_name.startswith('_'):
+                    continue
+                    
+                merged_properties[prop_name] = prop_value
+            
+            # Generate a new ID for the merged entity
+            new_entity_id = f"merged_{staging_id}_{production_id}"
+            
+            # Create a new node operation
+            # Note: In a real implementation, this would likely be handled at a higher level
+            # as it involves creating a new entity and updating relationships
+            operations.append(UpdateNodeOperation(
+                id=new_entity_id,  # This is a placeholder - actual creation happens elsewhere
+                staging_id=staging_id,
+                properties=merged_properties
+            ))
+            operations[-1].dict()["changes"] = {
+                "staging_id": staging_id,
+                "production_id": production_id,
+                "new_entity_id": new_entity_id,
+                "properties": merged_properties,
+                "action": "create_new"
+            }
+            
+            return operations
+            
+        else:
+            raise ValueError(f"Unsupported resolution type: {resolution.resolution_type}")
+            
         return operations
             
     async def _apply_property_missing_resolution(
@@ -216,7 +370,7 @@ class ResolutionApplicator:
                 "action": "remove_from_production"
             }
             
-        elif resolution.resolution_type == "ignore":
+        elif resolution.resolution_type == ResolutionStrategy.IGNORE:
             # No changes
             return operations
             
@@ -250,7 +404,7 @@ class ResolutionApplicator:
             raise ValueError("Missing relationship type information in conflict context")
         
         # Apply based on resolution type
-        if resolution.resolution_type == "keep_staging_rel_type":
+        if resolution.resolution_type == ResolutionStrategy.KEEP_STAGING:
             # Update the relationship type
             operations.append(UpdateRelationshipTypeOperation(
                 id=prod_rel_id,
@@ -265,11 +419,11 @@ class ResolutionApplicator:
                 "action": "update_relationship_type"
             }
             
-        elif resolution.resolution_type == "keep_production_rel_type":
+        elif resolution.resolution_type == ResolutionStrategy.KEEP_PRODUCTION:
             # No changes needed
             return operations
             
-        elif resolution.resolution_type == "keep_both_relationships":
+        elif resolution.resolution_type == ResolutionStrategy.KEEP_BOTH:
             # Create a new relationship in production with the staging type
             new_rel_id = str(uuid.uuid4())
             # Update the relationship type

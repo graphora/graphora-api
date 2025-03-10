@@ -344,9 +344,8 @@ class KnowledgeGraphBuilder:
                         rel_properties = extract_properties(rel_item.properties)
                     
                     # Create deterministic relationship ID
-                    # rel_key = f"{source_id}:{target_id}:{rel_type}"
-                    # rel_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, rel_key))
-                    rel_id = str(uuid.uuid4())
+                    rel_key = f"{source_id}:{target_id}:{rel_type}"
+                    rel_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, rel_key))
                     # Create relationship
                     rel = RelationshipInstance(
                         id=rel_id,

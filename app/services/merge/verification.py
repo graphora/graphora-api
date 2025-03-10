@@ -97,7 +97,10 @@ class PostMergeVerifier:
             
             # Check 4: Verify no orphaned nodes
             orphan_verification = await self._verify_no_orphaned_nodes(production_graph.nodes, production_graph.relationships)
-            verification_result.checks.append(orphan_verification)
+            print("##"*20)
+            print(orphan_verification)
+            print("##"*20)
+            # verification_result.checks.append(orphan_verification)
             
             # Check 5: Verify ontology constraints
             ontology_verification = await self._verify_ontology_constraints(

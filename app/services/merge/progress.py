@@ -245,11 +245,13 @@ class ProgressTracker:
             ignored_group_ids = {group.id for group in identical_groups}
             
             # Filter conflicts that aren't part of ignored groups
-            active_conflicts = [
-                conflict for conflict in conflict_batch.conflicts
-                if not conflict.is_identical
-            ]
+            active_conflicts = []
+            conflict_map = {}
+            for conflict in conflict_batch.conflicts:
+                if not conflict.is_identical:
+                    conflict_map[conflict.id] = conflict
             
+            active_conflicts = list(conflict_map.values())
             # Filter active conflict groups
             active_groups = [
                 group for group in conflict_batch.conflict_groups
