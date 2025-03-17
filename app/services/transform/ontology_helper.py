@@ -20,6 +20,7 @@ class OntologyParser:
             yaml_content = yaml_path
             
         self.parsed_ontology = yaml.safe_load(yaml_content)
+        self.ontology_yaml = yaml_content
         self.validate_ontology_structure()
         
     def validate_ontology_structure(self) -> None:

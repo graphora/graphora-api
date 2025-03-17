@@ -75,6 +75,12 @@ class Settings(BaseSettings):
         default="neo4j",
         description="Neo4j staging database name"
     )
+
+    # PDF Processor Settings
+    PDF_PROCESSOR: str = Field(
+        default="gemini",
+        description="PDF processor to use"
+    )
     
     # Marker API Settings
     MARKER_API_HOST: str = Field(
