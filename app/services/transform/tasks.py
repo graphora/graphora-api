@@ -80,9 +80,10 @@ async def load_and_validate_ontology(
     retry_delay_seconds=settings.RETRY_DELAY_SECONDS
 )
 async def construct_knowledge_graph(
-    chunks: List[str],
     ontology_path: Union[str, Path],
     transform_id: str,
+    chunks: List[str] = [],
+    pdf_paths: List[Path] = [],
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Tuple[Optional[DocumentKnowledgeGraph], Optional[ExtractionMetrics]]:
     """Construct knowledge graph from chunks using ontology"""
@@ -101,13 +102,23 @@ async def construct_knowledge_graph(
         concurrency=settings.EXTRACTION_CONCURRENCY
         if len(chunks) < concurrency:
             concurrency = len(chunks)
-        logger.info(f"Large document detected, using parallel processing with concurrency {settings.EXTRACTION_CONCURRENCY}")
-        graph = await builder.build_graph_from_chunks(
-            chunks=chunks,
-            transform_id=transform_id, 
-            concurrency=concurrency,
-            progress_callback=progress_callback
-        )
+        logger.info(f"Large document detected, using parallel processing with concurrency {concurrency}")
+        if chunks:
+            graph = await builder.build_graph_from_chunks(
+                chunks=chunks,
+                transform_id=transform_id, 
+                concurrency=concurrency,
+                progress_callback=progress_callback
+            )
+        elif pdf_paths:
+            graph = await builder.build_graph_from_pdfs(
+                pdf_paths=pdf_paths,
+                transform_id=transform_id, 
+                concurrency=concurrency,
+                progress_callback=progress_callback
+            )
+
+        
         metrics = builder.metrics
         
         # Finalize metrics

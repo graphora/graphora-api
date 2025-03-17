@@ -1,10 +1,11 @@
 from prefect import flow, task
 from prefect.context import get_run_context
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from pathlib import Path
 import aiofiles
 import asyncio
+import uuid
 from fastapi import UploadFile
 from app.utils.logger import logger
 from app.schemas.transform import (
@@ -25,6 +26,11 @@ from app.services.transform.status_models import (
     TransformationStage,
     ErrorSummary
 )
+from app.services.chunking.models import (
+    ChunkingResult,
+    ChunkMetadata
+)
+from PyPDF2 import PdfReader, PdfWriter
 
 progress_tracker = ProgressTracker()
 
@@ -104,62 +110,19 @@ async def document_transformation_flow(
     logger.info(f"Starting transformation flow with ID: {transform_id}")
     try:
         
+        logger.info(f"Starting transformation flow {transform_id}")
+        
+        processed_paths = []
+        doc_chunk_results = []
+        pdf_files = []
+        graphs = []
+
         # Start PARSE stage
         await progress_tracker.start_stage(
             transform_id,
             TransformationStage.PARSE
         )
-        
-        logger.info(f"Starting transformation flow {transform_id}")
-        
-        processed_paths = []
-        doc_chunk_results = []
-        graphs = []
-        
-        for file_path, doc_metadata in zip(file_paths, metadata):
-            try:
-                # Validate document
-                validation_result = await validate_document(file_path)
-                if not validation_result.is_valid:
-                    logger.error(f"Validation failed for {file_path}: {validation_result.errors}")
-                    continue
-                
-                # Store document
-                storage_location = await store_document(
-                    file_path,
-                    transform_id,
-                    doc_metadata
-                )
-                logger.info(f"Document stored at {storage_location.original_path}")
-                
-                # Convert PDF to markdown if needed
-                if Path(file_path).suffix.lower() == '.pdf':
-                    conversion_result = await convert_pdf_to_markdown(
-                        file_path=Path(file_path),
-                        transform_id=transform_id
-                    )
-                    if conversion_result:
-                        processed_paths.append(conversion_result.markdown_path)
-                        logger.info(f"PDF converted to markdown: {conversion_result.markdown_path}")
-                else:
-                    # For non-PDF files, use the original path
-                    processed_paths.append(file_path)
-                    logger.info(f"Using original file: {file_path}")
-                
-                # Update progress
-                await update_stage_progress(transform_id, TransformationStage.PARSE, 
-                                            len(processed_paths), len(file_paths))
-                
-            except Exception as e:
-                logger.error(
-                    f"Processing failed for file {file_path}",
-                    extra={
-                        "transform_id": transform_id,
-                        "error": str(e)
-                    }
-                )
-                continue
-        
+        processed_paths = await parse_docs(transform_id, file_paths, metadata)
         await progress_tracker.complete_stage(
             transform_id,
             TransformationStage.PARSE
@@ -170,29 +133,16 @@ async def document_transformation_flow(
             transform_id,
             TransformationStage.CHUNK
         )
-        
-        # Chunk documents
+        pdf_folder = Path(settings.UPLOAD_DIR) / transform_id / 'pdf'
+        pdf_folder.mkdir(parents=True, exist_ok=True)
         for processed_path in processed_paths:
-            result, doc_chunks = await chunk_document(
-                file_path=Path(processed_path),
-                transform_id=transform_id
-            )
-            if doc_chunks:
-                doc_chunk_results.append((result, doc_chunks))
-                logger.info(f"Document chunked into {len(doc_chunks)} parts")
-                
-                # Verify chunk quality
-                quality_ok = await check_chunk_quality(doc_chunks)
-                if not quality_ok:
-                    logger.warning(
-                        f"Chunk quality check failed",
-                        extra={"transform_id": transform_id}
-                    )
-            
-            # Update progress
+            if Path(processed_path).suffix.lower() == '.pdf':
+                pdf_splits = split_pdf(input_pdf=processed_path, location=pdf_folder, pages=100)
+                pdf_files.extend(pdf_splits)
+            else:
+                doc_chunk_results = await chunk_documents(transform_id, processed_path, doc_chunk_results)
             await update_stage_progress(transform_id, TransformationStage.CHUNK, 
-                                        len(doc_chunk_results), len(processed_paths))
-        
+                                    len(doc_chunk_results), len(processed_paths))
         await progress_tracker.complete_stage(
             transform_id,
             TransformationStage.CHUNK
@@ -225,6 +175,18 @@ async def document_transformation_flow(
                     total_nodes += metrics.total_nodes
                     total_relationships += metrics.total_relationships
                 graphs.append(graph)
+        
+        
+        pdf_graph, metrics = await construct_knowledge_graph(
+            pdf_paths=pdf_files,
+            ontology_path=ontology_path,
+            transform_id=transform_id,
+            progress_callback=lambda i, t: asyncio.create_task(
+                update_stage_progress(transform_id, TransformationStage.TRANSFORM, i, t)
+            )
+        )
+        if pdf_graph:
+            graphs.append(pdf_graph)
         
         await progress_tracker.complete_stage(
             transform_id,
@@ -311,3 +273,98 @@ async def document_transformation_flow(
         )
         
         raise
+
+async def parse_docs(transform_id, file_paths, metadata) -> List[str]:
+    processed_paths = []
+    for file_path, doc_metadata in zip(file_paths, metadata):
+        try:
+                # Validate document
+            validation_result = await validate_document(file_path)
+            if not validation_result.is_valid:
+                logger.error(f"Validation failed for {file_path}: {validation_result.errors}")
+                continue
+                
+                # Store document
+            storage_location = await store_document(
+                    file_path,
+                    transform_id,
+                    doc_metadata
+                )
+            logger.info(f"Document stored at {storage_location.original_path}")
+                
+                # Convert PDF to markdown if needed
+            if settings.PDF_PROCESSOR == 'marker':
+                if Path(file_path).suffix.lower() == '.pdf':
+                    conversion_result = await convert_pdf_to_markdown(
+                            file_path=Path(file_path),
+                            transform_id=transform_id
+                        )
+                    if conversion_result:
+                        processed_paths.append(conversion_result.markdown_path)
+                        logger.info(f"PDF converted to markdown: {conversion_result.markdown_path}")
+                else:
+                        # For non-PDF files, use the original path
+                    processed_paths.append(file_path)
+                    logger.info(f"Using original file: {file_path}")
+            else:
+                    # For gemini files, use the original path
+                processed_paths.append(file_path)
+                logger.info(f"Using original file: {file_path}")
+                
+                # Update progress
+            await update_stage_progress(transform_id, TransformationStage.PARSE, 
+                                            len(processed_paths), len(file_paths))
+                
+        except Exception as e:
+            logger.error(
+                    f"Processing failed for file {file_path}",
+                    extra={
+                        "transform_id": transform_id,
+                        "error": str(e)
+                    }
+                )
+            continue
+
+    return processed_paths
+
+
+async def chunk_documents(transform_id: str, 
+                          processed_path: str, 
+                          doc_chunk_results: List[Tuple[ChunkingResult, List[ChunkMetadata]]]
+                          ) -> List[Tuple[ChunkingResult, List[ChunkMetadata]]]:
+    
+    result, doc_chunks = await chunk_document(
+            file_path=Path(processed_path),
+            transform_id=transform_id
+        )
+    if doc_chunks:
+        doc_chunk_results.append((result, doc_chunks))
+        logger.info(f"Document chunked into {len(doc_chunks)} parts")
+        
+        # Verify chunk quality
+        quality_ok = await check_chunk_quality(doc_chunks)
+        if not quality_ok:
+            logger.warning(
+                f"Chunk quality check failed",
+                extra={"transform_id": transform_id}
+            )
+            
+    return doc_chunk_results
+
+def split_pdf(input_pdf: str, location: Path, pages=100):
+    reader = PdfReader(input_pdf)
+    idx = 0
+    writer = PdfWriter()
+    output = []
+    for i, page in enumerate(reader.pages):
+      idx = idx + 1
+      writer.add_page(page)
+      if idx == pages or (i == len(reader.pages) - 1):
+        uuid_key = str(uuid.uuid4())
+        output_filename = location / f"page_{uuid_key}_{i+1}.pdf"
+        with open(output_filename, "wb") as output_file:
+            writer.write(output_file)
+        writer = PdfWriter()
+        idx = 0
+        output.append(output_filename.as_posix())
+    return output

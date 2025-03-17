@@ -48,6 +48,51 @@ class KnowledgeGraphBuilder:
         
         # Relationship registry for deduplication (source_id -> target_id -> rel_type -> rel_id)
         self.relationship_registry = {}
+
+    async def build_graph_from_pdfs(
+        self,
+        pdf_paths: List[str],
+        transform_id: str,
+        concurrency: int = 5,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> DocumentKnowledgeGraph:
+        """Process all PDFs and build unified graph with sliding window context"""
+        pdf_results = []
+        
+        # Process chunks sequentially with sliding window context
+        for idx, pdf in enumerate(pdf_paths):
+            
+            try:
+                print(f"Processing PDF {idx + 1} / {len(pdf_paths)}")
+                result = await self.process_chunk_or_pdf(
+                    pdf_path=pdf,
+                    id=f"{transform_id}_pdf_{idx}",
+                    context_chunks=''
+                )
+                
+                if result:
+                    pdf_results.append(result)
+                    
+                if progress_callback:
+                    try:
+                        if asyncio.iscoroutinefunction(progress_callback):
+                            await progress_callback(idx + 1, len(pdf_paths))
+                        else:
+                            # Handle synchronous callback
+                            progress_callback(idx + 1, len(pdf_paths))
+                    except Exception as e:
+                        logger.warning(f"Progress callback failed: {str(e)}")
+                        
+            except Exception as e:
+                logger.error(f"PDF processing failed for idx {idx}: {str(e)}")
+                continue
+        
+        # Merge all extraction results
+        for result in pdf_results:
+            self.add_extraction_result(result)
+            
+        # Finalize the graph
+        return await self.finalize_graph()
         
     async def build_graph_from_chunks(
         self,
@@ -69,9 +114,9 @@ class KnowledgeGraphBuilder:
             
             try:
                 print(f"Processing chunk {idx + 1} / {len(chunks)}")
-                result = await self.process_chunk(
+                result = await self.process_chunk_or_pdf(
                     chunk=chunk,
-                    chunk_id=f"{transform_id}_chunk_{idx}",
+                    id=f"{transform_id}_chunk_{idx}",
                     context_chunks=context_chunks
                 )
                 
@@ -99,13 +144,14 @@ class KnowledgeGraphBuilder:
         # Finalize the graph
         return await self.finalize_graph()
     
-    async def process_chunk(
+    async def process_chunk_or_pdf(
         self,
-        chunk: str,
-        chunk_id: str,
+        id: str,
+        chunk: str = None,
+        pdf_path: str = None,
         context_chunks: List[str] = []
     ) -> Optional[Dict[str, Any]]:
-        """Process single chunk with LLM extraction using RDF context"""
+        """Process single PDF/chunk with LLM extraction using RDF context"""
         start_time = datetime.now()
         
         try:
@@ -119,15 +165,22 @@ class KnowledgeGraphBuilder:
                     context += ctx_chunk + "\n"
             
             # Call LLM for extraction of whole ontology with context
-            extraction_result = await self.llm_client.extract_from_chunk(
+            if chunk:
+                extraction_result = await self.llm_client.extract_from_chunk(
                 chunk=chunk,
                 response_model=self.pydantic_cls,
                 context=context
             )
+            else:
+                extraction_result = await self.llm_client.extract_from_pdf(
+                    pdf_path=pdf_path,
+                    response_model=self.pydantic_cls,
+                    ontology_yaml=self.ontology_parser.ontology_yaml,
+                    context=context
+                )
             
             # Initialize token usage and confidence if not set
-            if not hasattr(extraction_result, 'tokens_used') or extraction_result.tokens_used is None:
-                extraction_result.tokens_used = 0
+            extraction_result.tokens_used = 0
                     
             if not hasattr(extraction_result, 'confidence_score') or extraction_result.confidence_score is None:
                 extraction_result.confidence_score = 0.0
@@ -226,7 +279,7 @@ class KnowledgeGraphBuilder:
                         type=entity_type,
                         properties=properties,
                         provenance=NodeProvenance(
-                            chunk_ids=[chunk_id],
+                            chunk_ids=[id],
                             extraction_timestamp=datetime.now(timezone.utc).isoformat(),
                             confidence_score=extraction_result.confidence_score
                         )
@@ -306,7 +359,7 @@ class KnowledgeGraphBuilder:
                             type=source_type,
                             properties=source_props,
                             provenance=NodeProvenance(
-                                chunk_ids=[chunk_id],
+                                chunk_ids=[id],
                                 extraction_timestamp=datetime.now(timezone.utc).isoformat(),
                                 confidence_score=extraction_result.confidence_score
                             )
@@ -327,7 +380,7 @@ class KnowledgeGraphBuilder:
                             type=target_type,
                             properties=target_props,
                             provenance=NodeProvenance(
-                                chunk_ids=[chunk_id],
+                                chunk_ids=[id],
                                 extraction_timestamp=datetime.now(timezone.utc).isoformat(),
                                 confidence_score=extraction_result.confidence_score
                             )
@@ -356,7 +409,7 @@ class KnowledgeGraphBuilder:
                         target_type=target_type,
                         properties=rel_properties,
                         provenance=NodeProvenance(
-                            chunk_ids=[chunk_id],
+                            chunk_ids=[id],
                             extraction_timestamp=datetime.now(timezone.utc).isoformat(),
                             confidence_score=extraction_result.confidence_score
                         )
@@ -366,7 +419,7 @@ class KnowledgeGraphBuilder:
                 
             # Track metrics
             self.metrics.track_extraction(
-                chunk_id=chunk_id,
+                chunk_id=id,
                 duration_ms=duration_ms,
                 llm_token_usage={'total': extraction_result.tokens_used} if extraction_result.tokens_used else {},
                 entity_count=len(nodes)
@@ -374,7 +427,7 @@ class KnowledgeGraphBuilder:
             
             # Prepare result
             result = {
-                'chunk_id': chunk_id,
+                'chunk_id': id,
                 'nodes': nodes,
                 'relationships': relationships,
                 'metrics': {
@@ -391,8 +444,8 @@ class KnowledgeGraphBuilder:
             return result
                 
         except Exception as e:
-            self.metrics.record_failure(chunk_id, str(e))
-            logger.error(f"Extraction failed for chunk {chunk_id}: {str(e)}")
+            self.metrics.record_failure(id, str(e))
+            logger.error(f"Extraction failed for chunk {id}: {str(e)}")
             traceback.print_exc()
             return None
     
