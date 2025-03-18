@@ -27,7 +27,7 @@ class DocumentChunker:
             self.text_splitter = SemanticChunker(
                 embeddings=self.embeddings,
                 breakpoint_threshold_type="gradient",
-                min_chunk_size=settings.MIN_CHUNK_SIZE
+                min_chunk_size=settings.MIN_SEMANTIC_CHUNK_SIZE
             )
             logger.info("Initialized semantic chunker")
         except Exception as e:
@@ -56,9 +56,11 @@ class DocumentChunker:
         try:
             # Semantic chunking
             semantic_start = datetime.now(timezone.utc)
-            documents = self.text_splitter.create_documents([text])
+            if(len(text) <= settings.MIN_CHUNK_SIZE):
+                documents = [Document(page_content=text)]
+            else:
+                documents = self.text_splitter.create_documents([text])
             semantic_time = datetime.now(timezone.utc) - semantic_start
-            
             # Process chunks
             chunk_start = datetime.now(timezone.utc)
             chunk_texts = []
@@ -94,6 +96,10 @@ class DocumentChunker:
                 chunk_metadata.append(metadata)
             
             chunk_time = datetime.now(timezone.utc) - chunk_start
+
+            print('*'*30)
+            print([len(c) for c in chunk_texts])
+            print('*'*30)
             
             # Create result
             result = ChunkingResult(

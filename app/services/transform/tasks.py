@@ -103,6 +103,8 @@ async def construct_knowledge_graph(
         if len(chunks) < concurrency:
             concurrency = len(chunks)
         logger.info(f"Large document detected, using parallel processing with concurrency {concurrency}")
+        if(len(chunks) == 0 and len(pdf_paths) == 0):
+            return None, None
         if chunks:
             graph = await builder.build_graph_from_chunks(
                 chunks=chunks,
