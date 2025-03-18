@@ -159,7 +159,7 @@ class OntologyParser:
         
         # Now create the KnowledgeGraph model that includes all entities and relationships
         kg_fields = {
-            "extraction_timestamp": (str, Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())),
+            "extraction_timestamp": (Optional[str], Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())),
             "tokens_used": (Optional[int], None),
             "confidence_score": (Optional[float], None)
         }

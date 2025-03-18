@@ -114,8 +114,12 @@ class Settings(BaseSettings):
         description="Maximum size of a text chunk"
     )
     MIN_CHUNK_SIZE: int = Field(
-        default=1500,
+        default=32000,
         description="Minimum size of a text chunk"
+    )
+    MIN_SEMANTIC_CHUNK_SIZE: int = Field(
+        default=3000,
+        description="Minimum size of a semantic text chunk"
     )
     MAX_CHUNKS_PER_DOC: int = Field(
         default=100,
