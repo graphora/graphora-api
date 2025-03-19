@@ -8,12 +8,12 @@ from app.services.transform.models import (
     DocumentKnowledgeGraph
 )
 from google.genai import client
-from pydantic import BaseModel
+from pydantic import BaseModel, Type
 from typing import Dict, Any
 import json
 import uuid
 from datetime import datetime, timezone
-
+from app.services.transform.agents.ontology import OntologyParser
 
 def _filter_properties_by_ontology(parsed_ontology, entity_type: str, properties: Dict[str, Any]) -> Dict[str, Any]:
     entity_def = parsed_ontology.get('entities', {}).get(entity_type)
@@ -83,9 +83,10 @@ def extract_properties(item):
                 pass
         return properties
 
-def extract_structured_data(file_path: str, parsed_ontology, 
-                            entity_model: BaseModel, 
-                            relationship_model: BaseModel, 
+def extract_structured_data(file_path: str, ontology: Dict[str, Any],
+                            ontology_yaml: str,
+                            entities_only_model: Type[BaseModel],
+                            relationships_only_model: Type[BaseModel],
                             model_id='gemini-2.0-flash-lite-001') -> DocumentKnowledgeGraph:
     filepath = pathlib.Path(file_path)
     file = types.Part.from_bytes(
@@ -108,7 +109,7 @@ def extract_structured_data(file_path: str, parsed_ontology,
     entity_response = client.models.generate_content(
         model=model_id,
         contents=[file, entity_prompt],
-        config={'response_mime_type': 'application/json', 'response_schema': entity_model}
+        config={'response_mime_type': 'application/json', 'response_schema': entities_only_model}
     )
     logger.debug(f"Entity extraction response: {entity_response.text}")
     entity_result = entity_response.parsed
@@ -129,10 +130,10 @@ def extract_structured_data(file_path: str, parsed_ontology,
             if not item:
                 continue
             raw_properties = extract_properties(item)
-            properties = _filter_properties_by_ontology(parsed_ontology, entity_type, raw_properties)
-            if not _is_node_valuable(parsed_ontology, entity_type, properties):
+            properties = _filter_properties_by_ontology(ontology, entity_type, raw_properties)
+            if not _is_node_valuable(ontology, entity_type, properties):
                 continue
-            node_key = _generate_node_key(parsed_ontology, entity_type, properties)
+            node_key = _generate_node_key(ontology, entity_type, properties)
             node_id = str(uuid.uuid4())
             node = BaseNode(
                 id=node_id,
@@ -169,7 +170,7 @@ def extract_structured_data(file_path: str, parsed_ontology,
     relationship_response = client.models.generate_content(
         model=model_id,
         contents=[file, relationship_prompt],
-        config={'response_mime_type': 'application/json', 'response_schema': relationship_model}
+        config={'response_mime_type': 'application/json', 'response_schema': relationships_only_model}
     )
     logger.debug(f"Relationship extraction response: {relationship_response.text}")
     relationship_result = relationship_response.parsed
@@ -195,7 +196,7 @@ def extract_structured_data(file_path: str, parsed_ontology,
 
         # Try to extract source_type, rel_type, and target_type
         source_type = parts[0]
-        if source_type not in parsed_ontology.get('entities', {}):
+        if source_type not in ontology.get('entities', {}):
             continue
         
         # Handle cases where target_type might be missing or concatenated
@@ -204,7 +205,7 @@ def extract_structured_data(file_path: str, parsed_ontology,
         target_type = parts[-1] if len(parts) > 2 else None
 
         # Infer target_type from ontology if not in field_name
-        relationships_def = parsed_ontology['entities'].get(source_type, {}).get('relationships', {})
+        relationships_def = ontology['entities'].get(source_type, {}).get('relationships', {})
         print("relationships_def: ", relationships_def)
         if rel_type in relationships_def:
             target_type = target_type or relationships_def[rel_type].get('target')
@@ -213,7 +214,7 @@ def extract_structured_data(file_path: str, parsed_ontology,
             print(f"Skipping unknown relationship type: {rel_type} for {source_type}")
             continue
 
-        if not target_type or target_type not in parsed_ontology.get('entities', {}):
+        if not target_type or target_type not in ontology.get('entities', {}):
             logger.warning(f"Skipping relationship {field_name}: Could not determine valid target_type")
             print(f"Skipping relationship {field_name}: Could not determine valid target_type")
             continue

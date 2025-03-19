@@ -13,7 +13,16 @@ from google.auth import default
 import google.auth.transport.requests
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import StructuredTool
-
+from app.services.transform.models import (
+    BaseNode,
+    NodeProvenance,
+    RelationshipInstance,
+    KnowledgeGraph,
+    DocumentKnowledgeGraph,
+    ExtractionMetrics
+)
+from pydantic import BaseModel, Field
+from app.services.transform.agents.ontology import OntologyParser
 project_id = "graphit-sandbox"
 location = "us-central1"
 credentials, _ = default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
@@ -26,19 +35,21 @@ gemini_model = ChatOpenAI(
 )
 
 
-# Custom JSON encoder for Pydantic models
+# Custom JSON encoder (unchanged)
 def custom_json_encoder(obj):
     if isinstance(obj, (BaseNode, RelationshipInstance, NodeProvenance, ExtractionMetrics, DocumentKnowledgeGraph)):
-        return obj.dict()
+        return obj.model_dump()
     if isinstance(obj, datetime):
         return obj.isoformat()
     raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
-# State to track graph construction
+# State class (unchanged)
 class GraphState(BaseModel):
     pdf_paths: List[str] = Field(default_factory=list)
     ontology: Dict[str, Any] = Field(default_factory=dict)
-    ontology_model: Optional[Type[BaseModel]] = None
+    ontology_yaml: str = Field(default="")
+    entities_only_model: Optional[Type[BaseModel]] = None
+    relationships_only_model: Optional[Type[BaseModel]] = None
     graph: DocumentKnowledgeGraph = Field(default_factory=DocumentKnowledgeGraph)
     context: str = Field(default="")
     decision_log: List[str] = Field(default_factory=list)
@@ -48,9 +59,8 @@ class GraphState(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-# Helper to extract JSON from response
+# Helper to extract JSON (unchanged)
 def extract_json_from_response(response_text: str) -> Optional[Dict]:
-    """Extract JSON from a response that may contain explanatory text."""
     json_pattern = r'```json\s*([\s\S]*?)\s*```|({[\s\S]*})'
     match = re.search(json_pattern, response_text)
     if match:
@@ -66,18 +76,18 @@ def extract_json_from_response(response_text: str) -> Optional[Dict]:
 # Tools for Graph Construction
 def extract_initial_graph(state: GraphState) -> Dict:
     """Extract initial graph from PDFs with detailed properties."""
-    result = extract_structured_data(state.pdf_paths[0], parsed_ontology=state.ontology, model=state.ontology_model)
-    print(result)
+    result = extract_structured_data(state.pdf_paths[0], ontology=state.ontology, 
+                                     ontology_yaml=state.ontology_yaml, 
+                                     entities_only_model=state.entities_only_model, 
+                                     relationships_only_model=state.relationships_only_model)
     state.decision_log.append("Initial graph extracted from PDFs")
     return result
 
-def compare_nodes(nodes: List[BaseNode], ontology: BaseModel, context: str) -> Dict[str, List[Dict]]:
-    """Compare all nodes of the same type in one shot using Gemini."""
-    print(f"Comparing {len(nodes)} nodes of type {nodes[0].type}")
+def compare_nodes(nodes: List[BaseNode], ontology: Dict[str, Any], context: str) -> Dict[str, List[Dict]]:
+    """Compare all nodes of the same type in one shot using Gemini (unchanged)."""
     if not nodes or len(nodes) <= 1:
         return {"clusters": [{"nodes": [node.model_dump_json() for node in nodes], "confidence": 1.0, "reason": "Single or no nodes"}]}
 
-    # Group nodes by type first (assuming this is called per type)
     node_type = nodes[0].type
     if not all(node.type == node_type for node in nodes):
         raise ValueError("All nodes must be of the same type for one-shot comparison")
@@ -99,7 +109,7 @@ def compare_nodes(nodes: List[BaseNode], ontology: BaseModel, context: str) -> D
     return result
 
 def merge_nodes(nodes_to_merge: List[BaseNode]) -> BaseNode:
-    """Merge a list of nodes into a single node."""
+    """Merge a list of nodes into a single node (unchanged)."""
     if not nodes_to_merge:
         raise ValueError("No nodes provided to merge")
     if len(nodes_to_merge) == 1:
@@ -126,56 +136,68 @@ def merge_nodes(nodes_to_merge: List[BaseNode]) -> BaseNode:
     merged.provenance.chunk_ids = list(set(merged.provenance.chunk_ids))
     return merged
 
-def compare_edges(edge1: RelationshipInstance, edge2: RelationshipInstance, ontology: BaseModel, context: str) -> RelationshipInstance:
-    """Use Gemini to decide if two edges should merge."""
-    if edge1.type != edge2.type:
-        return {"should_merge": False, "confidence": 1.0, "reason": "Different edge types"}
-    print(f"Comparing edges: {edge1} and {edge2}")
+def compare_edges(edges: List[RelationshipInstance], ontology: Dict[str, Any], context: str) -> Dict[str, List[Dict]]:
+    """Compare all edges of the same type in one shot using Gemini."""
+    if not edges or len(edges) <= 1:
+        return {"clusters": [{"edges": [edge.model_dump_json() for edge in edges], "confidence": 1.0, "reason": "Single or no edges"}]}
+
+    edge_type = edges[0].type
+    if not all(edge.type == edge_type for edge in edges):
+        raise ValueError("All edges must be of the same type for one-shot comparison")
+
+    print(f"Comparing {len(edges)} edges of type {edge_type} in one shot")
     prompt = (
-        f"Given the ontology and context, determine if these edges represent the same relationship.\n"
+        f"Given the ontology and context, group these edges of type '{edge_type}' into clusters where edges in each cluster represent the same relationship.\n"
         f"Ontology: {json.dumps(ontology)}\n"
-        f"Edge 1: {edge1.model_dump_json()}\n"
-        f"Edge 2: {edge2.model_dump_json()}\n"
+        f"Edges: {json.dumps([edge.model_dump_json() for edge in edges], indent=2)}\n"
         f"Context: {context[:10000]}\n"
-        f'Return only a JSON object: {{"should_merge": bool, "confidence": float (0-1), "reason": str}}'
+        f'Return only a JSON object: {{"clusters": list of {{"edges": list of edge JSON strings, "confidence": float (0-1), "reason": str}}}}'
     )
     response = gemini_model.invoke(prompt)
     content = response.content.strip()
     result = extract_json_from_response(content)
-    if result is None:
-        return {"should_merge": False, "confidence": 0.0, "reason": "Invalid response from Gemini"}
+    if result is None or "clusters" not in result:
+        logger.error(f"Failed to cluster edges: {content[:500]}")
+        return {"clusters": [{"edges": [edge.model_dump_json()], "confidence": 0.0, "reason": "Invalid response"} for edge in edges]}
     return result
 
-def merge_edges(edge1: RelationshipInstance, edge2: RelationshipInstance) -> RelationshipInstance:
-    """Merge two edges, combining properties and provenance."""
-    print(f"Merging edges: {edge1} and {edge2}")
+def merge_edges(edges_to_merge: List[RelationshipInstance]) -> RelationshipInstance:
+    """Merge a list of edges into a single edge."""
+    if not edges_to_merge:
+        raise ValueError("No edges provided to merge")
+    if len(edges_to_merge) == 1:
+        return edges_to_merge[0]
+
+    print(f"Merging {len(edges_to_merge)} edges: {[e.id for e in edges_to_merge]}")
+    base_edge = edges_to_merge[0]
     merged = RelationshipInstance(
-        id=edge1.id,
-        type=edge1.type,
-        source_id=edge1.source_id,
-        target_id=edge1.target_id,
-        source_type=edge1.source_type,
-        target_type=edge1.target_type,
-        properties=edge1.properties.copy(),
+        id=base_edge.id,
+        type=base_edge.type,
+        source_id=base_edge.source_id,
+        target_id=base_edge.target_id,
+        source_type=base_edge.source_type,
+        target_type=base_edge.target_type,
+        properties=base_edge.properties.copy(),
         provenance=NodeProvenance(
-            chunk_ids=edge1.provenance.chunk_ids.copy(),
-            extraction_timestamp=edge1.provenance.extraction_timestamp,
-            confidence_score=max(edge1.provenance.confidence_score or 0, edge2.provenance.confidence_score or 0)
+            chunk_ids=base_edge.provenance.chunk_ids.copy(),
+            extraction_timestamp=base_edge.provenance.extraction_timestamp,
+            confidence_score=base_edge.provenance.confidence_score or 0
         )
     )
-    for key, value in edge2.properties.items():
-        if value and (key not in merged.properties or not merged.properties[key]):
-            merged.properties[key] = value
-    merged.provenance.chunk_ids.extend(edge2.provenance.chunk_ids)
+    for edge in edges_to_merge[1:]:
+        for key, value in edge.properties.items():
+            if value and (key not in merged.properties or not merged.properties[key]):
+                merged.properties[key] = value
+        merged.provenance.chunk_ids.extend(edge.provenance.chunk_ids)
+        merged.provenance.confidence_score = max(merged.provenance.confidence_score, edge.provenance.confidence_score or 0)
     merged.provenance.chunk_ids = list(set(merged.provenance.chunk_ids))
     return merged
 
-def infer_relationship(nodes: List[BaseNode], relationships: List[RelationshipInstance], ontology: BaseModel, context: str) -> List[Dict]:
-    """Infer relationships for orphan nodes and disjointed subgraphs in one shot using Gemini."""
+def infer_relationship(nodes: List[BaseNode], relationships: List[RelationshipInstance], ontology: Dict[str, Any], context: str) -> List[Dict]:
+    """Infer relationships (unchanged)."""
     if not nodes or len(nodes) < 2:
         return []
 
-    # Identify orphan nodes and disjointed subgraphs
     connected_nodes = set()
     for rel in relationships:
         connected_nodes.add(rel.source_id)
@@ -188,13 +210,13 @@ def infer_relationship(nodes: List[BaseNode], relationships: List[RelationshipIn
 
     print(f"Inferring relationships for {len(orphan_nodes)} orphan nodes")
     prompt = (
-        f"Given the ontology, context, and current graph, infer meaningful relationships between orphan nodes (nodes with no current relationships) and other nodes or subgraphs.\n"
+        f"Given the ontology, context, and current graph, infer meaningful relationships between orphan nodes and other nodes or subgraphs.\n"
         f"Ontology: {json.dumps(ontology)}\n"
         f"Orphan Nodes: {json.dumps([node.model_dump_json() for node in orphan_nodes], indent=2)}\n"
         f"All Nodes: {json.dumps([node.model_dump_json() for node in nodes], indent=2)}\n"
         f"Existing Relationships: {json.dumps([rel.model_dump_json() for rel in relationships], indent=2)}\n"
         f"Context: {context[:10000]}\n"
-        f"Return only a JSON object: {{'relationships': list of {{'type': str (valid from ontology), 'source': str (node id), 'target': str (node id), 'properties': dict (specific details with evidence from context), 'confidence': float (0-1), 'evidence': str (text from context justifying the relationship)}}}}"
+        f"Return only a JSON object: {{'relationships': list of {{'type': str, 'source': str, 'target': str, 'properties': dict, 'confidence': float (0-1), 'evidence': str}}}}"
     )
     response = gemini_model.invoke(prompt)
     content = response.content.strip()
@@ -205,8 +227,8 @@ def infer_relationship(nodes: List[BaseNode], relationships: List[RelationshipIn
     print(f"Inferred {len(result['relationships'])} relationships")
     return result["relationships"]
 
-def validate_component(component: BaseModel, ontology: BaseModel, context: str) -> Dict:
-    """Use Gemini to validate nodes or edges without placeholders."""
+def validate_component(component: BaseModel, ontology: Dict[str, Any], context: str) -> Dict:
+    """Validate component (unchanged)."""
     print(f"Validating component: {component}")
     component_serializable = component.model_dump_json()
     is_node = "properties" in component_serializable
@@ -216,7 +238,7 @@ def validate_component(component: BaseModel, ontology: BaseModel, context: str) 
         f"Ontology: {json.dumps(ontology)}\n"
         f"{'Node' if is_node else 'Edge'}: {json.dumps(component_serializable, indent=2)}\n"
         f"Context: {context[:10000]}\n"
-        f'Return only a JSON object: {{"is_valid": bool, "fixes": dict (specific corrections only, no placeholders or messages)}}'
+        f'Return only a JSON object: {{"is_valid": bool, "fixes": dict}}'
     )
     response = gemini_model.invoke(prompt)
     content = response.content.strip()
@@ -225,62 +247,25 @@ def validate_component(component: BaseModel, ontology: BaseModel, context: str) 
         return {"is_valid": False, "fixes": {}}
     return result
 
-# Handoff Tools
-transfer_to_resolution = create_handoff_tool(
-    agent_name="resolution_agent",
-    description="Transfer to entity resolution agent."
-)
-transfer_to_inference = create_handoff_tool(
-    agent_name="inference_agent",
-    description="Transfer to relationship inference agent."
-)
-transfer_to_validation = create_handoff_tool(
-    agent_name="validation_agent",
-    description="Transfer to validation agent."
-)
+# Handoff Tools (unchanged)
+transfer_to_resolution = create_handoff_tool(agent_name="resolution_agent", description="Transfer to entity resolution agent.")
+transfer_to_inference = create_handoff_tool(agent_name="inference_agent", description="Transfer to relationship inference agent.")
+transfer_to_validation = create_handoff_tool(agent_name="validation_agent", description="Transfer to validation agent.")
 
-# Prompt Factory
+# Prompt Factory (unchanged)
 def make_prompt(base_prompt: str) -> Callable[[GraphState, RunnableConfig], List]:
     def prompt(state: GraphState, config: RunnableConfig) -> List:
-        graph_dict = {
-            "nodes": [n.dict() for n in state.graph.nodes],
-            "relationships": [r.dict() for r in state.graph.relationships]
-        }
+        graph_dict = {"nodes": [n.model_dump() for n in state.graph.nodes], "relationships": [r.model_dump() for r in state.graph.relationships]}
         system_prompt = (
-            base_prompt +
-            "\nAct autonomously, reasoning about entities and relationships using context and ontology." +
-            f"\nOntology: {json.dumps(state.ontology, indent=2)}" +
-            f"\nCurrent graph: {json.dumps(graph_dict, indent=2)}" +
+            base_prompt + "\nAct autonomously, reasoning about entities and relationships using context and ontology." +
+            f"\nOntology: {json.dumps(state.ontology, indent=2)}" + f"\nCurrent graph: {json.dumps(graph_dict, indent=2)}" +
             f"\nContext: {state.context[:1000]}"
         )
         return [{"role": "system", "content": system_prompt}] + state.messages
     return prompt
 
-# Define Agents
-extraction_agent = create_react_agent(
-    gemini_model,
-    tools=[extract_initial_graph, transfer_to_resolution],
-    prompt=make_prompt("Extract an initial graph from PDFs using the ontology."),
-    name="extraction_agent"
-)
-
-resolution_agent = create_react_agent(
-    gemini_model,
-    tools=[compare_nodes, merge_nodes, compare_edges, merge_edges, transfer_to_inference],
-    prompt=make_prompt("Resolve ambiguous nodes and edges by reasoning about their identity."),
-    name="resolution_agent"
-)
-
-inference_agent = create_react_agent(
-    gemini_model,
-    tools=[infer_relationship, transfer_to_validation],
-    prompt=make_prompt("Infer relationships between nodes based on context and ontology."),
-    name="inference_agent"
-)
-
-validation_agent = create_react_agent(
-    gemini_model,
-    tools=[validate_component, transfer_to_resolution],
-    prompt=make_prompt("Validate and refine the graph, fixing inconsistencies."),
-    name="validation_agent"
-)
+# Define Agents (unchanged)
+extraction_agent = create_react_agent(gemini_model, tools=[extract_initial_graph, transfer_to_resolution], prompt=make_prompt("Extract an initial graph from PDFs using the ontology."), name="extraction_agent")
+resolution_agent = create_react_agent(gemini_model, tools=[compare_nodes, merge_nodes, compare_edges, merge_edges, transfer_to_inference], prompt=make_prompt("Resolve ambiguous nodes and edges."), name="resolution_agent")
+inference_agent = create_react_agent(gemini_model, tools=[infer_relationship, transfer_to_validation], prompt=make_prompt("Infer relationships between nodes."), name="inference_agent")
+validation_agent = create_react_agent(gemini_model, tools=[validate_component, transfer_to_resolution], prompt=make_prompt("Validate and refine the graph."), name="validation_agent")

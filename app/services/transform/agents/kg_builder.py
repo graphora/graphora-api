@@ -1,7 +1,7 @@
 
-from app.services.transform.agents.agent import extraction_agent, resolution_agent, inference_agent, validation_agent
+from app.services.transform.agent import extraction_agent, resolution_agent, inference_agent, validation_agent
 from app.services.transform.agents.ontology import OntologyParser
-from app.services.transform.agents.agent import GraphState
+from app.services.transform.agent import GraphState
 from app.services.transform.models import DocumentKnowledgeGraph
 from langgraph_swarm import create_swarm
 from langgraph.checkpoint.memory import InMemorySaver
@@ -16,12 +16,8 @@ from app.services.transform.models import (
 )
 
 class KnowledgeGraphBuilder:
-    def __init__(self, ontology_parser: OntologyParser):
-        self.ontology_parser = ontology_parser
-        self.ontology = ontology_parser.parsed_ontology
-        self.ontology_model = ontology_parser.build_graph_model()
-        self.entity_model = ontology_parser.build_entities_only_model()
-        self.relationship_model = ontology_parser.build_relationships_only_model()
+    def __init__(self, ontology_yaml: str):
+        self.ontology_parser = OntologyParser(ontology_yaml)
         self.checkpointer = InMemorySaver()
         self.app = self._build_workflow()
 
@@ -41,8 +37,10 @@ class KnowledgeGraphBuilder:
         """Build a knowledge graph from PDFs."""
         state = GraphState(
             pdf_paths=pdf_paths,
-            ontology=self.ontology,
-            ontology_model=self.ontology_model,
+            ontology=self.ontology_parser.parsed_ontology,
+            ontology_yaml=self.ontology_parser.ontology_yaml,
+            entities_only_model=self.ontology_parser.build_entities_only_model(),  # Updated to call method
+            relationships_only_model=self.ontology_parser.build_relationships_only_model(),  # Updated to call method
             messages=[{"role": "user", "content": "Start graph extraction from PDFs."}]
         )
         config = {"configurable": {"thread_id": transform_id, "user_id": "1"}}
@@ -53,19 +51,16 @@ class KnowledgeGraphBuilder:
         state.graph.nodes = initial_graph.nodes
         state.graph.relationships = initial_graph.relationships
 
-        # Step 2: Resolution (Fixed)
+        # Step 2: Resolution
+        # Node resolution (unchanged)
         nodes = state.graph.nodes
-        edges = state.graph.relationships
-
-        # Group nodes by type
         nodes_by_type = {}
         for node in nodes:
             nodes_by_type.setdefault(node.type, []).append(node)
 
-        # One-shot comparison and merging per type
         resolved_nodes = []
         for node_type, type_nodes in nodes_by_type.items():
-            clustering_result = compare_nodes(type_nodes, self.ontology, state.context)
+            clustering_result = compare_nodes(type_nodes, self.ontology_parser.parsed_ontology, state.context)
             for cluster in clustering_result["clusters"]:
                 cluster_nodes = [BaseNode.model_validate_json(node_json) for node_json in cluster["nodes"]]
                 if len(cluster_nodes) > 1:
@@ -73,33 +68,37 @@ class KnowledgeGraphBuilder:
                     resolved_nodes.append(merged_node)
                     state.decision_log.append(f"Merged {len(cluster_nodes)} nodes of type {node_type} into {merged_node.id}: {cluster['reason']}")
                     state.confidence_scores[f"node_merge_{merged_node.id}"] = cluster["confidence"]
-                    #state.graph.metrics.merged_nodes += len(cluster_nodes) - 1
                 else:
                     resolved_nodes.append(cluster_nodes[0])
                     state.decision_log.append(f"Kept single node {cluster_nodes[0].id} of type {node_type}: {cluster['reason']}")
                     state.confidence_scores[f"node_merge_{cluster_nodes[0].id}"] = cluster["confidence"]
-
         state.graph.nodes = resolved_nodes
 
-        # Edge resolution (unchanged)
-        i = 0
-        while i < len(edges):
-            j = i + 1
-            while j < len(edges):
-                decision = compare_edges(edges[i], edges[j], self.ontology, state.context)
-                state.decision_log.append(f"Compared edges {i} and {j}: {decision['reason']}")
-                state.confidence_scores[f"edge_merge_{i}_{j}"] = decision["confidence"]
-                if decision["should_merge"]:
-                    edges[i] = merge_edges(edges[i], edges[j])
-                    edges.pop(j)
-                else:
-                    j += 1
-            i += 1
-        state.graph.relationships = edges
+        # Edge resolution (optimized)
+        edges = state.graph.relationships
+        edges_by_type = {}
+        for edge in edges:
+            edges_by_type.setdefault(edge.type, []).append(edge)
 
-        # Step 3: Inference with Deduplication (Optimized)
-        seen_rels = set()  # Track unique relationships
-        inferred_rels = infer_relationship(state.graph.nodes, state.graph.relationships, self.ontology, state.context)
+        resolved_edges = []
+        for edge_type, type_edges in edges_by_type.items():
+            clustering_result = compare_edges(type_edges, self.ontology_parser.parsed_ontology, state.context)
+            for cluster in clustering_result["clusters"]:
+                cluster_edges = [RelationshipInstance.model_validate_json(edge_json) for edge_json in cluster["edges"]]
+                if len(cluster_edges) > 1:
+                    merged_edge = merge_edges(cluster_edges)
+                    resolved_edges.append(merged_edge)
+                    state.decision_log.append(f"Merged {len(cluster_edges)} edges of type {edge_type} into {merged_edge.id}: {cluster['reason']}")
+                    state.confidence_scores[f"edge_merge_{merged_edge.id}"] = cluster["confidence"]
+                else:
+                    resolved_edges.append(cluster_edges[0])
+                    state.decision_log.append(f"Kept single edge {cluster_edges[0].id} of type {edge_type}: {cluster['reason']}")
+                    state.confidence_scores[f"edge_merge_{cluster_edges[0].id}"] = cluster["confidence"]
+        state.graph.relationships = resolved_edges
+
+        # Step 3: Inference with Deduplication
+        seen_rels = set()
+        inferred_rels = infer_relationship(state.graph.nodes, state.graph.relationships, self.ontology_parser.parsed_ontology, state.context)
         for rel in inferred_rels:
             if rel.get("type") and rel.get("source") and rel.get("target"):
                 rel_key = (rel["type"], rel["source"], rel["target"])
@@ -116,7 +115,7 @@ class KnowledgeGraphBuilder:
                         target_type=target_node.type,
                         properties=rel["properties"],
                         provenance=NodeProvenance(
-                            chunk_ids=[f"{transform_id}_0"],  # Assuming single PDF for simplicity
+                            chunk_ids=[f"{transform_id}_0"],
                             extraction_timestamp=datetime.now(timezone.utc).isoformat(),
                             confidence_score=rel["confidence"]
                         )
@@ -126,13 +125,13 @@ class KnowledgeGraphBuilder:
 
         # Step 4: Validation
         for node in state.graph.nodes:
-            validation = validate_component(node, self.ontology, state.context)
+            validation = validate_component(node, self.ontology_parser.parsed_ontology, state.context)
             if not validation["is_valid"]:
                 node.properties.update(validation["fixes"])
                 state.decision_log.append(f"Fixed node {node.id}: {validation['fixes']}")
         valid_edges = []
         for edge in state.graph.relationships:
-            validation = validate_component(edge, self.ontology, state.context)
+            validation = validate_component(edge, self.ontology_parser.parsed_ontology, state.context)
             if validation["is_valid"]:
                 fixes = {k: v for k, v in validation["fixes"].items() if k in edge.properties}
                 edge.properties.update(fixes)

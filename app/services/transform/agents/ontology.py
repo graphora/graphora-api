@@ -1,7 +1,6 @@
-from typing import Dict, List, Any, Type, Optional, Union, Set
+from typing import Dict, List, Any, Type, Optional
 import yaml
 from datetime import datetime, timezone
-from pathlib import Path
 from pydantic import BaseModel, create_model, Field
 
 class OntologyParser:
@@ -11,6 +10,9 @@ class OntologyParser:
         """Initialize parser with YAML ontology"""
         self.parsed_ontology = yaml.safe_load(yaml_content)
         self.ontology_yaml = yaml_content
+        self.graph_model = self.build_graph_model()
+        self.entities_only_model = self.build_entities_only_model()
+        self.relationships_only_model = self.build_relationships_only_model()
         self.validate_ontology_structure()
 
     def validate_ontology_structure(self) -> None:
@@ -157,7 +159,7 @@ class OntologyParser:
 
     def build_entities_only_model(self) -> Type[BaseModel]:
         """Build a Pydantic model that only contains entity list fields with id."""
-        full_model = self.build_graph_model()
+        full_model = self.graph_model
         entity_models = full_model.__entity_models__
 
         kg_fields = {
@@ -182,7 +184,7 @@ class OntologyParser:
 
     def build_relationships_only_model(self) -> Type[BaseModel]:
         """Build a Pydantic model that only contains relationship fields with source_id and target_id."""
-        full_model = self.build_graph_model()
+        full_model = self.graph_model
         entity_models = full_model.__entity_models__
         relationship_models = full_model.__relationship_models__
 
@@ -206,6 +208,6 @@ class OntologyParser:
             __domain__="graphit",
             **kg_fields
         )
-        RelationshipsOnlyModel.__entity_models__ = entity_models
+        # RelationshipsOnlyModel.__entity_models__ = entity_models
         RelationshipsOnlyModel.__relationship_models__ = relationship_models
         return RelationshipsOnlyModel
