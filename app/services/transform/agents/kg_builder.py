@@ -39,8 +39,8 @@ class KnowledgeGraphBuilder:
             pdf_paths=pdf_paths,
             ontology=self.ontology_parser.parsed_ontology,
             ontology_yaml=self.ontology_parser.ontology_yaml,
-            entities_only_model=self.ontology_parser.build_entities_only_model(),  # Updated to call method
-            relationships_only_model=self.ontology_parser.build_relationships_only_model(),  # Updated to call method
+            entities_only_model=self.ontology_parser.build_entities_only_model(),
+            relationships_only_model=self.ontology_parser.build_relationships_only_model(),
             messages=[{"role": "user", "content": "Start graph extraction from PDFs."}]
         )
         config = {"configurable": {"thread_id": transform_id, "user_id": "1"}}
@@ -52,7 +52,7 @@ class KnowledgeGraphBuilder:
         state.graph.relationships = initial_graph.relationships
 
         # Step 2: Resolution
-        # Node resolution (unchanged)
+        # Node resolution
         nodes = state.graph.nodes
         nodes_by_type = {}
         for node in nodes:
@@ -74,7 +74,7 @@ class KnowledgeGraphBuilder:
                     state.confidence_scores[f"node_merge_{cluster_nodes[0].id}"] = cluster["confidence"]
         state.graph.nodes = resolved_nodes
 
-        # Edge resolution (optimized)
+        # Edge resolution
         edges = state.graph.relationships
         edges_by_type = {}
         for edge in edges:
@@ -123,21 +123,34 @@ class KnowledgeGraphBuilder:
                     state.decision_log.append(f"Inferred {rel['type']} between {rel['source']} and {rel['target']} with evidence: {rel['evidence']}")
                     state.confidence_scores[f"rel_{rel['source']}_{rel['target']}"] = rel["confidence"]
 
-        # Step 4: Validation
+        # Step 4: Validation (Optimized)
+        # Validate nodes by type
+        nodes_by_type = {}
         for node in state.graph.nodes:
-            validation = validate_component(node, self.ontology_parser.parsed_ontology, state.context)
-            if not validation["is_valid"]:
-                node.properties.update(validation["fixes"])
-                state.decision_log.append(f"Fixed node {node.id}: {validation['fixes']}")
-        valid_edges = []
+            nodes_by_type.setdefault(node.type, []).append(node)
+
+        for node_type, type_nodes in nodes_by_type.items():
+            validations = validate_component(type_nodes, self.ontology_parser.parsed_ontology, state.context)
+            for validation, node in zip(validations, type_nodes):
+                if not validation["is_valid"]:
+                    node.properties.update(validation["fixes"])
+                    state.decision_log.append(f"Fixed node {node.id} of type {node_type}: {validation['fixes']}")
+
+        # Validate edges by type
+        edges_by_type = {}
         for edge in state.graph.relationships:
-            validation = validate_component(edge, self.ontology_parser.parsed_ontology, state.context)
-            if validation["is_valid"]:
-                fixes = {k: v for k, v in validation["fixes"].items() if k in edge.properties}
-                edge.properties.update(fixes)
-                valid_edges.append(edge)
-            else:
-                state.decision_log.append(f"Removed invalid edge {edge.source_id}->{edge.target_id}")
+            edges_by_type.setdefault(edge.type, []).append(edge)
+
+        valid_edges = []
+        for edge_type, type_edges in edges_by_type.items():
+            validations = validate_component(type_edges, self.ontology_parser.parsed_ontology, state.context)
+            for validation, edge in zip(validations, type_edges):
+                if validation["is_valid"]:
+                    fixes = {k: v for k, v in validation["fixes"].items() if k in edge.properties}
+                    edge.properties.update(fixes)
+                    valid_edges.append(edge)
+                else:
+                    state.decision_log.append(f"Removed invalid edge {edge.source_id}->{edge.target_id} of type {edge_type}")
         state.graph.relationships = valid_edges
 
         # Finalize metrics

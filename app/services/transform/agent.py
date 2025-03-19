@@ -227,25 +227,49 @@ def infer_relationship(nodes: List[BaseNode], relationships: List[RelationshipIn
     print(f"Inferred {len(result['relationships'])} relationships")
     return result["relationships"]
 
-def validate_component(component: BaseModel, ontology: Dict[str, Any], context: str) -> Dict:
-    """Validate component (unchanged)."""
-    print(f"Validating component: {component}")
-    component_serializable = component.model_dump_json()
-    is_node = "properties" in component_serializable
-    
+def validate_component(components: List[BaseModel], ontology: Dict[str, Any], context: str) -> List[Dict]:
+    """Validate a list of nodes or edges of the same type in one shot using Gemini."""
+    if not components:
+        return []
+
+    # Check if all components are of the same type (node or edge)
+    is_node = isinstance(components[0], BaseNode)
+    if not all((isinstance(c, BaseNode) == is_node) for c in components):
+        raise ValueError("All components must be either nodes or edges, not mixed")
+
+    component_type = "nodes" if is_node else "edges"
+    component_count = len(components)
+    print(f"Validating {component_count} {component_type} in one shot")
+
+    # Serialize components
+    components_json = [c.model_dump_json() for c in components]
+
     prompt = (
-        f"Validate this {'node' if is_node else 'edge'} against the ontology and context.\n"
+        f"Validate these {component_type} against the ontology and context.\n"
         f"Ontology: {json.dumps(ontology)}\n"
-        f"{'Node' if is_node else 'Edge'}: {json.dumps(component_serializable, indent=2)}\n"
+        f"{component_type.capitalize()}: {json.dumps(components_json, indent=2)}\n"
         f"Context: {context[:10000]}\n"
-        f'Return only a JSON object: {{"is_valid": bool, "fixes": dict}}'
+        f'Return only a JSON object: {{"validations": list of {{"component": str (original JSON string), "is_valid": bool, "fixes": dict (specific corrections only, no placeholders)}}}}'
     )
     response = gemini_model.invoke(prompt)
     content = response.content.strip()
     result = extract_json_from_response(content)
-    if result is None:
-        return {"is_valid": False, "fixes": {}}
-    return result
+
+    if result is None or "validations" not in result:
+        logger.error(f"Failed to validate {component_type}: {content[:500]}")
+        return [{"component": c_json, "is_valid": False, "fixes": {}} for c_json in components_json]
+
+    # Ensure the number of validations matches the input
+    if len(result["validations"]) != component_count:
+        logger.warning(f"Validation count mismatch: expected {component_count}, got {len(result['validations'])}")
+        # Fallback to invalid for missing components
+        validated_components = {v["component"]: v for v in result["validations"]}
+        return [
+            validated_components.get(c_json, {"component": c_json, "is_valid": False, "fixes": {}, "reason": "Missing validation"})
+            for c_json in components_json
+        ]
+
+    return result["validations"]
 
 # Handoff Tools (unchanged)
 transfer_to_resolution = create_handoff_tool(agent_name="resolution_agent", description="Transfer to entity resolution agent.")
