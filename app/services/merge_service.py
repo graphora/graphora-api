@@ -9,6 +9,7 @@ from app.services.global_merge.global_db_connector import DBConnector
 from app.services.websocket_manager import WebSocketManager
 from app.schemas.global_merge import ReviewStatus, ERState, ResolutionStatus
 from app.schemas.merge_events import MergeAnswer
+from app.utils.mock import get_mock_subgraph
 from app.config import settings
 from app.services.ontology_validator import parse_and_validate_yaml
 import asyncio
@@ -95,7 +96,9 @@ class MergeService:
             )
             
             # Get nodes and edges from staging
-            nodes, edges = get_subgraph(transform_id)
+            # nodes, edges = get_subgraph(transform_id)
+            nodes, edges = get_mock_subgraph(transform_id)
+            prod_db_conn
             
             # Update state with staging nodes and edges
             state = self._active_sessions[session_id]

@@ -9,7 +9,7 @@ from anthropic import AnthropicVertex
 from vertexai.generative_models import GenerativeModel
 
 def call_llm(messages, response_model: Any):
-        return call_llm_anthropic(messages, response_model)
+        return call_llm_deepseek(messages, response_model)
     
 def call_llm_deepseek(messages, response_model: Any, 
                         model = 'deepseek-chat', max_tokens=8000):
@@ -31,6 +31,7 @@ def call_llm_deepseek(messages, response_model: Any,
 def call_llm_anthropic(messages, response_model, 
                         model = 'claude-3-5-haiku@20241022',
                         max_tokens=8000):
+    return call_llm_deepseek(messages, response_model, model, max_tokens)
     PROJECT_ID=settings.VERTEXAI_PROJECT_ID
     LOCATION='us-east5'
 
