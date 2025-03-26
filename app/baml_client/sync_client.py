@@ -692,7 +692,7 @@ class BamlSyncClient:
       )
       return cast(types.ConflictClassification, raw.cast_to(types, types, partial_types, False))
     
-    def ExtractChunk(
+    def ExtractNodesFromChunk(
         self,
         chunk: str,context: str,
         baml_options: BamlCallOptions = {},
@@ -708,7 +708,34 @@ class BamlSyncClient:
       collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.call_function_sync(
-        "ExtractChunk",
+        "ExtractNodesFromChunk",
+        {
+          "chunk": chunk,"context": context,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+      return cast(types.DynamicContainer, raw.cast_to(types, types, partial_types, False))
+    
+    def ExtractRelationshipsFromChunk(
+        self,
+        chunk: str,context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.call_function_sync(
+        "ExtractRelationshipsFromChunk",
         {
           "chunk": chunk,"context": context,
         },
@@ -1850,7 +1877,7 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
       )
     
-    def ExtractChunk(
+    def ExtractNodesFromChunk(
         self,
         chunk: str,context: str,
         baml_options: BamlCallOptions = {},
@@ -1866,7 +1893,42 @@ class BamlStreamClient:
       collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
 
       raw = self.__runtime.stream_function_sync(
-        "ExtractChunk",
+        "ExtractNodesFromChunk",
+        {
+          "chunk": chunk,
+          "context": context,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+
+      return baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer](
+        raw,
+        lambda x: cast(partial_types.DynamicContainer, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.DynamicContainer, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def ExtractRelationshipsFromChunk(
+        self,
+        chunk: str,context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.stream_function_sync(
+        "ExtractRelationshipsFromChunk",
         {
           "chunk": chunk,
           "context": context,

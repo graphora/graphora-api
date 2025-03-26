@@ -1,7 +1,7 @@
 from typing import List, Callable, Tuple, Optional, Union
-from pydantic import BaseModel
 from pathlib import Path
 from prefect import task, get_run_logger
+from datetime import datetime, timezone
 import yaml
 import traceback
 from app.services.transform.models import (
@@ -9,9 +9,12 @@ from app.services.transform.models import (
     ExtractionMetrics,
     OntologyDefinition
 )
-from app.services.transform.graph_builder import (
-    OntologyParser,
-    KnowledgeGraphBuilder
+from app.services.transform.ontology_helper import (
+    OntologyParser
+)
+from app.services.transform.graph_transformer import (
+    build_graph_from_chunks,
+    build_graph_from_pdfs
 )
 from app.config import settings
 
@@ -95,9 +98,6 @@ async def construct_knowledge_graph(
         # Load and validate ontology
         parser = OntologyParser(ontology_path)
         
-        # Initialize builder
-        builder = KnowledgeGraphBuilder(parser)
-        
         # Process chunks with controlled concurrency
         concurrency=settings.EXTRACTION_CONCURRENCY
         if len(chunks) < concurrency:
@@ -106,27 +106,30 @@ async def construct_knowledge_graph(
         if(len(chunks) == 0 and len(pdf_paths) == 0):
             return None, None
         if chunks:
-            graph = await builder.build_graph_from_chunks(
+            graph = await build_graph_from_chunks(
+                ontology_parser=parser,
                 chunks=chunks,
                 transform_id=transform_id, 
-                concurrency=concurrency,
                 progress_callback=progress_callback
             )
         elif pdf_paths:
-            graph = await builder.build_graph_from_pdfs(
+            graph = await build_graph_from_pdfs(
+                ontology_parser=parser,
                 pdf_paths=pdf_paths,
                 transform_id=transform_id, 
-                concurrency=concurrency,
                 progress_callback=progress_callback
             )
 
-        
-        metrics = builder.metrics
+        metrics = ExtractionMetrics(
+            start_time=datetime.now(timezone.utc),
+            total_nodes=len(graph.nodes),
+            total_relationships=len(graph.relationships),
+            merged_nodes=graph.metrics.merged_nodes if graph.metrics else 0
+        )
         
         # Finalize metrics
         if metrics:
             metrics.finalize()
-            
             # Log metrics
             logger.info(
                 f"Extraction completed: "
