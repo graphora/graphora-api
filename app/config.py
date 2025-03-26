@@ -270,6 +270,10 @@ class Settings(BaseSettings):
         default='us-east5',
         description="Google VertexAI Project Location for LLM operations"
     )
+    VERTEXAI_DEFAULT_MODEL: Optional[str] = Field(
+        default='gemini-2.0-flash-lite-001',
+        description="Google VertexAI default model for LLM operations"
+    )
     
     # GCP Settings
     GCP_PROJECT_ID: str = Field(

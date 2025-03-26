@@ -3,7 +3,7 @@
 client<llm> VertexAI {
   provider vertex-ai
   options {
-    model gemini-2.0-flash-lite-preview-02-05
+    model env.VERTEXAI_DEFAULT_MODEL
     location env.VERTEXAI_LOCATION
     project_id env.VERTEXAI_PROJECT_ID
 
