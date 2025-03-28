@@ -273,7 +273,7 @@ class Neo4jStorage(GraphStorageInterface):
                         
                         if existing_rel:
                             # Case 1: Existing with no properties beyond valid_from/valid_to
-                            existing_props = {k: v for k, v in existing_rel["properties"].items() 
+                            existing_props = {k: v for k, v in existing_rel.get("properties", {}).items() 
                                             if k not in {VALID_FROM, VALID_TO}}
                             if not existing_props:
                                 stored_rels.add(rel.id)
@@ -374,7 +374,7 @@ class Neo4jStorage(GraphStorageInterface):
                 sanitized_properties[key] = value
 
         # Add versioning properties
-        sanitized_properties[VALID_FROM] = datetime.now(timezone.utc).isoformat() if not rel.properties.get(VALID_FROM) else rel.properties.get(VALID_FROM).isoformat()
+        sanitized_properties[VALID_FROM] = datetime.now(timezone.utc).isoformat() if not rel.properties.get(VALID_FROM) else rel.properties.get(VALID_FROM)
         sanitized_properties[VALID_TO] = None
 
         query = f"""
