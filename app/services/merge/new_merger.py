@@ -438,7 +438,7 @@ async def _persist_to_prod(
             source_type=node_map[edge.source].type,
             target_type=node_map[edge.target].type,
             properties=edge.properties
-        ) for edge in merged_graph.edges
+        ) for edge in merged_graph.edges if edge.source in node_map and edge.target in node_map
     ]
     edge_batch_result = await storage.store_relationships(
         edges_as_rel_instances,
