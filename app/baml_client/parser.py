@@ -609,6 +609,32 @@ class LlmResponseParser:
 
       return cast(types.ConflictClassification, parsed)
     
+    def EvalChanges(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> List[types.ChangeResult]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "EvalChanges",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        False,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(List[types.ChangeResult], parsed)
+    
     def ExtractNodesFromChunk(
         self,
         llm_response: str,
@@ -842,6 +868,32 @@ class LlmResponseParser:
       )
 
       return cast(List[types.ResolutionOption], parsed)
+    
+    def GetMatchingNodes(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> List[types.MatchingNode]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "GetMatchingNodes",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        False,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(List[types.MatchingNode], parsed)
     
     def InferRelationship(
         self,
@@ -1530,6 +1582,32 @@ class LlmStreamParser:
 
       return cast(partial_types.ConflictClassification, parsed)
     
+    def EvalChanges(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> List[partial_types.ChangeResult]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "EvalChanges",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        True,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(List[partial_types.ChangeResult], parsed)
+    
     def ExtractNodesFromChunk(
         self,
         llm_response: str,
@@ -1763,6 +1841,32 @@ class LlmStreamParser:
       )
 
       return cast(List[partial_types.ResolutionOption], parsed)
+    
+    def GetMatchingNodes(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> List[partial_types.MatchingNode]:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "GetMatchingNodes",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        True,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(List[partial_types.MatchingNode], parsed)
     
     def InferRelationship(
         self,

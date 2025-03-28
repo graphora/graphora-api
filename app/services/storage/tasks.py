@@ -264,10 +264,10 @@ async def store_knowledge_graph(
             "Stored data verification",
             extra={
                 "transform_id": transform_id,
-                "nodes": stored_data.node_count,
-                "relationships": stored_data.relationship_count,
-                "node_types": stored_data.node_types,
-                "relationship_types": stored_data.relationship_types
+                "nodes": stored_data.total_nodes,
+                "relationships": stored_data.total_edges,
+                "node_types": stored_data.nodes,
+                "relationship_types": stored_data.edges
             }
         )
         

@@ -10,21 +10,6 @@ class StorageStage(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
-class Node(BaseModel):
-    """Model representing a graph node"""
-    id: str
-    label: str
-    type: str
-    properties: Dict[str, Any]
-
-class Edge(BaseModel):
-    """Model representing a graph relationship"""
-    id: str
-    source: str
-    target: str
-    type: str
-    properties: Dict[str, Any]
-
 class StorageCheckpoint(BaseModel):
     """Storage process checkpoint"""
     transform_id: str

@@ -35,6 +35,11 @@ class StreamState(BaseModel, Generic[T]):
     state: Literal["Pending", "Incomplete", "Complete"]
 
 
+class ChangeResult(BaseModel):
+    id: Optional[str] = None
+    corrections: List["Correction"]
+    confidence_score: Optional[float] = None
+
 class ConflictAnalysis(BaseModel):
     description: Optional[str] = None
     potential_causes: List[str]
@@ -54,6 +59,10 @@ class ConflictGroupAnalysis(BaseModel):
     confidence: Optional[float] = None
     risks: List[str]
 
+class Correction(BaseModel):
+    prop_name: Optional[str] = None
+    prop_value: Optional[str] = None
+
 class DynamicContainer(BaseModel):
     model_config = ConfigDict(extra='allow')
 
@@ -66,6 +75,11 @@ class EntitySimilarityAnalysis(BaseModel):
     potential_merge_impact: Optional[str] = None
     recommended_action: Optional[str] = None
     reasoning: Optional[str] = None
+
+class MatchingNode(BaseModel):
+    staging_node_id: Optional[str] = None
+    node_id: Optional[str] = None
+    confidence: Optional[float] = None
 
 class PropertyConflictAnalysis(BaseModel):
     recommended_strategy: Optional[types.ResolutionStrategy] = None

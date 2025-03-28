@@ -694,6 +694,33 @@ class BamlAsyncClient:
       )
       return cast(types.ConflictClassification, raw.cast_to(types, types, partial_types, False))
     
+    async def EvalChanges(
+        self,
+        change_logs: str,past_resolutions: str,
+        baml_options: BamlCallOptions = {},
+    ) -> List[types.ChangeResult]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+      raw = await self.__runtime.call_function(
+        "EvalChanges",
+        {
+          "change_logs": change_logs,"past_resolutions": past_resolutions,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+      return cast(List[types.ChangeResult], raw.cast_to(types, types, partial_types, False))
+    
     async def ExtractNodesFromChunk(
         self,
         chunk: str,context: str,
@@ -936,6 +963,33 @@ class BamlAsyncClient:
         collectors,
       )
       return cast(List[types.ResolutionOption], raw.cast_to(types, types, partial_types, False))
+    
+    async def GetMatchingNodes(
+        self,
+        candidate_sets: List[str],
+        baml_options: BamlCallOptions = {},
+    ) -> List[types.MatchingNode]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+      raw = await self.__runtime.call_function(
+        "GetMatchingNodes",
+        {
+          "candidate_sets": candidate_sets,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+      return cast(List[types.MatchingNode], raw.cast_to(types, types, partial_types, False))
     
     async def InferRelationship(
         self,
@@ -1856,6 +1910,40 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
       )
     
+    def EvalChanges(
+        self,
+        change_logs: str,past_resolutions: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[List[partial_types.ChangeResult], List[types.ChangeResult]]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+      raw = self.__runtime.stream_function(
+        "EvalChanges",
+        {
+          "change_logs": change_logs,
+          "past_resolutions": past_resolutions,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+
+      return baml_py.BamlStream[List[partial_types.ChangeResult], List[types.ChangeResult]](
+        raw,
+        lambda x: cast(List[partial_types.ChangeResult], x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(List[types.ChangeResult], x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
     def ExtractNodesFromChunk(
         self,
         chunk: str,context: str,
@@ -2171,6 +2259,39 @@ class BamlStreamClient:
         raw,
         lambda x: cast(List[partial_types.ResolutionOption], x.cast_to(types, types, partial_types, True)),
         lambda x: cast(List[types.ResolutionOption], x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def GetMatchingNodes(
+        self,
+        candidate_sets: List[str],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[List[partial_types.MatchingNode], List[types.MatchingNode]]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+      raw = self.__runtime.stream_function(
+        "GetMatchingNodes",
+        {
+          "candidate_sets": candidate_sets,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+
+      return baml_py.BamlStream[List[partial_types.MatchingNode], List[types.MatchingNode]](
+        raw,
+        lambda x: cast(List[partial_types.MatchingNode], x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(List[types.MatchingNode], x.cast_to(types, types, partial_types, False)),
         self.__ctx_manager.get(),
       )
     

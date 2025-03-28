@@ -46,6 +46,11 @@ class ResolutionStrategy(str, Enum):
     KEEP_PRODUCTION = "KEEP_PRODUCTION"
     MERGE_VALUES = "MERGE_VALUES"
 
+class ChangeResult(BaseModel):
+    id: str
+    corrections: List["Correction"]
+    confidence_score: float
+
 class ConflictAnalysis(BaseModel):
     description: str
     potential_causes: List[str]
@@ -65,6 +70,10 @@ class ConflictGroupAnalysis(BaseModel):
     confidence: float
     risks: List[str]
 
+class Correction(BaseModel):
+    prop_name: str
+    prop_value: str
+
 class DynamicContainer(BaseModel):
     model_config = ConfigDict(extra='allow')
 
@@ -77,6 +86,11 @@ class EntitySimilarityAnalysis(BaseModel):
     potential_merge_impact: str
     recommended_action: str
     reasoning: str
+
+class MatchingNode(BaseModel):
+    staging_node_id: str
+    node_id: str
+    confidence: float
 
 class PropertyConflictAnalysis(BaseModel):
     recommended_strategy: "ResolutionStrategy"
