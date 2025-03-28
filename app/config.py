@@ -317,67 +317,14 @@ class Settings(BaseSettings):
         default=5,
         description="Number of backup log files to keep"
     )
-    
-    # Qdrant Vector Database Settings
-    QDRANT_URL: str = Field(
-        default="http://localhost:6333",
-        description="Qdrant server URL"
+
+    SUPABASE_URL: str = Field(
+        default="",
+        description="Supabase URL"
     )
-    QDRANT_API_KEY: Optional[str] = Field(
-        default=None,
-        description="Qdrant API key for authentication"
-    )
-    QDRANT_COLLECTION_NAME: str = Field(
-        default="resolution_patterns",
-        description="Qdrant collection name for resolution patterns"
-    )
-    QDRANT_VECTOR_SIZE: int = Field(
-        default=1536,
-        description="Vector size for embeddings"
-    )
-    QDRANT_DISTANCE_METRIC: str = Field(
-        default="Cosine",
-        description="Distance metric for vector similarity (Cosine, Euclid, Dot)"
-    )
-    QDRANT_SEARCH_LIMIT: int = Field(
-        default=10,
-        description="Default limit for similarity search results"
-    )
-    QDRANT_SCORE_THRESHOLD: float = Field(
-        default=0.7,
-        description="Default score threshold for similarity search"
-    )
-    
-    # Vector Storage Settings
-    VECTOR_STORAGE_TYPE: str = Field(
-        default="qdrant",
-        description="Type of vector storage to use (e.g., qdrant)"
-    )
-    
-    # Resolution Learning Service Settings
-    RESOLUTION_LEARNING_HIGH_CONFIDENCE: float = Field(
-        default=0.85,
-        description="Threshold for automatic application of learned resolutions"
-    )
-    RESOLUTION_LEARNING_MEDIUM_CONFIDENCE: float = Field(
-        default=0.70,
-        description="Threshold for suggesting learned resolutions"
-    )
-    RESOLUTION_LEARNING_RATE_LIMIT: int = Field(
-        default=10,
-        description="Maximum number of automatic resolutions per minute"
-    )
-    RESOLUTION_LEARNING_MIN_SUCCESS_RATE: float = Field(
-        default=0.5,
-        description="Minimum success rate required for automatic application"
-    )
-    RESOLUTION_LEARNING_MIN_RESOLUTION_COUNT: int = Field(
-        default=3,
-        description="Minimum number of successful resolutions required for learning"
-    )
-    RESOLUTION_LEARNING_MAX_AGE_DAYS: int = Field(
-        default=30,
-        description="Maximum age of resolutions to consider for learning (in days)"
+    SUPABASE_KEY: str = Field(
+        default="",
+        description="Supabase key"
     )
     
     @property

@@ -543,6 +543,29 @@ class HttpRequest:
         False,
       )
     
+    def EvalChanges(
+        self,
+        change_logs: str,past_resolutions: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return self.__runtime.build_request_sync(
+        "EvalChanges",
+        {
+          "change_logs": change_logs,"past_resolutions": past_resolutions,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
     def ExtractNodesFromChunk(
         self,
         chunk: str,context: str,
@@ -743,6 +766,29 @@ class HttpRequest:
         "GenerateSchemaConflictResolutionOptions",
         {
           "conflict_analysis": conflict_analysis,"entity_type": entity_type,"staging_schema": staging_schema,"production_schema": production_schema,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
+    def GetMatchingNodes(
+        self,
+        candidate_sets: List[str],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return self.__runtime.build_request_sync(
+        "GetMatchingNodes",
+        {
+          "candidate_sets": candidate_sets,
         },
         self.__ctx_manager.get(),
         tb,
@@ -1359,6 +1405,29 @@ class HttpStreamRequest:
         True,
       )
     
+    def EvalChanges(
+        self,
+        change_logs: str,past_resolutions: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return self.__runtime.build_request_sync(
+        "EvalChanges",
+        {
+          "change_logs": change_logs,"past_resolutions": past_resolutions,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
     def ExtractNodesFromChunk(
         self,
         chunk: str,context: str,
@@ -1559,6 +1628,29 @@ class HttpStreamRequest:
         "GenerateSchemaConflictResolutionOptions",
         {
           "conflict_analysis": conflict_analysis,"entity_type": entity_type,"staging_schema": staging_schema,"production_schema": production_schema,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
+    def GetMatchingNodes(
+        self,
+        candidate_sets: List[str],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return self.__runtime.build_request_sync(
+        "GetMatchingNodes",
+        {
+          "candidate_sets": candidate_sets,
         },
         self.__ctx_manager.get(),
         tb,

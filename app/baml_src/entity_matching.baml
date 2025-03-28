@@ -71,3 +71,41 @@ function AnalyzeEntitySimilarity(
         {{ ctx.output_format }}
     "#
 }
+
+class MatchingNode {
+    staging_node_id string @description(#"
+        ID of the staging node.
+        E.g: '12sds-2132d-21312f-fggfd3'
+    "#)
+
+    node_id string @description(#"
+        ID of the matching node. Confidence must be > 0.9. If none match, return None
+        E.g: '12sds-2132d-21312f-fggfd3'
+    "#)
+    
+    confidence float @description(#"
+        Confidence in the matching assessment (0-1).
+        E.g: 0.85
+    "#)
+}
+
+function GetMatchingNodes(
+    candidate_sets: string[]
+) -> MatchingNode[] {
+    client VertexAI
+    prompt #"
+        Given multiple sets of staging node and production candidates, pick the most likely Production Node that matches each Staging Node within the set:
+
+        Candidate Sets:
+        {{candidate_sets}}
+
+        Guidelines:
+        1. Compare property values semantically
+        2. Consider domain-specific matching rules
+        3. Evaluate merge impact and risks
+        4. Assess confidence in similarity
+        5. Pick the most likely Production Node that matches each Staging Node within the set
+
+        {{ ctx.output_format }}
+    "#
+}

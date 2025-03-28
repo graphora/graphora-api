@@ -616,6 +616,30 @@ class AsyncHttpRequest:
         False,
       )
     
+    async def EvalChanges(
+        self,
+        change_logs: str,past_resolutions: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "EvalChanges",
+        {
+          "change_logs": change_logs,
+          "past_resolutions": past_resolutions,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
     async def ExtractNodesFromChunk(
         self,
         chunk: str,context: str,
@@ -837,6 +861,29 @@ class AsyncHttpRequest:
           "entity_type": entity_type,
           "staging_schema": staging_schema,
           "production_schema": production_schema,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
+    async def GetMatchingNodes(
+        self,
+        candidate_sets: List[str],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "GetMatchingNodes",
+        {
+          "candidate_sets": candidate_sets,
         },
         self.__ctx_manager.get(),
         tb,
@@ -1535,6 +1582,30 @@ class AsyncHttpStreamRequest:
         True,
       )
     
+    async def EvalChanges(
+        self,
+        change_logs: str,past_resolutions: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "EvalChanges",
+        {
+          "change_logs": change_logs,
+          "past_resolutions": past_resolutions,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
     async def ExtractNodesFromChunk(
         self,
         chunk: str,context: str,
@@ -1756,6 +1827,29 @@ class AsyncHttpStreamRequest:
           "entity_type": entity_type,
           "staging_schema": staging_schema,
           "production_schema": production_schema,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
+    async def GetMatchingNodes(
+        self,
+        candidate_sets: List[str],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "GetMatchingNodes",
+        {
+          "candidate_sets": candidate_sets,
         },
         self.__ctx_manager.get(),
         tb,

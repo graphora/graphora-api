@@ -6,21 +6,22 @@ from contextlib import asynccontextmanager
 import asyncio
 import uuid
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import time
-
+from app.utils.constants import VALID_FROM, VALID_TO
 import traceback
 from neo4j import AsyncGraphDatabase, GraphDatabase
 from neo4j.exceptions import ServiceUnavailable, AuthError, DatabaseError, SessionExpired, TransientError
 
 from .interface import GraphStorageInterface
-from .models import Node, Edge, StorageBatchResult, StorageCheckpoint, StorageStage, TransformationResult
+from .models import StorageBatchResult, StorageCheckpoint, StorageStage, TransformationResult
 from .exceptions import (
     StorageConnectionError,
     StorageAuthError,
     StorageError
 )
 from app.services.transform.models import BaseNode, RelationshipInstance
+from app.schemas.graph import GraphResponse, Node, Edge
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -179,51 +180,6 @@ class Neo4jStorage(GraphStorageInterface):
             "properties": properties
         }
 
-    def _build_relationship_query(self, rel: RelationshipInstance, merge: bool = True) -> Tuple[str, Dict[str, Any]]:
-        """Build a Cypher query for creating a relationship"""
-        if isinstance(rel, dict):
-            source_id = rel.get('source_id') or rel.get('source')
-            target_id = rel.get('target_id') or rel.get('target')
-            rel_id = rel.get('id', str(uuid.uuid4()))
-            rel_type = rel.get('type') or rel.get('relationship_type')
-            rel_properties = rel.get('properties', {})
-        else:
-            source_id = rel.source if hasattr(rel, 'source') else rel.source_id
-            target_id = rel.target if hasattr(rel, 'target') else rel.target_id
-            rel_id = rel.id
-            rel_type = rel.type if hasattr(rel, 'type') else rel.relationship_type
-            rel_properties = rel.properties
-
-        # Ensure rel_properties is a dict
-        if rel_properties is None:
-            rel_properties = {}
-            
-        # Sanitize properties
-        sanitized_properties = {}
-        for key, value in rel_properties.items():
-            if isinstance(value, (dict, list)):
-                sanitized_properties[key] = json.dumps(value)
-            elif value is None:
-                # Skip None values
-                continue
-            else:
-                sanitized_properties[key] = value
-        
-        query = """
-        MATCH (s), (t)
-        WHERE s.id = $source_id AND t.id = $target_id
-        CREATE (s)-[r:`{}`]->(t)
-        SET r = $properties, r.id = $rel_id
-        RETURN r
-        """.format(rel_type)
-        
-        return query, {
-            "source_id": source_id,
-            "target_id": target_id,
-            "rel_id": rel_id,
-            "properties": sanitized_properties
-        }
-
     async def store_nodes(
         self,
         nodes: List[BaseNode],
@@ -297,48 +253,66 @@ class Neo4jStorage(GraphStorageInterface):
         transform_id: str,
         merge: bool = True
     ) -> StorageBatchResult:
-        """Store relationships in Neo4j"""
+        """Store relationships in Neo4j with versioning logic"""
         start_time = time.time()
         success = True
         error_message = None
         items_processed = 0
         warnings = []
+        stored_rels = set()
 
-        # First try to store all relationships
         for rel in relationships:
-            stored_rels = set()
+            if rel.id in stored_rels:
+                continue
+
             try:
-                if rel.id in stored_rels:
-                    continue
-                async def _execute_query():
+                async def _execute_relationship():
                     async with self._get_session() as session:
-                        query, params = self._build_relationship_query(rel, merge=merge)
-                        await session.run(query, params)
-                        stored_rels.add(rel.id)
-                
-                await self._execute_with_retry(_execute_query)
+                        # Check for existing relationship
+                        existing_rel = await self._find_existing_relationship(session, rel)
+                        
+                        if existing_rel:
+                            # Case 1: Existing with no properties beyond valid_from/valid_to
+                            existing_props = {k: v for k, v in existing_rel["properties"].items() 
+                                            if k not in {VALID_FROM, VALID_TO}}
+                            if not existing_props:
+                                stored_rels.add(rel.id)
+                                return  # Skip adding new relationship
+
+                            # Case 2: Existing with differing properties
+                            new_props = {k: v for k, v in rel.properties.items() 
+                                       if k not in {VALID_FROM, VALID_TO}}
+                            if existing_props != new_props:
+                                # Version the existing relationship
+                                await self._close_existing_relationship(session, existing_rel)
+                                # Merge properties and create new version
+                                merged_props = {**existing_props, **new_props}
+                                query, params = self._build_relationship_query(rel, merge=True, properties=merged_props)
+                                await session.run(query, params)
+                                stored_rels.add(rel.id)
+                            else:
+                                stored_rels.add(rel.id)  # No change needed
+                        else:
+                            # Case 3: No existing relationship
+                            query, params = self._build_relationship_query(rel, merge=True)
+                            await session.run(query, params)
+                            stored_rels.add(rel.id)
+
+                await self._execute_with_retry(_execute_relationship)
                 items_processed += 1
-                print(stored_rels)
+                print(f"Stored relationships: {stored_rels}")
             except (StorageError, DatabaseError) as e:
                 traceback.print_exc()
                 success = False
                 error_message = str(e)
-                if isinstance(rel, dict):
-                    rel_id = rel.get('id', 'unknown')
-                else:
-                    rel_id = rel.id
-                logger.error(f"Failed to store relationship {rel_id}: {error_message}")
-                warnings.append(f"Failed to store relationship {rel_id}: {error_message}")
+                logger.error(f"Failed to store relationship {rel.id}: {error_message}")
+                warnings.append(f"Failed to store relationship {rel.id}: {error_message}")
                 break
 
-        # Only update checkpoint if at least one relationship was stored successfully
+        # Update checkpoint if successful
         if items_processed > 0:
             try:
-                checkpoint_result = await self.update_checkpoint(
-                    transform_id,
-                    batch_index,
-                    StorageStage.RELATIONSHIPS
-                )
+                checkpoint_result = await self.update_checkpoint(transform_id, batch_index, "RELATIONSHIPS")
                 if not checkpoint_result.success:
                     success = False
                     error_message = checkpoint_result.error
@@ -360,6 +334,63 @@ class Neo4jStorage(GraphStorageInterface):
             error=error_message,
             warnings=warnings
         )
+
+    async def _find_existing_relationship(self, session, rel: RelationshipInstance) -> Optional[Dict]:
+        """Check for an existing relationship in Neo4j"""
+        query = """
+        MATCH (s)-[r:%s]->(t)
+        WHERE s.id = $source_id AND t.id = $target_id AND r.valid_to IS NULL
+        RETURN r
+        """ % rel.type
+        result = await session.run(query, source_id=rel.source_id, target_id=rel.target_id)
+        record = await result.single()
+        return record["r"] if record else None
+
+    async def _close_existing_relationship(self, session, existing_rel: Dict):
+        """Set valid_to on an existing relationship"""
+        query = """
+        MATCH ()-[r]->()
+        WHERE r.id = $rel_id
+        SET r.valid_to = $valid_to
+        """
+        await session.run(query, rel_id=existing_rel["id"], valid_to=datetime.now(timezone.utc).isoformat())
+
+    def _build_relationship_query(self, rel: RelationshipInstance, merge: bool = True, properties: Optional[Dict] = None) -> Tuple[str, Dict[str, Any]]:
+        """Build a Cypher query for creating or versioning a relationship"""
+        source_id = rel.source_id
+        target_id = rel.target_id
+        rel_id = rel.id if merge else str(uuid.uuid4())
+        rel_type = rel.type
+        rel_properties = properties if properties is not None else rel.properties
+
+        # Sanitize properties
+        sanitized_properties = {}
+        for key, value in rel_properties.items():
+            if isinstance(value, (dict, list)):
+                sanitized_properties[key] = json.dumps(value)
+            elif value is None:
+                continue
+            else:
+                sanitized_properties[key] = value
+
+        # Add versioning properties
+        sanitized_properties[VALID_FROM] = datetime.now(timezone.utc).isoformat() if not rel.properties.get(VALID_FROM) else rel.properties.get(VALID_FROM).isoformat()
+        sanitized_properties[VALID_TO] = None
+
+        query = f"""
+        MATCH (s), (t)
+        WHERE s.id = $source_id AND t.id = $target_id
+        {"MERGE" if merge else "CREATE"} (s)-[r:`{rel_type}`]->(t)
+        SET r = $properties, r.id = $rel_id
+        RETURN r
+        """
+        
+        return query, {
+            "source_id": source_id,
+            "target_id": target_id,
+            "rel_id": rel_id,
+            "properties": sanitized_properties
+        }
 
     async def get_storage_status(
         self,
@@ -452,118 +483,117 @@ class Neo4jStorage(GraphStorageInterface):
             warnings=[]
         )
 
-    async def get_transformation_data(
-        self,
-        transform_id: str
-    ) -> TransformationResult:
+    async def get_transformation_data(self, transform_id: str) -> GraphResponse:
         """Get all nodes and relationships for a transformation"""
         try:
-            # Get nodes
-            query = """
+            count_query = """
             MATCH (n)
             WHERE n.transform_id = $transform_id
-            RETURN n, n.id as node_id, labels(n) as labels
+            WITH count(n) as node_count
+            OPTIONAL MATCH (n)-[r]-()
+            RETURN node_count, count(DISTINCT r) as edge_count
             """
-            
-            nodes = []
-            async with self.driver.session() as session:
-                result = await session.run(query, transform_id=transform_id)
-                async for record in result:
-                    node = record["n"]
-                    node_dict = dict(node)
-                    # Add the id field if it doesn't exist
-                    if "id" not in node_dict:
-                        node_dict["id"] = node_dict.get("id", str(record["node_id"]))
-                    node_dict["type"] = str(record["labels"][0])
-                    nodes.append(node_dict)
-            
-            # Get relationships
-            query = """
-            MATCH (s)-[r]->(t)
-            WHERE s.transform_id = $transform_id OR t.transform_id = $transform_id
-            RETURN r, r.id as rel_id, s.id as source_id, t.id as target_id, type(r) as type
-            """
-            
-            relationships = []
-            async with self.driver.session() as session:
-                result = await session.run(query, transform_id=transform_id)
-                async for record in result:
-                    rel = record["r"]
-                    rel_dict = dict(rel)
-                    # Add the id field if it doesn't exist
-                    if "id" not in rel_dict:
-                        rel_dict["id"] = rel_dict.get("id", str(record["rel_id"]))
-                    rel_dict["source"] = str(record["source_id"])
-                    rel_dict["target"] = str(record["target_id"])
-                    rel_dict["type"] = str(record["type"])
-                    relationships.append(rel_dict)
-            
-            return TransformationResult(
-                transform_id=transform_id,
-                nodes=nodes,
-                relationships=relationships,
-                timestamp=datetime.now()
-            )
-        except Exception as e:
-            logger.error(f"Error getting transformation data: {str(e)}")
-            raise DatabaseError(f"Failed to get transformation data: {str(e)}")
 
-    async def get_production_graph_for_transform(
-        self,
-        transform_id: str
-    ) -> TransformationResult:
-        """Get all nodes and relationships from production that were affected by a transform"""
-        try:
-            # Get nodes that were affected by the transform
-            # This includes nodes that were created or updated during the merge
-            query = """
-            MATCH (n)
-            WHERE n.transform_id = $transform_id OR n.affected_by_transform = $transform_id
-            RETURN n, n.id as node_id, labels(n) as labels
-            """
-            
-            nodes = []
             async with self.driver.session() as session:
+                count_result = await session.run(count_query, transform_id=transform_id)
+                count_data = await count_result.single()
+                total_nodes = count_data["node_count"]
+                total_edges = count_data["edge_count"]
+
+                query = """
+                MATCH (n)
+                WHERE n.transform_id = $transform_id
+                WITH n ORDER BY n.id
+                OPTIONAL MATCH (n)-[r]-(m)
+                RETURN 
+                    collect(DISTINCT n) as nodes,
+                    collect(DISTINCT r) as relationships,
+                    collect(DISTINCT m) as connected_nodes
+                """
+
                 result = await session.run(query, transform_id=transform_id)
-                async for record in result:
-                    node = record["n"]
-                    node_dict = dict(node)
-                    # Add the id field if it doesn't exist
-                    if "id" not in node_dict:
-                        node_dict["id"] = node_dict.get("id", str(record["node_id"]))
-                    node_dict["type"] = str(record["labels"][0])
-                    nodes.append(node_dict)
-            
-            # Get relationships that were affected by the transform
-            query = """
-            MATCH (s)-[r]->(t)
-            WHERE s.transform_id = $transform_id OR t.transform_id = $transform_id
-            RETURN r, r.id as rel_id, s.id as source_id, t.id as target_id, type(r) as type
-            """
-            
-            relationships = []
-            async with self.driver.session() as session:
-                result = await session.run(query, transform_id=transform_id)
-                async for record in result:
-                    rel = record["r"]
-                    rel_dict = dict(rel)
-                    # Add the id field if it doesn't exist
-                    if "id" not in rel_dict:
-                        rel_dict["id"] = rel_dict.get("id", str(record["rel_id"]))
-                    rel_dict["source"] = str(record["source_id"])
-                    rel_dict["target"] = str(record["target_id"])
-                    rel_dict["type"] = str(record["type"])
-                    relationships.append(rel_dict)
-            
-            return TransformationResult(
-                transform_id=transform_id,
-                nodes=nodes,
-                relationships=relationships,
-                timestamp=datetime.now()
-            )
+                data = await result.single()
+
+                nodes_list = []
+                edges_list = []
+                seen_nodes = set()
+                seen_edges = set()
+
+                def get_actual_label(node_labels):
+                    return list(node_labels)[0]
+
+                def extract_properties(entity):
+                    props = {}
+                    entity_dict = dict(entity)
+                    for key, value in entity_dict.items():
+                        if isinstance(value, str):
+                            try:
+                                if value.startswith('[') or value.startswith('{'):
+                                    value = eval(value)
+                            except:
+                                pass
+                        props[key] = value
+                    return props
+
+                # Process main nodes
+                for node in data["nodes"]:
+                    node_id = node.get("id")
+                    if node_id and node_id not in seen_nodes:
+                        actual_label = get_actual_label(node.labels)
+                        node_props = extract_properties(node)
+                        nodes_list.append({
+                            "id": node_id,
+                            "label": actual_label,
+                            "properties": node_props,
+                            "type": actual_label
+                        })
+                        seen_nodes.add(node_id)
+
+                # Process connected nodes
+                for node in data["connected_nodes"]:
+                    if node is not None:
+                        node_id = node.get("id")
+                        if node_id and node_id not in seen_nodes:
+                            actual_label = get_actual_label(node.labels)
+                            node_props = extract_properties(node)
+                            nodes_list.append({
+                                "id": node_id,
+                                "label": actual_label,
+                                "properties": node_props,
+                                "type": actual_label
+                            })
+                            seen_nodes.add(node_id)
+
+                # Process relationships
+                for rel in data["relationships"]:
+                    if rel is not None:
+                        edge_id = rel.get("id", str(rel.id))
+                        if edge_id not in seen_edges:
+                            source_id = rel.start_node.get("id")
+                            target_id = rel.end_node.get("id")
+                            if source_id and target_id:
+                                edge_props = extract_properties(rel)
+                                edges_list.append({
+                                    "id": edge_id,
+                                    "source": source_id,
+                                    "target": target_id,
+                                    "type": str(rel.type),
+                                    "properties": edge_props
+                                })
+                                seen_edges.add(edge_id)
+
+                return GraphResponse(
+                    nodes=nodes_list,
+                    edges=edges_list,
+                    total_nodes=total_nodes,
+                    total_edges=total_edges
+                )
+
         except Exception as e:
-            logger.error(f"Error getting production graph for transform: {str(e)}")
-            raise DatabaseError(f"Failed to get production graph for transform: {str(e)}")
+            logger.error(f"Error retrieving graph data: {str(e)}")
+            raise
+
+    
 
     async def get_nodes_by_property(
         self,
