@@ -459,9 +459,10 @@ def _add_ingestion_stats(merge_id, node_batch_result, edge_batch_result):
     supabase.table("merge_status").update(
         {
             "statistics": {
-                "nodes_stored": node_batch_result,
-                "edges_stored": edge_batch_result
-            }
+                "nodes_stored": node_batch_result.model_dump(),
+                "edges_stored": edge_batch_result.model_dump()
+            },
+            "status": MergeStatus.COMPLETED
         }
     ).eq("merge_id", merge_id).execute()
 
