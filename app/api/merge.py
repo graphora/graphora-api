@@ -12,7 +12,6 @@ from app.services.merge.new_merger import (
 )
 from app.services.merge.models import MergeInitResponse, MergeStatus, ChangeLog
 from app.config import settings
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,7 @@ router = APIRouter(
 )
 
 @router.post("/{session_id}/{transform_id}/start",
-            response_model=MergeStatus,
+            response_model=MergeInitResponse,
             description="Start graph merge process")
 async def start_merge(
     merge_id: Optional[str],
@@ -40,7 +39,7 @@ async def start_merge(
             )
             
         # Generate merge ID
-        if not merge_id:
+        if not merge_id or merge_id == "new":
             merge_id = str(uuid.uuid4())
         
         # Define background task
@@ -54,6 +53,7 @@ async def start_merge(
                 )
                 logger.info(f"Started flow run {flow_run} for merge {merge_id}")
             except Exception as e:
+                traceback.print_exc()
                 logger.error(f"Failed to start merge flow: {str(e)}")
                 log_merge_failure(merge_id, str(e))
         

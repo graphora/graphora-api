@@ -55,11 +55,13 @@ async def merge_flow(
 
     #if there is a merge status, check if it is already done, merge change_logs and update merge status
     merge_status = supabase.table("merge_status").select("*").eq("merge_id", merge_id).execute()
-    if merge_status.data and merge_status.data[0]['status'] == MergeStatus.READY_TO_MERGE:
+    if not merge_status.data:
+        _start_merge_status(merge_id, transform_id, ontology_id)
+    elif merge_status.data[0]['status'] == MergeStatus.READY_TO_MERGE:
         merged_graph = await _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, merged_graph)
         return merged_graph
-    elif not merge_status.data:
-        _start_merge_status(merge_id, transform_id, ontology_id)
+    elif merge_status.data[0]['status'] == MergeStatus.COMPLETED:
+        return
     
     # Step-2: Extract Production Graph
     prod_mapping_result: EntityMappingResult = await _map_production_entities(staging_graph, ontology_parser.parsed_ontology)
@@ -111,6 +113,9 @@ def log_merge_failure(merge_id: str, error: str):
 
 def get_merge_status(merge_id: str) -> MergeStatus:
     merge_status = supabase.table("merge_status").select("*").eq("merge_id", merge_id).execute()
+    print(merge_status)
+    if not merge_status.data:
+        return MergeStatus.NOT_FOUND
     return MergeStatus(merge_status.data[0]['status'])
 
 def get_human_review_items(merge_id: str) -> List[ChangeLog]:
@@ -146,12 +151,14 @@ async def get_merge_graph(merge_id: str, transform_id: str) -> GraphResponse:
     merge_status = supabase.table("merge_status").select("status").eq("merge_id", merge_id).execute()
     if not merge_status.data:
         return None
-    elif merge_status.data[0]['status'] != MergeStatus.COMPLETED:
+    elif merge_status.data[0]['status'] == MergeStatus.COMPLETED:
         return await _get_prod_graph(transform_id)
     #fetch staging graph using transform_id
-    staging_graph = await _extract_staging_graph(transform_id) 
+    staging_graph = await _extract_staging_graph(transform_id)
+    print("staging_graph", staging_graph)
     #fetch change_logs and apply on top of staging graph
     change_logs = supabase.table("change_logs").select("*").eq("merge_id", merge_id).execute()
+    print("change_logs", change_logs)
     for change_log in change_logs.data:
         staging_node = staging_graph.nodes[change_log['staging_node_id']]
         prod_node = _get_prod_node(change_log['node_type'], change_log['prod_node_id'])
