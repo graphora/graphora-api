@@ -12,7 +12,7 @@ from app.utils.constants import VALID_FROM, VALID_TO
 import traceback
 from neo4j import AsyncGraphDatabase, GraphDatabase
 from neo4j.exceptions import ServiceUnavailable, AuthError, DatabaseError, SessionExpired, TransientError
-
+from neo4j.time import DateTime as Neo4jDateTime
 from .interface import GraphStorageInterface
 from .models import StorageBatchResult, StorageCheckpoint, StorageStage, TransformationResult
 from .exceptions import (
@@ -486,6 +486,7 @@ class Neo4jStorage(GraphStorageInterface):
     async def get_transformation_data(self, transform_id: str) -> GraphResponse:
         """Get all nodes and relationships for a transformation"""
         try:
+            print("transform_id", transform_id)
             count_query = """
             MATCH (n)
             WHERE n.transform_id = $transform_id
@@ -522,74 +523,97 @@ class Neo4jStorage(GraphStorageInterface):
                 def get_actual_label(node_labels):
                     return list(node_labels)[0]
 
+                def convert_datetime(value):
+                    """Convert neo4j.time.DateTime to ISO string"""
+                    if isinstance(value, Neo4jDateTime):
+                        return value.iso_format()
+                    return value
+
                 def extract_properties(entity):
+                    """Extract properties, converting Neo4j DateTime to strings"""
                     props = {}
                     entity_dict = dict(entity)
                     for key, value in entity_dict.items():
-                        if isinstance(value, str):
+                        if isinstance(value, Neo4jDateTime):
+                            props[key] = value.iso_format()
+                        elif isinstance(value, str):
                             try:
                                 if value.startswith('[') or value.startswith('{'):
                                     value = eval(value)
                             except:
                                 pass
-                        props[key] = value
+                            props[key] = value
+                        else:
+                            props[key] = value
+                    # Log for debugging
+                    logger.debug(f"Extracted properties: {props}")
                     return props
 
                 # Process main nodes
                 for node in data["nodes"]:
-                    node_id = node.get("id")
+                    node_id = convert_datetime(node.get("id"))
                     if node_id and node_id not in seen_nodes:
                         actual_label = get_actual_label(node.labels)
                         node_props = extract_properties(node)
-                        nodes_list.append({
+                        node_dict = {
                             "id": node_id,
                             "label": actual_label,
                             "properties": node_props,
                             "type": actual_label
-                        })
+                        }
+                        nodes_list.append(node_dict)
                         seen_nodes.add(node_id)
+                        # Debug: Check raw node data
+                        logger.debug(f"Node: {node_dict}")
 
                 # Process connected nodes
                 for node in data["connected_nodes"]:
                     if node is not None:
-                        node_id = node.get("id")
+                        node_id = convert_datetime(node.get("id"))
                         if node_id and node_id not in seen_nodes:
                             actual_label = get_actual_label(node.labels)
                             node_props = extract_properties(node)
-                            nodes_list.append({
+                            node_dict = {
                                 "id": node_id,
                                 "label": actual_label,
                                 "properties": node_props,
                                 "type": actual_label
-                            })
+                            }
+                            nodes_list.append(node_dict)
                             seen_nodes.add(node_id)
+                            logger.debug(f"Connected Node: {node_dict}")
 
                 # Process relationships
                 for rel in data["relationships"]:
                     if rel is not None:
-                        edge_id = rel.get("id", str(rel.id))
+                        edge_id = convert_datetime(rel.get("id", str(rel.id)))
                         if edge_id not in seen_edges:
-                            source_id = rel.start_node.get("id")
-                            target_id = rel.end_node.get("id")
+                            source_id = convert_datetime(rel.start_node.get("id"))
+                            target_id = convert_datetime(rel.end_node.get("id"))
                             if source_id and target_id:
                                 edge_props = extract_properties(rel)
-                                edges_list.append({
+                                edge_dict = {
                                     "id": edge_id,
                                     "source": source_id,
                                     "target": target_id,
                                     "type": str(rel.type),
                                     "properties": edge_props
-                                })
+                                }
+                                edges_list.append(edge_dict)
                                 seen_edges.add(edge_id)
+                                logger.debug(f"Edge: {edge_dict}")
 
-                return GraphResponse(
+                # Create GraphResponse and test serialization
+                response = GraphResponse(
                     nodes=nodes_list,
                     edges=edges_list,
                     total_nodes=total_nodes,
                     total_edges=total_edges
                 )
+                return response
 
         except Exception as e:
+            traceback.print_exc()
             logger.error(f"Error retrieving graph data: {str(e)}")
             raise
 

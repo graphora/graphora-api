@@ -16,6 +16,7 @@ class MergeStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    NOT_FOUND = "not_found"
 
 class MergeInitResponse(BaseModel):
     """Response for merge initialization"""
