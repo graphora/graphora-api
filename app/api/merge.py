@@ -29,7 +29,7 @@ async def start_merge(
     session_id: str,
     transform_id: str,
     background_tasks: BackgroundTasks
-) -> MergeStatus:
+) -> MergeInitResponse:
     """Start a new merge process"""
     try:
         # Validate inputs
@@ -60,7 +60,11 @@ async def start_merge(
         # Add background task
         background_tasks.add_task(run_merge_flow)
         
-        return MergeStatus.STARTED
+        return MergeInitResponse(
+            merge_id=merge_id,
+            status=MergeStatus.STARTED,
+            start_time=datetime.now()
+        )
         
     except Exception as e:
         logger.error(f"Failed to start merge: {str(e)}")

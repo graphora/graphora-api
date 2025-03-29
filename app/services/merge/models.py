@@ -17,6 +17,12 @@ class MergeStatus(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+class MergeInitResponse(BaseModel):
+    """Response for merge initialization"""
+    merge_id: str
+    status: MergeStatus
+    start_time: datetime
+
 class MatchStrategy(str, Enum):
     """Available strategies for entity matching"""
     EXACT_NAME = "exact_name"
