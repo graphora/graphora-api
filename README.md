@@ -49,15 +49,6 @@ A sophisticated document processing backend that leverages AI-powered intelligen
    ```
 - [Setup BAML](https://docs.boundaryml.com/guide/installation-language/python)
 
-### Running Tests
-
-```bash
-# On macOS
-brew install redis
-
-# Start Redis
-brew services start redis
-```
 
 
 ### Running the Project

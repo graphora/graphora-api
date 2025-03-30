@@ -41,3 +41,4 @@ python-magic>=0.4.27
 textstat>=0.7.3
 baml-py>=0.81.3
 supabase>=2.15.0
+redis>=5.0.11
