@@ -46,12 +46,12 @@ async def start_merge(
         async def run_merge_flow():
             try:
                 # Create flow run directly
-                flow_run = await merge_flow(
+                await merge_flow(
                     merge_id=merge_id,
                     transform_id=transform_id,
                     ontology_id=session_id
                 )
-                logger.info(f"Started flow run {flow_run} for merge {merge_id}")
+                logger.info(f"Started flow run for merge {merge_id}")
             except Exception as e:
                 traceback.print_exc()
                 logger.error(f"Failed to start merge flow: {str(e)}")
@@ -179,7 +179,14 @@ async def get_graph_by_merge_id(
     transform_id: str
 ) -> GraphResponse:
     try:
-        return await get_merge_graph(merge_id, transform_id)
+        graph = await get_merge_graph(merge_id, transform_id)
+        if graph:
+            return graph
+        else:
+            return GraphResponse(
+                nodes=[],
+                edges=[]
+            )
     except Exception as e:
         traceback.print_exc()
         logger.error(f"Error retrieving graph data: {str(e)}")

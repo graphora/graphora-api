@@ -171,7 +171,8 @@ async def get_merge_graph(merge_id: str, transform_id: str) -> GraphResponse:
     print("staging_graph", staging_graph)
     #fetch change_logs and apply on top of staging graph
     change_logs = supabase.table("change_logs").select("*").eq("merge_id", merge_id).execute()
-    print("change_logs", change_logs)
+    if not change_logs.data:
+        return None
     for change_log in change_logs.data:
         staging_node = staging_graph.nodes[change_log['staging_node_id']]
         prod_node = _get_prod_node(change_log['node_type'], change_log['prod_node_id'])
