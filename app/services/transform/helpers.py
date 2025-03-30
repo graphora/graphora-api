@@ -52,6 +52,10 @@ def transform_as_nodes(ontology: Dict[str, Any], entity_result: BaseModel) -> Li
 
 def transform_as_relationships(ontology: Dict[str, Any], 
                                nodes: List[BaseNode], relationship_result: BaseModel) -> List[RelationshipInstance]:
+    print("#"*30)
+    print("relationship_result", relationship_result)
+    print("nodes", nodes)
+    print("#"*30)
     relationships = []
     for field_name in dir(relationship_result):
         if field_name.endswith('_list') or field_name.startswith('_') or '_' not in field_name:
@@ -181,7 +185,7 @@ async def resolve_entity_group(entity_type: str, nodes: List[BaseNode]) -> List[
         for node in nodes:
             if node not in included_nodes:
                 resolved_groups.append([node])
-        
+        print("resolved_groups", resolved_groups)
         return resolved_groups
         
     except Exception as e:

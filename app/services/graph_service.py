@@ -8,6 +8,7 @@ from app.schemas.graph_changes import (
 )
 from app.utils.logger import logger
 from uuid import uuid4
+from app.utils.constants import TRANSFORM_ID, MERGE_ID
 
 class GraphService:
     def __init__(self, uri: str, user: str, password: str):
@@ -35,7 +36,7 @@ class GraphService:
             # First get total counts
             count_query = f"""
             MATCH (n)
-            WHERE n.transform_id = '{transform_id}'
+            WHERE n.{TRANSFORM_ID} = '{transform_id}'
             WITH count(n) as node_count
             OPTIONAL MATCH (n)-[r]-()
             RETURN node_count, count(DISTINCT r) as edge_count
@@ -50,7 +51,7 @@ class GraphService:
                 # Now get the actual data with pagination
                 query = f"""
                 MATCH (n)
-                WHERE n.transform_id = '{transform_id}'
+                WHERE n.{TRANSFORM_ID} = '{transform_id}'
                 WITH n ORDER BY n.id
                 SKIP {skip} LIMIT {limit}
                 OPTIONAL MATCH (n)-[r]-(m)
@@ -190,7 +191,7 @@ class GraphService:
         result = tx.run(
             f"""
             MATCH (n)
-            WHERE n.transform_id = "{transform_id}" AND
+            WHERE n.{TRANSFORM_ID} = "{transform_id}" AND
             n.id = $id
             RETURN n
             """,
@@ -222,7 +223,7 @@ class GraphService:
         # Build and execute query
         query_parts = [
             f"""MATCH (n)
-            WHERE n.transform_id = "{transform_id}" AND
+            WHERE n.{TRANSFORM_ID} = "{transform_id}" AND
             n.id = $id
             """
         ]
@@ -247,7 +248,7 @@ class GraphService:
         tx.run(
             f"""
             MATCH (n)
-            WHERE n.transform_id = "{transform_id}" AND
+            WHERE n.{TRANSFORM_ID} = "{transform_id}" AND
             n.id = $id
             DETACH DELETE n
             """,
