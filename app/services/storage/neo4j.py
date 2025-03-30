@@ -8,7 +8,7 @@ import uuid
 import json
 from datetime import datetime, timezone
 import time
-from app.utils.constants import VALID_FROM, VALID_TO
+from app.utils.constants import VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID, SYSTEM_PROPERTIES
 import traceback
 from neo4j import AsyncGraphDatabase, GraphDatabase
 from neo4j.exceptions import ServiceUnavailable, AuthError, DatabaseError, SessionExpired, TransientError
@@ -139,7 +139,9 @@ class Neo4jStorage(GraphStorageInterface):
                 # Don't retry other errors
                 raise StorageError(f"Unexpected error: {str(e)}")
 
-    def _build_node_query(self, node: BaseNode, transform_id: str, merge: bool = True) -> tuple[str, Dict]:
+    def _build_node_query(self, node: BaseNode, 
+                          transform_id: str, merge_id: Optional[str] = None, 
+                          merge: bool = True) -> tuple[str, Dict]:
         """Build Cypher query for creating a node with properties"""
         # Extract properties excluding metadata
         if isinstance(node, dict):
@@ -155,11 +157,13 @@ class Neo4jStorage(GraphStorageInterface):
             
         properties = {
             k: v for k, v in node_properties.items()
-            if k not in ['id', 'type', 'transform_id']
+            if k not in ['id', 'type', TRANSFORM_ID, MERGE_ID]
         }
 
         # Add transform ID
-        properties['transform_id'] = transform_id
+        properties[TRANSFORM_ID] = transform_id
+        if merge_id:
+            properties[MERGE_ID] = merge_id
 
         # Add provenance if present
         if not isinstance(node, dict) and hasattr(node, 'provenance') and node.provenance:
@@ -185,6 +189,7 @@ class Neo4jStorage(GraphStorageInterface):
         nodes: List[BaseNode],
         batch_index: int,
         transform_id: str,
+        merge_id: Optional[str] = None,
         merge: bool = True
     ) -> StorageBatchResult:
         """Store nodes in Neo4j"""
@@ -199,7 +204,7 @@ class Neo4jStorage(GraphStorageInterface):
             try:
                 async def _execute_query():
                     async with self._get_session() as session:
-                        query, params = self._build_node_query(node, transform_id, merge=merge)
+                        query, params = self._build_node_query(node, transform_id, merge_id, merge)
                         await session.run(query, params)
 
                 await self._execute_with_retry(_execute_query)
@@ -251,6 +256,7 @@ class Neo4jStorage(GraphStorageInterface):
         relationships: List[RelationshipInstance],
         batch_index: int,
         transform_id: str,
+        merge_id: Optional[str] = None,
         merge: bool = True
     ) -> StorageBatchResult:
         """Store relationships in Neo4j with versioning logic"""
@@ -274,27 +280,30 @@ class Neo4jStorage(GraphStorageInterface):
                         if existing_rel:
                             # Case 1: Existing with no properties beyond valid_from/valid_to
                             existing_props = {k: v for k, v in existing_rel.get("properties", {}).items() 
-                                            if k not in {VALID_FROM, VALID_TO}}
+                                            if k not in {VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID}}
                             if not existing_props:
                                 stored_rels.add(rel.id)
                                 return  # Skip adding new relationship
 
                             # Case 2: Existing with differing properties
                             new_props = {k: v for k, v in rel.properties.items() 
-                                       if k not in {VALID_FROM, VALID_TO}}
+                                       if k not in {VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID}}
                             if existing_props != new_props:
                                 # Version the existing relationship
                                 await self._close_existing_relationship(session, existing_rel)
                                 # Merge properties and create new version
                                 merged_props = {**existing_props, **new_props}
-                                query, params = self._build_relationship_query(rel, merge=True, properties=merged_props)
+                                query, params = self._build_relationship_query(
+                                    rel, merge=True, properties=merged_props, 
+                                    transform_id=transform_id, merge_id=merge_id)
                                 await session.run(query, params)
                                 stored_rels.add(rel.id)
                             else:
                                 stored_rels.add(rel.id)  # No change needed
                         else:
                             # Case 3: No existing relationship
-                            query, params = self._build_relationship_query(rel, merge=True)
+                            query, params = self._build_relationship_query(rel, merge=True, 
+                                                                           transform_id=transform_id, merge_id=merge_id)
                             await session.run(query, params)
                             stored_rels.add(rel.id)
 
@@ -337,25 +346,29 @@ class Neo4jStorage(GraphStorageInterface):
 
     async def _find_existing_relationship(self, session, rel: RelationshipInstance) -> Optional[Dict]:
         """Check for an existing relationship in Neo4j"""
-        query = """
-        MATCH (s)-[r:%s]->(t)
-        WHERE s.id = $source_id AND t.id = $target_id AND r.valid_to IS NULL
+        query = f"""
+        MATCH (s)-[r:`{rel.type}`]->(t)
+        WHERE s.id = $source_id AND t.id = $target_id AND r.{VALID_TO} IS NULL
         RETURN r
-        """ % rel.type
+        """
         result = await session.run(query, source_id=rel.source_id, target_id=rel.target_id)
         record = await result.single()
         return record["r"] if record else None
 
     async def _close_existing_relationship(self, session, existing_rel: Dict):
         """Set valid_to on an existing relationship"""
-        query = """
+        query = f"""
         MATCH ()-[r]->()
         WHERE r.id = $rel_id
-        SET r.valid_to = $valid_to
+        SET r.{VALID_TO} = $valid_to
         """
         await session.run(query, rel_id=existing_rel["id"], valid_to=datetime.now(timezone.utc).isoformat())
 
-    def _build_relationship_query(self, rel: RelationshipInstance, merge: bool = True, properties: Optional[Dict] = None) -> Tuple[str, Dict[str, Any]]:
+    def _build_relationship_query(self, rel: RelationshipInstance, 
+                                  merge: bool = True, 
+                                  properties: Optional[Dict] = None,
+                                  transform_id: str = None,
+                                  merge_id: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
         """Build a Cypher query for creating or versioning a relationship"""
         source_id = rel.source_id
         target_id = rel.target_id
@@ -374,8 +387,14 @@ class Neo4jStorage(GraphStorageInterface):
                 sanitized_properties[key] = value
 
         # Add versioning properties
-        sanitized_properties[VALID_FROM] = datetime.now(timezone.utc).isoformat() if not rel.properties.get(VALID_FROM) else rel.properties.get(VALID_FROM)
+        sanitized_properties[VALID_FROM] = datetime.now(timezone.utc).isoformat() if not (
+            rel.properties.get(VALID_FROM)
+        ) else rel.properties.get(VALID_FROM)
         sanitized_properties[VALID_TO] = None
+        if transform_id:
+            sanitized_properties[TRANSFORM_ID] = transform_id
+        if merge_id:
+            sanitized_properties[MERGE_ID] = merge_id
 
         query = f"""
         MATCH (s), (t)
@@ -399,8 +418,8 @@ class Neo4jStorage(GraphStorageInterface):
         """Get current storage status"""
         async def _execute_query():
             async with self._get_session() as session:
-                query = """
-                MATCH (c:__Checkpoint__ {transform_id: $transform_id})
+                query = f"""
+                MATCH (c:__Checkpoint__ {{{TRANSFORM_ID}: $transform_id}})
                 RETURN c ORDER BY c.timestamp DESC LIMIT 1
                 """
                 result = await session.run(query, {"transform_id": transform_id})
@@ -423,7 +442,7 @@ class Neo4jStorage(GraphStorageInterface):
                     timestamp = datetime.now()
                 
                 return StorageCheckpoint(
-                    transform_id=checkpoint["transform_id"],
+                    transform_id=checkpoint[TRANSFORM_ID],
                     last_processed_index=checkpoint["last_processed_index"],
                     stage=StorageStage(checkpoint["stage"]),
                     timestamp=timestamp
@@ -486,10 +505,9 @@ class Neo4jStorage(GraphStorageInterface):
     async def get_transformation_data(self, transform_id: str) -> GraphResponse:
         """Get all nodes and relationships for a transformation"""
         try:
-            print("transform_id", transform_id)
-            count_query = """
+            count_query = f"""
             MATCH (n)
-            WHERE n.transform_id = $transform_id
+            WHERE n.{TRANSFORM_ID} = $transform_id
             WITH count(n) as node_count
             OPTIONAL MATCH (n)-[r]-()
             RETURN node_count, count(DISTINCT r) as edge_count
@@ -501,9 +519,9 @@ class Neo4jStorage(GraphStorageInterface):
                 total_nodes = count_data["node_count"]
                 total_edges = count_data["edge_count"]
 
-                query = """
+                query = f"""
                 MATCH (n)
-                WHERE n.transform_id = $transform_id
+                WHERE n.{TRANSFORM_ID} = $transform_id
                 WITH n ORDER BY n.id
                 OPTIONAL MATCH (n)-[r]-(m)
                 RETURN 
@@ -617,7 +635,139 @@ class Neo4jStorage(GraphStorageInterface):
             logger.error(f"Error retrieving graph data: {str(e)}")
             raise
 
-    
+    async def get_merge_data(self, merge_id: str) -> GraphResponse:
+        """Get all nodes and relationships for a merge"""
+        try:
+            count_query = f"""
+            MATCH (n)
+            WHERE n.{MERGE_ID} = $merge_id
+            WITH count(n) as node_count
+            OPTIONAL MATCH (n)-[r]-()
+            RETURN node_count, count(DISTINCT r) as edge_count
+            """
+
+            async with self.driver.session() as session:
+                count_result = await session.run(count_query, merge_id=merge_id)
+                count_data = await count_result.single()
+                total_nodes = count_data["node_count"]
+                total_edges = count_data["edge_count"]
+
+                query = f"""
+                MATCH (n)
+                WHERE n.{MERGE_ID} = $merge_id
+                WITH n ORDER BY n.id
+                OPTIONAL MATCH (n)-[r]-(m)
+                WHERE r.{VALID_TO} IS NULL 
+                RETURN 
+                    collect(DISTINCT n) as nodes,
+                    collect(DISTINCT r) as relationships,
+                    collect(DISTINCT m) as connected_nodes
+                """
+
+                result = await session.run(query, merge_id=merge_id)
+                data = await result.single()
+
+                nodes_list = []
+                edges_list = []
+                seen_nodes = set()
+                seen_edges = set()
+
+                def get_actual_label(node_labels):
+                    return list(node_labels)[0]
+
+                def convert_datetime(value):
+                    """Convert neo4j.time.DateTime to ISO string"""
+                    if isinstance(value, Neo4jDateTime):
+                        return value.iso_format()
+                    return value
+
+                def extract_properties(entity):
+                    """Extract properties, converting Neo4j DateTime to strings"""
+                    props = {}
+                    entity_dict = dict(entity)
+                    for key, value in entity_dict.items():
+                        if isinstance(value, Neo4jDateTime):
+                            props[key] = value.iso_format()
+                        elif isinstance(value, str):
+                            try:
+                                if value.startswith('[') or value.startswith('{'):
+                                    value = eval(value)
+                            except:
+                                pass
+                            props[key] = value
+                        else:
+                            props[key] = value
+                    # Log for debugging
+                    logger.debug(f"Extracted properties: {props}")
+                    return props
+
+                # Process main nodes
+                for node in data["nodes"]:
+                    node_id = convert_datetime(node.get("id"))
+                    if node_id and node_id not in seen_nodes:
+                        actual_label = get_actual_label(node.labels)
+                        node_props = extract_properties(node)
+                        node_dict = {
+                            "id": node_id,
+                            "label": actual_label,
+                            "properties": node_props,
+                            "type": actual_label
+                        }
+                        nodes_list.append(node_dict)
+                        seen_nodes.add(node_id)
+                        # Debug: Check raw node data
+                        logger.debug(f"Node: {node_dict}")
+
+                # Process connected nodes
+                for node in data["connected_nodes"]:
+                    if node is not None:
+                        node_id = convert_datetime(node.get("id"))
+                        if node_id and node_id not in seen_nodes:
+                            actual_label = get_actual_label(node.labels)
+                            node_props = extract_properties(node)
+                            node_dict = {
+                                "id": node_id,
+                                "label": actual_label,
+                                "properties": node_props,
+                                "type": actual_label
+                            }
+                            nodes_list.append(node_dict)
+                            seen_nodes.add(node_id)
+                            logger.debug(f"Connected Node: {node_dict}")
+
+                # Process relationships
+                for rel in data["relationships"]:
+                    if rel is not None:
+                        edge_id = convert_datetime(rel.get("id", str(rel.id)))
+                        if edge_id not in seen_edges:
+                            source_id = convert_datetime(rel.start_node.get("id"))
+                            target_id = convert_datetime(rel.end_node.get("id"))
+                            if source_id and target_id:
+                                edge_props = extract_properties(rel)
+                                edge_dict = {
+                                    "id": edge_id,
+                                    "source": source_id,
+                                    "target": target_id,
+                                    "type": str(rel.type),
+                                    "properties": edge_props
+                                }
+                                edges_list.append(edge_dict)
+                                seen_edges.add(edge_id)
+                                logger.debug(f"Edge: {edge_dict}")
+
+                # Create GraphResponse and test serialization
+                response = GraphResponse(
+                    nodes=nodes_list,
+                    edges=edges_list,
+                    total_nodes=total_nodes,
+                    total_edges=total_edges
+                )
+                return response
+
+        except Exception as e:
+            traceback.print_exc()
+            logger.error(f"Error retrieving graph data: {str(e)}")
+            raise
 
     async def get_nodes_by_property(
         self,
@@ -761,7 +911,7 @@ class Neo4jStorage(GraphStorageInterface):
 
         property_conditions = []
         for idx, (key, value) in enumerate(properties.items()):
-            if key not in ["id", "chunk_ids", "confidence_score", "transform_id", "affected_by_transform", "extraction_timestamp"]:
+            if key not in SYSTEM_PROPERTIES:
                 param_key = f"value{idx}"
                 params[param_key] = str(value)  # Convert all values to strings
                 if type(value) == list:

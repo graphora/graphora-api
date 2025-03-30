@@ -16,7 +16,7 @@ from typing import Dict, Any, Tuple, List
 import uuid
 import json
 from datetime import datetime
-from app.utils.constants import VALID_FROM, VALID_TO, PREVIOUS_VERSION_RELATIONSHIP_TYPE, UPDATED
+from app.utils.constants import VALID_FROM, VALID_TO, PREVIOUS_VERSION_RELATIONSHIP_TYPE, UPDATED, TRANSFORM_ID
 from app.baml_client import b
 from supabase import create_client, Client
 from app.services.storage.interface import StorageBatchResult
@@ -73,12 +73,10 @@ async def merge_flow(
         if match.best_match:
             staging_node = next((n for n in staging_graph.nodes if n.id == node_id), None)
             ontology_props = ontology['entities'][staging_node.type]['properties']
-            print(staging_node)
-            print(match.best_match)
             change_log = ChangeLog(
                 staging_node=staging_node,
                 prod_node=match.best_match,
-                prop_changes=_get_prop_changes(staging_node, ontology_props)
+                prop_changes=_get_prop_changes(staging_node, match.best_match, ontology_props)
             )
             change_logs.append(change_log)
 
@@ -113,14 +111,29 @@ def log_merge_failure(merge_id: str, error: str):
 
 def get_merge_status(merge_id: str) -> MergeStatus:
     merge_status = supabase.table("merge_status").select("*").eq("merge_id", merge_id).execute()
-    print(merge_status)
     if not merge_status.data:
         return MergeStatus.NOT_FOUND
     return MergeStatus(merge_status.data[0]['status'])
 
 def get_human_review_items(merge_id: str) -> List[ChangeLog]:
-    change_logs = supabase.table("change_logs").select("*").eq("merge_id", merge_id).eq("need_human_review", True).execute()
-    return change_logs.data
+    change_logs_data = supabase.table("change_logs").select("*").eq("merge_id", merge_id).eq("need_human_review", True).execute()
+    change_logs = []
+    for change_log in change_logs_data.data:
+        change_logs.append(ChangeLog(
+            id=change_log['id'],
+            prop_changes={k: (change_log['changed_props'][k], change_log['previous_props'].get(k, None)) for k in change_log['changed_props']},
+            staging_node=Node(
+                id=change_log['node_id'],
+                label=change_log['node_type'],
+                properties=change_log['changed_props']
+            ),
+            prod_node=Node(
+                id=change_log['prod_node_id'],
+                label=change_log['node_type'],
+                properties=change_log['previous_props']
+            )
+        ))
+    return change_logs
 
 async def apply_resolution(merge_id: str, change_log_id: str, resolution_data: Dict[str, Any], learning_comment: str) -> bool:
     change_log = supabase.table("change_logs").select("*").eq("merge_id", merge_id).eq("id", change_log_id).execute()
@@ -152,7 +165,7 @@ async def get_merge_graph(merge_id: str, transform_id: str) -> GraphResponse:
     if not merge_status.data:
         return None
     elif merge_status.data[0]['status'] == MergeStatus.COMPLETED:
-        return await _get_prod_graph(transform_id)
+        return await _get_prod_graph(merge_id)
     #fetch staging graph using transform_id
     staging_graph = await _extract_staging_graph(transform_id)
     print("staging_graph", staging_graph)
@@ -182,7 +195,7 @@ async def _extract_staging_graph(transform_id: str) -> GraphResponse:
     try:
         # Extract nodes with transform_id
         storage_nodes = await storage.get_nodes_by_property(
-            property_name="transform_id",
+            property_name=TRANSFORM_ID,
             property_value=transform_id
         )
         
@@ -415,6 +428,7 @@ async def _get_matching_nodes(
         logger.error(f"Failed to get matching nodes: {str(e)}")
         raise
 
+@task(name="persist_to_prod")
 async def _persist_to_prod(
         merged_graph: GraphResponse,
         merge_id: str,
@@ -429,13 +443,13 @@ async def _persist_to_prod(
     node_batch_result = await storage.store_nodes(
         merged_graph.nodes,
         0,
-        transform_id
+        transform_id,
+        merge_id
     )
     if not node_batch_result.success:
         logger.error(f"Failed to persist nodes: {node_batch_result.error}")
         logger.warning(f"Failed to persist nodes: {node_batch_result.error}")
     node_map = {n.id: n for n in merged_graph.nodes}
-    print(node_map)
     edges_as_rel_instances = [
         RelationshipInstance(
             id=edge.id,
@@ -451,6 +465,7 @@ async def _persist_to_prod(
         edges_as_rel_instances,
         0,
         transform_id,
+        merge_id,
         merge=True
     )
     if not edge_batch_result.success:
@@ -473,14 +488,14 @@ def _add_ingestion_stats(merge_id, node_batch_result, edge_batch_result):
         }
     ).eq("merge_id", merge_id).execute()
 
-async def _get_prod_graph(transform_id: str) -> GraphResponse:
+async def _get_prod_graph(merge_id: str) -> GraphResponse:
     storage = Neo4jStorage(
         uri=settings.NEO4J_URI,
         username=settings.NEO4J_USER,
         password=settings.NEO4J_PASSWORD,
         database=settings.NEO4J_DB
     )
-    return await storage.get_transformation_data(transform_id)
+    return await storage.get_merge_data(merge_id)
 
 async def get_past_resolution(ontology_id: str, node_type: str) -> str:
     response = supabase.table("resolutions").select("*").eq("ontology_id", ontology_id).eq("node_type", node_type).execute()
@@ -507,7 +522,7 @@ def save_change_log(merge_id, change_log, need_human_review: bool = False):
                     "prod_node_id": change_log.prod_node.id,
                     "node_type": change_log.staging_node.type,
                     "previous_props": change_log.staging_node.properties,
-                    "changed_props": change_log.prop_changes,
+                    "changed_props": {k: v[0] for k, v in change_log.prop_changes.items()},
                     "need_human_review": need_human_review
                 }
             ).execute()
@@ -529,6 +544,7 @@ def _update_merge_status(merge_id, status):
         }
     ).eq("merge_id", merge_id).execute()
 
+@task(name="complete_prod_merge")
 async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, merged_graph):
     change_logs = supabase.table("change_logs").select("*").eq("merge_id", merge_id).execute()
     if len(change_logs.data) > 0:
@@ -547,8 +563,8 @@ def _get_node_string(node: Node, properties: Dict[str, Any]) -> str:
     props = { k: v for k, v in node.properties.items() if k in properties }
     return f"(Node Id: {node.id}, properties: {props})"
 
-def _get_prop_changes(staging_node: Node, props: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
-    return { k: (staging_node.properties[k], v) for k, v in props.items() if k in staging_node.properties and staging_node.properties[k] != v}
+def _get_prop_changes(staging_node: Node, prod_node: Node, props: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
+    return { k: (staging_node.properties[k], prod_node.properties.get(k, None)) for k, v in props.items() if k in staging_node.properties and staging_node.properties[k] != prod_node.properties.get(k, None)}
 
 def _group_changes_by_entity_type(change_logs: List[ChangeLog]) -> Dict[str, List[ChangeLog]]:
     change_log_by_entity_type = {}
@@ -559,7 +575,7 @@ def _group_changes_by_entity_type(change_logs: List[ChangeLog]) -> Dict[str, Lis
     return change_log_by_entity_type
 
 def _get_change_log_string(change_log: ChangeLog) -> str:
-    changes = "\n".join([f"{k}: {v[0]} -> {v[1]}" for k, v in change_log.prop_changes.items()])
+    changes = "\n".join([f"{k}: {v[1]} -> {v[0]}" for k, v in change_log.prop_changes.items()])
     return f"""
     Changes (old prop -> new prop; one per line):
     <id>{change_log.id}</id>
@@ -567,6 +583,8 @@ def _get_change_log_string(change_log: ChangeLog) -> str:
     {changes}
     </changes>
     """
+
+@task(name="classify_changes")
 async def _classify_changes(
         ontology_id: str, 
         change_log_by_entity_type: Dict[str, List[ChangeLog]]
@@ -601,6 +619,7 @@ async def _classify_changes(
 
     return high_conf_changes, changes_for_human_review
 
+@task(name="apply_auto_corrections")
 def _apply_corrections(ontology_props, change_log):
     for prop in ontology_props:
         if prop in change_log.prop_changes:

@@ -17,6 +17,7 @@ class GraphStorageInterface(ABC):
         nodes: List[BaseNode],
         batch_index: int,
         transform_id: str,
+        merge_id: Optional[str] = None,
         merge: bool = True
     ) -> StorageBatchResult:
         """Store nodes in batch"""
@@ -28,6 +29,7 @@ class GraphStorageInterface(ABC):
         relationships: List[RelationshipInstance],
         batch_index: int,
         transform_id: str,
+        merge_id: Optional[str] = None,
         merge: bool = True
     ) -> StorageBatchResult:
         """Store relationships in batch"""
@@ -57,6 +59,14 @@ class GraphStorageInterface(ABC):
         transform_id: str
     ) -> GraphResponse:
         """Get all nodes and relationships for a transformation"""
+        pass
+
+    @abstractmethod
+    def get_merge_data(
+        self,
+        merge_id: str
+    ) -> GraphResponse:
+        """Get all nodes and relationships for a merge"""
         pass
     
     @abstractmethod
