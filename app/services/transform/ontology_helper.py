@@ -61,7 +61,7 @@ class OntologyParser:
             entity_model = create_model(
                 entity_name,
                 __base__=BaseModel,
-                __domain__="graphit",
+                __domain__="graphora",
                 **field_definitions
             )
             entity_models[entity_name] = entity_model
@@ -104,7 +104,7 @@ class OntologyParser:
                     rel_model = create_model(
                         rel_model_name,
                         __base__=BaseModel,
-                        __domain__="graphit",
+                        __domain__="graphora",
                         source_id=(str, Field(..., description="ID of the source entity")),
                         target_id=(str, Field(..., description="ID of the target entity")),
                         properties=(Optional[rel_property_model], None)
@@ -113,7 +113,7 @@ class OntologyParser:
                     rel_model = create_model(
                         rel_model_name,
                         __base__=BaseModel,
-                        __domain__="graphit",
+                        __domain__="graphora",
                         source_id=(str, Field(..., description="ID of the source entity")),
                         target_id=(str, Field(..., description="ID of the target entity"))
                     )
@@ -146,7 +146,7 @@ class OntologyParser:
         KnowledgeGraph = create_model(
             "KnowledgeGraph",
             __base__=BaseModel,
-            __domain__="graphit",
+            __domain__="graphora",
             **kg_fields
         )
         KnowledgeGraph.__entity_models__ = entity_models
@@ -184,7 +184,7 @@ class OntologyParser:
         EntitiesOnlyModel = create_model(
             "EntitiesOnlyModel",
             __base__=BaseModel,
-            __domain__="graphit",
+            __domain__="graphora",
             **kg_fields
         )
         EntitiesOnlyModel.__entity_models__ = entity_models
@@ -213,7 +213,7 @@ class OntologyParser:
         RelationshipsOnlyModel = create_model(
             "RelationshipsOnlyModel",
             __base__=BaseModel,
-            __domain__="graphit",
+            __domain__="graphora",
             **kg_fields
         )
         # RelationshipsOnlyModel.__entity_models__ = entity_models

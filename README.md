@@ -1,4 +1,4 @@
-# graphit-api
+# graphora-api
 
 A sophisticated document processing backend that leverages AI-powered intelligent document analysis with flexible and modular preprocessing capabilities. The system uses FastAPI, LLM, and Neo4j to create an intelligent document processing pipeline.
 

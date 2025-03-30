@@ -21,12 +21,12 @@ class Settings(BaseSettings):
     
     # Upload Settings
     UPLOAD_DIR: str = Field(
-        default="/tmp/graphit/uploads",
+        default="/tmp/graphora/uploads",
         description="Directory for storing uploaded files"
     )
     
     ONTOLOGY_DIR:str = Field(
-        default="/tmp/graphit/ontologies",
+        default="/tmp/graphora/ontologies",
         description="Directory for storing ontologies"
     )
     
@@ -298,7 +298,7 @@ class Settings(BaseSettings):
     
     # Merge Logging Settings
     LOG_DIR: str = Field(
-        default="/tmp/graphit/logs",
+        default="/tmp/graphora/logs",
         description="Directory for storing log files"
     )
     LOG_TO_DATABASE: bool = Field(
@@ -331,7 +331,7 @@ class Settings(BaseSettings):
     def ontology_dir(self) -> str:
         """Get the ontology directory path based on mode"""
         if self.test_mode:
-            return "/tmp/graphit-test/ontologies"
+            return "/tmp/graphora-test/ontologies"
         return self.ONTOLOGY_DIR
     
     model_config = SettingsConfigDict(
