@@ -1,6 +1,6 @@
-# LLM-Assisted Conflict Resolution
+# LLM-Based Conflict Resolution
 
-The GraphIT API now supports intelligent conflict resolution using Language Models (LLMs). This feature enhances the merge process by providing smart resolution options for various types of conflicts, along with confidence scores and explanations.
+The Graphora API now supports intelligent conflict resolution using Language Models (LLMs). This feature enhances the merge process by providing smart resolution options for various types of conflicts, along with confidence scores and explanations.
 
 ## Overview
 

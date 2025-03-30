@@ -252,13 +252,13 @@ class Neo4jStorage(GraphStorageInterface):
         )
 
     async def store_relationships(
-        self,
-        relationships: List[RelationshipInstance],
-        batch_index: int,
-        transform_id: str,
-        merge_id: Optional[str] = None,
-        merge: bool = True
-    ) -> StorageBatchResult:
+    self,
+    relationships: List[RelationshipInstance],
+    batch_index: int,
+    transform_id: str,
+    merge_id: Optional[str] = None,
+    merge: bool = True
+) -> StorageBatchResult:
         """Store relationships in Neo4j with versioning logic"""
         start_time = time.time()
         success = True
@@ -269,6 +269,7 @@ class Neo4jStorage(GraphStorageInterface):
 
         for rel in relationships:
             if rel.id in stored_rels:
+                logger.debug(f"Skipping duplicate relationship ID: {rel.id}")
                 continue
 
             try:
@@ -278,44 +279,78 @@ class Neo4jStorage(GraphStorageInterface):
                         existing_rel = await self._find_existing_relationship(session, rel)
                         
                         if existing_rel:
-                            # Case 1: Existing with no properties beyond valid_from/valid_to
-                            existing_props = {k: v for k, v in existing_rel.get("properties", {}).items() 
-                                            if k not in {VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID}}
+                            # Case 1: Existing with no properties beyond valid_from/valid_to/transform_id/merge_id
+                            existing_props = {
+                                k: v for k, v in existing_rel.get("properties", {}).items() 
+                                if k not in {VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID}
+                            }
                             if not existing_props:
+                                logger.debug(f"Existing relationship {rel.id} has no meaningful properties, skipping")
                                 stored_rels.add(rel.id)
                                 return  # Skip adding new relationship
 
                             # Case 2: Existing with differing properties
-                            new_props = {k: v for k, v in rel.properties.items() 
-                                       if k not in {VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID}}
+                            new_props = {
+                                k: v for k, v in rel.properties.items() 
+                                if k not in {VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID}
+                            }
                             if existing_props != new_props:
                                 # Version the existing relationship
+                                logger.debug(f"Versioning relationship {rel.id} due to property differences")
                                 await self._close_existing_relationship(session, existing_rel)
                                 # Merge properties and create new version
-                                merged_props = {**existing_props, **new_props}
+                                merged_props = {
+                                    **existing_props,
+                                    **new_props,
+                                    VALID_FROM: datetime.now().isoformat(),
+                                    VALID_TO: None,
+                                    TRANSFORM_ID: transform_id,
+                                    MERGE_ID: merge_id if merge_id else None
+                                }
                                 query, params = self._build_relationship_query(
                                     rel, merge=True, properties=merged_props, 
-                                    transform_id=transform_id, merge_id=merge_id)
+                                    transform_id=transform_id, merge_id=merge_id
+                                )
+                                logger.debug(f"Creating new version: Query={query}, Params={params}")
                                 await session.run(query, params)
                                 stored_rels.add(rel.id)
                             else:
+                                logger.debug(f"Relationship {rel.id} properties unchanged, keeping existing")
                                 stored_rels.add(rel.id)  # No change needed
                         else:
                             # Case 3: No existing relationship
-                            query, params = self._build_relationship_query(rel, merge=True, 
-                                                                           transform_id=transform_id, merge_id=merge_id)
+                            logger.debug(f"No existing relationship found for {rel.id}, creating new")
+                            props_with_metadata = {
+                                **rel.properties,
+                                VALID_FROM: datetime.now().isoformat(),
+                                VALID_TO: None,
+                                TRANSFORM_ID: transform_id,
+                                MERGE_ID: merge_id if merge_id else None
+                            }
+                            query, params = self._build_relationship_query(
+                                rel, merge=True, properties=props_with_metadata, 
+                                transform_id=transform_id, merge_id=merge_id
+                            )
+                            logger.debug(f"New relationship: Query={query}, Params={params}")
                             await session.run(query, params)
                             stored_rels.add(rel.id)
 
                 await self._execute_with_retry(_execute_relationship)
                 items_processed += 1
-                print(f"Stored relationships: {stored_rels}")
+                logger.info(f"Stored relationships: {stored_rels}")
             except (StorageError, DatabaseError) as e:
                 traceback.print_exc()
                 success = False
                 error_message = str(e)
                 logger.error(f"Failed to store relationship {rel.id}: {error_message}")
                 warnings.append(f"Failed to store relationship {rel.id}: {error_message}")
+                break
+            except Exception as e:
+                traceback.print_exc()
+                success = False
+                error_message = f"Unexpected error: {str(e)}"
+                logger.error(f"Unexpected failure for relationship {rel.id}: {error_message}")
+                warnings.append(f"Unexpected failure for relationship {rel.id}: {error_message}")
                 break
 
         # Update checkpoint if successful
@@ -326,15 +361,18 @@ class Neo4jStorage(GraphStorageInterface):
                     success = False
                     error_message = checkpoint_result.error
                     logger.error(f"Error updating checkpoint: {error_message}")
+                    warnings.append(f"Checkpoint update failed: {error_message}")
             except (StorageError, DatabaseError) as e:
                 success = False
                 error_message = str(e)
                 logger.error(f"Failed to update checkpoint: {error_message}")
+                warnings.append(f"Checkpoint update failed: {error_message}")
 
         if items_processed < len(relationships):
             warnings.append(f"Partial batch failure: {items_processed} of {len(relationships)} relationships stored")
 
         processing_time_ms = (time.time() - start_time) * 1000
+        logger.info(f"Stored {items_processed} relationships in {processing_time_ms:.2f}ms")
         return StorageBatchResult(
             batch_index=batch_index,
             items_processed=items_processed,

@@ -1,4 +1,4 @@
-# GraphIt API Development Guide
+# Graphora API Development Guide
 
 ## Commands
 - Run all tests: `pytest -v`

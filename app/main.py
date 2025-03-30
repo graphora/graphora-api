@@ -12,18 +12,18 @@ from app.services.transform.prefect_client import configure_prefect
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    logger.info("Starting Graphit API")
+    logger.info("Starting Graphora API")
     # Add any additional startup tasks here
     configure_prefect()
     
     yield  # Server is running
     # Shutdown
-    logger.info("Shutting down Graphit API")
+    logger.info("Shutting down Graphora API")
     # Add any cleanup tasks here
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Graphit API",
+    title="Graphora API",
     version="1.0.0",
     docs_url=f"{settings.API_V1_STR}/docs",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",

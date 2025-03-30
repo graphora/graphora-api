@@ -44,16 +44,17 @@ async def merge_flow(
     merge_id: str,
     transform_id: str,
     ontology_id: str
-    ):
+):
     """Merge two graphs"""
     ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
     ontology_parser = OntologyParser(ontology_path)
+    ontology = ontology_parser.parsed_ontology
 
     # Step-1: Extract Staging Graph
     staging_graph: GraphResponse = await _extract_staging_graph(transform_id)
     merged_graph = copy.deepcopy(staging_graph)
 
-    #if there is a merge status, check if it is already done, merge change_logs and update merge status
+    # Check merge status
     merge_status = supabase.table("merge_status").select("*").eq("merge_id", merge_id).execute()
     if not merge_status.data:
         _start_merge_status(merge_id, transform_id, ontology_id)
@@ -61,17 +62,20 @@ async def merge_flow(
         merged_graph = await _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, merged_graph)
         return merged_graph
     elif merge_status.data[0]['status'] == MergeStatus.COMPLETED:
-        return
-    
+        # For re-merge, load existing prod graph and reconcile
+        prod_graph = await _get_prod_graph(merge_id)
+        merged_graph = _reconcile_graphs(staging_graph, prod_graph)
+        _update_merge_status(merge_id, MergeStatus.STARTED)
+
     # Step-2: Extract Production Graph
-    prod_mapping_result: EntityMappingResult = await _map_production_entities(staging_graph, ontology_parser.parsed_ontology)
+    prod_mapping_result: EntityMappingResult = await _map_production_entities(merged_graph, ontology)
+    logger.debug(f"Production mapping result: {prod_mapping_result}")
 
     # Step-3: Compare Graphs & Identify Conflicts
-    ontology = ontology_parser.parsed_ontology  
     change_logs = []
     for node_id, match in prod_mapping_result.matches.items():
         if match.best_match:
-            staging_node = next((n for n in staging_graph.nodes if n.id == node_id), None)
+            staging_node = next((n for n in merged_graph.nodes if n.id == node_id), None)
             ontology_props = ontology['entities'][staging_node.type]['properties']
             change_log = ChangeLog(
                 staging_node=staging_node,
@@ -83,9 +87,8 @@ async def merge_flow(
     change_log_by_entity_type = _group_changes_by_entity_type(change_logs)
     high_conf_changes, changes_for_human_review = await _classify_changes(ontology_id, change_log_by_entity_type)
 
-    if len(changes_for_human_review) > 0:
+    if changes_for_human_review:
         _update_merge_status(merge_id, MergeStatus.HUMAN_REVIEW)
-        #save all changes in supabase
         for change_log in changes_for_human_review:
             save_change_log(merge_id, change_log, need_human_review=True)
         for change_log in high_conf_changes:
@@ -100,6 +103,31 @@ async def merge_flow(
             _merge_nodes(change_log.staging_node, change_log.prod_node, ontology_props, merged_graph)
         _update_merge_status(merge_id, MergeStatus.MERGE_IN_PROGRESS)
         await _persist_to_prod(merged_graph, merge_id, transform_id)
+    return merged_graph
+
+def _reconcile_graphs(staging_graph: GraphResponse, prod_graph: GraphResponse) -> GraphResponse:
+    """Reconcile staging and production graphs for re-merge"""
+    merged_graph = copy.deepcopy(staging_graph)
+    prod_node_map = {n.id: n for n in prod_graph.nodes}
+    prod_edge_map = {(e.source, e.target, e.type): e for e in prod_graph.edges if e.properties.get(VALID_TO) is None}
+
+    # Update node IDs to match production where applicable
+    for staging_node in merged_graph.nodes:
+        prod_node = prod_node_map.get(staging_node.id)
+        if prod_node:
+            staging_node.id = prod_node.id  # Use existing prod ID if matched
+
+    # Reconcile edges
+    for edge in merged_graph.edges:
+        key = (edge.source, edge.target, edge.type)
+        prod_edge = prod_edge_map.get(key)
+        if prod_edge:
+            edge.id = prod_edge.id  # Use existing prod edge ID
+            edge.properties = {**prod_edge.properties, **edge.properties}  # Merge properties
+        else:
+            edge.id = str(uuid.uuid4())  # New edge gets a new ID
+
+    return merged_graph
 
 def log_merge_failure(merge_id: str, error: str):
     supabase.table("merge_status").update(
@@ -339,19 +367,21 @@ async def _get_prod_node(label: str, id: str) -> Node:
 
 def _merge_nodes(staging_node: Node, prod_node: Node, 
                  ontology: Dict[str, Any], merged_graph: GraphResponse) -> GraphResponse:
-    """Merge two nodes"""
+    """Merge two nodes and ensure all edges are updated"""
     entity_def = ontology
-
-    staging_props = { k: v for k, v in staging_node.properties.items() if k in entity_def }
-    prod_props = { k: v for k, v in prod_node.properties.items() if k in entity_def }
+    staging_props = {k: v for k, v in staging_node.properties.items() if k in entity_def}
+    prod_props = {k: v for k, v in prod_node.properties.items() if k in entity_def}
     
-    staging_node.properties = { **staging_props, **prod_props }
+    # Merge properties
+    staging_node.properties = {**staging_props, **prod_props}
     staging_node.properties[VALID_FROM] = str(datetime.now())
     
-    _update_to_prod_node_id_in_edges(staging_node, prod_node, merged_graph)
+    # Update edges to use prod_node.id
+    old_staging_id = staging_node.id
     staging_node.id = prod_node.id
+    _update_to_prod_node_id_in_edges(old_staging_id, prod_node.id, merged_graph)
 
-    #Create a previous version for old prod node
+    # Version the old production node
     prod_node.properties[VALID_TO] = staging_node.properties[VALID_FROM]
     prev_ver = Node(
         id=str(uuid.uuid4()),
@@ -368,14 +398,19 @@ def _merge_nodes(staging_node: Node, prod_node: Node,
         properties={UPDATED: staging_node.properties[VALID_FROM]}
     ))
 
+    logger.debug(f"Merged node: {staging_node.id}, Previous version: {prev_ver.id}")
     return merged_graph
 
-def _update_to_prod_node_id_in_edges(staging_node, prod_node, merged_graph):
+def _update_to_prod_node_id_in_edges(old_id: str, new_id: str, merged_graph: GraphResponse):
+    """Update all edges to use the new production ID"""
     for edge in merged_graph.edges:
-        if edge.source == staging_node.id:
-            edge.source = prod_node.id
-        if edge.target == staging_node.id:
-            edge.target = prod_node.id
+        if edge.source == old_id:
+            edge.source = new_id
+        if edge.target == old_id:
+            edge.target = new_id
+    logger.debug(f"Updated edges: old_id={old_id} to new_id={new_id}")
+
+
 
 async def _get_matching_nodes(
     storage: GraphStorageInterface,
@@ -431,16 +466,18 @@ async def _get_matching_nodes(
 
 @task(name="persist_to_prod")
 async def _persist_to_prod(
-        merged_graph: GraphResponse,
-        merge_id: str,
-        transform_id: str
-    ) -> Tuple[StorageBatchResult, StorageBatchResult]:
+    merged_graph: GraphResponse,
+    merge_id: str,
+    transform_id: str
+) -> Tuple[StorageBatchResult, StorageBatchResult]:
     storage = Neo4jStorage(
         uri=settings.NEO4J_URI,
         username=settings.NEO4J_USER,
         password=settings.NEO4J_PASSWORD,
         database=settings.NEO4J_DB
     )
+    
+    # Store nodes first
     node_batch_result = await storage.store_nodes(
         merged_graph.nodes,
         0,
@@ -449,19 +486,28 @@ async def _persist_to_prod(
     )
     if not node_batch_result.success:
         logger.error(f"Failed to persist nodes: {node_batch_result.error}")
-        logger.warning(f"Failed to persist nodes: {node_batch_result.error}")
+        raise Exception(f"Node persistence failed: {node_batch_result.error}")
+
+    # Create a node map from persisted nodes
     node_map = {n.id: n for n in merged_graph.nodes}
-    edges_as_rel_instances = [
-        RelationshipInstance(
-            id=edge.id,
-            source_id=edge.source,
-            target_id=edge.target,
-            type=edge.type,
-            source_type=node_map[edge.source].type,
-            target_type=node_map[edge.target].type,
-            properties=edge.properties
-        ) for edge in merged_graph.edges if edge.source in node_map and edge.target in node_map
-    ]
+    
+    # Convert edges to RelationshipInstance, ensuring valid IDs
+    edges_as_rel_instances = []
+    for edge in merged_graph.edges:
+        if edge.source in node_map and edge.target in node_map:
+            edges_as_rel_instances.append(RelationshipInstance(
+                id=edge.id,
+                source_id=edge.source,
+                target_id=edge.target,
+                type=edge.type,
+                source_type=node_map[edge.source].type,
+                target_type=node_map[edge.target].type,
+                properties=edge.properties
+            ))
+        else:
+            logger.warning(f"Skipping edge {edge.id}: Source {edge.source} or Target {edge.target} not in node_map")
+
+    # Store relationships with versioning logic
     edge_batch_result = await storage.store_relationships(
         edges_as_rel_instances,
         0,
@@ -471,11 +517,10 @@ async def _persist_to_prod(
     )
     if not edge_batch_result.success:
         logger.error(f"Failed to persist edges: {edge_batch_result.error}")
-        logger.warning(f"Failed to persist edges: {edge_batch_result.error}")
-    
-    #update merge status
-    _add_ingestion_stats(merge_id, node_batch_result, edge_batch_result)
+        raise Exception(f"Edge persistence failed: {edge_batch_result.error}")
 
+    # Update merge status
+    _add_ingestion_stats(merge_id, node_batch_result, edge_batch_result)
     return node_batch_result, edge_batch_result
 
 def _add_ingestion_stats(merge_id, node_batch_result, edge_batch_result):
@@ -599,7 +644,11 @@ async def _classify_changes(
         #get past resolutions
         past_resolutions = await get_past_resolution(ontology_id, entity_type)
         #get LLM response
-        change_log_string = "\n".join([_get_change_log_string(change_log) for change_log in change_logs])
+        changes = [_get_change_log_string(change_log) for change_log in change_logs]
+        if not changes:
+            high_conf_changes.extend(change_logs)
+            continue
+        change_log_string = "\n".join(changes)
         eval_changes = b.EvalChanges(
             change_logs=change_log_string,
             past_resolutions=past_resolutions
@@ -607,6 +656,10 @@ async def _classify_changes(
         if len(eval_changes) > 0:
             for change in eval_changes:
                 if change.confidence_score > 0.95:
+                    if not change.corrections:
+                        change_log = next((c for c in change_logs if c.id == change.id), None)
+                        high_conf_changes.append(change_log)
+                        continue
                     for correction in change.corrections:
                         change_log = next((c for c in change_logs if c.id == change.id), None)
                         change_log.prop_changes[correction.prop_name] = (
@@ -623,6 +676,6 @@ async def _classify_changes(
 @task(name="apply_auto_corrections")
 def _apply_corrections(ontology_props, change_log):
     for prop in ontology_props:
-        if prop in change_log.prop_changes:
+        if change_log.prop_changes and prop in change_log.prop_changes:
             change_log.staging_node.properties[prop] = change_log.prop_changes[prop][1]
     return change_log
