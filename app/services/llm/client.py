@@ -75,9 +75,13 @@ class LLMClient:
         - Include all required fields for each node
         - Omit optional fields if information is not clearly present
         """
+        
+        # Convert Pydantic model to JSON schema dictionary
+        model_schema = response_model.model_json_schema()
+        
         response = client.models.generate_content(model=model_id, 
                                                   contents=[file, prompt], 
-                                                  config={'response_mime_type': 'application/json', 'response_schema': response_model})
+                                                  config={'response_mime_type': 'application/json', 'response_schema': model_schema})
         # Convert the response to the pydantic model and return it
         print('*'*30)
         print(response)
@@ -141,9 +145,13 @@ class LLMClient:
         - Include all required fields for each relationship
         - Omit optional fields if information is not clearly present
         """
+
+        # Convert Pydantic model to JSON schema dictionary
+        model_schema = response_model.model_json_schema()
+        
         response = client.models.generate_content(model=model_id, 
                                                   contents=[file, prompt], 
-                                                  config={'response_mime_type': 'application/json', 'response_schema': response_model})
+                                                  config={'response_mime_type': 'application/json', 'response_schema': model_schema})
         # Convert the response to the pydantic model and return it
         print('*'*30)
         print(response)
