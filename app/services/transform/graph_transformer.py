@@ -120,7 +120,7 @@ async def _build_relationships_context(
     for relationship in relationships:
         src = f"({node_map[relationship.source_id].type}:{{'id': '{node_map[relationship.source_id].id}', 'properties': {node_map[relationship.source_id].properties}}})"
         tgt = f"({node_map[relationship.target_id].type}:{{'id': '{node_map[relationship.target_id].id}', 'properties': {node_map[relationship.target_id].properties}}})"
-        context += f"{src}-[:{relationship.type}{{'properties': {relationship.properties}}}]->{{{tgt}}}\n"
+        context += f"{src}-[:{relationship.type}{{'properties': {relationship.properties}}}]->{tgt}\n"
     if nodes_not_in_relationships:
         context += "These Nodes without any relationships:\n"
     for node in nodes_not_in_relationships:
