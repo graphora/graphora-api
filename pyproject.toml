@@ -50,7 +50,7 @@ dependencies = [
     "pytest-benchmark>=4.0.0",
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
-    "baml-py>=0.76.2"
+    "baml-py==0.81.3",
 ]
 
 [tool.setuptools]
