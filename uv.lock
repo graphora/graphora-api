@@ -213,15 +213,6 @@ wheels = [
 ]
 
 [[package]]
-name = "async-timeout"
-version = "5.0.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a5/ae/136395dfbfe00dfc94da3f3e136d0b13f394cba8f4841120e34226265780/async_timeout-5.0.1.tar.gz", hash = "sha256:d9321a7a3d5a6a5e187e824d2fa0793ce379a202935782d555d6e9d2735677d3", size = 9274 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/ba/e2081de779ca30d473f21f5b30e0e737c438205440784c7dfc81efc2b029/async_timeout-5.0.1-py3-none-any.whl", hash = "sha256:39e3809566ff85354557ec2398b55e096c8364bacac9405a7a1fa429e77fe76c", size = 6233 },
-]
-
-[[package]]
 name = "asyncpg"
 version = "0.30.0"
 source = { registry = "https://pypi.org/simple" }
@@ -264,16 +255,16 @@ wheels = [
 
 [[package]]
 name = "baml-py"
-version = "0.76.2"
+version = "0.81.3"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/f4/11bb7ccbaf73158a82e74cd93078e21d168ed57f0650c1ae690cc3d45bb5/baml_py-0.76.2-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:47c956da2377c3b637a4dc2840b07650dd856082c490f2c7443f81d4c46f9518", size = 12846459 },
-    { url = "https://files.pythonhosted.org/packages/46/81/2c7a7ece8bd0753487f13eef6d0f90cfe684739b708bec629348c0ec3d6c/baml_py-0.76.2-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:54a75feff7dc48f83b747692759ec0639a74a79455807a2fff26141741d3632e", size = 11925913 },
-    { url = "https://files.pythonhosted.org/packages/96/69/5c22e2bc794fbdc4b7c3b34f87cabf7263d8190f1c23cf719dc874f68e09/baml_py-0.76.2-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:657b937d00d9688880511d56f2973596cd816723c80620749972bc3e7ec739fe", size = 15186021 },
-    { url = "https://files.pythonhosted.org/packages/19/d8/2085844a8167eeda672981733f403ea69d91609ca4716bf7bb50ba6cf3cb/baml_py-0.76.2-cp38-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:b9df159d2a2fec9fb07620d68c340f1f45a36f566fd54211fb84834a135f8bd4", size = 14736415 },
-    { url = "https://files.pythonhosted.org/packages/0e/22/5b7162d90541ea61429f9b531316f7694287363be2fa887051eb2f2293d5/baml_py-0.76.2-cp38-abi3-musllinux_1_1_aarch64.whl", hash = "sha256:e8177f2109f850037f25b1ad4858df314f5984b5ab13c630d2459ac1a0586385", size = 14950554 },
-    { url = "https://files.pythonhosted.org/packages/ee/83/fa6866ef15e445f64239afbdff23425d65a691c071906a23a12e376bff4c/baml_py-0.76.2-cp38-abi3-musllinux_1_1_x86_64.whl", hash = "sha256:a5a55f6237fe399f9a2e5270de00c4844651184d98e9891d4795d43099acf911", size = 15263980 },
-    { url = "https://files.pythonhosted.org/packages/af/05/ee1e4e18ad8fa5134f1e62f4779962df53f46f9e28ae1a02259e14a6cf35/baml_py-0.76.2-cp38-abi3-win_amd64.whl", hash = "sha256:1a26e1c42c8450f95bfe9b04dfc26229e1188b9056fc295ee476039950076f79", size = 12752456 },
+    { url = "https://files.pythonhosted.org/packages/4c/0f/1773ae4d5181c8b89eade3a45581e6c4571992bbd0da03e0465ba231b936/baml_py-0.81.3-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:ee96705c050ff8adc7b968b1ccd70bb34c0e93d8efb5e5b2ac600b0209eb9ecb", size = 12489016 },
+    { url = "https://files.pythonhosted.org/packages/b5/36/6cc0e8ab6491649cf91cd9de7ff60614706ce38e8fa3dc68fd8a43500e2b/baml_py-0.81.3-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:ac40e020931902b839fb896f78418bcef65a0874ace2914b6d89ca3e33792faf", size = 11727909 },
+    { url = "https://files.pythonhosted.org/packages/08/b1/bfa7ac4bd40fdd94a34f5ed5fa2c5a9a42a0a2a66d8b0e5e77c5f5fccc93/baml_py-0.81.3-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:3f7ff2b7958cbb9224f3f68626c67dad7a9a9a8d6835a43542348307def35191", size = 14797299 },
+    { url = "https://files.pythonhosted.org/packages/54/36/04f876759dffb4354ad58047cb6b35d35258a12868409a7303e61fd1cce3/baml_py-0.81.3-cp38-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:bb0d0b95ef5947b968e9570d082b78364ea3187c3c95c3574b3296154889226f", size = 14381199 },
+    { url = "https://files.pythonhosted.org/packages/7e/f7/5ee924cfb64557edde07fe564cee8c141f662e3fc7d2faf1c8dfff0ed4b6/baml_py-0.81.3-cp38-abi3-musllinux_1_1_aarch64.whl", hash = "sha256:71ea7ce6c4bb7b8b65fbc4d3d77ace334d90c6c6f6a4f110cadcd38b8ab56484", size = 14651499 },
+    { url = "https://files.pythonhosted.org/packages/64/3e/08ef9cb9395f23a057f2efab5eff6b255d13a7f9642e071709f62fe82b03/baml_py-0.81.3-cp38-abi3-musllinux_1_1_x86_64.whl", hash = "sha256:e6ce373d21c50e8f80c30f4fec24e3378b7882f3ad06d9c8bf2ca480ef8ecef5", size = 14949938 },
+    { url = "https://files.pythonhosted.org/packages/f7/4b/d80ab8d970613e255e08b829f87ad1c02c3dcbbde75efd84acc686c6d2e9/baml_py-0.81.3-cp38-abi3-win_amd64.whl", hash = "sha256:229c5d86606ea1fc3a3135917eaf40e35215f529216fbef3c4ef505424a9f0f0", size = 12720657 },
 ]
 
 [[package]]
@@ -1010,7 +1001,7 @@ grpc = [
 ]
 
 [[package]]
-name = "graphit-api"
+name = "graphora-api"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
@@ -1054,7 +1045,6 @@ dependencies = [
     { name = "python-magic" },
     { name = "python-multipart" },
     { name = "pyyaml" },
-    { name = "redis" },
     { name = "scikit-learn" },
     { name = "sentence-transformers" },
     { name = "textstat" },
@@ -1068,7 +1058,7 @@ requires-dist = [
     { name = "aiofiles", specifier = ">=23.2.1" },
     { name = "aiohttp", specifier = ">=3.11.12" },
     { name = "anthropic", extras = ["vertex"], specifier = ">=0.43.1" },
-    { name = "baml-py", specifier = ">=0.76.2" },
+    { name = "baml-py", specifier = "==0.81.3" },
     { name = "fastapi", specifier = ">=0.109.2" },
     { name = "flask-login", specifier = ">=0.6.3" },
     { name = "flask-wtf", specifier = ">=1.2.2" },
@@ -1106,7 +1096,6 @@ requires-dist = [
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0.1" },
-    { name = "redis", specifier = ">=5.0.1" },
     { name = "scikit-learn", specifier = ">=1.4.1.post1" },
     { name = "sentence-transformers", specifier = ">=3.4.1" },
     { name = "textstat", specifier = ">=0.7.3" },
@@ -2826,18 +2815,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/dd/f8/8657b8cbb4ebeabfbdf991ac40eca8a1d1bd012011bd44ad1ed10f5cb494/readchar-4.2.1.tar.gz", hash = "sha256:91ce3faf07688de14d800592951e5575e9c7a3213738ed01d394dcc949b79adb", size = 9685 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/10/e4b1e0e5b6b6745c8098c275b69bc9d73e9542d5c7da4f137542b499ed44/readchar-4.2.1-py3-none-any.whl", hash = "sha256:a769305cd3994bb5fa2764aa4073452dc105a4ec39068ffe6efd3c20c60acc77", size = 9350 },
-]
-
-[[package]]
-name = "redis"
-version = "5.2.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "async-timeout", marker = "python_full_version < '3.11.3'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/47/da/d283a37303a995cd36f8b92db85135153dc4f7a8e4441aa827721b442cfb/redis-5.2.1.tar.gz", hash = "sha256:16f2e22dff21d5125e8481515e386711a34cbec50f0e44413dd7d9c060a54e0f", size = 4608355 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3c/5f/fa26b9b2672cbe30e07d9a5bdf39cf16e3b80b42916757c5f92bca88e4ba/redis-5.2.1-py3-none-any.whl", hash = "sha256:ee7e1056b9aea0f04c6c2ed59452947f34c4940ee025f5dd83e6a6418b6989e4", size = 261502 },
 ]
 
 [[package]]
