@@ -367,38 +367,108 @@ async def _get_prod_node(label: str, id: str) -> Node:
 
 def _merge_nodes(staging_node: Node, prod_node: Node, 
                  ontology: Dict[str, Any], merged_graph: GraphResponse) -> GraphResponse:
-    """Merge two nodes and ensure all edges are updated"""
+    """Merge two nodes and ensure all edges are updated. Only version if properties change."""
     entity_def = ontology
-    staging_props = {k: v for k, v in staging_node.properties.items() if k in entity_def}
-    prod_props = {k: v for k, v in prod_node.properties.items() if k in entity_def}
+    # Filter properties based on the ontology definition
+    staging_props_relevant = {k: v for k, v in staging_node.properties.items() if k in entity_def}
+    prod_props_relevant = {k: v for k, v in prod_node.properties.items() if k in entity_def}
     
-    # Merge properties
-    staging_node.properties = {**staging_props, **prod_props}
-    staging_node.properties[VALID_FROM] = str(datetime.now())
+    # Check if there are any differences or new properties in staging
+    properties_changed = False
+    for key, value in staging_props_relevant.items():
+        if key not in prod_props_relevant or prod_props_relevant[key] != value:
+            properties_changed = True
+            break
+
+    # Even if no changes in staging props, check if staging *removes* a relevant prop that existed in prod
+    # This is unlikely given the merge strategy, but good to consider. Let's assume staging props are the source of truth for now.
+    # A more robust check would be: properties_changed = staging_props_relevant != prod_props_relevant
+    # Let's use the simpler check first based on the request (new or different in staging)
+
+    current_time_str = str(datetime.now())
+
+    # Merge properties: Staging properties overwrite production properties for defined keys
+    # Keep existing prod properties not defined in the ontology (like system properties)
+    merged_properties = {**prod_node.properties, **staging_props_relevant}
+    merged_properties[VALID_FROM] = current_time_str
     
-    # Update edges to use prod_node.id
+    # Preserve original staging ID before modification
     old_staging_id = staging_node.id
+
+    # Update staging node in-place to reflect the merged state (using prod_node ID)
     staging_node.id = prod_node.id
+    staging_node.properties = merged_properties
+    # Note: We are modifying the staging_node object that exists within merged_graph.nodes list
+    
+    # Update edges pointing to the old staging ID to use the prod_node ID
     _update_to_prod_node_id_in_edges(old_staging_id, prod_node.id, merged_graph)
 
-    # Version the old production node
-    prod_node.properties[VALID_TO] = staging_node.properties[VALID_FROM]
-    prev_ver = Node(
-        id=str(uuid.uuid4()),
-        label=prod_node.label,
-        type=prod_node.type,
-        properties=prod_node.properties
-    )
-    merged_graph.nodes.append(prev_ver)
-    merged_graph.edges.append(Edge(
-        id=str(uuid.uuid4()),
-        target=prev_ver.id,
-        source=prod_node.id,
-        type=PREVIOUS_VERSION_RELATIONSHIP_TYPE,
-        properties={UPDATED: staging_node.properties[VALID_FROM]}
-    ))
+    # Only version the production node if properties actually changed
+    if properties_changed:
+        logger.info(f"Properties changed for node {prod_node.id}. Versioning required.")
+        # Version the old production node state
+        prod_node.properties[VALID_TO] = current_time_str # Use the same timestamp for consistency
+        prev_ver = Node(
+            id=str(uuid.uuid4()),
+            label=prod_node.label,
+            type=prod_node.type,
+            properties=prod_node.properties # Properties before merge, now marked with VALID_TO
+        )
+        merged_graph.nodes.append(prev_ver)
+        merged_graph.edges.append(Edge(
+            id=str(uuid.uuid4()),
+            target=prev_ver.id,
+            source=prod_node.id, # Link from the current node ID
+            type=PREVIOUS_VERSION_RELATIONSHIP_TYPE,
+            properties={UPDATED: current_time_str}
+        ))
+        logger.debug(f"Merged node: {prod_node.id}, Previous version created: {prev_ver.id}")
+    else:
+        logger.info(f"No relevant property changes for node {prod_node.id}. Skipping versioning.")
+        # Find the actual staging node in the merged_graph.nodes list and update it
+        # (since we modified the staging_node object directly earlier)
+        # No, the modification above already updates the object in the list.
+        # We just need to ensure the old staging node isn't separately added.
+        # The logic should handle finding the staging node in merged_graph.nodes and updating it.
 
-    logger.debug(f"Merged node: {staging_node.id}, Previous version: {prev_ver.id}")
+    # Ensure the original staging node *object* (with old_staging_id) is removed 
+    # if it wasn't the one modified in-place. This depends on how merged_graph was constructed.
+    # Assuming merged_graph initially contains the staging_node object reference:
+    # The update to staging_node.id and staging_node.properties modifies the object within the list.
+    # We might need to remove the prod_node from the list if it was added separately.
+    # Let's refine this: The goal is to have ONE node with prod_node.id in the final list.
+    
+    # Find the index of the node we modified (which now has prod_node.id)
+    modified_node_index = -1
+    for i, n in enumerate(merged_graph.nodes):
+        if n.id == prod_node.id:
+            modified_node_index = i
+            break
+            
+    # Remove the original prod_node if it exists separately in the list
+    # This assumes prod_node was fetched separately and might be a different object
+    # than the one potentially already in merged_graph.nodes with the same ID.
+    # A safer approach might be to ensure only ONE node with prod_node.id exists *after* the merge.
+    
+    final_nodes = []
+    ids_seen = set()
+    for node in merged_graph.nodes:
+        if node.id == prod_node.id:
+            if prod_node.id not in ids_seen:
+                final_nodes.append(node) # Keep the modified one
+                ids_seen.add(prod_node.id)
+        elif node.id != old_staging_id: # Avoid adding back the original staging node if it lingered
+             if node.id not in ids_seen:
+                 final_nodes.append(node)
+                 ids_seen.add(node.id)
+        # Add the previous version if it was created
+        elif properties_changed and node.id == prev_ver.id:
+             if node.id not in ids_seen:
+                 final_nodes.append(node)
+                 ids_seen.add(node.id)
+                 
+    merged_graph.nodes = final_nodes
+
     return merged_graph
 
 def _update_to_prod_node_id_in_edges(old_id: str, new_id: str, merged_graph: GraphResponse):
@@ -409,8 +479,6 @@ def _update_to_prod_node_id_in_edges(old_id: str, new_id: str, merged_graph: Gra
         if edge.target == old_id:
             edge.target = new_id
     logger.debug(f"Updated edges: old_id={old_id} to new_id={new_id}")
-
-
 
 async def _get_matching_nodes(
     storage: GraphStorageInterface,
