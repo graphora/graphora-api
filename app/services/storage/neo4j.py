@@ -942,22 +942,17 @@ class Neo4jStorage(GraphStorageInterface):
             "max_results": max_results
         }
 
-        # Add source_id parameter if available
-        has_source_id = bool(properties.get("id"))
-        if has_source_id:
-            params["source_id"] = properties["id"]
-
         property_conditions = []
         for idx, (key, value) in enumerate(properties.items()):
             if key not in SYSTEM_PROPERTIES:
                 param_key = f"value{idx}"
-                params[param_key] = str(value)  # Convert all values to strings
+                params[param_key] = str(value).lower()  # Convert all values to strings
                 if type(value) == list:
                     property_conditions.append(f"apoc.text.levenshteinSimilarity(apoc.text.join([x IN n.{key} | toString(x)], ','), ${param_key})")
                 elif type(value) == dict:
                     property_conditions.append(f"apoc.text.levenshteinSimilarity(apoc.convert.toJson(props[key]), ${param_key})")
                 else:
-                    property_conditions.append(f"apoc.text.levenshteinSimilarity(toString(coalesce(n.{key}, '')), ${param_key})")
+                    property_conditions.append(f"apoc.text.levenshteinSimilarity(toLower(toString(coalesce(n.{key}, ''))), ${param_key})")
 
         # Build final query with conditional relationship score calculation
         query = f"""
@@ -970,30 +965,17 @@ class Neo4jStorage(GraphStorageInterface):
              END as property_score
         """
 
-        # Only add relationship score calculation if source_id is present
-        if has_source_id and include_relationships:
-            query += """
-            WITH n, property_score,
-                 size([(n)-[r]->() WHERE type(r) IN [(s)-[sr]->() WHERE s.id = $source_id | type(sr)] | r]) * 1.0 /
-                 CASE 
-                    WHEN size([(s)-[sr]->() WHERE s.id = $source_id | sr]) > 0 
-                    THEN size([(s)-[sr]->() WHERE s.id = $source_id | sr])
-                    ELSE 1.0
-                 END as relationship_score
-            WITH n, property_score, relationship_score,
-                 property_score * 0.7 + relationship_score * 0.3 as similarity_score
-            """
-        else:
-            query += """
-            WITH n, property_score as similarity_score
-            """
-
         query += """
+        WITH n, property_score as similarity_score
         WHERE similarity_score >= $threshold
         RETURN n, similarity_score
         ORDER BY similarity_score DESC
         LIMIT $max_results
         """
+        print("************************************************")
+        print(query)
+        print(params)
+        print("************************************************")
         records = await self._execute_query(query, params)
 
         return [
