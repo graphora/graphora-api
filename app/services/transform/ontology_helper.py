@@ -1,9 +1,12 @@
 from typing import Dict, List, Any, Type, Optional
 import yaml
 from datetime import datetime, timezone
+from app.utils.constants import get_full_text_index_name
 from pydantic import BaseModel, create_model, Field
 from pathlib import Path
 from typing import Union
+from app.config import settings
+from app.services.storage.neo4j import Neo4jStorage
 
 class OntologyParser:
     """Parser for YAML ontology definitions"""
@@ -219,3 +222,43 @@ class OntologyParser:
         # RelationshipsOnlyModel.__entity_models__ = entity_models
         RelationshipsOnlyModel.__relationship_models__ = relationship_models
         return RelationshipsOnlyModel
+    
+    
+    async def build_full_text_indexes(self) -> None:
+        """Build full text indexes for all entities and relationships defined in the ontology."""
+        staging_storage = Neo4jStorage(
+            uri=settings.STAGING_NEO4J_URI,
+            username=settings.STAGING_NEO4J_USER,
+            password=settings.STAGING_NEO4J_PASSWORD,
+            database=settings.STAGING_NEO4J_DATABASE
+        )
+        prod_storage = Neo4jStorage(
+            uri=settings.NEO4J_URI,
+            username=settings.NEO4J_USER,
+            password=settings.NEO4J_PASSWORD,
+            database=settings.NEO4J_DB
+        )
+        for entity_name, entity_def in self.parsed_ontology['entities'].items():
+            # Create full text index for entity
+            index_name = get_full_text_index_name(entity_name)
+            props = entity_def.get('properties', {})
+            if not props:
+                continue
+            prop_names = [f'{prop}' for prop in props.keys()]
+            await staging_storage.create_or_replace_ft_index_for_node(index_name, entity_name, prop_names)
+            await prod_storage.create_or_replace_ft_index_for_node(index_name, entity_name, prop_names)
+            
+        # Create full text index for relationships
+        for source_name, rels in self.parsed_ontology['entities'].items():
+            for rel_name, rel_def in rels.get('relationships', {}).items():
+                target_name = rel_def.get('target', None)
+                if not target_name:
+                    continue
+                index_name = get_full_text_index_name(f"{source_name}_{rel_name}_{target_name}")
+                props = rel_def.get('properties', {})
+                if not props:
+                    continue
+                prop_names = [f'{prop}' for prop in props.keys()]
+                await staging_storage.create_or_replace_ft_index_for_relationship(index_name, source_name, rel_name, target_name, prop_names)
+                await prod_storage.create_or_replace_ft_index_for_relationship(index_name, source_name, rel_name, target_name, prop_names)
+            

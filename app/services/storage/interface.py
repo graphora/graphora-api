@@ -12,6 +12,28 @@ class GraphStorageInterface(ABC):
     """Abstract interface for graph storage"""
     
     @abstractmethod
+    async def create_or_replace_ft_index_for_node(
+        self,
+        index_name: str,
+        entity_name: str,
+        properties: List[str]
+    ) -> None:
+        """Create a full text index for a node entity"""
+        pass
+    
+    @abstractmethod
+    async def create_or_replace_ft_index_for_relationship(
+        self,
+        index_name: str,
+        source_name: str,
+        rel_name: str,
+        target_name: str,
+        properties: List[str]
+    ) -> None:
+        """Create a full text index for a relationship entity"""
+        pass
+    
+    @abstractmethod
     async def store_nodes(
         self,
         nodes: List[BaseNode],
