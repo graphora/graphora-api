@@ -1,3 +1,5 @@
+import traceback
+from app.services.transform.ontology_helper import OntologyParser
 from fastapi import APIRouter, HTTPException
 from uuid import uuid4
 import yaml
@@ -26,7 +28,7 @@ async def validate_ontology(request: OntologyRequest) -> OntologyResponse:
     """
     try:
         # Parse and validate YAML
-        ontology = parse_and_validate_yaml(request.text)
+        parse_and_validate_yaml(request.text)
         
         # Generate unique ID
         ontology_id = str(uuid4())
@@ -39,6 +41,9 @@ async def validate_ontology(request: OntologyRequest) -> OntologyResponse:
         with open(ontology_path, 'w') as f:
             f.write(request.text)
             
+        # Create Full Text Indexes for entities defined in Ontology
+        await OntologyParser(ontology_path).build_full_text_indexes()
+        
         return OntologyResponse(id=ontology_id)
         
     except OntologyValidationError as e:
@@ -47,6 +52,7 @@ async def validate_ontology(request: OntologyRequest) -> OntologyResponse:
             detail=f"Invalid ontology: {str(e)}"
         )
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Error processing ontology: {str(e)}"

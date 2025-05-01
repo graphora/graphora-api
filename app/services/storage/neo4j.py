@@ -8,7 +8,7 @@ import uuid
 import json
 from datetime import datetime, timezone
 import time
-from app.utils.constants import VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID, SYSTEM_PROPERTIES
+from app.utils.constants import VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID, SYSTEM_PROPERTIES, get_full_text_index_name
 import traceback
 from neo4j import AsyncGraphDatabase, GraphDatabase
 from neo4j.exceptions import ServiceUnavailable, AuthError, DatabaseError, SessionExpired, TransientError
@@ -183,6 +183,57 @@ class Neo4jStorage(GraphStorageInterface):
             "id": node_id,
             "properties": properties
         }
+        
+    async def create_or_replace_ft_index_for_node(
+        self,
+        index_name: str,
+        entity_name: str,
+        properties: List[str]
+    ) -> None:
+        """Create a full text index for a node entity"""
+        async with self._get_session() as session:
+            query = f"DROP INDEX {index_name} IF EXISTS;"
+            await session.run(query)
+            node_alias = 'n'
+            prop_names = [f'{node_alias}.{prop}' for prop in properties]
+            query = f"CREATE FULLTEXT INDEX {index_name} FOR ({node_alias}:`{entity_name}`) ON EACH [{', '.join(prop_names)}];"
+            await session.run(query)
+            
+    async def create_or_replace_ft_index_for_relationship(
+        self,
+        index_name: str,
+        source_name: str,
+        rel_name: str,
+        target_name: str,
+        properties: List[str]
+    ) -> None:
+        """Create a full text index for a relationship entity"""
+        async with self._get_session() as session:
+            try:
+                # Drop existing index if it exists
+                query = f"DROP INDEX {index_name} IF EXISTS;"
+                await session.run(query)
+                
+                # Create new index with correct syntax
+                # Neo4j relationship index syntax requires direction and variable naming
+                rel_alias = 'r'
+                prop_names = [f'{rel_alias}.{prop}' for prop in properties]
+                
+                if not prop_names:
+                    logger.warning(f"No properties provided for full-text index {index_name}, skipping creation")
+                    return
+                    
+                # Use correct syntax with direction and properly formatted relationship pattern
+                query = f"""
+                CREATE FULLTEXT INDEX {index_name} 
+                FOR ()-[{rel_alias}:`{rel_name}`]->() 
+                ON EACH [{', '.join(prop_names)}];
+                """
+                await session.run(query)
+                logger.info(f"Created full-text index {index_name} for relationship {rel_name}")
+            except Exception as e:
+                logger.error(f"Error creating full-text index for relationship: {str(e)}")
+                # Don't raise the exception - we want to continue even if index creation fails
 
     async def store_nodes(
         self,
@@ -935,54 +986,147 @@ class Neo4jStorage(GraphStorageInterface):
         include_relationships: bool = True
     ) -> List[Node]:
         """Find nodes with similar properties using fuzzy matching"""
-        # Build query parameters for each property
+        # Skip if no properties to search
+        if not properties:
+            return []
+            
+        # First try exact match using get_nodes
+        exact_matches = await self.get_nodes(label, properties, max_results)
+        if exact_matches and len(exact_matches) >= max_results:
+            return exact_matches
+            
+        # Then try similarity search
+        similarity_conditions = []
         params = {
             "include_relationships": include_relationships,
             "threshold": similarity_threshold,
             "max_results": max_results
         }
-
-        property_conditions = []
+        
         for idx, (key, value) in enumerate(properties.items()):
-            if key not in SYSTEM_PROPERTIES:
+            if value is not None and key not in SYSTEM_PROPERTIES:
                 param_key = f"value{idx}"
                 params[param_key] = str(value).lower()  # Convert all values to strings
+                
+                # Create individual similarity conditions
                 if type(value) == list:
-                    property_conditions.append(f"apoc.text.levenshteinSimilarity(apoc.text.join([x IN n.{key} | toString(x)], ','), ${param_key})")
+                    similarity_conditions.append(f"CASE WHEN apoc.text.join([x IN n.{key} | toString(x)], ',') = ${param_key} THEN 1.0 ELSE 0.0 END")
                 elif type(value) == dict:
-                    property_conditions.append(f"apoc.text.levenshteinSimilarity(apoc.convert.toJson(props[key]), ${param_key})")
+                    similarity_conditions.append(f"CASE WHEN apoc.convert.toJson(n.{key}) = ${param_key} THEN 1.0 ELSE 0.0 END")
                 else:
-                    property_conditions.append(f"apoc.text.levenshteinSimilarity(toLower(toString(coalesce(n.{key}, ''))), ${param_key})")
+                    # Text distance similarity
+                    similarity_conditions.append(f"CASE WHEN apoc.text.distance(toLower(toString(coalesce(n.{key}, ''))), ${param_key}) < 5 THEN 1.0 ELSE 0.0 END")
+                    # Metaphone similarity (phonetic)
+                    similarity_conditions.append(f"CASE WHEN apoc.text.doubleMetaphone(toLower(toString(coalesce(n.{key}, '')))) = apoc.text.doubleMetaphone(${param_key}) THEN 1.0 ELSE 0.0 END")
 
         # Build final query with conditional relationship score calculation
+        if not similarity_conditions:
+            return []
+            
+        similarity_expr = " + ".join(similarity_conditions)
+        
         query = f"""
         MATCH (n:{label})
-        WITH n,
-             CASE 
-                WHEN size([{', '.join(property_conditions)}]) > 0
-                THEN reduce(s = 0.0, x IN [{', '.join(property_conditions)}] | s + x) / size([{', '.join(property_conditions)}])
-                ELSE 0.0
-             END as property_score
-        """
-
-        query += """
-        WITH n, property_score as similarity_score
+        WITH n, ({similarity_expr}) / {len(similarity_conditions)} as similarity_score
         WHERE similarity_score >= $threshold
         RETURN n, similarity_score
         ORDER BY similarity_score DESC
         LIMIT $max_results
         """
-        print("************************************************")
-        print(query)
-        print(params)
-        print("************************************************")
         records = await self._execute_query(query, params)
+        
+        # Search Full text index of this node and look for fuzzy matches
+        # Use label as the entity_type for full-text search
+        ft_results = await self._full_text_search(label, properties, max_results)
+        
+        # Combine results from both queries and return unique nodes (by ID)
+        similarity_results = [
+            Node(
+                id=dict(record[0].items()).get("id", ''),
+                label=list(record[0].labels)[0] if record[0].labels else label,
+                type=list(record[0].labels)[0] if record[0].labels else label,
+                properties=dict(record[0].items())
+            )
+            for record in records
+        ]
+        
+        # Combine results, prioritizing exact and similarity matches
+        combined_results = []
+        seen_ids = set()
+        
+        # First add exact matches
+        for node in exact_matches:
+            if node.id not in seen_ids:
+                combined_results.append(node)
+                seen_ids.add(node.id)
+                
+        # Then add similarity matches
+        for node in similarity_results:
+            if node.id not in seen_ids:
+                combined_results.append(node)
+                seen_ids.add(node.id)
+                
+        # Finally add full-text matches
+        for node in ft_results:
+            if node.id not in seen_ids:
+                combined_results.append(node)
+                seen_ids.add(node.id)
+                
+        # Limit to max_results
+        print("************************************************")
+        print(combined_results[:max_results])
+        print("************************************************")
+        return combined_results[:max_results]
 
+    async def get_nodes(
+        self,
+        label: str,
+        properties: Dict[str, Any],
+        limit: int = 10
+    ) -> List[Node]:
+        """
+        Get nodes with exact property matches
+        
+        Args:
+            label (str): Node label
+            properties (Dict[str, Any]): Properties to match
+            limit (int, optional): Maximum number of results. Defaults to 10.
+            
+        Returns:
+            List[Node]: List of matching nodes
+        """
+        # Skip system properties and None values
+        query_props = {k: v for k, v in properties.items() 
+                      if k not in SYSTEM_PROPERTIES and v is not None}
+        
+        if not query_props:
+            return []
+            
+        # Build WHERE clause for exact matches
+        where_clauses = []
+        params = {"limit": limit}
+        
+        for idx, (key, value) in enumerate(query_props.items()):
+            param_name = f"prop{idx}"
+            params[param_name] = value
+            where_clauses.append(f"n.{key} = ${param_name}")
+            
+        where_clause = " AND ".join(where_clauses)
+        
+        query = f"""
+        MATCH (n:{label})
+        WHERE {where_clause}
+        RETURN n
+        LIMIT $limit
+        """
+        
+        records = await self._execute_query(query, params)
+        
         return [
             Node(
                 id=dict(record[0].items()).get("id", ''),
-                label=list(record[0].labels)[0] if record[0].labels else None,
-                type=list(record[0].labels)[0] if record[0].labels else None,
+                label=list(record[0].labels)[0] if record[0].labels else label,
+                type=list(record[0].labels)[0] if record[0].labels else label,
                 properties=dict(record[0].items())
             )
             for record in records
@@ -1008,7 +1152,7 @@ class Neo4jStorage(GraphStorageInterface):
             return Node(
                 id=properties.get("id", str(uuid.uuid4())),
                 label=list(node_data.labels)[0],
-                type=node_data.get("type", ""),
+                type=list(node_data.labels)[0],
                 properties=dict(node_data.items())
             )
         
@@ -1094,7 +1238,7 @@ class Neo4jStorage(GraphStorageInterface):
             return Node(
                 id=node_data.get("id", ''),
                 label=list(node_data.labels)[0],
-                type=node_data.get("type", ""),
+                type=list(node_data.labels)[0],
                 properties=node_properties
             )
         
@@ -1433,3 +1577,122 @@ class Neo4jStorage(GraphStorageInterface):
                 await session.run("MATCH (n) DELETE n")
         
         await self._execute_with_retry(_execute_query)
+
+    async def _full_text_search(
+        self,
+        label: str,
+        properties: Dict[str, Any],
+        max_results: int = 10
+    ) -> List[Node]:
+        """
+        Perform a full-text search on a node entity using Neo4j's full-text indexes.
+        
+        Args:
+            label (str): Type of entity to search
+            properties (Dict[str, Any]): Properties to search for
+            max_results (int, optional): Maximum number of results to return. Defaults to 10.
+            
+        Returns:
+            List[Node]: List of nodes matching the search criteria
+        """
+        
+        # Skip if no properties to search
+        if not properties:
+            return []
+            
+        # Get index name for this entity type
+        index_name = get_full_text_index_name(label)
+        
+        # First check if the index exists - use a more compatible approach
+        try:
+            # Try a simple query with the index to see if it exists
+            # If it fails, we'll catch the exception
+            test_query = f"""
+            CALL db.index.fulltext.queryNodes($index_name, "*")
+            YIELD node LIMIT 1
+            RETURN count(node) as count
+            """
+            await self._execute_query(test_query, {"index_name": index_name})
+            # If we get here, the index exists
+            print(f"Full-text index {index_name} exists.")
+        except Exception as e:
+            # If we get an error about the index not existing, skip full-text search
+            error_str = str(e)
+            if "no such fulltext schema index" in error_str.lower() or "no procedure" in error_str.lower():
+                print(f"Full-text index {index_name} does not exist. Skipping full-text search.")
+                return []
+            else:
+                # Some other error occurred
+                print(f"Error checking if index exists: {error_str}")
+                # Continue anyway - we'll try the search and handle errors there
+                pass
+        
+        # For full-text search, we'll run separate queries for each property
+        # and combine the results, as Neo4j's full-text search works best with
+        # individual property searches
+        all_results = []
+        seen_ids = set()
+        
+        for key, value in properties.items():
+            if key not in SYSTEM_PROPERTIES and value:
+                # Skip complex types
+                if isinstance(value, (list, dict)):
+                    continue
+                    
+                # Convert to string and escape quotes
+                value_str = str(value).replace('"', '\\"')
+                
+                # Try different search approaches
+                search_queries = [
+                    # Exact match - use double quotes to handle spaces
+                    f"{key}:\"{value_str}\"",
+                    # Prefix match with first word only
+                    f"{key}:{value_str.split()[0]}*" if value_str.split() else "",
+                    # Fuzzy match with first word only
+                    f"{key}:{value_str.split()[0]}~0.7" if value_str.split() else ""
+                ]
+                
+                for search_query in search_queries:
+                    if not search_query:
+                        continue
+                        
+                    try:
+                        # Build query with CALL db.index.fulltext.queryNodes
+                        query = f"""
+                        CALL db.index.fulltext.queryNodes($index_name, $search_query)
+                        YIELD node, score
+                        WHERE node:`{label}`
+                        RETURN node, score
+                        ORDER BY score DESC
+                        LIMIT $max_results
+                        """
+                        
+                        records = await self._execute_query(query, {
+                            "max_results": max_results,
+                            "index_name": index_name,
+                            "search_query": search_query
+                        })
+                        
+                        # Add results, avoiding duplicates
+                        for record in records:
+                            node_id = dict(record[0].items()).get("id", '')
+                            if node_id and node_id not in seen_ids:
+                                seen_ids.add(node_id)
+                                node_label = list(record[0].labels)[0] if record[0].labels else label
+                                all_results.append(
+                                    Node(
+                                        id=node_id,
+                                        label=node_label,
+                                        type=node_label,  # Ensure type is always set
+                                        properties=dict(record[0].items())
+                                    )
+                                )
+                                
+                                # Stop if we have enough results
+                                if len(all_results) >= max_results:
+                                    return all_results
+                    except Exception as e:
+                        # If the index doesn't exist or other error, log and continue
+                        print(f"Full-text search error for {search_query}: {str(e)}")
+        
+        return all_results
