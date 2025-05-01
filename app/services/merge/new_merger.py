@@ -153,31 +153,67 @@ def get_human_review_items(merge_id: str) -> List[ChangeLog]:
             staging_node=Node(
                 id=change_log['node_id'],
                 label=change_log['node_type'],
+                type=change_log['node_type'],
                 properties=change_log['changed_props']
             ),
             prod_node=Node(
                 id=change_log['prod_node_id'],
                 label=change_log['node_type'],
+                type=change_log['node_type'],
                 properties=change_log['previous_props']
             )
         ))
     return change_logs
 
 async def apply_resolution(merge_id: str, change_log_id: str, resolution_data: Dict[str, Any], learning_comment: str) -> bool:
+    """
+    Apply a resolution to a conflict and save the learning for future reference.
+    
+    Args:
+        merge_id: ID of the merge process
+        change_log_id: ID of the conflict to resolve
+        resolution_data: Properties to update
+        learning_comment: Comment on the resolution
+        
+    Returns:
+        True if the resolution was applied successfully, False otherwise
+    """
     change_log = supabase.table("change_logs").select("*").eq("merge_id", merge_id).eq("id", change_log_id).execute()
     if len(change_log.data) > 0:
+        conflict_data = change_log.data[0]
+        
+        # Get ontology_id from merge_status
+        merge_info = supabase.table("merge_status").select("ontology_id").eq("merge_id", merge_id).execute()
+        if not merge_info.data:
+            logger.error(f"Could not find merge info for merge_id {merge_id}")
+            return False
+            
+        ontology_id = merge_info.data[0].get('ontology_id')
+        
+        # Save resolution for future learning
+        save_resolution(
+            merge_id=merge_id,
+            ontology_id=ontology_id,
+            node_id=conflict_data['node_id'],
+            node_type=conflict_data['node_type'],
+            previous_props=conflict_data['previous_props'],
+            changed_props=resolution_data,
+            learning_comment=learning_comment
+        )
+        
+        # Update the change log
         supabase.table("change_logs").update(
             {
                 "need_human_review": False,
-                "changed_props": json.dumps(resolution_data),
-                "learning_comment": learning_comment
+                "changed_props": resolution_data
             }
         ).eq("merge_id", merge_id).eq("id", change_log_id).execute()
 
+        # Check if all conflicts are resolved
         unresolved_conflicts = supabase.table("change_logs").select("*").eq("merge_id", merge_id).eq("need_human_review", True).execute()
         if len(unresolved_conflicts.data) == 0:
             _update_merge_status(merge_id, MergeStatus.READY_TO_MERGE)
-            transform_id, ontology_id = supabase.table("merge_status").select("transform_id, ontology_id").eq("merge_id", merge_id).execute()
+            transform_id = merge_info.data[0].get('transform_id')
             if transform_id and ontology_id:
                 await merge_flow(merge_id, transform_id, ontology_id)
         return True
@@ -188,25 +224,48 @@ def get_merge_statistics(merge_id: str) -> Dict[str, Any]:
     return merge_status.data[0]['statistics']
 
 async def get_merge_graph(merge_id: str, transform_id: str) -> GraphResponse:
-    #if merge status is not STARTED then return None
+    """Get the merged graph for a merge operation"""
+    # If merge status is not STARTED then return None
     merge_status = supabase.table("merge_status").select("status").eq("merge_id", merge_id).execute()
     if not merge_status.data:
         return None
     elif merge_status.data[0]['status'] == MergeStatus.COMPLETED:
         return await _get_prod_graph(merge_id)
-    #fetch staging graph using transform_id
+        
+    # Fetch staging graph using transform_id
     staging_graph = await _extract_staging_graph(transform_id)
-    print("staging_graph", staging_graph)
-    #fetch change_logs and apply on top of staging graph
+    logger.debug(f"Retrieved staging graph with {len(staging_graph.nodes)} nodes")
+    
+    # Fetch change_logs and apply on top of staging graph
     change_logs = supabase.table("change_logs").select("*").eq("merge_id", merge_id).execute()
     if not change_logs.data:
-        return None
+        return staging_graph
+        
+    # Create a map of node IDs for quick lookup
+    node_map = {node.id: node for node in staging_graph.nodes}
+    
     for change_log in change_logs.data:
-        staging_node = staging_graph.nodes[change_log['staging_node_id']]
-        prod_node = _get_prod_node(change_log['node_type'], change_log['prod_node_id'])
-        staging_graph = _merge_nodes(staging_node, prod_node, staging_node.properties, staging_graph)
-        if change_log['need_human_review']:
-            staging_node.properties['__NEED_REVIEW'] = True
+        try:
+            # Use 'node_id' instead of 'staging_node_id'
+            node_id = change_log.get('node_id')
+            if not node_id or node_id not in node_map:
+                logger.warning(f"Node ID {node_id} not found in staging graph")
+                continue
+                
+            staging_node = node_map[node_id]
+            
+            # Apply changes if needed
+            if change_log.get('changed_props'):
+                # Update the node properties with the resolved properties
+                staging_node.properties.update(change_log['changed_props'])
+                
+            # Mark nodes that need review
+            if change_log.get('need_human_review', False):
+                staging_node.properties['__NEED_REVIEW'] = True
+                
+        except Exception as e:
+            logger.error(f"Error processing change log: {str(e)}")
+            
     return staging_graph
 
 @task(name="extract_staging_graph")
@@ -401,7 +460,7 @@ def _merge_nodes(staging_node: Node, prod_node: Node,
     # Note: We are modifying the staging_node object that exists within merged_graph.nodes list
     
     # Update edges pointing to the old staging ID to use the prod_node ID
-    _update_to_prod_node_id_in_edges(old_staging_id, prod_node.id, merged_graph)
+    _update_to_prod_node_id_in_edges(old_id=old_staging_id, new_id=prod_node.id, merged_graph=merged_graph)
 
     # Only version the production node if properties actually changed
     if properties_changed:
@@ -635,12 +694,48 @@ def save_change_log(merge_id, change_log, need_human_review: bool = False):
                     "node_id": change_log.staging_node.id,
                     "prod_node_id": change_log.prod_node.id,
                     "node_type": change_log.staging_node.type,
-                    "previous_props": change_log.staging_node.properties,
+                    "previous_props": change_log.prod_node.properties,
                     "changed_props": {k: v[0] for k, v in change_log.prop_changes.items()},
                     "need_human_review": need_human_review
                 }
             ).execute()
     
+def save_resolution(merge_id: str, ontology_id: str, node_id: str, node_type: str, previous_props: Dict, changed_props: Dict, learning_comment: str):
+    """
+    Save a resolution to the resolutions table for future reference.
+    
+    Args:
+        merge_id: ID of the merge operation
+        ontology_id: ID of the ontology used for the merge
+        node_id: ID of the node that was resolved
+        node_type: Type of the node
+        previous_props: Properties before the merge
+        changed_props: Properties after the merge
+        learning_comment: User comment about the resolution decision
+    """
+    logger.info(f"Saving resolution for node {node_id} of type {node_type}")
+    try:
+        supabase.table("resolutions").insert(
+            {
+                "ontology_id": ontology_id,
+                "node_type": node_type,
+                "previous_props": previous_props,
+                "changed_props": changed_props,
+                "learning_comment": learning_comment
+            }
+        ).execute()
+        
+        # Also update the change_log to mark it as resolved
+        supabase.table("change_logs").update(
+            {
+                "need_human_review": False
+            }
+        ).eq("merge_id", merge_id).eq("id", change_log_id).execute()
+        
+        logger.info(f"Successfully saved resolution for node {node_id}")
+    except Exception as e:
+        logger.error(f"Failed to save resolution: {str(e)}")
+
 def _start_merge_status(merge_id, transform_id, ontology_id):
     supabase.table("merge_status").insert(
         {
@@ -660,18 +755,59 @@ def _update_merge_status(merge_id, status):
 
 @task(name="complete_prod_merge")
 async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, merged_graph):
-    change_logs = supabase.table("change_logs").select("*").eq("merge_id", merge_id).execute()
-    if len(change_logs.data) > 0:
+    """Complete the production merge by applying all resolved conflicts"""
+    try:
+        # Get all change logs for this merge
+        change_logs = supabase.table("change_logs").select("*").eq("merge_id", merge_id).execute()
+        
+        if not change_logs.data:
+            logger.info(f"No change logs found for merge {merge_id}, proceeding with direct merge")
+            await _persist_to_prod(merged_graph, merge_id, transform_id)
+            _update_merge_status(merge_id, MergeStatus.COMPLETED)
+            return merged_graph
+            
+        # Create a map of node IDs for quick lookup
+        node_map = {node.id: node for node in staging_graph.nodes}
+        
+        # Apply all resolved conflicts
         for change_log in change_logs.data:
-            ontology_props = ontology['entities'][change_log['node_type']]['properties']
-            staging_node = staging_graph.nodes[change_log['staging_node_id']]
-            staging_node.properties = json.loads(change_log['previous_props'])
-            prod_node = _get_prod_node(change_log['node_type'], change_log['prod_node_id'])
-            merged_graph = _merge_nodes(staging_node, prod_node, ontology_props, merged_graph)
-            #persist in Graph DB
+            try:
+                node_id = change_log.get('node_id')
+                node_type = change_log.get('node_type')
+                
+                if not node_id or not node_type or node_id not in node_map:
+                    logger.warning(f"Invalid change log entry: node_id={node_id}, node_type={node_type}")
+                    continue
+                    
+                # Get the staging node
+                staging_node = node_map[node_id]
+                
+                # Apply the resolved properties if any
+                if change_log.get('changed_props'):
+                    if isinstance(change_log['changed_props'], str):
+                        # Handle the case where properties are stored as JSON string
+                        try:
+                            resolved_props = json.loads(change_log['changed_props'])
+                            staging_node.properties.update(resolved_props)
+                        except json.JSONDecodeError:
+                            logger.error(f"Failed to parse changed_props JSON: {change_log['changed_props']}")
+                    else:
+                        # Handle the case where properties are stored as dictionary
+                        staging_node.properties.update(change_log['changed_props'])
+                
+            except Exception as e:
+                logger.error(f"Error processing change log during prod merge: {str(e)}")
+                
+        # Persist the merged graph to production
         await _persist_to_prod(merged_graph, merge_id, transform_id)
-    _update_merge_status(merge_id, MergeStatus.COMPLETED)
-    return merged_graph
+        _update_merge_status(merge_id, MergeStatus.COMPLETED)
+        return merged_graph
+        
+    except Exception as e:
+        logger.error(f"Error in _complete_prod_merge: {str(e)}")
+        traceback.print_exc()
+        log_merge_failure(merge_id, str(e))
+        raise
 
 def _get_node_string(node: Node, properties: Dict[str, Any]) -> str:
     props = { k: v for k, v in node.properties.items() if k in properties }
