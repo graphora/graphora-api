@@ -7,7 +7,8 @@ from app.services.transform.helpers import (
   resolve_entity_group, 
   merge_nodes, 
   transform_as_relationships, 
-  prune_orphaned_nodes
+  prune_orphaned_nodes,
+  deduplicate_entities_with_splink
 )
 from app.services.llm.client import LLMClient
 from app.services.transform.models import BaseNode, RelationshipInstance
@@ -59,16 +60,19 @@ async def _build_graph_from(
             context=context, 
             ontology_yaml=ontology_parser.ontology_yaml
         )
-        base_nodes = transform_as_nodes(ontology_parser.parsed_ontology, nodes_only_kg)
+        base_nodes = transform_as_nodes(
+            ontology_parser.parsed_ontology, 
+            nodes_only_kg
+        )
         for new_node in base_nodes:
             is_duplicate = any(_is_duplicate_node(existing_node, new_node) for existing_node in nodes)
             if not is_duplicate:
                 nodes.append(new_node)
-                
         context = await _build_nodes_context(nodes)
 
     # Step 2: Compare & Merge entities if they are the same.
     nodes = await _compare_and_merge_nodes(nodes)
+    nodes, _ = await deduplicate_entities_with_splink(nodes, None, parsed_ontology=ontology_parser.parsed_ontology)
     logger.info(f"Nodes after comparison: {nodes}")
 
     # Step 3: LLM based Relationship Inference for each chunk. Pass all relevant nodes & relationships, current chunk to LLM.
@@ -95,8 +99,11 @@ async def _build_graph_from(
     # Step 4: Compare & Merge relationships if they are the same.
     relationships = _compare_and_merge_relationships(relationships)
     
+    # Step 5: Splink based Entity deduplication within an entity group using entities & 1 degree related entities
+    nodes, relationships = await deduplicate_entities_with_splink(
+        nodes, relationships, parsed_ontology=ontology_parser.parsed_ontology)
 
-    # Step 5: Build graph from nodes and relationships.
+    # Step 6: Build graph from nodes and relationships.
     kg = DocumentKnowledgeGraph(nodes=nodes, relationships=relationships)
     prune_orphaned_nodes(ontology_parser.parsed_ontology, kg)
     return kg
@@ -213,6 +220,3 @@ def _is_duplicate_relationship(existing_relationship: RelationshipInstance,
         existing_relationship.type == new_relationship.type and
         existing_relationship.target_id == new_relationship.target_id
     )
-    
-    
-    
