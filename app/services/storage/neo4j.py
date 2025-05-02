@@ -1561,12 +1561,12 @@ class Neo4jStorage(GraphStorageInterface):
     def __del__(self):
         """Cleanup when object is deleted"""
         try:
-            loop = asyncio.get_running_loop()
-            if not loop.is_closed():
-                loop.create_task(self.close())
-        except RuntimeError:
-            traceback.print_exc()
-            # No event loop running, which is fine during interpreter shutdown
+            # Instead of trying to get a running loop, use asyncio.run if needed
+            # But since we're in __del__, it's better to just log and not try to close
+            # as the connection will be closed when the process ends anyway
+            logger.debug("Neo4j connection will be closed on process shutdown")
+        except Exception:
+            # Silently ignore any errors during cleanup
             pass
 
     async def _execute_query(self, query: str, params: Optional[Dict[str, Any]] = None, tx=None) -> List[Any]:

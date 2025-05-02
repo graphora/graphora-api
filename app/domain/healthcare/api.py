@@ -3,7 +3,7 @@ Healthcare domain-specific API endpoints
 """
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional
-from app.domain.healthcare.schemas import PatientListResponse, PatientJourney
+from app.domain.healthcare.schemas import PatientListResponse, PatientJourney, LaboratoryResultsResponse
 from app.domain.healthcare.service import HealthcareService
 from app.services.storage.neo4j import Neo4jStorage
 from app.config import settings
@@ -101,4 +101,33 @@ async def get_patient_journey(
         raise HTTPException(
             status_code=500,
             detail="An error occurred while retrieving the patient journey"
+        )
+
+@router.get("/patients/{patient_id}/laboratory-results", response_model=LaboratoryResultsResponse)
+async def get_patient_laboratory_results(
+    patient_id: str,
+    healthcare_service: HealthcareService = Depends(get_healthcare_service),
+):
+    """
+    Get laboratory results for a specific patient
+    
+    Args:
+        patient_id: ID of the patient
+        
+    Returns:
+        LaboratoryResultsResponse containing a list of laboratory results with components
+    """
+    try:
+        lab_results = await healthcare_service.get_patient_laboratory_results(patient_id=patient_id)
+        return LaboratoryResultsResponse(laboratoryResults=lab_results)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error retrieving laboratory results: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while retrieving laboratory results"
         )
