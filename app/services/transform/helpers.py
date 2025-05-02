@@ -1,3 +1,4 @@
+from app.schemas.graph import Edge, Node
 from app.services.transform.models import (
     BaseNode,
     NodeProvenance,
@@ -5,7 +6,7 @@ from app.services.transform.models import (
     DocumentKnowledgeGraph
 )
 from pydantic import BaseModel
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import json
 import uuid
 from datetime import datetime, timezone
@@ -135,7 +136,10 @@ def transform_as_relationships(ontology: Dict[str, Any],
 
 
 async def deduplicate_entities_with_splink(
-    entities, relationships=None, entity_type=None, threshold=0.95, parsed_ontology=None):
+    entities: List[BaseNode | Node], 
+    relationships: List[RelationshipInstance | Edge] = None, 
+    entity_type: str = None, threshold: float = 0.95, 
+    parsed_ontology: Dict[str, Any] = None) -> Tuple[List[BaseNode | Node], List[RelationshipInstance | Edge]]:
     """
     Deduplicate entities using the Splink library.
     
