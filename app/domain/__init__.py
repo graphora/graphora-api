@@ -1,0 +1,3 @@
+"""
+Domain-specific applications package
+"""
