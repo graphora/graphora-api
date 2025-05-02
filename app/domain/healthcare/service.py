@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 import logging
 from datetime import datetime, date
 from app.services.storage.neo4j import Neo4jStorage
-from app.domain.healthcare.schemas import Patient, PatientInfo, JourneyEvent, MedicalReport, TreatmentOutcome, PatientJourney
+from app.domain.healthcare.schemas import Patient, PatientInfo, JourneyEvent, MedicalReport, TreatmentOutcome, PatientJourney, LaboratoryResult, LaboratoryComponent
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -46,7 +46,6 @@ class HealthcareService:
                 records = await result.fetch(limit)  # Fetch up to 100 records
                 
                 patients = []
-                print(records)
                 for record in records:
                     # Convert Neo4j date to Python date if needed
                     dob = record.get("dateOfBirth")
@@ -237,3 +236,89 @@ class HealthcareService:
                 medicalReports=[],
                 treatmentOutcomes=[]
             )
+
+    async def get_patient_laboratory_results(self, patient_id: str) -> List[LaboratoryResult]:
+        """
+        Get laboratory results for a specific patient
+        
+        Args:
+            patient_id: ID of the patient
+            
+        Returns:
+            List of laboratory results with components
+        """
+        try:
+            async with self.storage._get_session() as session:
+                # First check if patient exists
+                patient_query = """
+                MATCH (p:Patient {id: $patient_id})
+                RETURN p.id as id
+                """
+                
+                patient_result = await session.run(patient_query, patient_id=patient_id)
+                patient_record = await patient_result.single(None)
+                
+                if not patient_record:
+                    logger.error(f"Patient with ID {patient_id} not found")
+                    raise ValueError(f"Patient with ID {patient_id} not found")
+                
+                # Query to get laboratory results
+                lab_results_query = """
+                MATCH (p:Patient {id: $patient_id})-[:HAS_LAB_RESULT]->(lr:LaboratoryResult)
+                RETURN 
+                    lr.id as id,
+                    lr.date as date,
+                    lr.time as time,
+                    lr.reportDate as reportDate,
+                    lr.facility as facility
+                ORDER BY lr.date, lr.time
+                """
+                
+                lab_results = await session.run(lab_results_query, patient_id=patient_id)
+                lab_records = await lab_results.fetch(100)  # Fetch up to 100 records
+                
+                results = []
+                for record in lab_records:
+                    # Query to get components for each laboratory result
+                    components_query = """
+                    MATCH (lr:LaboratoryResult {id: $lab_id})<-[:PART_OF]-(c:TestComponent)
+                    RETURN 
+                        c.id as id,
+                        c.name as name,
+                        c.value as value,
+                        c.units as units,
+                        c.referenceRange as referenceRange
+                    """
+                    
+                    lab_id = record.get("id")
+                    components_result = await session.run(components_query, lab_id=lab_id)
+                    component_records = await components_result.fetch(100)
+                    
+                    components = []
+                    for comp_record in component_records:
+                        component = LaboratoryComponent(
+                            id=comp_record.get("id") or f"comp-{len(components)+1:03d}",
+                            name=comp_record.get("name") or "Unknown Test",
+                            value=comp_record.get("value") or "",
+                            units=comp_record.get("units") or "",
+                            referenceRange=comp_record.get("referenceRange") or ""
+                        )
+                        components.append(component)
+                    
+                    lab_result = LaboratoryResult(
+                        id=record.get("id") or f"lab-{len(results)+1:03d}",
+                        date=record.get("date") or datetime.now().strftime("%Y-%m-%d"),
+                        time=record.get("time") or datetime.now().strftime("%H:%M:%S"),
+                        reportDate=record.get("reportDate") or record.get("date") or datetime.now().strftime("%Y-%m-%d"),
+                        facility=record.get("facility") or "Unknown Facility",
+                        components=components
+                    )
+                    results.append(lab_result)
+                
+                return results
+                
+        except Exception as e:
+            traceback.print_exc()
+            logger.error(f"Error retrieving laboratory results: {str(e)}")
+            # Return empty list as fallback
+            return []

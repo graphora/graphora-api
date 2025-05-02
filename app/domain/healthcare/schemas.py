@@ -69,3 +69,27 @@ class PatientJourney(BaseModel):
 class PatientListResponse(BaseModel):
     """Response schema for patient list"""
     patients: List[Patient]
+
+
+class LaboratoryComponent(BaseModel):
+    """Laboratory test component schema"""
+    id: str
+    name: str
+    value: str
+    units: str
+    referenceRange: str
+
+
+class LaboratoryResult(BaseModel):
+    """Laboratory result schema"""
+    id: str
+    date: str
+    time: str
+    reportDate: str
+    facility: str
+    components: List[LaboratoryComponent]
+
+
+class LaboratoryResultsResponse(BaseModel):
+    """Response schema for laboratory results endpoint"""
+    laboratoryResults: List[LaboratoryResult]
