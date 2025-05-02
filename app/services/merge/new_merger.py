@@ -1,3 +1,4 @@
+from app.services.transform.helpers import deduplicate_entities_with_splink
 from prefect import flow, task
 from app.services.storage.interface import GraphStorageInterface
 from app.services.storage.neo4j import Neo4jStorage
@@ -12,7 +13,7 @@ import traceback
 import copy
 from app.services.merge.models import EntityMappingResult, EntityMatch, MatchStrategy
 from app.services.merge.models import ChangeLog, MergeStatus
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Optional, Tuple, List
 import uuid
 import json
 from datetime import datetime
@@ -392,6 +393,27 @@ async def _map_production_entities(
                     prod_matches = matches[match.staging_node_id].production_matches
                     best_match = next((n for n in prod_matches if n.id == match.node_id), None)
                     matches[match.staging_node_id].best_match = best_match
+            
+            # For each staging node, use splink to find the best production match
+            for node_id, match_info in matches.items():
+                # Skip if we already have a best match from BAML
+                if match_info.best_match:
+                    continue
+                    
+                # Get the staging node and its production candidates
+                staging_node = next((n for n in staging_graph.nodes if n.id == node_id), None)
+                if not staging_node or not match_info.production_matches:
+                    continue
+                    
+                # Use splink to find the best match
+                best_match = await _find_best_production_match_with_splink(
+                    staging_node=staging_node,
+                    production_candidates=match_info.production_matches,
+                    ontology=ontology
+                )
+                
+                if best_match:
+                    matches[node_id].best_match = best_match
         
         duration_ms = (time.time() - start_time) * 1000
         logger.info(
@@ -409,6 +431,68 @@ async def _map_production_entities(
     except Exception as e:
         logger.error(f"Failed to map production entities: {str(e)}")
         raise
+
+async def _find_best_production_match_with_splink(
+    staging_node: Node,
+    production_candidates: List[Node],
+    ontology: Dict[str, Any],
+    threshold: float = 0.95
+) -> Optional[Node]:
+    """
+    Use splink deduplication to find the best matching production node for a staging node.
+    
+    Args:
+        staging_node: The staging node to find a match for
+        production_candidates: List of potential production node matches
+        ontology: The ontology definition
+        threshold: Match probability threshold (default: 0.95)
+        
+    Returns:
+        The best matching production node or None if no match found
+    """
+    if not production_candidates:
+        return None
+        
+    # Combine staging node with production candidates for deduplication
+    all_nodes = [staging_node] + production_candidates
+    
+    # Run splink deduplication
+    deduplicated_nodes, _ = await deduplicate_entities_with_splink(
+        entities=all_nodes,
+        threshold=threshold,
+        parsed_ontology=ontology
+    )
+    
+    # If the number of deduplicated nodes is less than the original count,
+    # it means some nodes were considered duplicates
+    if len(deduplicated_nodes) < len(all_nodes):
+        # Find which production node was merged with the staging node
+        staging_node_id = staging_node.id
+        
+        # Check if the staging node ID is still in the deduplicated results
+        staging_node_exists = any(node.id == staging_node_id for node in deduplicated_nodes)
+        
+        if not staging_node_exists:
+            # If staging node was merged with a production node, find which one
+            # by checking which production node is still in the results
+            for prod_node in production_candidates:
+                if any(node.id == prod_node.id for node in deduplicated_nodes):
+                    logger.info(f"Splink found match: staging node {staging_node_id} -> production node {prod_node.id}")
+                    return prod_node
+        else:
+            # If staging node still exists, check if any production nodes were removed
+            # (meaning they were considered duplicates of something else)
+            remaining_prod_ids = {node.id for node in deduplicated_nodes if node.id != staging_node_id}
+            removed_prod_ids = {node.id for node in production_candidates} - remaining_prod_ids
+            
+            if removed_prod_ids:
+                # Find the first production node that was removed (considered a duplicate)
+                for prod_node in production_candidates:
+                    if prod_node.id not in remaining_prod_ids:
+                        logger.info(f"Splink found match: staging node {staging_node_id} -> production node {prod_node.id}")
+                        return prod_node
+    
+    return None
 
 async def _get_prod_node(label: str, id: str) -> Node:
     storage = Neo4jStorage(
@@ -450,6 +534,7 @@ def _merge_nodes(staging_node: Node, prod_node: Node,
     # Keep existing prod properties not defined in the ontology (like system properties)
     merged_properties = {**prod_node.properties, **staging_props_relevant}
     merged_properties[VALID_FROM] = current_time_str
+    del merged_properties[VALID_TO]
     
     # Preserve original staging ID before modification
     old_staging_id = staging_node.id
@@ -848,7 +933,7 @@ async def _classify_changes(
         #get past resolutions
         past_resolutions = await get_past_resolution(ontology_id, entity_type)
         #get LLM response
-        changes = [_get_change_log_string(change_log) for change_log in change_logs]
+        changes = [_get_change_log_string(change_log) for change_log in change_logs if change_log.prop_changes]
         if not changes:
             high_conf_changes.extend(change_logs)
             continue

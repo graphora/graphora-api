@@ -101,7 +101,7 @@ async def _build_graph_from(
     
     # Step 5: Splink based Entity deduplication within an entity group using entities & 1 degree related entities
     nodes, relationships = await deduplicate_entities_with_splink(
-        nodes, relationships, parsed_ontology=ontology_parser.parsed_ontology)
+        entities=nodes, relationships=relationships, parsed_ontology=ontology_parser.parsed_ontology)
 
     # Step 6: Build graph from nodes and relationships.
     kg = DocumentKnowledgeGraph(nodes=nodes, relationships=relationships)

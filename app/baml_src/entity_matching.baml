@@ -100,7 +100,7 @@ function GetMatchingNodes(
         {{candidate_sets}}
 
         Guidelines:
-        1. Compare property values semantically
+        1. Compare property values semantically and they should be about the same thing
         2. Consider domain-specific matching rules
         3. Evaluate merge impact and risks
         4. Assess confidence in similarity

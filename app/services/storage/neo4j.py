@@ -197,6 +197,7 @@ class Neo4jStorage(GraphStorageInterface):
             node_alias = 'n'
             prop_names = [f'{node_alias}.{prop}' for prop in properties]
             query = f"CREATE FULLTEXT INDEX {index_name} FOR ({node_alias}:`{entity_name}`) ON EACH [{', '.join(prop_names)}];"
+            print(query)
             await session.run(query)
             
     async def create_or_replace_ft_index_for_relationship(
@@ -229,11 +230,66 @@ class Neo4jStorage(GraphStorageInterface):
                 FOR ()-[{rel_alias}:`{rel_name}`]->() 
                 ON EACH [{', '.join(prop_names)}];
                 """
+                print(query)
                 await session.run(query)
                 logger.info(f"Created full-text index {index_name} for relationship {rel_name}")
             except Exception as e:
                 logger.error(f"Error creating full-text index for relationship: {str(e)}")
                 # Don't raise the exception - we want to continue even if index creation fails
+
+    async def get_all_node_properties(
+        self,
+        entity_name: str
+    ) -> List[str]:
+        """
+        Get all properties of a node entity from the database.
+        
+        Args:
+            entity_name: Name of the entity to get properties for
+            
+        Returns:
+            List of property names, excluding system properties
+        """
+        async with self._get_session() as session:
+            try:
+                query = f"MATCH (n:`{entity_name}`) RETURN keys(n) as props LIMIT 1"
+                result = await session.run(query)
+                record = await result.single(None)
+                if record:
+                    # Get all properties excluding system properties
+                    all_props = record["props"]
+                    return [prop for prop in all_props if prop not in SYSTEM_PROPERTIES]
+                return []
+            except Exception as e:
+                logger.error(f"Error getting node properties for {entity_name}: {str(e)}")
+                return []
+                
+    async def get_all_relationship_properties(
+        self,
+        rel_name: str
+    ) -> List[str]:
+        """
+        Get all properties of a relationship type from the database.
+        
+        Args:
+            rel_name: Name of the relationship type to get properties for
+            
+        Returns:
+            List of property names, excluding system properties
+        """
+        async with self._get_session() as session:
+            try:
+                query = f"MATCH ()-[r:`{rel_name}`]->() RETURN keys(r) as props LIMIT 1"
+                result = await session.run(query)
+                record = await result.single(None)
+                if record:
+                    # Get all properties excluding system properties
+                    all_props = record["props"]
+                    return [prop for prop in all_props if prop not in SYSTEM_PROPERTIES]
+                return []
+            except Exception as e:
+                logger.error(f"Error getting relationship properties for {rel_name}: {str(e)}")
+                return []
 
     async def store_nodes(
         self,
@@ -1639,17 +1695,21 @@ class Neo4jStorage(GraphStorageInterface):
                 if isinstance(value, (list, dict)):
                     continue
                     
-                # Convert to string and escape quotes
-                value_str = str(value).replace('"', '\\"')
+                # Convert to string and escape special Lucene characters
+                value_str = str(value)
+                # Escape special Lucene characters: + - && || ! ( ) { } [ ] ^ " ~ * ? : \ /
+                lucene_special_chars = ['+', '-', '&', '|', '!', '(', ')', '{', '}', '[', ']', '^', '"', '~', '*', '?', ':', '\\', '/']
+                for char in lucene_special_chars:
+                    value_str = value_str.replace(char, f"\\{char}")
                 
                 # Try different search approaches
                 search_queries = [
                     # Exact match - use double quotes to handle spaces
                     f"{key}:\"{value_str}\"",
-                    # Prefix match with first word only
-                    f"{key}:{value_str.split()[0]}*" if value_str.split() else "",
-                    # Fuzzy match with first word only
-                    f"{key}:{value_str.split()[0]}~0.7" if value_str.split() else ""
+                    # Prefix match with first word only (only if no special chars)
+                    f"{key}:{value_str.split()[0]}*" if value_str.split() and '*' not in value_str.split()[0] else "",
+                    # Fuzzy match with first word only (only if no special chars)
+                    f"{key}:{value_str.split()[0]}~0.7" if value_str.split() and '~' not in value_str.split()[0] else ""
                 ]
                 
                 for search_query in search_queries:

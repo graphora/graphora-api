@@ -92,6 +92,38 @@ class GraphStorageInterface(ABC):
         pass
     
     @abstractmethod
+    async def get_all_node_properties(
+        self,
+        entity_name: str
+    ) -> List[str]:
+        """
+        Get all properties of a node entity from the database.
+        
+        Args:
+            entity_name: Name of the entity to get properties for
+            
+        Returns:
+            List of property names, excluding system properties
+        """
+        pass
+    
+    @abstractmethod
+    async def get_all_relationship_properties(
+        self,
+        rel_name: str
+    ) -> List[str]:
+        """
+        Get all properties of a relationship type from the database.
+        
+        Args:
+            rel_name: Name of the relationship type to get properties for
+            
+        Returns:
+            List of property names, excluding system properties
+        """
+        pass
+    
+    @abstractmethod
     async def get_nodes_by_property(
         self,
         property_name: str,
