@@ -1,6 +1,7 @@
 """API endpoints for merge operations"""
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+from app.baml_client.types import ResolutionStrategy
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 import logging
 import uuid
@@ -124,6 +125,7 @@ async def resolve_conflict(
     merge_id: str,
     conflict_id: str,
     changed_props: Dict[str, Any],
+    resolution: ResolutionStrategy,
     learning_comment: str
 ) -> bool:
     """
@@ -132,14 +134,15 @@ async def resolve_conflict(
     Parameters:
     - merge_id: ID of the merge process
     - conflict_id: ID of the conflict to resolve
-    - changed_props: Properties to update
+    - changed_props: Properties that were changed
+    - resolution: The resolution decision
     - learning_comment: Comment on the resolution
     
     Returns:
     - True if the resolution was applied successfully, False otherwise
     """
     try:
-        return await apply_resolution(merge_id, conflict_id, changed_props, learning_comment)
+        return await apply_resolution(merge_id, conflict_id, changed_props, resolution, learning_comment)
         
     except Exception as e:
         traceback.print_exc()

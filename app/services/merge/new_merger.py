@@ -1,3 +1,4 @@
+from app.baml_client.types import ResolutionStrategy
 from app.services.transform.helpers import deduplicate_entities_with_splink
 from prefect import flow, task
 from app.services.storage.interface import GraphStorageInterface
@@ -166,14 +167,17 @@ def get_human_review_items(merge_id: str) -> List[ChangeLog]:
         ))
     return change_logs
 
-async def apply_resolution(merge_id: str, change_log_id: str, resolution_data: Dict[str, Any], learning_comment: str) -> bool:
+async def apply_resolution(
+    merge_id: str, change_log_id: str, 
+    resolved_props: Dict[str, Any], resolution: ResolutionStrategy, 
+    learning_comment: str) -> bool:
     """
     Apply a resolution to a conflict and save the learning for future reference.
     
     Args:
         merge_id: ID of the merge process
         change_log_id: ID of the conflict to resolve
-        resolution_data: Properties to update
+        resolution: The resolution decision : resolved properties
         learning_comment: Comment on the resolution
         
     Returns:
@@ -194,21 +198,16 @@ async def apply_resolution(merge_id: str, change_log_id: str, resolution_data: D
         # Save resolution for future learning
         save_resolution(
             merge_id=merge_id,
+            change_log_id=change_log_id,
             ontology_id=ontology_id,
             node_id=conflict_data['node_id'],
             node_type=conflict_data['node_type'],
             previous_props=conflict_data['previous_props'],
-            changed_props=resolution_data,
+            changed_props=conflict_data['changed_props'],
+            resolved_props=resolved_props,
+            resolution=resolution,
             learning_comment=learning_comment
         )
-        
-        # Update the change log
-        supabase.table("change_logs").update(
-            {
-                "need_human_review": False,
-                "changed_props": resolution_data
-            }
-        ).eq("merge_id", merge_id).eq("id", change_log_id).execute()
 
         # Check if all conflicts are resolved
         unresolved_conflicts = supabase.table("change_logs").select("*").eq("merge_id", merge_id).eq("need_human_review", True).execute()
@@ -534,7 +533,8 @@ def _merge_nodes(staging_node: Node, prod_node: Node,
     # Keep existing prod properties not defined in the ontology (like system properties)
     merged_properties = {**prod_node.properties, **staging_props_relevant}
     merged_properties[VALID_FROM] = current_time_str
-    del merged_properties[VALID_TO]
+    if VALID_TO in merged_properties:
+        del merged_properties[VALID_TO]
     
     # Preserve original staging ID before modification
     old_staging_id = staging_node.id
@@ -756,7 +756,7 @@ async def _get_prod_graph(merge_id: str) -> GraphResponse:
     return await storage.get_merge_data(merge_id)
 
 async def get_past_resolution(ontology_id: str, node_type: str) -> str:
-    response = supabase.table("resolutions").select("*").eq("ontology_id", ontology_id).eq("node_type", node_type).execute()
+    response = supabase.table("resolutions").select("*").eq("node_type", node_type).execute()
     if not response.data:
         return "None"
     learnings = []
@@ -764,9 +764,11 @@ async def get_past_resolution(ontology_id: str, node_type: str) -> str:
     for log in response.data:
         learning = f"""
         Learning {i}:
-            Before Merge: {log['previous_props']}
-            After Merge: {log['changed_props']}
-            User Comment: {log['learning_comment']}
+            Existing Properties (Production): {log['previous_props']}
+            Incoming Properties (Staging): {log['changed_props']}
+            Resolution by the User: {log['resolved_props']}
+            Resolution Strategy: {"Keep Incoming Properties" if log['resolution'] == ResolutionStrategy.KEEP_BOTH.value else ResolutionStrategy(log['resolution']).value}
+            User Comment (rationale): {log['learning_comment']}
         """
         learnings.append(learning)
         i += 1
@@ -774,18 +776,21 @@ async def get_past_resolution(ontology_id: str, node_type: str) -> str:
 
 def save_change_log(merge_id, change_log, need_human_review: bool = False):
     supabase.table("change_logs").insert(
-                {
-                    "merge_id": merge_id,
-                    "node_id": change_log.staging_node.id,
-                    "prod_node_id": change_log.prod_node.id,
-                    "node_type": change_log.staging_node.type,
-                    "previous_props": change_log.prod_node.properties,
-                    "changed_props": {k: v[0] for k, v in change_log.prop_changes.items()},
-                    "need_human_review": need_human_review
-                }
-            ).execute()
+        {
+            "merge_id": merge_id,
+            "node_id": change_log.staging_node.id,
+            "prod_node_id": change_log.prod_node.id,
+            "node_type": change_log.staging_node.type,
+            "previous_props": change_log.prod_node.properties,
+            "changed_props": {k: v[0] for k, v in change_log.prop_changes.items()},
+            "need_human_review": need_human_review
+        }
+    ).execute()
     
-def save_resolution(merge_id: str, ontology_id: str, node_id: str, node_type: str, previous_props: Dict, changed_props: Dict, learning_comment: str):
+def save_resolution(
+    merge_id: str, change_log_id: str, ontology_id: str, 
+    node_id: str, node_type: str, previous_props: Dict, 
+    changed_props: Dict, resolved_props: Dict, resolution: ResolutionStrategy, learning_comment: str):
     """
     Save a resolution to the resolutions table for future reference.
     
@@ -796,6 +801,7 @@ def save_resolution(merge_id: str, ontology_id: str, node_id: str, node_type: st
         node_type: Type of the node
         previous_props: Properties before the merge
         changed_props: Properties after the merge
+        resolution: The resolution decision
         learning_comment: User comment about the resolution decision
     """
     logger.info(f"Saving resolution for node {node_id} of type {node_type}")
@@ -806,20 +812,25 @@ def save_resolution(merge_id: str, ontology_id: str, node_id: str, node_type: st
                 "node_type": node_type,
                 "previous_props": previous_props,
                 "changed_props": changed_props,
+                "resolved_props": resolved_props,
+                "resolution": resolution.value,
                 "learning_comment": learning_comment
             }
         ).execute()
         
-        # Also update the change_log to mark it as resolved
+        # Update the change log
         supabase.table("change_logs").update(
             {
-                "need_human_review": False
+                "need_human_review": False,
+                "changed_props": {} if resolution == ResolutionStrategy.KEEP_BOTH else resolved_props
             }
         ).eq("merge_id", merge_id).eq("id", change_log_id).execute()
         
         logger.info(f"Successfully saved resolution for node {node_id}")
     except Exception as e:
         logger.error(f"Failed to save resolution: {str(e)}")
+        traceback.print_exc()
+        
 
 def _start_merge_status(merge_id, transform_id, ontology_id):
     supabase.table("merge_status").insert(
@@ -872,6 +883,8 @@ async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, 
                     if isinstance(change_log['changed_props'], str):
                         # Handle the case where properties are stored as JSON string
                         try:
+                            if change_log['changed_props'] == "{}":
+                                continue
                             resolved_props = json.loads(change_log['changed_props'])
                             staging_node.properties.update(resolved_props)
                         except json.JSONDecodeError:
@@ -912,7 +925,7 @@ def _group_changes_by_entity_type(change_logs: List[ChangeLog]) -> Dict[str, Lis
 def _get_change_log_string(change_log: ChangeLog) -> str:
     changes = "\n".join([f"{k}: {v[1]} -> {v[0]}" for k, v in change_log.prop_changes.items()])
     return f"""
-    Changes (old prop -> new prop; one per line):
+    Changes (Existing properties [production] -> Incoming properties [staging]; one per line):
     <id>{change_log.id}</id>
     <changes>
     {changes}

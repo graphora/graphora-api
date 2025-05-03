@@ -4,7 +4,10 @@ CREATE TABLE resolutions (
     node_type TEXT NOT NULL,
     previous_props JSONB NOT NULL,
     changed_props JSONB NOT NULL,
-    learning_comment TEXT NOT NULL
+    resolved_props JSONB NOT NULL,
+    resolution TEXT NOT NULL,
+    learning_comment TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE change_logs (
