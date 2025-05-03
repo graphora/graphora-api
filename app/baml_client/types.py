@@ -41,10 +41,10 @@ def all_succeeded(checks: Dict[CheckName, Check]) -> bool:
 
 
 class ResolutionStrategy(str, Enum):
-    
-    KEEP_STAGING = "KEEP_STAGING"
-    KEEP_PRODUCTION = "KEEP_PRODUCTION"
-    MERGE_VALUES = "MERGE_VALUES"
+    KEEP_STAGING = "staging"
+    KEEP_PRODUCTION = "production"
+    CUSTOM = "custom"
+    KEEP_BOTH = "both"
 
 class ChangeResult(BaseModel):
     id: str

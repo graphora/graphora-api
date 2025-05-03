@@ -1,6 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Literal, Union
-from uuid import UUID
+from typing import List, Dict, Any, Optional, Literal
 
 class NodeCreation(BaseModel):
     """Model for creating new nodes"""
