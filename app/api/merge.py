@@ -157,12 +157,12 @@ async def resolve_conflict(
     response_model=Dict[str, Any],
     description="Get detailed statistics of a merge operation"
 )
-async def get_merge_statistics(
+async def get_merge_statistics_api(
     merge_id: str
 ) -> Dict[str, Any]:
     """Get detailed statistics of a merge operation"""
     try:
-        statistics = get_merge_statistics(merge_id)
+        statistics = await get_merge_statistics(merge_id)
         if not statistics:
             raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
         return statistics

@@ -219,7 +219,7 @@ async def apply_resolution(
         return True
     return False
 
-def get_merge_statistics(merge_id: str) -> Dict[str, Any]:
+async def get_merge_statistics(merge_id: str) -> Dict[str, Any]:
     merge_status = supabase.table("merge_status").select("statistics").eq("merge_id", merge_id).execute()
     return merge_status.data[0]['statistics']
 
