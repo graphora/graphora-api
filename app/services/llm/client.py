@@ -68,12 +68,14 @@ class LLMClient:
         ```
         {context}
         ```
-
-        Remember:
+        
+        <rules>
+        - For name fields, sometimes names may be written as `LASTNAME, FIRSTNAME`. So interpret accordingly
         - Only extract information that is explicitly present in the text
         - Set confidence scores based on certainty of extraction
         - Include all required fields for each node
         - Omit optional fields if information is not clearly present
+        </rules>
         """
         response = client.models.generate_content(model=model_id, 
                                                   contents=[file, prompt], 
