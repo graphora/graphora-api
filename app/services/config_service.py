@@ -21,12 +21,12 @@ class ConfigService:
             settings.SUPABASE_KEY
         )
     
-    async def get_user_config(self, user_email: str) -> Optional[UserConfig]:
+    async def get_user_config(self, user_id: str) -> Optional[UserConfig]:
         """
-        Retrieve user configuration by email
+        Retrieve user configuration by user ID
         
         Args:
-            user_email: User's email address
+            user_id: User's ID
             
         Returns:
             UserConfig if found, None otherwise
@@ -36,16 +36,16 @@ class ConfigService:
             response = self.supabase.table('configs').select(
                 '''
                 id,
-                user_email,
+                user_id,
                 created_at,
                 updated_at,
                 staging_db:staging_db_id(id, name, uri, username, password),
                 prod_db:prod_db_id(id, name, uri, username, password)
                 '''
-            ).eq('user_email', user_email).execute()
+            ).eq('user_id', user_id).execute()
             
             if not response.data:
-                logger.info(f"No configuration found for user: {user_email}")
+                logger.info(f"No configuration found for user: {user_id}")
                 return None
             
             config_data = response.data[0]
@@ -53,7 +53,7 @@ class ConfigService:
             # Convert to UserConfig schema
             user_config = UserConfig(
                 id=config_data['id'],
-                userEmail=config_data['user_email'],
+                userEmail=config_data['user_id'],  # Map user_id to userEmail for compatibility
                 stagingDb=DatabaseConfig(
                     id=config_data['staging_db']['id'],
                     name=config_data['staging_db']['name'],
@@ -72,11 +72,11 @@ class ConfigService:
                 updatedAt=datetime.fromisoformat(config_data['updated_at'].replace('Z', '+00:00'))
             )
             
-            logger.info(f"Retrieved configuration for user: {user_email}")
+            logger.info(f"Retrieved configuration for user: {user_id}")
             return user_config
             
         except Exception as e:
-            logger.error(f"Error retrieving user config for {user_email}: {str(e)}")
+            logger.error(f"Error retrieving user config for {user_id}: {str(e)}")
             raise
     
     async def create_user_config(self, config_request: ConfigRequest) -> UserConfig:
@@ -90,10 +90,12 @@ class ConfigService:
             Created UserConfig
         """
         try:
+            user_id = config_request.userEmail  # userEmail field contains user_id
+            
             # Check if user already has a configuration
-            existing_config = await self.get_user_config(config_request.userEmail)
+            existing_config = await self.get_user_config(user_id)
             if existing_config:
-                raise ValueError(f"Configuration already exists for user: {config_request.userEmail}")
+                raise ValueError(f"Configuration already exists for user: {user_id}")
             
             # Create staging database config
             staging_db_id = str(uuid.uuid4())
@@ -125,7 +127,7 @@ class ConfigService:
             config_id = str(uuid.uuid4())
             config_response = self.supabase.table('configs').insert({
                 'id': config_id,
-                'user_email': config_request.userEmail,
+                'user_id': user_id,
                 'staging_db_id': staging_db_id,
                 'prod_db_id': prod_db_id
             }).execute()
@@ -134,11 +136,11 @@ class ConfigService:
                 raise Exception("Failed to create user configuration")
             
             # Return the created configuration
-            created_config = await self.get_user_config(config_request.userEmail)
+            created_config = await self.get_user_config(user_id)
             if not created_config:
                 raise Exception("Failed to retrieve created configuration")
             
-            logger.info(f"Created configuration for user: {config_request.userEmail}")
+            logger.info(f"Created configuration for user: {user_id}")
             return created_config
             
         except Exception as e:
@@ -156,10 +158,12 @@ class ConfigService:
             Updated UserConfig
         """
         try:
+            user_id = config_request.userEmail  # userEmail field contains user_id
+            
             # Get existing configuration
-            existing_config = await self.get_user_config(config_request.userEmail)
+            existing_config = await self.get_user_config(user_id)
             if not existing_config:
-                raise ValueError(f"No configuration found for user: {config_request.userEmail}")
+                raise ValueError(f"No configuration found for user: {user_id}")
             
             # Update staging database config
             staging_db_response = self.supabase.table('database_configs').update({
@@ -194,32 +198,32 @@ class ConfigService:
                 raise Exception("Failed to update user configuration timestamp")
             
             # Return the updated configuration
-            updated_config = await self.get_user_config(config_request.userEmail)
+            updated_config = await self.get_user_config(user_id)
             if not updated_config:
                 raise Exception("Failed to retrieve updated configuration")
             
-            logger.info(f"Updated configuration for user: {config_request.userEmail}")
+            logger.info(f"Updated configuration for user: {user_id}")
             return updated_config
             
         except Exception as e:
             logger.error(f"Error updating user config for {config_request.userEmail}: {str(e)}")
             raise
     
-    async def delete_user_config(self, user_email: str) -> bool:
+    async def delete_user_config(self, user_id: str) -> bool:
         """
         Delete a user configuration
         
         Args:
-            user_email: User's email address
+            user_id: User's ID
             
         Returns:
             True if deleted successfully
         """
         try:
             # Get existing configuration
-            existing_config = await self.get_user_config(user_email)
+            existing_config = await self.get_user_config(user_id)
             if not existing_config:
-                logger.info(f"No configuration found to delete for user: {user_email}")
+                logger.info(f"No configuration found to delete for user: {user_id}")
                 return True
             
             # Delete user config (this should cascade to database configs if foreign keys are set up properly)
@@ -229,11 +233,11 @@ class ConfigService:
             self.supabase.table('database_configs').delete().eq('id', existing_config.stagingDb.id).execute()
             self.supabase.table('database_configs').delete().eq('id', existing_config.prodDb.id).execute()
             
-            logger.info(f"Deleted configuration for user: {user_email}")
+            logger.info(f"Deleted configuration for user: {user_id}")
             return True
             
         except Exception as e:
-            logger.error(f"Error deleting user config for {user_email}: {str(e)}")
+            logger.error(f"Error deleting user config for {user_id}: {str(e)}")
             raise
 
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Header
 from fastapi.responses import JSONResponse
 from typing import Optional
 import traceback
@@ -20,13 +20,13 @@ router = APIRouter(prefix=settings.API_V1_STR, tags=["Configuration"])
 
 @router.get("/config", response_model=UserConfig)
 async def get_user_config(
-    email: str = Query(..., description="User's email address")
+    user_id: str = Header(..., alias="user-id", description="User's ID")
 ) -> UserConfig:
     """
-    Get user configuration by email
+    Get user configuration by user ID
     
     Args:
-        email: User's email address
+        user_id: User's ID (from header)
         
     Returns:
         UserConfig: User's database configuration
@@ -35,12 +35,12 @@ async def get_user_config(
         HTTPException: 404 if configuration not found
     """
     try:
-        user_config = await config_service.get_user_config(email)
+        user_config = await config_service.get_user_config(user_id)
         
         if not user_config:
             raise HTTPException(
                 status_code=404,
-                detail=f"Configuration not found for user: {email}"
+                detail=f"Configuration not found for user: {user_id}"
             )
         
         return user_config
@@ -48,7 +48,7 @@ async def get_user_config(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error retrieving configuration for {email}: {str(e)}")
+        logger.error(f"Error retrieving configuration for {user_id}: {str(e)}")
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -62,7 +62,7 @@ async def create_user_config(config_request: ConfigRequest) -> UserConfig:
     Create a new user configuration
     
     Args:
-        config_request: Configuration data
+        config_request: Configuration data (userEmail field contains user_id)
         
     Returns:
         UserConfig: Created configuration
@@ -102,7 +102,7 @@ async def update_user_config(config_request: ConfigRequest) -> UserConfig:
     Update an existing user configuration
     
     Args:
-        config_request: Updated configuration data
+        config_request: Updated configuration data (userEmail field contains user_id)
         
     Returns:
         UserConfig: Updated configuration
@@ -138,26 +138,26 @@ async def update_user_config(config_request: ConfigRequest) -> UserConfig:
 
 @router.delete("/config")
 async def delete_user_config(
-    email: str = Query(..., description="User's email address")
+    user_id: str = Header(..., alias="user-id", description="User's ID")
 ) -> JSONResponse:
     """
     Delete a user configuration
     
     Args:
-        email: User's email address
+        user_id: User's ID (from header)
         
     Returns:
         JSONResponse: Success message
     """
     try:
-        await config_service.delete_user_config(email)
+        await config_service.delete_user_config(user_id)
         return JSONResponse(
-            content={"message": f"Configuration deleted for user: {email}"},
+            content={"message": f"Configuration deleted for user: {user_id}"},
             status_code=200
         )
         
     except Exception as e:
-        logger.error(f"Error deleting configuration for {email}: {str(e)}")
+        logger.error(f"Error deleting configuration for {user_id}: {str(e)}")
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
