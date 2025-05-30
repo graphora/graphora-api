@@ -30,24 +30,6 @@ class Settings(BaseSettings):
         description="Directory for storing ontologies"
     )
     
-    # Neo4j Settings
-    NEO4J_URI: str = Field(
-        default="bolt://localhost:7687",
-        description="Neo4j database connection URI"
-    )
-    NEO4J_USER: str = Field(
-        default="neo4j",
-        description="Neo4j database username"
-    )
-    NEO4J_PASSWORD: str = Field(
-        default="password",
-        description="Neo4j database password"
-    )
-    NEO4J_DB: str = Field(
-        default="neo4j",
-        description="Neo4j database name"
-    )
-    
     # Storage Settings
     STORAGE_BATCH_SIZE: int = Field(
         default=1000,
@@ -56,24 +38,6 @@ class Settings(BaseSettings):
     STORAGE_RETRIES: int = Field(
         default=3,
         description="Number of retries for storage task"
-    )
-    
-    # Staging Neo4j Settings
-    STAGING_NEO4J_URI: str = Field(
-        default="bolt://localhost:7687",
-        description="Neo4j staging database URI"
-    )
-    STAGING_NEO4J_USER: str = Field(
-        default="neo4j",
-        description="Neo4j staging database username"
-    )
-    STAGING_NEO4J_PASSWORD: str = Field(
-        default="",
-        description="Neo4j staging database password"
-    )
-    STAGING_NEO4J_DATABASE: str = Field(
-        default="neo4j",
-        description="Neo4j staging database name"
     )
 
     # PDF Processor Settings
@@ -348,9 +312,6 @@ def get_settings() -> Settings:
         settings = Settings()
         if not settings.DEEPSEEK_API_KEY and not settings.OPENAI_API_KEY and not settings.ANTHROPIC_API_KEY and not settings.GOOGLE_GEMINI_API_KEY and not settings.VERTEXAI_PROJECT_ID:
             print("Warning: DEEPSEEK_API_KEY/OPENAI_API_KEY/ANTHROPIC_API_KEY/GOOGLE_GEMINI_API_KEY/VERTEXAI_PROJECT_ID not set")
-        if not all([settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD, 
-                    settings.STAGING_NEO4J_URI, settings.STAGING_NEO4J_USER, settings.STAGING_NEO4J_PASSWORD]):
-            raise ValueError("Required Neo4j settings are missing")
         print(f"Loaded settings from environment with LOG_LEVEL={settings.LOG_LEVEL}")
         return settings
     except Exception as e:

@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS database_configs (
 -- Create configs table
 CREATE TABLE IF NOT EXISTS configs (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    user_email VARCHAR(255) NOT NULL UNIQUE,
+    user_id VARCHAR(255) NOT NULL UNIQUE,
     staging_db_id UUID NOT NULL REFERENCES database_configs(id) ON DELETE CASCADE,
     prod_db_id UUID NOT NULL REFERENCES database_configs(id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS configs (
 );
 
 -- Create indexes for performance
-CREATE INDEX IF NOT EXISTS idx_configs_user_email ON configs(user_email);
+CREATE INDEX IF NOT EXISTS idx_configs_user_id ON configs(user_id);
 CREATE INDEX IF NOT EXISTS idx_database_configs_uri ON database_configs(uri);
 CREATE INDEX IF NOT EXISTS idx_configs_staging_db ON configs(staging_db_id);
 CREATE INDEX IF NOT EXISTS idx_configs_prod_db ON configs(prod_db_id);
@@ -55,7 +55,7 @@ CREATE TRIGGER update_configs_updated_at
 
 -- Example RLS policy (uncomment if you want to restrict access by user)
 -- CREATE POLICY "Users can only access their own configs" ON configs
---     FOR ALL USING (user_email = auth.email());
+--     FOR ALL USING (user_id = auth.uid()::text);
 
 -- Grant necessary permissions (adjust as needed for your setup)
 -- GRANT ALL ON configs TO authenticated;

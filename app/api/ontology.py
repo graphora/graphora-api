@@ -1,6 +1,6 @@
 import traceback
 from app.services.transform.ontology_helper import OntologyParser
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from uuid import uuid4
 import yaml
 import os
@@ -8,6 +8,7 @@ from pathlib import Path
 from app.config import settings
 from app.schemas.ontology import OntologyRequest, OntologyResponse
 from app.services.ontology_validator import parse_and_validate_yaml, OntologyValidationError
+from app.services.user_db_service import UserDatabaseService
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Ontology"])
 
@@ -16,12 +17,16 @@ def ensure_ontology_dir():
     Path(settings.ontology_dir).expanduser().mkdir(parents=True, exist_ok=True)
 
 @router.post("/ontology", response_model=OntologyResponse)
-async def validate_ontology(request: OntologyRequest) -> OntologyResponse:
+async def validate_ontology(
+    request: OntologyRequest,
+    user_id: str = Header(..., alias="user-id", description="User's ID")
+) -> OntologyResponse:
     """
     Validate and process ontology YAML.
     
     Parameters:
-    - text: String containing ontology definition in YAML format
+    - request: Ontology request containing YAML text
+    - user_id: User's ID (from header)
     
     Returns:
     - id: Unique ID for the validated ontology
@@ -42,7 +47,14 @@ async def validate_ontology(request: OntologyRequest) -> OntologyResponse:
             f.write(request.text)
             
         # Create Full Text Indexes for entities defined in Ontology
-        await OntologyParser(ontology_path).build_full_text_indexes()
+        # Use user's specific database configurations
+        try:
+            await OntologyParser(ontology_path).build_full_text_indexes_for_user(user_id)
+        except ValueError as db_error:
+            # User doesn't have database configuration set up yet
+            # This is okay - we can still validate and save the ontology
+            # The indexes will be created when the user sets up their databases
+            print(f"Warning: Could not create full-text indexes for user {user_id}: {str(db_error)}")
         
         return OntologyResponse(id=ontology_id)
         
@@ -50,6 +62,17 @@ async def validate_ontology(request: OntologyRequest) -> OntologyResponse:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid ontology: {str(e)}"
+        )
+    except ValueError as e:
+        # Check if this is a database configuration error
+        if "Database configuration not found" in str(e):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Please configure your Neo4j databases first before creating ontologies. {str(e)}"
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
         )
     except Exception as e:
         traceback.print_exc()

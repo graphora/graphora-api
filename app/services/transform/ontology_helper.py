@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Union
 from app.config import settings
 from app.services.storage.neo4j import Neo4jStorage
+from app.services.user_db_service import UserDatabaseService
 
 class OntologyParser:
     """Parser for YAML ontology definitions"""
@@ -237,6 +238,84 @@ class OntologyParser:
             username=settings.NEO4J_USER,
             password=settings.NEO4J_PASSWORD,
             database=settings.NEO4J_DB
+        )
+        
+        for entity_name, entity_def in self.parsed_ontology['entities'].items():
+            # Create full text index for entity
+            index_name = get_full_text_index_name(entity_name)
+            
+            # Get properties from ontology
+            ontology_props = entity_def.get('properties', {})
+            ontology_prop_names = [f'{prop}' for prop in ontology_props.keys()]
+            
+            # Try to get all properties from the database
+            try:
+                staging_props = await staging_storage.get_all_node_properties(entity_name)
+                # Combine ontology properties with properties found in the database
+                prop_names = list(set(ontology_prop_names + staging_props))
+            except Exception as e:
+                # If we can't get properties from the database, use ontology properties
+                prop_names = ontology_prop_names
+            
+            # If we still don't have any properties, skip this entity
+            if not prop_names:
+                continue
+                
+            # Create indexes in both environments
+            await staging_storage.create_or_replace_ft_index_for_node(index_name, entity_name, prop_names)
+            await prod_storage.create_or_replace_ft_index_for_node(index_name, entity_name, prop_names)
+            
+        # Create full text index for relationships
+        for source_name, rels in self.parsed_ontology['entities'].items():
+            for rel_name, rel_def in rels.get('relationships', {}).items():
+                target_name = rel_def.get('target', None)
+                if not target_name:
+                    continue
+                    
+                index_name = get_full_text_index_name(f"{source_name}_{rel_name}_{target_name}")
+                
+                # Get properties from ontology
+                ontology_props = rel_def.get('properties', {})
+                ontology_prop_names = [f'{prop}' for prop in ontology_props.keys()]
+                
+                # Try to get all properties from the database
+                try:
+                    staging_rel_props = await staging_storage.get_all_relationship_properties(rel_name)
+                    # Combine ontology properties with properties found in the database
+                    prop_names = list(set(ontology_prop_names + staging_rel_props))
+                except Exception as e:
+                    # If we can't get properties from the database, use ontology properties
+                    prop_names = ontology_prop_names
+                
+                # If we still don't have any properties, skip this relationship
+                if not prop_names:
+                    continue
+                    
+                # Create indexes in both environments
+                await staging_storage.create_or_replace_ft_index_for_relationship(
+                    index_name, source_name, rel_name, target_name, prop_names
+                )
+                await prod_storage.create_or_replace_ft_index_for_relationship(
+                    index_name, source_name, rel_name, target_name, prop_names
+                )
+
+    async def build_full_text_indexes_for_user(self, user_id: str) -> None:
+        """Build full text indexes for all entities and relationships defined in the ontology for a specific user."""
+        # Get user's database configurations
+        user_config = await UserDatabaseService.get_user_config(user_id)
+        
+        # Create storage instances for user's databases
+        staging_storage = Neo4jStorage(
+            uri=user_config.stagingDb.uri,
+            username=user_config.stagingDb.username,
+            password=user_config.stagingDb.password,
+            database="neo4j"  # Default database name
+        )
+        prod_storage = Neo4jStorage(
+            uri=user_config.prodDb.uri,
+            username=user_config.prodDb.username,
+            password=user_config.prodDb.password,
+            database="neo4j"  # Default database name
         )
         
         for entity_name, entity_def in self.parsed_ontology['entities'].items():

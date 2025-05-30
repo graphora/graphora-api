@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, UploadFile, HTTPException, Request, BackgroundTasks
+from fastapi import APIRouter, File, UploadFile, HTTPException, Request, BackgroundTasks, Query, Header
 from typing import List
 import aiofiles
 import uuid
@@ -28,25 +28,27 @@ async def run_transform_flow(
     transform_id: str,
     ontology_id: str,
     file_paths: List[Path],
-    metadata: List[DocumentMetadata]
+    metadata: List[DocumentMetadata],
+    user_id: str
 ):
-    """Run the transform flow asynchronously"""
+    """Run the transform flow asynchronously with user context"""
     try:
         # Convert Path objects to strings
         file_paths_str = [str(path) for path in file_paths]
         
-        # Run the flow
+        # Run the flow with user ID context (transforms use staging database)
         flow_state = await document_transformation_flow(
             transform_id=transform_id,
             ontology_id=ontology_id,
             file_paths=file_paths_str,
-            metadata=metadata
+            metadata=metadata,
+            user_id=user_id  # Pass user ID to the flow
         )
         
-        logger.info(f"Started flow run with state: {flow_state}")
+        logger.info(f"Started transform flow for user {user_id} with state: {flow_state}")
             
     except Exception as e:
-        logger.error(f"Failed to start flow run: {str(e)}")
+        logger.error(f"Failed to start transform flow for user {user_id}: {str(e)}")
         raise
 
 @router.post("/transform/{ontology_id}/upload", response_model=TransformInitResponse)
@@ -54,6 +56,7 @@ async def upload_documents(
     request: Request,
     background_tasks: BackgroundTasks,
     ontology_id: str,
+    user_id: str = Header(..., alias="user-id", description="User's ID"),
     files: List[UploadFile] = File(...)
 ) -> TransformInitResponse:
     """
@@ -63,6 +66,7 @@ async def upload_documents(
         request: FastAPI request object
         background_tasks: FastAPI background tasks
         ontology_id: Ontology ID to use for transformation
+        user_id: User's ID (from header)
         files: List of files to process
         
     Returns:
@@ -70,6 +74,8 @@ async def upload_documents(
     """
     temp_dir = Path(settings.UPLOAD_DIR)
     try:
+        logger.info(f"Starting document upload for user: {user_id}")
+        
         # Generate transform ID
         transform_id = f"transform_{uuid.uuid4().hex}"
         
@@ -81,7 +87,7 @@ async def upload_documents(
         temp_dir = Path(settings.UPLOAD_DIR) / transform_id
         temp_dir.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"Created transform TMP directory {temp_dir}")
+        logger.info(f"Created transform TMP directory {temp_dir} for user {user_id}")
         
         file_paths = []
         doc_metadata = []
@@ -89,7 +95,7 @@ async def upload_documents(
         for file in files:
             # Validate file
             validation_result = await validator.validate(file)
-            logger.info(f"Validated file {file.filename}: {validation_result}")
+            logger.info(f"Validated file {file.filename} for user {user_id}: {validation_result}")
             if not validation_result.is_valid:
                 raise HTTPException(
                     status_code=400,
@@ -104,16 +110,16 @@ async def upload_documents(
                 await f.write(content)
             
             file_paths.append(temp_path)
-            logger.info(f"File saved to TMP directory {temp_path}")
+            logger.info(f"File saved to TMP directory {temp_path} for user {user_id}")
             
             # Create metadata
             metadata = DocumentMetadata(
                 source=file.filename,
                 document_type=DocumentType(Path(file.filename).suffix[1:]),
-                tags=[ontology_id]
+                tags=[ontology_id, user_id]  # Add user ID to tags
             )
             doc_metadata.append(metadata)
-            logger.info(f"Created document metadata {metadata}")
+            logger.info(f"Created document metadata for user {user_id}: {metadata}")
             
             # Create document info for response
             doc_info = DocumentInfo(
@@ -128,14 +134,17 @@ async def upload_documents(
             TransformationStage.UPLOAD
         )
         
-        # Start Prefect flow in background
+        # Start Prefect flow in background with user context
         background_tasks.add_task(
             run_transform_flow,
             transform_id=transform_id,
             ontology_id=ontology_id,
             file_paths=file_paths,
-            metadata=doc_metadata
+            metadata=doc_metadata,
+            user_id=user_id
         )
+        
+        logger.info(f"Started transformation flow for user {user_id} with transform_id: {transform_id}")
         
         return TransformInitResponse(
             id=transform_id,
@@ -145,7 +154,7 @@ async def upload_documents(
         )
         
     except Exception as e:
-        logger.error(f"Upload failed: {str(e)}")
+        logger.error(f"Upload failed for user {user_id}: {str(e)}")
         traceback.print_exc()
         # Clean up temp directory on error
         if temp_dir.exists():
@@ -162,6 +171,7 @@ async def upload_documents(
 async def get_transform_status(
     request: Request,
     transform_id: str,
+    user_id: str = Header(..., alias="user-id", description="User's ID"),
     include_metrics: bool = True
 ) -> DetailedTransformStatus:
     """
@@ -169,6 +179,7 @@ async def get_transform_status(
     
     Args:
         transform_id: Transformation ID to get status for
+        user_id: User's ID (from header)
         include_metrics: Whether to include resource metrics
         
     Returns:
@@ -178,13 +189,15 @@ async def get_transform_status(
         HTTPException: If transform not found or other error
     """
     try:
-        # Get status)
+        logger.info(f"Getting transform status for user {user_id}, transform_id: {transform_id}")
+        
+        # Get status
         status = await progress_tracker.get_detailed_status(transform_id)
         
         if not status:
             raise HTTPException(
                 status_code=404,
-                detail=f"Transform {transform_id} not found"
+                detail=f"Transform {transform_id} not found for user {user_id}"
             )
         
         # Optionally exclude metrics
@@ -198,6 +211,7 @@ async def get_transform_status(
         raise
     except Exception as e:
         traceback.print_exc()
+        logger.error(f"Error getting transform status for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get transform status: {str(e)}"
@@ -210,18 +224,22 @@ async def get_transform_status(
 async def cleanup_transform_status(
     request: Request,
     transform_id: str,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    user_id: str = Header(..., alias="user-id", description="User's ID")
 ) -> JSONResponse:
     """
     Clean up transformation status data
     
     Args:
         transform_id: Transformation ID to clean up
+        user_id: User's ID (from header)
         
     Returns:
         JSONResponse confirming cleanup
     """
     try:
+        logger.info(f"Scheduling cleanup for user {user_id}, transform_id: {transform_id}")
+        
         # Add cleanup to background tasks
         background_tasks.add_task(
             progress_tracker.cleanup_transform,
@@ -229,10 +247,11 @@ async def cleanup_transform_status(
         )
         
         return JSONResponse({
-            "message": f"Cleanup scheduled for transform {transform_id}"
+            "message": f"Cleanup scheduled for transform {transform_id} for user {user_id}"
         })
         
     except Exception as e:
+        logger.error(f"Failed to schedule cleanup for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to schedule cleanup: {str(e)}"

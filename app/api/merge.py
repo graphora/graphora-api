@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from app.baml_client.types import ResolutionStrategy
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Header
 import logging
 import uuid
 import traceback
@@ -28,9 +28,10 @@ async def start_merge(
     merge_id: Optional[str],
     session_id: str,
     transform_id: str,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    user_id: str = Header(..., alias="user-id", description="User's ID")
 ) -> MergeInitResponse:
-    """Start a new merge process"""
+    """Start a new merge process for user's production database"""
     try:
         # Validate inputs
         if not session_id or not transform_id:
@@ -39,23 +40,26 @@ async def start_merge(
                 detail="session_id and transform_id are required"
             )
             
+        logger.info(f"Starting merge for user {user_id}, session: {session_id}, transform: {transform_id}")
+        
         # Generate merge ID
         if not merge_id or merge_id == "new":
             merge_id = str(uuid.uuid4())
         
-        # Define background task
+        # Define background task with user context (merges use production database)
         async def run_merge_flow():
             try:
-                # Create flow run directly
+                # Create flow run directly with user ID
                 await merge_flow(
                     merge_id=merge_id,
                     transform_id=transform_id,
-                    ontology_id=session_id
+                    ontology_id=session_id,
+                    user_id=user_id  # Pass user ID to merge flow
                 )
-                logger.info(f"Started flow run for merge {merge_id}")
+                logger.info(f"Started merge flow for user {user_id} with merge_id: {merge_id}")
             except Exception as e:
                 traceback.print_exc()
-                logger.error(f"Failed to start merge flow: {str(e)}")
+                logger.error(f"Failed to start merge flow for user {user_id}: {str(e)}")
                 log_merge_failure(merge_id, str(e))
         
         # Add background task
@@ -68,22 +72,27 @@ async def start_merge(
         )
         
     except Exception as e:
-        logger.error(f"Failed to start merge: {str(e)}")
+        logger.error(f"Failed to start merge for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to start merge: {str(e)}"
         )
 
 @router.get("/{merge_id}/status", response_model=MergeStatus)
-def get_merge_status_api(merge_id: str) -> MergeStatus:
-    """Get current status of a merge process"""
+def get_merge_status_api(
+    merge_id: str,
+    user_id: str = Header(..., alias="user-id", description="User's ID")
+) -> MergeStatus:
+    """Get current status of a merge process for user"""
     try:
+        logger.info(f"Getting merge status for user {user_id}, merge_id: {merge_id}")
+        
         status = get_merge_status(merge_id)
             
         if not status:
             raise HTTPException(
                 status_code=404,
-                detail=f"Merge {merge_id} not found"
+                detail=f"Merge {merge_id} not found for user {user_id}"
             )
             
         return status
@@ -92,7 +101,7 @@ def get_merge_status_api(merge_id: str) -> MergeStatus:
         raise
     except Exception as e:
         traceback.print_exc()
-        logger.error(f"Failed to get merge status: {str(e)}")
+        logger.error(f"Failed to get merge status for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get merge status: {str(e)}"
@@ -104,13 +113,15 @@ def get_merge_status_api(merge_id: str) -> MergeStatus:
     description="Get conflicts for a merge process"
 )
 async def get_conflicts(
-    merge_id: str
+    merge_id: str,
+    user_id: str = Header(..., alias="user-id", description="User's ID")
 ) -> List[ChangeLog]:
-    """Get conflicts for a merge process"""
+    """Get conflicts for a merge process for user"""
     try:
+        logger.info(f"Getting conflicts for user {user_id}, merge_id: {merge_id}")
         return get_human_review_items(merge_id)
     except Exception as e:
-        logger.error(f"Failed to get conflicts: {str(e)}")
+        logger.error(f"Failed to get conflicts for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get conflicts: {str(e)}"
@@ -126,10 +137,11 @@ async def resolve_conflict(
     conflict_id: str,
     changed_props: Dict[str, Any],
     resolution: ResolutionStrategy,
-    learning_comment: str
+    learning_comment: str,
+    user_id: str = Header(..., alias="user-id", description="User's ID")
 ) -> bool:
     """
-    Apply a resolution to a specific conflict
+    Apply a resolution to a specific conflict for user
     
     Parameters:
     - merge_id: ID of the merge process
@@ -137,16 +149,19 @@ async def resolve_conflict(
     - changed_props: Properties that were changed
     - resolution: The resolution decision
     - learning_comment: Comment on the resolution
+    - user_id: User's ID (from header)
     
     Returns:
     - True if the resolution was applied successfully, False otherwise
     """
     try:
+        logger.info(f"Resolving conflict for user {user_id}, merge_id: {merge_id}, conflict_id: {conflict_id}")
+        
         return await apply_resolution(merge_id, conflict_id, changed_props, resolution, learning_comment)
         
     except Exception as e:
         traceback.print_exc()
-        logger.error(f"Error resolving conflict: {str(e)}")
+        logger.error(f"Error resolving conflict for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Error resolving conflict: {str(e)}"
@@ -158,17 +173,20 @@ async def resolve_conflict(
     description="Get detailed statistics of a merge operation"
 )
 async def get_merge_statistics_api(
-    merge_id: str
+    merge_id: str,
+    user_id: str = Header(..., alias="user-id", description="User's ID")
 ) -> Dict[str, Any]:
-    """Get detailed statistics of a merge operation"""
+    """Get detailed statistics of a merge operation for user"""
     try:
+        logger.info(f"Getting merge statistics for user {user_id}, merge_id: {merge_id}")
+        
         statistics = await get_merge_statistics(merge_id)
         if not statistics:
-            raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found")
+            raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found for user {user_id}")
         return statistics
     except Exception as e:
         traceback.print_exc()
-        logger.error(f"Error getting merge statistics: {str(e)}")
+        logger.error(f"Error getting merge statistics for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Error getting merge statistics: {str(e)}"
@@ -179,9 +197,13 @@ async def get_merge_statistics_api(
          description="Retrieve nodes by transform ID and their relationships")
 async def get_graph_by_merge_id(
     merge_id: str,
-    transform_id: str
+    transform_id: str,
+    user_id: str = Header(..., alias="user-id", description="User's ID")
 ) -> GraphResponse:
+    """Get graph data for merge operation for user (from production database)"""
     try:
+        logger.info(f"Getting merge graph for user {user_id}, merge_id: {merge_id}, transform_id: {transform_id}")
+        
         graph = await get_merge_graph(merge_id, transform_id)
         if graph:
             return graph
@@ -192,7 +214,7 @@ async def get_graph_by_merge_id(
             )
     except Exception as e:
         traceback.print_exc()
-        logger.error(f"Error retrieving graph data: {str(e)}")
+        logger.error(f"Error retrieving graph data for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Error retrieving graph data: {str(e)}"
