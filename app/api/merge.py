@@ -157,7 +157,7 @@ async def resolve_conflict(
     try:
         logger.info(f"Resolving conflict for user {user_id}, merge_id: {merge_id}, conflict_id: {conflict_id}")
         
-        return await apply_resolution(merge_id, conflict_id, changed_props, resolution, learning_comment)
+        return await apply_resolution(merge_id, conflict_id, changed_props, resolution, learning_comment, user_id)
         
     except Exception as e:
         traceback.print_exc()
@@ -182,7 +182,12 @@ async def get_merge_statistics_api(
         
         statistics = await get_merge_statistics(merge_id)
         if not statistics:
-            raise HTTPException(status_code=404, detail=f"Merge {merge_id} not found for user {user_id}")
+            # Return empty statistics if not available yet (merge in progress)
+            return {
+                "message": "Statistics not available yet - merge in progress",
+                "nodes_stored": None,
+                "edges_stored": None
+            }
         return statistics
     except Exception as e:
         traceback.print_exc()
@@ -204,7 +209,7 @@ async def get_graph_by_merge_id(
     try:
         logger.info(f"Getting merge graph for user {user_id}, merge_id: {merge_id}, transform_id: {transform_id}")
         
-        graph = await get_merge_graph(merge_id, transform_id)
+        graph = await get_merge_graph(merge_id, transform_id, user_id)
         if graph:
             return graph
         else:

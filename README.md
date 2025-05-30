@@ -20,17 +20,6 @@ A sophisticated document processing backend that leverages AI-powered intelligen
 
 ## Getting Started
 
-### Environment Setup
-
-1. Fork this project on Replit
-2. Add the following secrets to your Replit project:
-   - `ANTHROPIC_API_KEY`: Your Anthropic API key `default` (or)
-      `OPENAI_API_KEY`: Your OpenAI API key (or)
-      `GOOGLE_GEMINI_API_KEY`: Your Google Gemini AI Studio (or)
-   - `NEO4J_URI`: Neo4j database URI
-   - `NEO4J_USER`: Neo4j database username
-   - `NEO4J_PASSWORD`: Neo4j database password
-
 ### Building the Project
 - Install uv: 
   ````bash

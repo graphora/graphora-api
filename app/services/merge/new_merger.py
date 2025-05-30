@@ -22,6 +22,7 @@ from app.utils.constants import VALID_FROM, VALID_TO, PREVIOUS_VERSION_RELATIONS
 from app.baml_client import b
 from supabase import create_client, Client
 from app.services.storage.interface import StorageBatchResult
+from app.services.user_db_service import UserDatabaseService
 
 
 logger = logging.getLogger(__name__)
@@ -45,15 +46,16 @@ def custom_cache_key_fn(context, parameters):
 async def merge_flow(
     merge_id: str,
     transform_id: str,
-    ontology_id: str
+    ontology_id: str,
+    user_id: str
 ):
     """Merge two graphs"""
     ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
     ontology_parser = OntologyParser(ontology_path)
     ontology = ontology_parser.parsed_ontology
 
-    # Step-1: Extract Staging Graph
-    staging_graph: GraphResponse = await _extract_staging_graph(transform_id)
+    # Step-1: Extract Staging Graph (using user's staging database)
+    staging_graph: GraphResponse = await _extract_staging_graph(transform_id, user_id)
     merged_graph = copy.deepcopy(staging_graph)
 
     # Check merge status
@@ -61,16 +63,16 @@ async def merge_flow(
     if not merge_status.data:
         _start_merge_status(merge_id, transform_id, ontology_id)
     elif merge_status.data[0]['status'] == MergeStatus.READY_TO_MERGE:
-        merged_graph = await _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, merged_graph)
+        merged_graph = await _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, merged_graph, user_id)
         return merged_graph
     elif merge_status.data[0]['status'] == MergeStatus.COMPLETED:
         # For re-merge, load existing prod graph and reconcile
-        prod_graph = await _get_prod_graph(merge_id)
+        prod_graph = await _get_prod_graph(merge_id, user_id)
         merged_graph = _reconcile_graphs(staging_graph, prod_graph)
         _update_merge_status(merge_id, MergeStatus.STARTED)
 
     # Step-2: Extract Production Graph
-    prod_mapping_result: EntityMappingResult = await _map_production_entities(merged_graph, ontology)
+    prod_mapping_result: EntityMappingResult = await _map_production_entities(merged_graph, ontology, user_id)
     logger.debug(f"Production mapping result: {prod_mapping_result}")
 
     # Step-3: Compare Graphs & Identify Conflicts
@@ -104,7 +106,7 @@ async def merge_flow(
             change_log = _apply_corrections(ontology_props, change_log)
             _merge_nodes(change_log.staging_node, change_log.prod_node, ontology_props, merged_graph)
         _update_merge_status(merge_id, MergeStatus.MERGE_IN_PROGRESS)
-        await _persist_to_prod(merged_graph, merge_id, transform_id)
+        await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
     return merged_graph
 
 def _reconcile_graphs(staging_graph: GraphResponse, prod_graph: GraphResponse) -> GraphResponse:
@@ -170,7 +172,7 @@ def get_human_review_items(merge_id: str) -> List[ChangeLog]:
 async def apply_resolution(
     merge_id: str, change_log_id: str, 
     resolved_props: Dict[str, Any], resolution: ResolutionStrategy, 
-    learning_comment: str) -> bool:
+    learning_comment: str, user_id: str) -> bool:
     """
     Apply a resolution to a conflict and save the learning for future reference.
     
@@ -179,6 +181,7 @@ async def apply_resolution(
         change_log_id: ID of the conflict to resolve
         resolution: The resolution decision : resolved properties
         learning_comment: Comment on the resolution
+        user_id: User's ID
         
     Returns:
         True if the resolution was applied successfully, False otherwise
@@ -215,25 +218,29 @@ async def apply_resolution(
             _update_merge_status(merge_id, MergeStatus.READY_TO_MERGE)
             transform_id = merge_info.data[0].get('transform_id')
             if transform_id and ontology_id:
-                await merge_flow(merge_id, transform_id, ontology_id)
+                await merge_flow(merge_id, transform_id, ontology_id, user_id)
         return True
     return False
 
 async def get_merge_statistics(merge_id: str) -> Dict[str, Any]:
     merge_status = supabase.table("merge_status").select("statistics").eq("merge_id", merge_id).execute()
-    return merge_status.data[0]['statistics']
+    if not merge_status.data:
+        return None
+    
+    statistics = merge_status.data[0].get('statistics')
+    return statistics if statistics else None
 
-async def get_merge_graph(merge_id: str, transform_id: str) -> GraphResponse:
+async def get_merge_graph(merge_id: str, transform_id: str, user_id: str) -> GraphResponse:
     """Get the merged graph for a merge operation"""
     # If merge status is not STARTED then return None
     merge_status = supabase.table("merge_status").select("status").eq("merge_id", merge_id).execute()
     if not merge_status.data:
         return None
     elif merge_status.data[0]['status'] == MergeStatus.COMPLETED:
-        return await _get_prod_graph(merge_id)
+        return await _get_prod_graph(merge_id, user_id)
         
     # Fetch staging graph using transform_id
-    staging_graph = await _extract_staging_graph(transform_id)
+    staging_graph = await _extract_staging_graph(transform_id, user_id)
     logger.debug(f"Retrieved staging graph with {len(staging_graph.nodes)} nodes")
     
     # Fetch change_logs and apply on top of staging graph
@@ -269,15 +276,18 @@ async def get_merge_graph(merge_id: str, transform_id: str) -> GraphResponse:
     return staging_graph
 
 @task(name="extract_staging_graph")
-async def _extract_staging_graph(transform_id: str) -> GraphResponse:
+async def _extract_staging_graph(transform_id: str, user_id: str) -> GraphResponse:
     """Extract Staging Graph"""
     start_time = time.time()
 
+    # Get user's staging database configuration
+    user_config = await UserDatabaseService.get_user_config(user_id)
+    
     storage = Neo4jStorage(
-        uri=settings.STAGING_NEO4J_URI,
-        username=settings.STAGING_NEO4J_USER,
-        password=settings.STAGING_NEO4J_PASSWORD,
-        database=settings.STAGING_NEO4J_DATABASE
+        uri=user_config.stagingDb.uri,
+        username=user_config.stagingDb.username,
+        password=user_config.stagingDb.password,
+        database="neo4j"  # Default database name
     )
     
     try:
@@ -344,6 +354,7 @@ async def _extract_staging_graph(transform_id: str) -> GraphResponse:
 async def _map_production_entities(
     staging_graph: GraphResponse,
     ontology: Dict[str, Any],
+    user_id: str,
     similarity_threshold: float = 0.7,
 ) -> EntityMappingResult:
     try:
@@ -351,11 +362,14 @@ async def _map_production_entities(
         matches = {}
         matched_count = 0
 
+        # Get user's production database configuration
+        user_config = await UserDatabaseService.get_user_config(user_id)
+        
         storage = Neo4jStorage(
-            uri=settings.NEO4J_URI,
-            username=settings.NEO4J_USER,
-            password=settings.NEO4J_PASSWORD,
-            database=settings.NEO4J_DB
+            uri=user_config.prodDb.uri,
+            username=user_config.prodDb.username,
+            password=user_config.prodDb.password,
+            database="neo4j"  # Default database name
         )
 
         candidates = []
@@ -680,13 +694,17 @@ async def _get_matching_nodes(
 async def _persist_to_prod(
     merged_graph: GraphResponse,
     merge_id: str,
-    transform_id: str
+    transform_id: str,
+    user_id: str
 ) -> Tuple[StorageBatchResult, StorageBatchResult]:
+    # Get user's production database configuration
+    user_config = await UserDatabaseService.get_user_config(user_id)
+    
     storage = Neo4jStorage(
-        uri=settings.NEO4J_URI,
-        username=settings.NEO4J_USER,
-        password=settings.NEO4J_PASSWORD,
-        database=settings.NEO4J_DB
+        uri=user_config.prodDb.uri,
+        username=user_config.prodDb.username,
+        password=user_config.prodDb.password,
+        database="neo4j"  # Default database name
     )
     
     # Store nodes first
@@ -746,12 +764,15 @@ def _add_ingestion_stats(merge_id, node_batch_result, edge_batch_result):
         }
     ).eq("merge_id", merge_id).execute()
 
-async def _get_prod_graph(merge_id: str) -> GraphResponse:
+async def _get_prod_graph(merge_id: str, user_id: str) -> GraphResponse:
+    # Get user's production database configuration
+    user_config = await UserDatabaseService.get_user_config(user_id)
+    
     storage = Neo4jStorage(
-        uri=settings.NEO4J_URI,
-        username=settings.NEO4J_USER,
-        password=settings.NEO4J_PASSWORD,
-        database=settings.NEO4J_DB
+        uri=user_config.prodDb.uri,
+        username=user_config.prodDb.username,
+        password=user_config.prodDb.password,
+        database="neo4j"  # Default database name
     )
     return await storage.get_merge_data(merge_id)
 
@@ -850,7 +871,7 @@ def _update_merge_status(merge_id, status):
     ).eq("merge_id", merge_id).execute()
 
 @task(name="complete_prod_merge")
-async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, merged_graph):
+async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, merged_graph, user_id):
     """Complete the production merge by applying all resolved conflicts"""
     try:
         # Get all change logs for this merge
@@ -858,7 +879,7 @@ async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, 
         
         if not change_logs.data:
             logger.info(f"No change logs found for merge {merge_id}, proceeding with direct merge")
-            await _persist_to_prod(merged_graph, merge_id, transform_id)
+            await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
             _update_merge_status(merge_id, MergeStatus.COMPLETED)
             return merged_graph
             
@@ -897,7 +918,7 @@ async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, 
                 logger.error(f"Error processing change log during prod merge: {str(e)}")
                 
         # Persist the merged graph to production
-        await _persist_to_prod(merged_graph, merge_id, transform_id)
+        await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
         _update_merge_status(merge_id, MergeStatus.COMPLETED)
         return merged_graph
         
