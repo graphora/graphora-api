@@ -23,6 +23,7 @@ from app.baml_client import b
 from supabase import create_client, Client
 from app.services.storage.interface import StorageBatchResult
 from app.services.user_db_service import UserDatabaseService
+from app.services.audit_service import audit_service, OperationType, OperationStatus
 
 
 logger = logging.getLogger(__name__)
@@ -50,64 +51,133 @@ async def merge_flow(
     user_id: str
 ):
     """Merge two graphs"""
-    ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
-    ontology_parser = OntologyParser(ontology_path)
-    ontology = ontology_parser.parsed_ontology
+    start_time = time.time()
+    
+    # Start audit trail for merge operation
+    audit_id = await audit_service.log_operation_start(
+        user_id=user_id,
+        operation_type=OperationType.MERGE_STARTED,
+        operation_id=merge_id,
+        resource_name=f"Merge {merge_id[:8]}",
+        metadata={
+            "transform_id": transform_id,
+            "ontology_id": ontology_id
+        }
+    )
+    
+    try:
+        ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
+        ontology_parser = OntologyParser(ontology_path, user_id)
+        ontology = ontology_parser.parsed_ontology
 
-    # Step-1: Extract Staging Graph (using user's staging database)
-    staging_graph: GraphResponse = await _extract_staging_graph(transform_id, user_id)
-    merged_graph = copy.deepcopy(staging_graph)
+        # Step-1: Extract Staging Graph (using user's staging database)
+        staging_graph: GraphResponse = await _extract_staging_graph(transform_id, user_id)
+        merged_graph = copy.deepcopy(staging_graph)
 
-    # Check merge status
-    merge_status = supabase.table("merge_status").select("*").eq("merge_id", merge_id).execute()
-    if not merge_status.data:
-        _start_merge_status(merge_id, transform_id, ontology_id)
-    elif merge_status.data[0]['status'] == MergeStatus.READY_TO_MERGE:
-        merged_graph = await _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, merged_graph, user_id)
-        return merged_graph
-    elif merge_status.data[0]['status'] == MergeStatus.COMPLETED:
-        # For re-merge, load existing prod graph and reconcile
-        prod_graph = await _get_prod_graph(merge_id, user_id)
-        merged_graph = _reconcile_graphs(staging_graph, prod_graph)
-        _update_merge_status(merge_id, MergeStatus.STARTED)
+        # Check merge status
+        merge_status = supabase.table("merge_status").select("*").eq("merge_id", merge_id).execute()
+        if not merge_status.data:
+            _start_merge_status(merge_id, transform_id, ontology_id)
+        elif merge_status.data[0]['status'] == MergeStatus.READY_TO_MERGE:
+            merged_graph = await _complete_prod_merge(merge_id, transform_id, ontology_id, ontology, staging_graph, merged_graph, user_id)
+            return merged_graph
+        elif merge_status.data[0]['status'] == MergeStatus.COMPLETED:
+            # For re-merge, load existing prod graph and reconcile
+            prod_graph = await _get_prod_graph(merge_id, user_id)
+            merged_graph = _reconcile_graphs(staging_graph, prod_graph)
+            _update_merge_status(merge_id, MergeStatus.STARTED)
 
-    # Step-2: Extract Production Graph
-    prod_mapping_result: EntityMappingResult = await _map_production_entities(merged_graph, ontology, user_id)
-    logger.debug(f"Production mapping result: {prod_mapping_result}")
+        # Step-2: Extract Production Graph
+        prod_mapping_result: EntityMappingResult = await _map_production_entities(merged_graph, ontology, user_id)
+        logger.debug(f"Production mapping result: {prod_mapping_result}")
 
-    # Step-3: Compare Graphs & Identify Conflicts
-    change_logs = []
-    for node_id, match in prod_mapping_result.matches.items():
-        if match.best_match:
-            staging_node = next((n for n in merged_graph.nodes if n.id == node_id), None)
-            ontology_props = ontology['entities'][staging_node.type]['properties']
-            change_log = ChangeLog(
-                staging_node=staging_node,
-                prod_node=match.best_match,
-                prop_changes=_get_prop_changes(staging_node, match.best_match, ontology_props)
+        # Step-3: Compare Graphs & Identify Conflicts
+        change_logs = []
+        for node_id, match in prod_mapping_result.matches.items():
+            if match.best_match:
+                staging_node = next((n for n in merged_graph.nodes if n.id == node_id), None)
+                ontology_props = ontology['entities'][staging_node.type]['properties']
+                change_log = ChangeLog(
+                    staging_node=staging_node,
+                    prod_node=match.best_match,
+                    prop_changes=_get_prop_changes(staging_node, match.best_match, ontology_props)
+                )
+                change_logs.append(change_log)
+
+        change_log_by_entity_type = _group_changes_by_entity_type(change_logs)
+        high_conf_changes, changes_for_human_review = await _classify_changes(ontology_id, change_log_by_entity_type)
+
+        if changes_for_human_review:
+            _update_merge_status(merge_id, MergeStatus.HUMAN_REVIEW)
+            for change_log in changes_for_human_review:
+                save_change_log(merge_id, change_log, need_human_review=True)
+            for change_log in high_conf_changes:
+                ontology_props = ontology['entities'][change_log.staging_node.type]['properties']
+                change_log = _apply_corrections(ontology_props, change_log)
+                save_change_log(merge_id, change_log)
+                
+            # Log pending human review - keep using original audit_id for merge_started
+            duration_ms = int((time.time() - start_time) * 1000)
+            if audit_id:
+                await audit_service.log_operation_success(
+                    audit_id=audit_id,
+                    duration_ms=duration_ms,
+                    metadata={
+                        "status": "pending_review",
+                        "conflicts_count": len(changes_for_human_review),
+                        "auto_resolved_count": len(high_conf_changes)
+                    }
+                )
+        else:
+            _update_merge_status(merge_id, MergeStatus.AUTO_RESOLVE)
+            for change_log in high_conf_changes:
+                ontology_props = ontology['entities'][change_log.staging_node.type]['properties']
+                change_log = _apply_corrections(ontology_props, change_log)
+                _merge_nodes(change_log.staging_node, change_log.prod_node, ontology_props, merged_graph)
+            _update_merge_status(merge_id, MergeStatus.MERGE_IN_PROGRESS)
+            await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
+            
+            # Create separate merge_completed audit record for auto-resolution
+            completion_audit_id = await audit_service.log_operation_start(
+                user_id=user_id,
+                operation_type=OperationType.MERGE_COMPLETED,
+                operation_id=merge_id,
+                resource_name=f"Merge {merge_id[:8]} Auto-Completed",
+                metadata={
+                    "transform_id": transform_id,
+                    "ontology_id": ontology_id,
+                    "stage": "auto_resolve"
+                }
             )
-            change_logs.append(change_log)
-
-    change_log_by_entity_type = _group_changes_by_entity_type(change_logs)
-    high_conf_changes, changes_for_human_review = await _classify_changes(ontology_id, change_log_by_entity_type)
-
-    if changes_for_human_review:
-        _update_merge_status(merge_id, MergeStatus.HUMAN_REVIEW)
-        for change_log in changes_for_human_review:
-            save_change_log(merge_id, change_log, need_human_review=True)
-        for change_log in high_conf_changes:
-            ontology_props = ontology['entities'][change_log.staging_node.type]['properties']
-            change_log = _apply_corrections(ontology_props, change_log)
-            save_change_log(merge_id, change_log)
-    else:
-        _update_merge_status(merge_id, MergeStatus.AUTO_RESOLVE)
-        for change_log in high_conf_changes:
-            ontology_props = ontology['entities'][change_log.staging_node.type]['properties']
-            change_log = _apply_corrections(ontology_props, change_log)
-            _merge_nodes(change_log.staging_node, change_log.prod_node, ontology_props, merged_graph)
-        _update_merge_status(merge_id, MergeStatus.MERGE_IN_PROGRESS)
-        await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
-    return merged_graph
+            
+            # Log successful auto-resolution and completion
+            duration_ms = int((time.time() - start_time) * 1000)
+            if completion_audit_id:
+                await audit_service.log_operation_success(
+                    audit_id=completion_audit_id,
+                    duration_ms=duration_ms,
+                    metadata={
+                        "status": "auto_completed",
+                        "auto_resolved_count": len(high_conf_changes),
+                        "nodes_count": len(merged_graph.nodes),
+                        "edges_count": len(merged_graph.edges)
+                    }
+                )
+                
+        return merged_graph
+        
+    except Exception as e:
+        # Log failure
+        duration_ms = int((time.time() - start_time) * 1000)
+        if audit_id:
+            await audit_service.log_operation_failure(
+                audit_id=audit_id,
+                error_message=str(e),
+                duration_ms=duration_ms
+            )
+        
+        # Re-raise the exception
+        raise e
 
 def _reconcile_graphs(staging_graph: GraphResponse, prod_graph: GraphResponse) -> GraphResponse:
     """Reconcile staging and production graphs for re-merge"""
@@ -857,8 +927,23 @@ def _update_merge_status(merge_id, status):
     ).eq("merge_id", merge_id).execute()
 
 @task(name="complete_prod_merge")
-async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, merged_graph, user_id):
+async def _complete_prod_merge(merge_id, transform_id, ontology_id, ontology, staging_graph, merged_graph, user_id):
     """Complete the production merge by applying all resolved conflicts"""
+    start_time = time.time()
+    
+    # Create audit trail for merge completion
+    completion_audit_id = await audit_service.log_operation_start(
+        user_id=user_id,
+        operation_type=OperationType.MERGE_COMPLETED,
+        operation_id=merge_id,
+        resource_name=f"Merge {merge_id[:8]} Completion",
+        metadata={
+            "transform_id": transform_id,
+            "ontology_id": ontology_id,
+            "stage": "post_human_review"
+        }
+    )
+    
     try:
         # Get all change logs for this merge
         change_logs = supabase.table("change_logs").select("*").eq("merge_id", merge_id).execute()
@@ -867,10 +952,25 @@ async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, 
             logger.info(f"No change logs found for merge {merge_id}, proceeding with direct merge")
             await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
             _update_merge_status(merge_id, MergeStatus.COMPLETED)
+            
+            # Log completion
+            duration_ms = int((time.time() - start_time) * 1000)
+            if completion_audit_id:
+                await audit_service.log_operation_success(
+                    audit_id=completion_audit_id,
+                    duration_ms=duration_ms,
+                    metadata={
+                        "nodes_count": len(merged_graph.nodes),
+                        "edges_count": len(merged_graph.edges),
+                        "conflicts_resolved": 0
+                    }
+                )
+            
             return merged_graph
             
         # Create a map of node IDs for quick lookup
         node_map = {node.id: node for node in staging_graph.nodes}
+        conflicts_resolved = 0
         
         # Apply all resolved conflicts
         for change_log in change_logs.data:
@@ -887,6 +987,7 @@ async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, 
                 
                 # Apply the resolved properties if any
                 if change_log.get('changed_props'):
+                    conflicts_resolved += 1
                     if isinstance(change_log['changed_props'], str):
                         # Handle the case where properties are stored as JSON string
                         try:
@@ -906,10 +1007,34 @@ async def _complete_prod_merge(merge_id, transform_id, ontology, staging_graph, 
         # Persist the merged graph to production
         await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
         _update_merge_status(merge_id, MergeStatus.COMPLETED)
+        
+        # Log successful completion
+        duration_ms = int((time.time() - start_time) * 1000)
+        if completion_audit_id:
+            await audit_service.log_operation_success(
+                audit_id=completion_audit_id,
+                duration_ms=duration_ms,
+                metadata={
+                    "nodes_count": len(merged_graph.nodes),
+                    "edges_count": len(merged_graph.edges),
+                    "conflicts_resolved": conflicts_resolved
+                }
+            )
+        
         return merged_graph
         
     except Exception as e:
         logger.error(f"Error in _complete_prod_merge: {str(e)}")
+        
+        # Log failure
+        duration_ms = int((time.time() - start_time) * 1000)
+        if completion_audit_id:
+            await audit_service.log_operation_failure(
+                audit_id=completion_audit_id,
+                error_message=str(e),
+                duration_ms=duration_ms
+            )
+        
         traceback.print_exc()
         log_merge_failure(merge_id, str(e))
         raise
@@ -967,16 +1092,23 @@ async def _classify_changes(
                 if change.confidence_score > 0.95:
                     if not change.corrections:
                         change_log = next((c for c in change_logs if c.id == change.id), None)
-                        high_conf_changes.append(change_log)
+                        if change_log:
+                            high_conf_changes.append(change_log)
                         continue
                     for correction in change.corrections:
                         change_log = next((c for c in change_logs if c.id == change.id), None)
-                        change_log.prop_changes[correction.prop_name] = (
-                            change_log.prop_changes[correction.prop_name][0], correction.prop_value)
-                        high_conf_changes.append(change_log)
+                        if change_log and correction.prop_name in change_log.prop_changes:
+                            change_log.prop_changes[correction.prop_name] = (
+                                change_log.prop_changes[correction.prop_name][0], correction.prop_value)
+                        elif change_log:
+                            # If property doesn't exist in prop_changes, create it with empty string as original value
+                            change_log.prop_changes[correction.prop_name] = ("", correction.prop_value)
+                        if change_log:
+                            high_conf_changes.append(change_log)
                 else:
                     change_log = next((c for c in change_logs if c.id == change.id), None)
-                    changes_for_human_review.append(change_log)
+                    if change_log:
+                        changes_for_human_review.append(change_log)
         else:
             high_conf_changes.extend(change_logs)
 
