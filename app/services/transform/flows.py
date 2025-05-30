@@ -96,7 +96,8 @@ async def document_transformation_flow(
     transform_id: str,
     ontology_id: str,
     file_paths: List[str],
-    metadata: List[DocumentMetadata]
+    metadata: List[DocumentMetadata],
+    user_id: str
 ) -> Dict[str, Any]:
     """
     Main transformation flow
@@ -106,8 +107,9 @@ async def document_transformation_flow(
         ontology_id: ID of the ontology to use
         file_paths: List of paths to documents
         metadata: List of document metadata
+        user_id: User's ID for database configuration
     """
-    logger.info(f"Starting transformation flow with ID: {transform_id}")
+    logger.info(f"Starting transformation flow with ID: {transform_id} for user: {user_id}")
     try:
         
         logger.info(f"Starting transformation flow {transform_id}")
@@ -209,7 +211,8 @@ async def document_transformation_flow(
         for graph in graphs:
             storage_result = await store_knowledge_graph(
                 graph,
-                transform_id
+                transform_id,
+                user_id
             )
             nodes_stored = nodes_stored + storage_result.nodes_stored
             relationships_stored = relationships_stored + storage_result.relationships_stored

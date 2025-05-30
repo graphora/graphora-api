@@ -61,6 +61,7 @@ def log_storage_metrics(metrics: StorageMetrics, transform_id: str) -> None:
 async def store_knowledge_graph(
     graph: DocumentKnowledgeGraph,
     transform_id: str,
+    user_id: str,
     checkpoint_size: int = settings.STORAGE_BATCH_SIZE
 ) -> StorageResult:
     """
@@ -69,17 +70,23 @@ async def store_knowledge_graph(
     Args:
         graph: Knowledge graph to store
         transform_id: Transform ID for tracking
+        user_id: User's ID for database configuration
         checkpoint_size: Number of items per batch
         
     Returns:
         StorageResult with metrics
     """
     logger = get_run_logger()
+    
+    # Get user's staging database configuration (transforms use staging)
+    from app.services.user_db_service import UserDatabaseService
+    user_config = await UserDatabaseService.get_user_config(user_id)
+    
     storage = Neo4jStorage(
-        uri=settings.STAGING_NEO4J_URI,
-        username=settings.STAGING_NEO4J_USER,
-        password=settings.STAGING_NEO4J_PASSWORD,
-        database=settings.STAGING_NEO4J_DATABASE
+        uri=user_config.stagingDb.uri,
+        username=user_config.stagingDb.username,
+        password=user_config.stagingDb.password,
+        database="neo4j"  # Default database name
     )
     start_time = datetime.now()
     
