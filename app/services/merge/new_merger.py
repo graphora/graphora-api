@@ -507,20 +507,6 @@ async def _find_best_production_match_with_splink(
     
     return None
 
-async def _get_prod_node(label: str, id: str) -> Node:
-    storage = Neo4jStorage(
-        uri=settings.NEO4J_URI,
-        username=settings.NEO4J_USER,
-        password=settings.NEO4J_PASSWORD,
-        database=settings.NEO4J_DB
-    )
-    prod_node = await storage.find_nodes_by_property_value(
-        label=label,
-        property_name="id",
-        property_value=id
-    )
-    return prod_node[0] if len(prod_node) > 0 else None
-
 def _merge_nodes(staging_node: Node, prod_node: Node, 
                  ontology: Dict[str, Any], merged_graph: GraphResponse) -> GraphResponse:
     """Merge two nodes and ensure all edges are updated. Only version if properties change."""
