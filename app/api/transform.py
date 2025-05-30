@@ -3,6 +3,7 @@ from typing import List
 import aiofiles
 import uuid
 import traceback
+import time
 from fastapi.responses import JSONResponse
 from app.utils.logger import logger
 from app.schemas.transform import (
@@ -21,6 +22,7 @@ from app.services.transform.status_models import DetailedTransformStatus
 from app.config import settings
 from pathlib import Path
 from datetime import datetime, timezone
+from app.services.audit_service import audit_service, OperationType, OperationStatus
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
 
@@ -29,9 +31,24 @@ async def run_transform_flow(
     ontology_id: str,
     file_paths: List[Path],
     metadata: List[DocumentMetadata],
-    user_id: str
+    user_id: str,
+    audit_id: str
 ):
-    """Run the transform flow asynchronously with user context"""
+    """Run the transform flow asynchronously with user context and audit logging"""
+    flow_start_time = time.time()
+    
+    # Create separate audit ID for transform completion
+    completion_audit_id = await audit_service.log_operation_start(
+        user_id=user_id,
+        operation_type=OperationType.TRANSFORM_COMPLETED,
+        operation_id=transform_id,
+        resource_name=f"Transform {transform_id[:8]}",
+        metadata={
+            "ontology_id": ontology_id,
+            "files_count": len(file_paths)
+        }
+    )
+    
     try:
         # Convert Path objects to strings
         file_paths_str = [str(path) for path in file_paths]
@@ -45,10 +62,36 @@ async def run_transform_flow(
             user_id=user_id  # Pass user ID to the flow
         )
         
-        logger.info(f"Started transform flow for user {user_id} with state: {flow_state}")
+        logger.info(f"Completed transform flow for user {user_id} with state: {flow_state}")
+        
+        # Log successful transform completion
+        flow_duration_ms = int((time.time() - flow_start_time) * 1000)
+        if completion_audit_id:
+            await audit_service.log_operation_success(
+                audit_id=completion_audit_id,
+                duration_ms=flow_duration_ms,
+                metadata={
+                    "transform_id": transform_id,
+                    "ontology_id": ontology_id,
+                    "files_processed": len(file_paths),
+                    "flow_state": str(flow_state),
+                    "total_nodes": flow_state.get('total_nodes', 0),
+                    "total_relationships": flow_state.get('total_relationships', 0)
+                }
+            )
             
     except Exception as e:
-        logger.error(f"Failed to start transform flow for user {user_id}: {str(e)}")
+        logger.error(f"Failed to complete transform flow for user {user_id}: {str(e)}")
+        
+        # Log transform failure
+        flow_duration_ms = int((time.time() - flow_start_time) * 1000)
+        if completion_audit_id:
+            await audit_service.log_operation_failure(
+                audit_id=completion_audit_id,
+                error_message=str(e),
+                duration_ms=flow_duration_ms
+            )
+        
         raise
 
 @router.post("/transform/{ontology_id}/upload", response_model=TransformInitResponse)
@@ -72,12 +115,26 @@ async def upload_documents(
     Returns:
         TransformInitResponse with Prefect flow_id for tracking progress
     """
+    start_time = time.time()
     temp_dir = Path(settings.UPLOAD_DIR)
+    transform_id = f"transform_{uuid.uuid4().hex}"
+    audit_id = ""
+    
     try:
         logger.info(f"Starting document upload for user: {user_id}")
         
-        # Generate transform ID
-        transform_id = f"transform_{uuid.uuid4().hex}"
+        # Start audit trail for transform operation
+        audit_id = await audit_service.log_operation_start(
+            user_id=user_id,
+            operation_type=OperationType.TRANSFORM_STARTED,
+            operation_id=transform_id,
+            resource_name=f"Transform {transform_id[:8]}",
+            metadata={
+                "ontology_id": ontology_id,
+                "files_count": len(files),
+                "file_names": [file.filename for file in files]
+            }
+        )
         
         # Initialize progress tracking
         await progress_tracker.initialize_transform(transform_id)
@@ -91,6 +148,7 @@ async def upload_documents(
         
         file_paths = []
         doc_metadata = []
+        total_file_size = 0
         
         for file in files:
             # Validate file
@@ -110,6 +168,7 @@ async def upload_documents(
                 await f.write(content)
             
             file_paths.append(temp_path)
+            total_file_size += len(content)
             logger.info(f"File saved to TMP directory {temp_path} for user {user_id}")
             
             # Create metadata
@@ -134,17 +193,32 @@ async def upload_documents(
             TransformationStage.UPLOAD
         )
         
-        # Start Prefect flow in background with user context
+        # Start Prefect flow in background with user context and audit ID
         background_tasks.add_task(
             run_transform_flow,
             transform_id=transform_id,
             ontology_id=ontology_id,
             file_paths=file_paths,
             metadata=doc_metadata,
-            user_id=user_id
+            user_id=user_id,
+            audit_id=audit_id
         )
         
         logger.info(f"Started transformation flow for user {user_id} with transform_id: {transform_id}")
+        
+        # Log upload success (not the full transform completion yet)
+        upload_duration_ms = int((time.time() - start_time) * 1000)
+        if audit_id:
+            await audit_service.log_operation_success(
+                audit_id=audit_id,
+                duration_ms=upload_duration_ms,
+                metadata={
+                    "transform_id": transform_id,
+                    "upload_completed": True,
+                    "total_file_size_bytes": total_file_size,
+                    "temp_directory": str(temp_dir)
+                }
+            )
         
         return TransformInitResponse(
             id=transform_id,
@@ -156,6 +230,16 @@ async def upload_documents(
     except Exception as e:
         logger.error(f"Upload failed for user {user_id}: {str(e)}")
         traceback.print_exc()
+        
+        # Log upload failure
+        upload_duration_ms = int((time.time() - start_time) * 1000)
+        if audit_id:
+            await audit_service.log_operation_failure(
+                audit_id=audit_id,
+                error_message=str(e),
+                duration_ms=upload_duration_ms
+            )
+        
         # Clean up temp directory on error
         if temp_dir.exists():
             for file in temp_dir.glob("*"):

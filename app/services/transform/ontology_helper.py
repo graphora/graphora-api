@@ -12,20 +12,72 @@ from app.services.user_db_service import UserDatabaseService
 class OntologyParser:
     """Parser for YAML ontology definitions"""
 
-    def __init__(self, yaml_path: Union[str, Path]):
-        """Initialize parser with YAML ontology"""
-        # Load YAML content
-        if isinstance(yaml_path, Path):
-            with open(yaml_path) as f:
-                yaml_content = f.read()
-        else:
-            yaml_content = yaml_path
+    def __init__(self, yaml_path: Union[str, Path], user_id: Optional[str] = None):
+        """Initialize parser with YAML ontology
+        
+        Args:
+            yaml_path: Path to YAML file or ontology ID or YAML content string
+            user_id: User ID for Supabase fallback (optional)
+        """
+        # Load YAML content with Supabase fallback
+        yaml_content = self._load_yaml_content(yaml_path, user_id)
         self.parsed_ontology = yaml.safe_load(yaml_content)
         self.ontology_yaml = yaml_content
         self.graph_model = self.build_graph_model()
         self.entities_only_model = self.build_entities_only_model()
         self.relationships_only_model = self.build_relationships_only_model()
         self.validate_ontology_structure()
+
+    def _load_yaml_content(self, yaml_path: Union[str, Path], user_id: Optional[str] = None) -> str:
+        """Load YAML content from file, Supabase, or string with fallback logic"""
+        # If it's already YAML content (string), return it
+        if isinstance(yaml_path, str) and not Path(yaml_path).exists():
+            # Check if it looks like YAML content
+            if 'version:' in yaml_path and 'entities:' in yaml_path:
+                return yaml_path
+            
+            # Might be an ontology ID, try Supabase if user_id provided
+            if user_id:
+                supabase_content = self._load_from_supabase(yaml_path, user_id)
+                if supabase_content:
+                    return supabase_content
+        
+        # Try to load from file path
+        file_path = Path(yaml_path) if isinstance(yaml_path, str) else yaml_path
+        
+        if file_path.exists():
+            with open(file_path) as f:
+                return f.read()
+        
+        # If file doesn't exist and we have user_id, try Supabase
+        if user_id:
+            # Extract ontology ID from filename if it's a path
+            ontology_id = file_path.stem if file_path.suffix == '.yaml' else str(yaml_path)
+            supabase_content = self._load_from_supabase(ontology_id, user_id)
+            if supabase_content:
+                return supabase_content
+        
+        # If all else fails, raise an error
+        raise FileNotFoundError(f"Ontology not found: {yaml_path}")
+
+    def _load_from_supabase(self, ontology_id: str, user_id: str) -> Optional[str]:
+        """Load ontology content from Supabase"""
+        try:
+            from supabase import create_client
+            supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            
+            result = supabase.table("ontologies").select("yaml_content").eq(
+                "id", ontology_id
+            ).eq("user_id", user_id).eq("is_active", True).execute()
+            
+            if result.data and len(result.data) > 0:
+                return result.data[0]["yaml_content"]
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error loading from Supabase: {e}")
+            return None
 
     def validate_ontology_structure(self) -> None:
         """Validate ontology has required structure"""

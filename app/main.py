@@ -6,6 +6,7 @@ from app.api.transform import router as transform_router
 from app.api.graph import router as graph_router
 from app.api.merge import router as merge_router
 from app.api.config import router as config_router
+from app.api.audit import router as audit_router
 from app.domain.healthcare import router as healthcare_router
 from app.config import settings
 from app.utils.logger import logger
@@ -48,6 +49,7 @@ app.include_router(transform_router)
 app.include_router(graph_router)
 app.include_router(merge_router)
 app.include_router(config_router)
+app.include_router(audit_router)
 app.include_router(healthcare_router)
 
 @app.get("/health")

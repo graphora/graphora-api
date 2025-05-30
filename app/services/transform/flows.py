@@ -171,7 +171,8 @@ async def document_transformation_flow(
                     transform_id=transform_id,
                     progress_callback=lambda i, t: asyncio.create_task(
                         update_stage_progress(transform_id, TransformationStage.TRANSFORM, i, t)
-                        )
+                        ),
+                    user_id=user_id
                 )
                 if graph and metrics:
                     total_nodes += metrics.total_nodes
@@ -185,7 +186,8 @@ async def document_transformation_flow(
             transform_id=transform_id,
             progress_callback=lambda i, t: asyncio.create_task(
                 update_stage_progress(transform_id, TransformationStage.TRANSFORM, i, t)
-            )
+            ),
+            user_id=user_id
         )
         if pdf_graph:
             graphs.append(pdf_graph)

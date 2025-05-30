@@ -87,7 +87,8 @@ async def construct_knowledge_graph(
     transform_id: str,
     chunks: List[str] = [],
     pdf_paths: List[Path] = [],
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    user_id: Optional[str] = None
 ) -> Tuple[Optional[DocumentKnowledgeGraph], Optional[ExtractionMetrics]]:
     """Construct knowledge graph from chunks using ontology"""
     logger = get_run_logger()
@@ -95,8 +96,8 @@ async def construct_knowledge_graph(
     try:
         logger.info(f"Processing {len(chunks)} chunks for transform {transform_id}")
         
-        # Load and validate ontology
-        parser = OntologyParser(ontology_path)
+        # Load and validate ontology with user_id for Supabase fallback
+        parser = OntologyParser(ontology_path, user_id)
         
         # Process chunks with controlled concurrency
         concurrency=settings.EXTRACTION_CONCURRENCY
