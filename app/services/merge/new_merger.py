@@ -302,28 +302,37 @@ async def get_merge_statistics(merge_id: str) -> Dict[str, Any]:
 
 async def get_merge_graph(merge_id: str, transform_id: str, user_id: str) -> GraphResponse:
     """Get the merged graph for a merge operation"""
-    # If merge status is not STARTED then return None
+    logger.info(f"get_merge_graph called with merge_id: {merge_id}, transform_id: {transform_id}, user_id: {user_id}")
+    
+    # Check merge status
     merge_status = supabase.table("merge_status").select("status").eq("merge_id", merge_id).execute()
     if not merge_status.data:
+        logger.warning(f"No merge status found for merge_id: {merge_id}")
         return None
-    elif merge_status.data[0]['status'] == MergeStatus.COMPLETED:
-        return await _get_prod_graph(merge_id, user_id)
-        
-    # Fetch staging graph using transform_id
-    staging_graph = await _extract_staging_graph(transform_id, user_id)
-    logger.debug(f"Retrieved staging graph with {len(staging_graph.nodes)} nodes")
     
-    # Fetch change_logs and apply on top of staging graph
+    status = merge_status.data[0]['status']
+    logger.info(f"Merge status for {merge_id}: {status}")
+    
+    # Always fetch staging graph and apply resolved changes
+    # This ensures we show the merged result even after completion
+    logger.info(f"Fetching staging graph for transform_id: {transform_id}")
+    staging_graph = await _extract_staging_graph(transform_id, user_id)
+    logger.info(f"Retrieved staging graph with {len(staging_graph.nodes)} nodes and {len(staging_graph.edges)} edges")
+    
+    # Fetch change_logs and apply resolved changes on top of staging graph
     change_logs = supabase.table("change_logs").select("*").eq("merge_id", merge_id).execute()
+    logger.info(f"Found {len(change_logs.data) if change_logs.data else 0} change logs for merge_id: {merge_id}")
+    
     if not change_logs.data:
+        logger.info("No change logs found, returning original staging graph")
         return staging_graph
         
     # Create a map of node IDs for quick lookup
     node_map = {node.id: node for node in staging_graph.nodes}
+    applied_changes = 0
     
     for change_log in change_logs.data:
         try:
-            # Use 'node_id' instead of 'staging_node_id'
             node_id = change_log.get('node_id')
             if not node_id or node_id not in node_map:
                 logger.warning(f"Node ID {node_id} not found in staging graph")
@@ -331,18 +340,22 @@ async def get_merge_graph(merge_id: str, transform_id: str, user_id: str) -> Gra
                 
             staging_node = node_map[node_id]
             
-            # Apply changes if needed
-            if change_log.get('changed_props'):
-                # Update the node properties with the resolved properties
+            # Apply resolved changes (both auto-resolved and manually resolved)
+            if change_log.get('changed_props') and not change_log.get('need_human_review', False):
+                # Only apply if the conflict has been resolved (not needing human review)
                 staging_node.properties.update(change_log['changed_props'])
+                applied_changes += 1
+                logger.debug(f"Applied resolved changes to node {node_id}")
                 
-            # Mark nodes that need review
+            # Mark nodes that still need review (shouldn't happen after all conflicts are resolved)
             if change_log.get('need_human_review', False):
                 staging_node.properties['__NEED_REVIEW'] = True
+                logger.debug(f"Marked node {node_id} as needing review")
                 
         except Exception as e:
             logger.error(f"Error processing change log: {str(e)}")
             
+    logger.info(f"Applied {applied_changes} resolved changes. Returning staging graph with modifications: {len(staging_graph.nodes)} nodes, {len(staging_graph.edges)} edges")
     return staging_graph
 
 @task(name="extract_staging_graph")
@@ -821,8 +834,11 @@ def _add_ingestion_stats(merge_id, node_batch_result, edge_batch_result):
     ).eq("merge_id", merge_id).execute()
 
 async def _get_prod_graph(merge_id: str, user_id: str) -> GraphResponse:
+    logger.info(f"_get_prod_graph called with merge_id: {merge_id}, user_id: {user_id}")
+    
     # Get user's production database configuration
     user_config = await UserDatabaseService.get_user_config(user_id)
+    logger.info(f"Retrieved user config for production database: {user_config.prodDb.uri}")
     
     storage = Neo4jStorage(
         uri=user_config.prodDb.uri,
@@ -830,7 +846,14 @@ async def _get_prod_graph(merge_id: str, user_id: str) -> GraphResponse:
         password=user_config.prodDb.password,
         database="neo4j"  # Default database name
     )
-    return await storage.get_merge_data(merge_id)
+    
+    try:
+        graph_data = await storage.get_merge_data(merge_id)
+        logger.info(f"Retrieved production graph data: {len(graph_data.nodes) if graph_data else 0} nodes, {len(graph_data.edges) if graph_data else 0} edges")
+        return graph_data
+    except Exception as e:
+        logger.error(f"Error retrieving production graph data: {str(e)}")
+        raise
 
 async def get_past_resolution(ontology_id: str, node_type: str) -> str:
     response = supabase.table("resolutions").select("*").eq("node_type", node_type).execute()
