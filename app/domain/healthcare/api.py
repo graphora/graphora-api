@@ -1,30 +1,49 @@
 """
 Healthcare domain-specific API endpoints
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Header
 from typing import Optional
 from app.domain.healthcare.schemas import PatientListResponse, PatientJourney, LaboratoryResultsResponse
 from app.domain.healthcare.service import HealthcareService
 from app.services.storage.neo4j import Neo4jStorage
+from app.services.user_db_service import UserDatabaseService
 from app.config import settings
 from app.utils.logger import logger
 import traceback
 
 router = APIRouter(prefix="/api/v1/domain/healthcare", tags=["Healthcare"])
 
-def get_healthcare_service():
+async def get_healthcare_service(user_id: str = Header(..., alias="user-id", description="User's ID")):
     """
-    Dependency to get a healthcare service instance
+    Dependency to get a healthcare service instance with user-specific database
     """
-    neo4j_storage = Neo4jStorage(
-        uri=settings.NEO4J_URI,
-        username=settings.NEO4J_USER,
-        password=settings.NEO4J_PASSWORD
-    )
-    service = HealthcareService(neo4j_storage=neo4j_storage)
-    # Note: We're not closing the connection here to avoid async issues
-    # The connection will be closed when the application shuts down
-    return service
+    try:
+        # Get user's production database configuration (domain apps use production data)
+        user_config = await UserDatabaseService.get_user_config(user_id)
+        
+        neo4j_storage = Neo4jStorage(
+            uri=user_config.prodDb.uri,
+            username=user_config.prodDb.username,
+            password=user_config.prodDb.password,
+            database="neo4j"  # Default database name
+        )
+        service = HealthcareService(neo4j_storage=neo4j_storage)
+        # Note: We're not closing the connection here to avoid async issues
+        # The connection will be closed when the application shuts down
+        return service
+    except ValueError as e:
+        # User configuration not found
+        raise HTTPException(
+            status_code=404,
+            detail=str(e)
+        )
+    except Exception as e:
+        # Other errors (database connection, etc.)
+        logger.error(f"Error creating healthcare service for user {user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize healthcare service"
+        )
 
 @router.get("/patients", 
          response_model=PatientListResponse,
