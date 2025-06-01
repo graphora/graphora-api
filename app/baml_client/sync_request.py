@@ -13,8 +13,8 @@
 # flake8: noqa: E501,F401
 # pylint: disable=unused-import,line-too-long
 # fmt: off
-from typing import Any, Dict, List, Optional, Union, TypedDict, Type, Literal
-from typing_extensions import NotRequired
+from typing import Any, Dict, List, Optional, Union, TypedDict, Type
+from typing_extensions import NotRequired, Literal
 
 import baml_py
 

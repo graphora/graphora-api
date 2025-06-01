@@ -15,9 +15,11 @@
 # fmt: off
 import baml_py
 from enum import Enum
+
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import TypeAlias
-from typing import Dict, Generic, List, Literal, Optional, TypeVar, Union
+
+from typing_extensions import TypeAlias, Literal
+from typing import Dict, Generic, List, Optional, TypeVar, Union
 
 
 T = TypeVar('T')
@@ -27,7 +29,6 @@ class Check(BaseModel):
     name: str
     expression: str
     status: str
-
 class Checked(BaseModel, Generic[T,CheckName]):
     value: T
     checks: Dict[CheckName, Check]
@@ -41,10 +42,10 @@ def all_succeeded(checks: Dict[CheckName, Check]) -> bool:
 
 
 class ResolutionStrategy(str, Enum):
-    KEEP_STAGING = "staging"
-    KEEP_PRODUCTION = "production"
-    CUSTOM = "custom"
-    KEEP_BOTH = "both"
+    
+    KEEP_STAGING = "KEEP_STAGING"
+    KEEP_PRODUCTION = "KEEP_PRODUCTION"
+    MERGE_VALUES = "MERGE_VALUES"
 
 class ChangeResult(BaseModel):
     id: str

@@ -15,7 +15,7 @@
 # fmt: off
 import typing
 from baml_py.baml_py import FieldType, EnumValueBuilder, EnumBuilder, ClassBuilder
-from baml_py.type_builder import TypeBuilder as _TypeBuilder, ClassPropertyBuilder
+from baml_py.type_builder import TypeBuilder as _TypeBuilder, ClassPropertyBuilder, ClassPropertyViewer, EnumValueViewer
 from .globals import DO_NOT_USE_DIRECTLY_UNLESS_YOU_KNOW_WHAT_YOURE_DOING_RUNTIME
 
 
@@ -28,51 +28,940 @@ class TypeBuilder(_TypeBuilder):
         ), runtime=DO_NOT_USE_DIRECTLY_UNLESS_YOU_KNOW_WHAT_YOURE_DOING_RUNTIME)
 
 
+    @property
+    def ChangeResult(self) -> "ChangeResultAst":
+        return ChangeResultAst(self)
+
+    @property
+    def ConflictAnalysis(self) -> "ConflictAnalysisAst":
+        return ConflictAnalysisAst(self)
+
+    @property
+    def ConflictClassification(self) -> "ConflictClassificationAst":
+        return ConflictClassificationAst(self)
+
+    @property
+    def ConflictGroupAnalysis(self) -> "ConflictGroupAnalysisAst":
+        return ConflictGroupAnalysisAst(self)
+
+    @property
+    def Correction(self) -> "CorrectionAst":
+        return CorrectionAst(self)
+
     
     @property
     def DynamicContainer(self) -> "DynamicContainerBuilder":
         return DynamicContainerBuilder(self)
 
-
-
-
-
-class DynamicContainerBuilder:
-    def __init__(self, tb: _TypeBuilder):
-        _tb = tb._tb # type: ignore (we know how to use this private attribute)
-        self.__bldr = _tb.class_("DynamicContainer")
-        self.__properties: typing.Set[str] = set([])
-        self.__props = DynamicContainerProperties(self.__bldr, self.__properties)
-
-    def type(self) -> FieldType:
-        return self.__bldr.field()
+    @property
+    def EntitySimilarityAnalysis(self) -> "EntitySimilarityAnalysisAst":
+        return EntitySimilarityAnalysisAst(self)
 
     @property
-    def props(self) -> "DynamicContainerProperties":
-        return self.__props
+    def MatchingNode(self) -> "MatchingNodeAst":
+        return MatchingNodeAst(self)
+
+    @property
+    def PropertyConflictAnalysis(self) -> "PropertyConflictAnalysisAst":
+        return PropertyConflictAnalysisAst(self)
+
+    @property
+    def RelationshipConflictAnalysis(self) -> "RelationshipConflictAnalysisAst":
+        return RelationshipConflictAnalysisAst(self)
+
+    @property
+    def RelationshipInference(self) -> "RelationshipInferenceAst":
+        return RelationshipInferenceAst(self)
+
+    @property
+    def ResolutionOption(self) -> "ResolutionOptionAst":
+        return ResolutionOptionAst(self)
+
+    @property
+    def ResolutionOptions(self) -> "ResolutionOptionsAst":
+        return ResolutionOptionsAst(self)
+
+    @property
+    def ResolvedEntities(self) -> "ResolvedEntitiesAst":
+        return ResolvedEntitiesAst(self)
+
+    @property
+    def SelectedResolution(self) -> "SelectedResolutionAst":
+        return SelectedResolutionAst(self)
+
+    @property
+    def StandardisedProperties(self) -> "StandardisedPropertiesAst":
+        return StandardisedPropertiesAst(self)
+
+
+
+
+
+class ChangeResultAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("ChangeResult")
+        self._properties: typing.Set[str] = set([ "id",  "corrections",  "confidence_score", ])
+        self._props = ChangeResultProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "ChangeResultProperties":
+        return self._props
+
+
+class ChangeResultViewer(ChangeResultAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
     
-    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyBuilder]]:
-        return [(name, ClassPropertyBuilder(self.__bldr.property(name))) for name in self.__properties]
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
 
-    def add_property(self, name: str, type: FieldType) -> ClassPropertyBuilder:
-        if name in self.__properties:
-            raise ValueError(f"Property {name} already exists.")
-        return ClassPropertyBuilder(self.__bldr.property(name).type(type))
 
-class DynamicContainerProperties:
-    def __init__(self, cls_bldr: ClassBuilder, properties: typing.Set[str]):
-        self.__bldr = cls_bldr
+
+class ChangeResultProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
         self.__properties = properties
 
     
 
+    @property
+    def id(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("id"))
+
+    @property
+    def corrections(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("corrections"))
+
+    @property
+    def confidence_score(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence_score"))
+
+    
+
+class ConflictAnalysisAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("ConflictAnalysis")
+        self._properties: typing.Set[str] = set([ "description",  "potential_causes",  "semantic_meaning",  "impact",  "key_differences", ])
+        self._props = ConflictAnalysisProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "ConflictAnalysisProperties":
+        return self._props
+
+
+class ConflictAnalysisViewer(ConflictAnalysisAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class ConflictAnalysisProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def description(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("description"))
+
+    @property
+    def potential_causes(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("potential_causes"))
+
+    @property
+    def semantic_meaning(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("semantic_meaning"))
+
+    @property
+    def impact(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("impact"))
+
+    @property
+    def key_differences(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("key_differences"))
+
+    
+
+class ConflictClassificationAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("ConflictClassification")
+        self._properties: typing.Set[str] = set([ "category",  "explanation",  "confidence", ])
+        self._props = ConflictClassificationProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "ConflictClassificationProperties":
+        return self._props
+
+
+class ConflictClassificationViewer(ConflictClassificationAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class ConflictClassificationProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def category(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("category"))
+
+    @property
+    def explanation(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("explanation"))
+
+    @property
+    def confidence(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence"))
+
+    
+
+class ConflictGroupAnalysisAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("ConflictGroupAnalysis")
+        self._properties: typing.Set[str] = set([ "pattern",  "batch_resolvable",  "recommended_strategy",  "confidence",  "risks", ])
+        self._props = ConflictGroupAnalysisProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "ConflictGroupAnalysisProperties":
+        return self._props
+
+
+class ConflictGroupAnalysisViewer(ConflictGroupAnalysisAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class ConflictGroupAnalysisProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def pattern(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("pattern"))
+
+    @property
+    def batch_resolvable(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("batch_resolvable"))
+
+    @property
+    def recommended_strategy(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("recommended_strategy"))
+
+    @property
+    def confidence(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence"))
+
+    @property
+    def risks(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("risks"))
+
+    
+
+class CorrectionAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("Correction")
+        self._properties: typing.Set[str] = set([ "prop_name",  "prop_value", ])
+        self._props = CorrectionProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "CorrectionProperties":
+        return self._props
+
+
+class CorrectionViewer(CorrectionAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class CorrectionProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def prop_name(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("prop_name"))
+
+    @property
+    def prop_value(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("prop_value"))
+
+    
+
+class DynamicContainerAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("DynamicContainer")
+        self._properties: typing.Set[str] = set([])
+        self._props = DynamicContainerProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "DynamicContainerProperties":
+        return self._props
+
+
+class DynamicContainerBuilder(DynamicContainerAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    def add_property(self, name: str, type: FieldType) -> ClassPropertyBuilder:
+        if name in self._properties:
+            raise ValueError(f"Property {name} already exists.")
+        return ClassPropertyBuilder(self._bldr.property(name).type(type))
+
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyBuilder]]:
+        return [(name, ClassPropertyBuilder(self._bldr.property(name))) for name in self._properties]
+
+
+
+class DynamicContainerProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    
     def __getattr__(self, name: str) -> ClassPropertyBuilder:
         if name not in self.__properties:
             raise AttributeError(f"Property {name} not found.")
         return ClassPropertyBuilder(self.__bldr.property(name))
+    
+
+class EntitySimilarityAnalysisAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("EntitySimilarityAnalysis")
+        self._properties: typing.Set[str] = set([ "similarity_score",  "confidence",  "matching_properties",  "mismatched_properties",  "semantic_similarity",  "potential_merge_impact",  "recommended_action",  "reasoning", ])
+        self._props = EntitySimilarityAnalysisProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "EntitySimilarityAnalysisProperties":
+        return self._props
+
+
+class EntitySimilarityAnalysisViewer(EntitySimilarityAnalysisAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
 
 
 
+class EntitySimilarityAnalysisProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def similarity_score(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("similarity_score"))
+
+    @property
+    def confidence(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence"))
+
+    @property
+    def matching_properties(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("matching_properties"))
+
+    @property
+    def mismatched_properties(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("mismatched_properties"))
+
+    @property
+    def semantic_similarity(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("semantic_similarity"))
+
+    @property
+    def potential_merge_impact(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("potential_merge_impact"))
+
+    @property
+    def recommended_action(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("recommended_action"))
+
+    @property
+    def reasoning(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("reasoning"))
+
+    
+
+class MatchingNodeAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("MatchingNode")
+        self._properties: typing.Set[str] = set([ "staging_node_id",  "node_id",  "confidence", ])
+        self._props = MatchingNodeProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "MatchingNodeProperties":
+        return self._props
+
+
+class MatchingNodeViewer(MatchingNodeAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class MatchingNodeProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def staging_node_id(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("staging_node_id"))
+
+    @property
+    def node_id(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("node_id"))
+
+    @property
+    def confidence(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence"))
+
+    
+
+class PropertyConflictAnalysisAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("PropertyConflictAnalysis")
+        self._properties: typing.Set[str] = set([ "recommended_strategy",  "confidence",  "explanation",  "can_auto_resolve",  "potential_risks", ])
+        self._props = PropertyConflictAnalysisProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "PropertyConflictAnalysisProperties":
+        return self._props
+
+
+class PropertyConflictAnalysisViewer(PropertyConflictAnalysisAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class PropertyConflictAnalysisProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def recommended_strategy(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("recommended_strategy"))
+
+    @property
+    def confidence(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence"))
+
+    @property
+    def explanation(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("explanation"))
+
+    @property
+    def can_auto_resolve(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("can_auto_resolve"))
+
+    @property
+    def potential_risks(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("potential_risks"))
+
+    
+
+class RelationshipConflictAnalysisAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("RelationshipConflictAnalysis")
+        self._properties: typing.Set[str] = set([ "recommended_strategy",  "confidence",  "explanation",  "can_auto_resolve",  "semantic_impact",  "risks", ])
+        self._props = RelationshipConflictAnalysisProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "RelationshipConflictAnalysisProperties":
+        return self._props
+
+
+class RelationshipConflictAnalysisViewer(RelationshipConflictAnalysisAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class RelationshipConflictAnalysisProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def recommended_strategy(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("recommended_strategy"))
+
+    @property
+    def confidence(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence"))
+
+    @property
+    def explanation(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("explanation"))
+
+    @property
+    def can_auto_resolve(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("can_auto_resolve"))
+
+    @property
+    def semantic_impact(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("semantic_impact"))
+
+    @property
+    def risks(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("risks"))
+
+    
+
+class RelationshipInferenceAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("RelationshipInference")
+        self._properties: typing.Set[str] = set([ "id",  "type",  "source_id",  "target_id",  "source_type",  "target_type",  "properties",  "confidence_score", ])
+        self._props = RelationshipInferenceProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "RelationshipInferenceProperties":
+        return self._props
+
+
+class RelationshipInferenceViewer(RelationshipInferenceAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class RelationshipInferenceProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def id(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("id"))
+
+    @property
+    def type(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("type"))
+
+    @property
+    def source_id(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("source_id"))
+
+    @property
+    def target_id(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("target_id"))
+
+    @property
+    def source_type(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("source_type"))
+
+    @property
+    def target_type(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("target_type"))
+
+    @property
+    def properties(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("properties"))
+
+    @property
+    def confidence_score(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence_score"))
+
+    
+
+class ResolutionOptionAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("ResolutionOption")
+        self._properties: typing.Set[str] = set([ "id",  "description",  "resolution_type",  "resolution_data",  "confidence",  "reasoning", ])
+        self._props = ResolutionOptionProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "ResolutionOptionProperties":
+        return self._props
+
+
+class ResolutionOptionViewer(ResolutionOptionAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class ResolutionOptionProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def id(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("id"))
+
+    @property
+    def description(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("description"))
+
+    @property
+    def resolution_type(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("resolution_type"))
+
+    @property
+    def resolution_data(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("resolution_data"))
+
+    @property
+    def confidence(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence"))
+
+    @property
+    def reasoning(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("reasoning"))
+
+    
+
+class ResolutionOptionsAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("ResolutionOptions")
+        self._properties: typing.Set[str] = set([ "options",  "recommended_option_id",  "recommendation_reasoning", ])
+        self._props = ResolutionOptionsProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "ResolutionOptionsProperties":
+        return self._props
+
+
+class ResolutionOptionsViewer(ResolutionOptionsAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class ResolutionOptionsProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def options(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("options"))
+
+    @property
+    def recommended_option_id(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("recommended_option_id"))
+
+    @property
+    def recommendation_reasoning(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("recommendation_reasoning"))
+
+    
+
+class ResolvedEntitiesAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("ResolvedEntities")
+        self._properties: typing.Set[str] = set([ "matching_ids",  "confidence_score",  "explanation", ])
+        self._props = ResolvedEntitiesProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "ResolvedEntitiesProperties":
+        return self._props
+
+
+class ResolvedEntitiesViewer(ResolvedEntitiesAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class ResolvedEntitiesProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def matching_ids(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("matching_ids"))
+
+    @property
+    def confidence_score(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence_score"))
+
+    @property
+    def explanation(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("explanation"))
+
+    
+
+class SelectedResolutionAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("SelectedResolution")
+        self._properties: typing.Set[str] = set([ "option_id",  "resolution_type",  "resolution_data",  "confidence", ])
+        self._props = SelectedResolutionProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "SelectedResolutionProperties":
+        return self._props
+
+
+class SelectedResolutionViewer(SelectedResolutionAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class SelectedResolutionProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def option_id(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("option_id"))
+
+    @property
+    def resolution_type(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("resolution_type"))
+
+    @property
+    def resolution_data(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("resolution_data"))
+
+    @property
+    def confidence(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence"))
+
+    
+
+class StandardisedPropertiesAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("StandardisedProperties")
+        self._properties: typing.Set[str] = set([ "entity_id",  "properties", ])
+        self._props = StandardisedPropertiesProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "StandardisedPropertiesProperties":
+        return self._props
+
+
+class StandardisedPropertiesViewer(StandardisedPropertiesAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class StandardisedPropertiesProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def entity_id(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("entity_id"))
+
+    @property
+    def properties(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("properties"))
+
+    
+
+
+
+class ResolutionStrategyAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.enum("ResolutionStrategy")
+        self._values: typing.Set[str] = set([ "KEEP_STAGING",  "KEEP_PRODUCTION",  "MERGE_VALUES", ])
+        self._vals = ResolutionStrategyValues(self._bldr, self._values)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def values(self) -> "ResolutionStrategyValues":
+        return self._vals
+
+
+class ResolutionStrategyViewer(ResolutionStrategyAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    def list_values(self) -> typing.List[typing.Tuple[str, EnumValueViewer]]:
+        return [(name, EnumValueViewer(self._bldr.value(name))) for name in self._values]
+
+
+class ResolutionStrategyValues:
+    def __init__(self, enum_bldr: EnumBuilder, values: typing.Set[str]):
+        self.__bldr = enum_bldr
+        self.__values = values
+
+    
+
+    @property
+    def KEEP_STAGING(self) -> EnumValueViewer:
+        return EnumValueViewer(self.__bldr.value("KEEP_STAGING"))
+    
+
+    @property
+    def KEEP_PRODUCTION(self) -> EnumValueViewer:
+        return EnumValueViewer(self.__bldr.value("KEEP_PRODUCTION"))
+    
+
+    @property
+    def MERGE_VALUES(self) -> EnumValueViewer:
+        return EnumValueViewer(self.__bldr.value("MERGE_VALUES"))
+    
+
+    
 
 
 __all__ = ["TypeBuilder"]
