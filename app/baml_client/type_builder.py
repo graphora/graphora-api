@@ -920,7 +920,7 @@ class ResolutionStrategyAst:
     def __init__(self, tb: _TypeBuilder):
         _tb = tb._tb # type: ignore (we know how to use this private attribute)
         self._bldr = _tb.enum("ResolutionStrategy")
-        self._values: typing.Set[str] = set([ "KEEP_STAGING",  "KEEP_PRODUCTION",  "MERGE_VALUES", ])
+        self._values: typing.Set[str] = set([ "KEEP_STAGING",  "KEEP_PRODUCTION",  "MERGE_VALUES",  "KEEP_BOTH", ])
         self._vals = ResolutionStrategyValues(self._bldr, self._values)
 
     def type(self) -> FieldType:
@@ -959,6 +959,11 @@ class ResolutionStrategyValues:
     @property
     def MERGE_VALUES(self) -> EnumValueViewer:
         return EnumValueViewer(self.__bldr.value("MERGE_VALUES"))
+    
+
+    @property
+    def KEEP_BOTH(self) -> EnumValueViewer:
+        return EnumValueViewer(self.__bldr.value("KEEP_BOTH"))
     
 
     

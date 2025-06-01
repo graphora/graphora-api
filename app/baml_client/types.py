@@ -46,6 +46,7 @@ class ResolutionStrategy(str, Enum):
     KEEP_STAGING = "KEEP_STAGING"
     KEEP_PRODUCTION = "KEEP_PRODUCTION"
     MERGE_VALUES = "MERGE_VALUES"
+    KEEP_BOTH = "KEEP_BOTH"
 
 class ChangeResult(BaseModel):
     id: str

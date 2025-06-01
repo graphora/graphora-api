@@ -7,6 +7,7 @@ enum ResolutionStrategy {
   KEEP_STAGING
   KEEP_PRODUCTION
   MERGE_VALUES
+  KEEP_BOTH
 }
 
 // Output types

@@ -862,12 +862,22 @@ async def get_past_resolution(ontology_id: str, node_type: str) -> str:
     learnings = []
     i = 1
     for log in response.data:
+        # Handle different resolution strategies
+        if log['resolution'] == ResolutionStrategy.KEEP_BOTH.value:
+            resolution_description = "Keep Both (Staging and Production)"
+        else:
+            try:
+                resolution_description = ResolutionStrategy(log['resolution']).value
+            except ValueError:
+                # Fallback for unknown resolution values
+                resolution_description = log['resolution']
+        
         learning = f"""
         Learning {i}:
             Existing Properties (Production): {log['previous_props']}
             Incoming Properties (Staging): {log['changed_props']}
             Resolution by the User: {log['resolved_props']}
-            Resolution Strategy: {"Keep Incoming Properties" if log['resolution'] == ResolutionStrategy.KEEP_BOTH.value else ResolutionStrategy(log['resolution']).value}
+            Resolution Strategy: {resolution_description}
             User Comment (rationale): {log['learning_comment']}
         """
         learnings.append(learning)
