@@ -32,7 +32,38 @@ class ModelProvider(str, Enum):
     GEMINI = "gemini"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
-    BAML = "baml"
+    BAML = "other"
+
+
+class ModelProviderSchema(BaseModel):
+    """Schema for model providers"""
+    id: Optional[str] = None
+    provider_name: str = Field(..., description="Provider name")
+    display_name: str = Field(..., description="Display name")
+    description: Optional[str] = Field(None, description="Provider description")
+    is_active: bool = Field(default=True, description="Whether provider is active")
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ModelPricingSchema(BaseModel):
+    """Schema for model pricing"""
+    id: Optional[str] = None
+    provider_id: str = Field(..., description="Provider ID")
+    model_name: str = Field(..., description="Model name")
+    model_version: Optional[str] = Field(None, description="Model version")
+    
+    # Pricing per 1K tokens in USD
+    input_price_per_1k_tokens: Decimal = Field(..., description="Input token price per 1K")
+    output_price_per_1k_tokens: Decimal = Field(..., description="Output token price per 1K")
+    
+    # Additional metadata
+    model_context_window: Optional[int] = Field(None, description="Model context window size")
+    model_description: Optional[str] = Field(None, description="Model description")
+    is_active: bool = Field(default=True, description="Whether pricing is active")
+    
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class DocumentUsage(BaseModel):
