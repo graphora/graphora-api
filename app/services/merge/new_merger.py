@@ -88,7 +88,9 @@ async def merge_flow(
             _update_merge_status(merge_id, MergeStatus.STARTED)
 
         # Step-2: Extract Production Graph
-        prod_mapping_result: EntityMappingResult = await _map_production_entities(merged_graph, ontology, user_id)
+        prod_mapping_result: EntityMappingResult = await _map_production_entities(
+            merged_graph, ontology, user_id, merge_id=merge_id, transform_id=transform_id
+        )
         logger.debug(f"Production mapping result: {prod_mapping_result}")
 
         # Step-3: Compare Graphs & Identify Conflicts
@@ -105,7 +107,9 @@ async def merge_flow(
                 change_logs.append(change_log)
 
         change_log_by_entity_type = _group_changes_by_entity_type(change_logs)
-        high_conf_changes, changes_for_human_review = await _classify_changes(ontology_id, change_log_by_entity_type)
+        high_conf_changes, changes_for_human_review = await _classify_changes(
+            ontology_id, change_log_by_entity_type, merge_id=merge_id, transform_id=transform_id, user_id=user_id
+        )
 
         if changes_for_human_review:
             _update_merge_status(merge_id, MergeStatus.HUMAN_REVIEW)
@@ -439,6 +443,8 @@ async def _map_production_entities(
     ontology: Dict[str, Any],
     user_id: str,
     similarity_threshold: float = 0.7,
+    merge_id: Optional[str] = None,
+    transform_id: Optional[str] = None
 ) -> EntityMappingResult:
     try:
         start_time = time.time()
@@ -481,8 +487,12 @@ async def _map_production_entities(
 
         #analyse candidates and add to matches only if there is high confidence
         if len(candidates) > 0:
-            matching_nodes = b.GetMatchingNodes(
-                candidate_sets=candidates
+            from app.utils.baml_usage_tracker import track_baml_get_matching_nodes
+            matching_nodes = await track_baml_get_matching_nodes(
+                user_id=user_id,
+                candidate_sets=candidates,
+                merge_id=merge_id,
+                transform_id=transform_id
             )
             for match in matching_nodes:
                 if match.node_id:
@@ -1100,7 +1110,10 @@ def _get_change_log_string(change_log: ChangeLog) -> str:
 @task(name="classify_changes")
 async def _classify_changes(
         ontology_id: str, 
-        change_log_by_entity_type: Dict[str, List[ChangeLog]]
+        change_log_by_entity_type: Dict[str, List[ChangeLog]],
+        merge_id: Optional[str] = None,
+        transform_id: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> Tuple[List[ChangeLog], List[ChangeLog]]:
     """
     Classify changes into high confidence and low confidence changes
@@ -1116,9 +1129,14 @@ async def _classify_changes(
             high_conf_changes.extend(change_logs)
             continue
         change_log_string = "\n".join(changes)
-        eval_changes = b.EvalChanges(
+        from app.utils.baml_usage_tracker import track_baml_eval_changes
+        eval_changes = await track_baml_eval_changes(
+            user_id=user_id,
             change_logs=change_log_string,
-            past_resolutions=past_resolutions
+            past_resolutions=past_resolutions,
+            merge_id=merge_id,
+            transform_id=transform_id,
+            ontology_id=ontology_id
         )
         if len(eval_changes) > 0:
             for change in eval_changes:

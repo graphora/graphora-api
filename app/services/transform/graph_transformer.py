@@ -20,25 +20,29 @@ async def build_graph_from_chunks(
         ontology_parser: OntologyParser,
         chunks: List[str],
         transform_id: str,
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        user_id: Optional[str] = None,
+        document_usage_id: Optional[str] = None
     ) -> DocumentKnowledgeGraph:
     llm_client = LLMClient()
     return await _build_graph_from(ontology_parser, chunks, transform_id, 
                                   llm_client.extract_nodes_from_chunk, 
                                   llm_client.extract_relationships_from_chunk,
-                                  progress_callback)
+                                  progress_callback, user_id, document_usage_id)
 
 async def build_graph_from_pdfs(
         ontology_parser: OntologyParser,
         pdf_paths: List[str],
         transform_id: str,
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        user_id: Optional[str] = None,
+        document_usage_id: Optional[str] = None
     ) -> DocumentKnowledgeGraph:
     llm_client = LLMClient()
     return await _build_graph_from(ontology_parser, pdf_paths, transform_id, 
                                   llm_client.extract_nodes_from_pdf, 
                                   llm_client.extract_relationships_from_pdf,
-                                  progress_callback)
+                                  progress_callback, user_id, document_usage_id)
 
 
 async def _build_graph_from(
@@ -47,7 +51,9 @@ async def _build_graph_from(
         transform_id: str,
         node_extractor: Callable[[str, BaseModel, str], BaseModel],
         relationship_extractor: Callable[[str, BaseModel, str], BaseModel],
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        user_id: Optional[str] = None,
+        document_usage_id: Optional[str] = None
     ) -> DocumentKnowledgeGraph:
     nodes_only_ontology = ontology_parser.build_entities_only_model()
     context = "None"
@@ -58,7 +64,10 @@ async def _build_graph_from(
             _chunk, 
             response_model=nodes_only_ontology,
             context=context, 
-            ontology_yaml=ontology_parser.ontology_yaml
+            ontology_yaml=ontology_parser.ontology_yaml,
+            user_id=user_id,
+            transform_id=transform_id,
+            document_usage_id=document_usage_id
         )
         base_nodes = transform_as_nodes(
             ontology_parser.parsed_ontology, 
@@ -83,7 +92,10 @@ async def _build_graph_from(
             _chunk, 
             response_model=relationships_only_ontology, 
             context=context,
-            ontology_yaml=ontology_parser.ontology_yaml
+            ontology_yaml=ontology_parser.ontology_yaml,
+            user_id=user_id,
+            transform_id=transform_id,
+            document_usage_id=document_usage_id
         )
         base_relationships = transform_as_relationships(
             ontology_parser.parsed_ontology, 

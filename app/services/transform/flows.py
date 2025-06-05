@@ -6,6 +6,7 @@ from pathlib import Path
 import aiofiles
 import asyncio
 import uuid
+from datetime import timezone
 from fastapi import UploadFile
 from app.utils.logger import logger
 from app.schemas.transform import (
@@ -30,6 +31,8 @@ from app.services.chunking.models import (
     ChunkingResult,
     ChunkMetadata
 )
+from app.services.usage_tracking import usage_tracking_service
+from app.schemas.usage import DocumentUsageRequest, ProcessingStatus
 from PyPDF2 import PdfReader, PdfWriter
 
 progress_tracker = ProgressTracker()
@@ -110,9 +113,50 @@ async def document_transformation_flow(
         user_id: User's ID for database configuration
     """
     logger.info(f"Starting transformation flow with ID: {transform_id} for user: {user_id}")
+    
+    # Track document processing usage
+    document_usage_records = []
+    processing_start_time = datetime.now(timezone.utc)
+    
     try:
         
         logger.info(f"Starting transformation flow {transform_id}")
+        
+        # Create usage tracking records for each document
+        for file_path, doc_metadata in zip(file_paths, metadata):
+            try:
+                path = Path(file_path)
+                file_size = path.stat().st_size if path.exists() else 0
+                
+                # Estimate page count for non-PDF files
+                page_count = 1  # Default
+                if path.suffix.lower() == '.pdf':
+                    try:
+                        from PyPDF2 import PdfReader
+                        reader = PdfReader(file_path)
+                        page_count = len(reader.pages)
+                    except:
+                        page_count = 1  # Fallback
+                
+                usage_request = DocumentUsageRequest(
+                    transform_id=transform_id,
+                    document_name=path.name,
+                    document_type=path.suffix.lstrip('.').upper() or 'UNKNOWN',
+                    document_size_bytes=file_size,
+                    page_count=page_count
+                )
+                
+                usage_record = await usage_tracking_service.track_document_processing(
+                    user_id=user_id,
+                    request=usage_request,
+                    processing_started_at=processing_start_time
+                )
+                document_usage_records.append(usage_record)
+                logger.info(f"Started tracking usage for document: {path.name}")
+                
+            except Exception as e:
+                logger.error(f"Failed to track usage for {file_path}: {str(e)}")
+                # Continue processing even if tracking fails
         
         processed_paths = []
         doc_chunk_results = []
@@ -231,11 +275,34 @@ async def document_transformation_flow(
             TransformationStage.LOAD
         )
         
+        # Update usage tracking with final results
+        for i, usage_record in enumerate(document_usage_records):
+            try:
+                # Calculate metrics for this document
+                doc_chunks = len(doc_chunk_results) if i < len(doc_chunk_results) else 0
+                doc_nodes = total_nodes // len(document_usage_records) if document_usage_records else 0
+                doc_relationships = total_relationships // len(document_usage_records) if document_usage_records else 0
+                
+                await usage_tracking_service.update_document_processing(
+                    document_usage_id=usage_record.id,
+                    processing_completed_at=datetime.now(timezone.utc),
+                    processing_status=ProcessingStatus.SUCCESS,
+                    chunks_created=doc_chunks,
+                    nodes_extracted=doc_nodes,
+                    relationships_extracted=doc_relationships,
+                    success_rate=1.0
+                )
+                logger.info(f"Updated usage tracking for document: {usage_record.document_name}")
+                
+            except Exception as e:
+                logger.error(f"Failed to update usage tracking for {usage_record.id}: {str(e)}")
+        
         # Return flow results
         return {
             'transform_id': transform_id,
             'total_nodes': total_nodes,
-            'total_relationships': total_relationships
+            'total_relationships': total_relationships,
+            'documents_processed': len(document_usage_records)
         }
         
     except Exception as e:
@@ -276,6 +343,19 @@ async def document_transformation_flow(
             current_stage,
             error
         )
+        
+        # Update usage tracking for failed processing
+        for usage_record in document_usage_records:
+            try:
+                await usage_tracking_service.update_document_processing(
+                    document_usage_id=usage_record.id,
+                    processing_completed_at=datetime.now(timezone.utc),
+                    processing_status=ProcessingStatus.FAILED,
+                    success_rate=0.0,
+                    error_message=str(e)
+                )
+            except Exception as update_error:
+                logger.error(f"Failed to update failed usage tracking for {usage_record.id}: {str(update_error)}")
         
         raise
 
