@@ -14,7 +14,7 @@ from app.config import get_settings
 from app.schemas.usage import (
     DocumentUsage, LLMUsage, UsageAggregate, PricingTier, UserPricingTier,
     ProcessingStatus, PeriodType, ModelProvider, UsageReport, LimitCheckResult,
-    DocumentUsageRequest, LLMUsageRequest
+    DocumentUsageRequest, LLMUsageRequest, ModelProviderSchema, ModelPricingSchema
 )
 from app.utils.logger import logger
 
@@ -33,34 +33,10 @@ class UsageTrackingService:
             settings.SUPABASE_KEY
         )
         
-        # Model pricing (cost per 1K tokens in USD)
-        self.model_pricing = {
-            ModelProvider.GEMINI: {
-                "gemini-2.0-flash-lite-001": {"input": 0.075, "output": 0.30},
-                "gemini-1.5-pro": {"input": 3.50, "output": 10.50},
-                "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
-            },
-            ModelProvider.OPENAI: {
-                "gpt-4": {"input": 30.00, "output": 60.00},
-                "gpt-4-turbo": {"input": 10.00, "output": 30.00},
-                "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
-            },
-            ModelProvider.ANTHROPIC: {
-                "claude-3-opus": {"input": 15.00, "output": 75.00},
-                "claude-3-sonnet": {"input": 3.00, "output": 15.00},
-                "claude-3-haiku": {"input": 0.25, "output": 1.25},
-            },
-            ModelProvider.BAML: {
-                # BAML pricing depends on underlying provider, use average rates
-                "unknown": {"input": 1.00, "output": 3.00},
-                "gpt-4": {"input": 30.00, "output": 60.00},
-                "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
-                "claude-3-sonnet": {"input": 3.00, "output": 15.00},
-                "claude-3-haiku": {"input": 0.25, "output": 1.25},
-                "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
-                "gemini-2.0-flash-lite-001": {"input": 0.075, "output": 0.30},
-            }
-        }
+        # Cache for model pricing to avoid repeated DB queries
+        self._pricing_cache: Dict[str, Dict[str, Dict[str, float]]] = {}
+        self._cache_last_updated: Optional[datetime] = None
+        self._cache_ttl_minutes = 60  # Cache for 1 hour
     
     async def track_document_processing(
         self,
@@ -210,7 +186,7 @@ class UsageTrackingService:
                 latency_ms = int((resp_time - req_time).total_seconds() * 1000)
             
             # Get pricing for the model
-            model_costs = self._get_model_pricing(request.model_provider, request.model_name)
+            model_costs = await self._get_model_pricing(request.model_provider, request.model_name)
             
             # Calculate costs
             estimated_cost = None
@@ -261,10 +237,67 @@ class UsageTrackingService:
             logger.error(f"Error tracking LLM usage for {user_id}: {str(e)}")
             raise
     
-    def _get_model_pricing(self, provider: ModelProvider, model_name: str) -> Optional[Dict[str, float]]:
+    async def _load_pricing_from_db(self) -> Dict[str, Dict[str, Dict[str, float]]]:
+        """Load model pricing from database"""
+        try:
+            # Get all model pricing with provider information
+            response = self.supabase.table('model_pricing').select(
+                '''
+                *,
+                provider:provider_id(provider_name)
+                '''
+            ).eq('is_active', True).execute()
+            
+            if not response.data:
+                logger.warning("No model pricing found in database")
+                return {}
+            
+            # Organize pricing by provider and model
+            pricing_data = {}
+            for pricing in response.data:
+                provider_name = pricing['provider']['provider_name']
+                model_name = pricing['model_name']
+                
+                if provider_name not in pricing_data:
+                    pricing_data[provider_name] = {}
+                
+                pricing_data[provider_name][model_name] = {
+                    "input": float(pricing['input_price_per_1k_tokens']),
+                    "output": float(pricing['output_price_per_1k_tokens'])
+                }
+            
+            logger.info(f"Loaded pricing for {len(response.data)} models from database")
+            return pricing_data
+            
+        except Exception as e:
+            logger.error(f"Error loading pricing from database: {str(e)}")
+            return {}
+    
+    async def _get_cached_pricing(self) -> Dict[str, Dict[str, Dict[str, float]]]:
+        """Get cached pricing or load from database if cache is stale"""
+        now = datetime.now(timezone.utc)
+        
+        # Check if cache is empty or stale
+        if (not self._pricing_cache or
+            not self._cache_last_updated or
+            (now - self._cache_last_updated).total_seconds() > (self._cache_ttl_minutes * 60)):
+            
+            # Reload from database
+            self._pricing_cache = await self._load_pricing_from_db()
+            self._cache_last_updated = now
+            logger.info("Refreshed model pricing cache")
+        
+        return self._pricing_cache
+    
+    async def _get_model_pricing(self, provider: ModelProvider, model_name: str) -> Optional[Dict[str, float]]:
         """Get pricing information for a model"""
-        provider_pricing = self.model_pricing.get(provider, {})
-        return provider_pricing.get(model_name)
+        try:
+            pricing_data = await self._get_cached_pricing()
+            provider_pricing = pricing_data.get(provider.value, {})
+            return provider_pricing.get(model_name)
+        except Exception as e:
+            logger.error(f"Error getting model pricing for {provider.value}:{model_name}: {str(e)}")
+            return None
     
     async def check_user_limits(self, user_id: str) -> LimitCheckResult:
         """
@@ -487,6 +520,121 @@ class UsageTrackingService:
             
         except Exception as e:
             logger.error(f"Error generating usage report for {user_id}: {str(e)}")
+            raise
+    
+    async def get_all_model_providers(self) -> List[ModelProviderSchema]:
+        """Get all active model providers"""
+        try:
+            response = self.supabase.table('model_providers').select('*').eq('is_active', True).execute()
+            return [ModelProviderSchema(**provider) for provider in response.data or []]
+        except Exception as e:
+            logger.error(f"Error getting model providers: {str(e)}")
+            raise
+    
+    async def get_model_pricing_by_provider(self, provider_name: str) -> List[ModelPricingSchema]:
+        """Get all pricing for a specific provider"""
+        try:
+            response = self.supabase.table('model_pricing').select(
+                '''
+                *,
+                provider:provider_id(provider_name)
+                '''
+            ).eq('provider.provider_name', provider_name).eq('is_active', True).execute()
+            
+            return [ModelPricingSchema(**pricing) for pricing in response.data or []]
+        except Exception as e:
+            logger.error(f"Error getting pricing for provider {provider_name}: {str(e)}")
+            raise
+    
+    async def update_model_pricing(
+        self,
+        pricing_id: str,
+        input_price: Optional[Decimal] = None,
+        output_price: Optional[Decimal] = None,
+        model_description: Optional[str] = None,
+        is_active: Optional[bool] = None
+    ) -> ModelPricingSchema:
+        """Update model pricing"""
+        try:
+            update_data = {}
+            if input_price is not None:
+                update_data['input_price_per_1k_tokens'] = str(input_price)
+            if output_price is not None:
+                update_data['output_price_per_1k_tokens'] = str(output_price)
+            if model_description is not None:
+                update_data['model_description'] = model_description
+            if is_active is not None:
+                update_data['is_active'] = is_active
+            
+            if not update_data:
+                raise ValueError("No update data provided")
+            
+            response = self.supabase.table('model_pricing').update(update_data).eq('id', pricing_id).execute()
+            
+            if not response.data:
+                raise Exception(f"Model pricing {pricing_id} not found or update failed")
+            
+            # Clear cache to force reload
+            self._pricing_cache = {}
+            self._cache_last_updated = None
+            
+            logger.info(f"Updated model pricing {pricing_id}")
+            return ModelPricingSchema(**response.data[0])
+            
+        except Exception as e:
+            logger.error(f"Error updating model pricing {pricing_id}: {str(e)}")
+            raise
+    
+    async def add_model_pricing(
+        self,
+        provider_name: str,
+        model_name: str,
+        input_price: Decimal,
+        output_price: Decimal,
+        model_version: Optional[str] = None,
+        model_description: Optional[str] = None,
+        model_context_window: Optional[int] = None
+    ) -> ModelPricingSchema:
+        """Add new model pricing"""
+        try:
+            # Get provider ID
+            provider_response = self.supabase.table('model_providers').select('id').eq('provider_name', provider_name).execute()
+            
+            if not provider_response.data:
+                raise ValueError(f"Provider {provider_name} not found")
+            
+            provider_id = provider_response.data[0]['id']
+            
+            # Create pricing record
+            pricing_data = {
+                'id': str(uuid.uuid4()),
+                'provider_id': provider_id,
+                'model_name': model_name,
+                'input_price_per_1k_tokens': str(input_price),
+                'output_price_per_1k_tokens': str(output_price)
+            }
+            
+            if model_version:
+                pricing_data['model_version'] = model_version
+            if model_description:
+                pricing_data['model_description'] = model_description
+            if model_context_window:
+                pricing_data['model_context_window'] = model_context_window
+            
+            response = self.supabase.table('model_pricing').insert(pricing_data).execute()
+            
+            if not response.data:
+                raise Exception("Failed to create model pricing")
+            
+            # Clear cache to force reload
+            self._pricing_cache = {}
+            self._cache_last_updated = None
+            
+            logger.info(f"Added pricing for {provider_name}:{model_name}")
+            return ModelPricingSchema(**response.data[0])
+            
+        except Exception as e:
+            logger.error(f"Error adding model pricing for {provider_name}:{model_name}: {str(e)}")
             raise
 
 

@@ -7,13 +7,14 @@ checking limits, and generating billing reports.
 
 from fastapi import APIRouter, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timedelta
 import traceback
 from app.config import get_settings
 from app.services.usage_tracking import usage_tracking_service
-from app.schemas.usage import UsageReport, LimitCheckResult
+from app.schemas.usage import UsageReport, LimitCheckResult, ModelProviderSchema, ModelPricingSchema
 from app.utils.logger import logger
+from decimal import Decimal
 
 settings = get_settings()
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Usage & Billing"])
@@ -302,6 +303,57 @@ async def get_document_usage_history(
         
     except Exception as e:
         logger.error(f"Error getting document usage history for {user_id}: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
+@router.get("/usage/pricing/providers", response_model=List[ModelProviderSchema])
+async def get_model_providers() -> List[ModelProviderSchema]:
+    """
+    Get all active model providers.
+    
+    Returns:
+        List[ModelProviderSchema]: List of active providers
+        
+    Raises:
+        HTTPException: 500 on error
+    """
+    try:
+        providers = await usage_tracking_service.get_all_model_providers()
+        return providers
+        
+    except Exception as e:
+        logger.error(f"Error getting model providers: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
+@router.get("/usage/pricing/providers/{provider_name}/models", response_model=List[ModelPricingSchema])
+async def get_provider_pricing(provider_name: str) -> List[ModelPricingSchema]:
+    """
+    Get all pricing for a specific provider.
+    
+    Args:
+        provider_name: Name of the provider (e.g., 'openai', 'anthropic')
+        
+    Returns:
+        List[ModelPricingSchema]: List of model pricing for the provider
+        
+    Raises:
+        HTTPException: 500 on error
+    """
+    try:
+        pricing = await usage_tracking_service.get_model_pricing_by_provider(provider_name)
+        return pricing
+        
+    except Exception as e:
+        logger.error(f"Error getting pricing for provider {provider_name}: {str(e)}")
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
