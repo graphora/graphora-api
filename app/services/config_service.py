@@ -5,6 +5,7 @@ from supabase import create_client, Client
 from app.config import get_settings
 from app.schemas.config import UserConfig, DatabaseConfig, ConfigRequest
 from app.utils.logger import logger
+from app.utils.encryption import encrypt_password, decrypt_password, migrate_plaintext_password
 
 settings = get_settings()
 
@@ -50,7 +51,7 @@ class ConfigService:
             
             config_data = response.data[0]
             
-            # Convert to UserConfig schema
+            # Convert to UserConfig schema with password decryption
             user_config = UserConfig(
                 id=config_data['id'],
                 userEmail=config_data['user_id'],  # Map user_id to userEmail for compatibility
@@ -59,14 +60,14 @@ class ConfigService:
                     name=config_data['staging_db']['name'],
                     uri=config_data['staging_db']['uri'],
                     username=config_data['staging_db']['username'],
-                    password=config_data['staging_db']['password']
+                    password=decrypt_password(config_data['staging_db']['password'])
                 ),
                 prodDb=DatabaseConfig(
                     id=config_data['prod_db']['id'],
                     name=config_data['prod_db']['name'],
                     uri=config_data['prod_db']['uri'],
                     username=config_data['prod_db']['username'],
-                    password=config_data['prod_db']['password']
+                    password=decrypt_password(config_data['prod_db']['password'])
                 ),
                 createdAt=datetime.fromisoformat(config_data['created_at'].replace('Z', '+00:00')),
                 updatedAt=datetime.fromisoformat(config_data['updated_at'].replace('Z', '+00:00'))
@@ -97,27 +98,27 @@ class ConfigService:
             if existing_config:
                 raise ValueError(f"Configuration already exists for user: {user_id}")
             
-            # Create staging database config
+            # Create staging database config with encrypted password
             staging_db_id = str(uuid.uuid4())
             staging_db_response = self.supabase.table('database_configs').insert({
                 'id': staging_db_id,
                 'name': config_request.stagingDb.name,
                 'uri': config_request.stagingDb.uri,
                 'username': config_request.stagingDb.username,
-                'password': config_request.stagingDb.password
+                'password': encrypt_password(config_request.stagingDb.password)
             }).execute()
             
             if not staging_db_response.data:
                 raise Exception("Failed to create staging database configuration")
             
-            # Create production database config
+            # Create production database config with encrypted password
             prod_db_id = str(uuid.uuid4())
             prod_db_response = self.supabase.table('database_configs').insert({
                 'id': prod_db_id,
                 'name': config_request.prodDb.name,
                 'uri': config_request.prodDb.uri,
                 'username': config_request.prodDb.username,
-                'password': config_request.prodDb.password
+                'password': encrypt_password(config_request.prodDb.password)
             }).execute()
             
             if not prod_db_response.data:
@@ -165,24 +166,24 @@ class ConfigService:
             if not existing_config:
                 raise ValueError(f"No configuration found for user: {user_id}")
             
-            # Update staging database config
+            # Update staging database config with encrypted password
             staging_db_response = self.supabase.table('database_configs').update({
                 'name': config_request.stagingDb.name,
                 'uri': config_request.stagingDb.uri,
                 'username': config_request.stagingDb.username,
-                'password': config_request.stagingDb.password,
+                'password': encrypt_password(config_request.stagingDb.password),
                 'updated_at': datetime.now(timezone.utc).isoformat()
             }).eq('id', existing_config.stagingDb.id).execute()
             
             if not staging_db_response.data:
                 raise Exception("Failed to update staging database configuration")
             
-            # Update production database config
+            # Update production database config with encrypted password
             prod_db_response = self.supabase.table('database_configs').update({
                 'name': config_request.prodDb.name,
                 'uri': config_request.prodDb.uri,
                 'username': config_request.prodDb.username,
-                'password': config_request.prodDb.password,
+                'password': encrypt_password(config_request.prodDb.password),
                 'updated_at': datetime.now(timezone.utc).isoformat()
             }).eq('id', existing_config.prodDb.id).execute()
             

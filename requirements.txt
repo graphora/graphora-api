@@ -43,3 +43,4 @@ baml-py==0.89.0
 supabase>=2.15.0
 redis>=5.0.11
 splink==4.0.7
+cryptography>=42.0.0
