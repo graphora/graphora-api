@@ -1,4 +1,6 @@
 from typing import List, Type, Optional
+from datetime import datetime, timezone
+from pathlib import Path
 
 from app.baml_client.type_builder import TypeBuilder
 from pydantic import BaseModel
@@ -15,6 +17,9 @@ import pathlib
 from google.genai import types
 from google import genai
 from app.utils.func_helper import retry_async
+from app.utils.llm_usage_tracker import track_gemini_usage
+from app.schemas.usage import ModelProvider
+from app.utils.logger import logger
 dotenv.load_dotenv()
 reset_baml_env_vars(dict(os.environ))
 
@@ -35,6 +40,9 @@ class LLMClient:
         ontology_yaml: str,
         context: str = "",
         model_id: str = settings.VERTEXAI_DEFAULT_MODEL,
+        user_id: Optional[str] = None,
+        transform_id: Optional[str] = None,
+        document_usage_id: Optional[str] = None
     ) -> BaseModel:
         """Extract entities and relationships from PDF"""
         client = genai.Client(
@@ -77,9 +85,29 @@ class LLMClient:
         - Omit optional fields if information is not clearly present
         </rules>
         """
+        request_timestamp = datetime.now(timezone.utc)
         response = client.models.generate_content(model=model_id, 
                                                   contents=[file, prompt], 
                                                   config={'response_mime_type': 'application/json', 'response_schema': response_model})
+        response_timestamp = datetime.now(timezone.utc)
+        
+        # Track usage if user_id provided
+        if user_id:
+            try:
+                await track_gemini_usage(
+                    user_id=user_id,
+                    model_name=model_id,
+                    operation_type="pdf_entity_extraction",
+                    response=response,
+                    transform_id=transform_id,
+                    document_usage_id=document_usage_id,
+                    operation_context=f"pdf_processing:{Path(pdf_path).name}",
+                    request_timestamp=request_timestamp,
+                    response_timestamp=response_timestamp
+                )
+            except Exception as e:
+                logger.error(f"Failed to track Gemini usage: {str(e)}")
+        
         # Convert the response to the pydantic model and return it
         print('*'*30)
         print(response)
@@ -104,6 +132,9 @@ class LLMClient:
         ontology_yaml: str,
         context: str = "",
         model_id: str = settings.VERTEXAI_DEFAULT_MODEL,
+        user_id: Optional[str] = None,
+        transform_id: Optional[str] = None,
+        document_usage_id: Optional[str] = None
     ) -> BaseModel:
         """Extract entities and relationships from PDF"""
         client = genai.Client(
@@ -143,9 +174,29 @@ class LLMClient:
         - Include all required fields for each relationship
         - Omit optional fields if information is not clearly present
         """
+        request_timestamp = datetime.now(timezone.utc)
         response = client.models.generate_content(model=model_id, 
                                                   contents=[file, prompt], 
                                                   config={'response_mime_type': 'application/json', 'response_schema': response_model})
+        response_timestamp = datetime.now(timezone.utc)
+        
+        # Track usage if user_id provided
+        if user_id:
+            try:
+                await track_gemini_usage(
+                    user_id=user_id,
+                    model_name=model_id,
+                    operation_type="pdf_relationship_extraction",
+                    response=response,
+                    transform_id=transform_id,
+                    document_usage_id=document_usage_id,
+                    operation_context=f"pdf_processing:{Path(pdf_path).name}",
+                    request_timestamp=request_timestamp,
+                    response_timestamp=response_timestamp
+                )
+            except Exception as e:
+                logger.error(f"Failed to track Gemini usage: {str(e)}")
+        
         # Convert the response to the pydantic model and return it
         print('*'*30)
         print(response)
@@ -166,14 +217,31 @@ class LLMClient:
         chunk: str,
         response_model: Type[BaseModel],
         ontology_yaml: Optional[str] = None,
-        context: str = ""
+        context: str = "",
+        user_id: Optional[str] = None,
+        transform_id: Optional[str] = None,
+        document_usage_id: Optional[str] = None
     ) -> BaseModel:
         """Extract entities from text chunk"""
-        tb = TypeBuilder()
-        res = build_from_pydantic(response_model, tb)
-        tb.DynamicContainer.add_property("data", res)
-        result = b.ExtractNodesFromChunk(chunk, context, {"tb": tb})
-        return response_model.model_validate(result.data)
+        # Use BAML tracking if user_id provided
+        if user_id:
+            from app.utils.baml_usage_tracker import track_baml_extract_nodes_from_chunk
+            return await track_baml_extract_nodes_from_chunk(
+                user_id=user_id,
+                chunk=chunk,
+                response_model=response_model,
+                ontology_yaml=ontology_yaml,
+                context=context,
+                transform_id=transform_id,
+                document_usage_id=document_usage_id
+            )
+        else:
+            # Original implementation without tracking
+            tb = TypeBuilder()
+            res = build_from_pydantic(response_model, tb)
+            tb.DynamicContainer.add_property("data", res)
+            result = b.ExtractNodesFromChunk(chunk, context, {"tb": tb})
+            return response_model.model_validate(result.data)
     
     @cached(ttl=86400, 
         key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
@@ -182,14 +250,31 @@ class LLMClient:
         chunk: str,
         response_model: Type[BaseModel],
         ontology_yaml: Optional[str] = None,
-        context: str = ""
+        context: str = "",
+        user_id: Optional[str] = None,
+        transform_id: Optional[str] = None,
+        document_usage_id: Optional[str] = None
     ) -> BaseModel:
         """Extract relationships from text chunk"""
-        tb = TypeBuilder()
-        res = build_from_pydantic(response_model, tb)
-        tb.DynamicContainer.add_property("data", res)
-        result = b.ExtractRelationshipsFromChunk(chunk, context, {"tb": tb})
-        return response_model.model_validate(result.data)
+        # Use BAML tracking if user_id provided
+        if user_id:
+            from app.utils.baml_usage_tracker import track_baml_extract_relationships_from_chunk
+            return await track_baml_extract_relationships_from_chunk(
+                user_id=user_id,
+                chunk=chunk,
+                response_model=response_model,
+                ontology_yaml=ontology_yaml,
+                context=context,
+                transform_id=transform_id,
+                document_usage_id=document_usage_id
+            )
+        else:
+            # Original implementation without tracking
+            tb = TypeBuilder()
+            res = build_from_pydantic(response_model, tb)
+            tb.DynamicContainer.add_property("data", res)
+            result = b.ExtractRelationshipsFromChunk(chunk, context, {"tb": tb})
+            return response_model.model_validate(result.data)
     
     @cached(ttl=86400, 
         key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['rel_type']+':'+kwargs['source_type']+':'+kwargs['source_entities']+':'+kwargs['target_type']+':'+kwargs['target_entities'])}")
@@ -200,31 +285,80 @@ class LLMClient:
         source_entities: str = "",
         target_type: str = "",
         target_entities: str = "",
-        existing_rels: str = ""
+        existing_rels: str = "",
+        user_id: Optional[str] = None,
+        transform_id: Optional[str] = None,
+        document_usage_id: Optional[str] = None
     ) -> List[RelationshipInference]:
-        return b.InferRelationship(rel_type=rel_type,
-            source_type=source_type,
-            source_entities=source_entities,
-            target_type=target_type,
-            target_entities=target_entities,
-            existing_rels=existing_rels)
+        # Use BAML tracking if user_id provided
+        if user_id:
+            from app.utils.baml_usage_tracker import track_baml_infer_relationship
+            return await track_baml_infer_relationship(
+                user_id=user_id,
+                rel_type=rel_type,
+                source_type=source_type,
+                source_entities=source_entities,
+                target_type=target_type,
+                target_entities=target_entities,
+                existing_rels=existing_rels,
+                transform_id=transform_id,
+                document_usage_id=document_usage_id
+            )
+        else:
+            # Original implementation without tracking
+            return b.InferRelationship(rel_type=rel_type,
+                source_type=source_type,
+                source_entities=source_entities,
+                target_type=target_type,
+                target_entities=target_entities,
+                existing_rels=existing_rels)
     
     @cached(ttl=86400, 
         key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['entity_group_type']+':'+kwargs['entities_json'])}")
     async def standardise_properties(
         self,
         entity_group_type: str,
-        entities_json: str
+        entities_json: str,
+        user_id: Optional[str] = None,
+        transform_id: Optional[str] = None,
+        document_usage_id: Optional[str] = None
     ) -> List[StandardisedProperties]:
-        return b.StandardiseProperties(entity_group_type=entity_group_type,
-            entities_json=entities_json)
+        # Use BAML tracking if user_id provided
+        if user_id:
+            from app.utils.baml_usage_tracker import track_baml_standardise_properties
+            return await track_baml_standardise_properties(
+                user_id=user_id,
+                entity_group_type=entity_group_type,
+                entities_json=entities_json,
+                transform_id=transform_id,
+                document_usage_id=document_usage_id
+            )
+        else:
+            # Original implementation without tracking
+            return b.StandardiseProperties(entity_group_type=entity_group_type,
+                entities_json=entities_json)
     
     @cached(ttl=86400, 
         key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['entity_type']+':'+kwargs['node_dicts_str'])}")
     async def resolve_entities(
         self,
         entity_type: str,
-        node_dicts_str: str
+        node_dicts_str: str,
+        user_id: Optional[str] = None,
+        transform_id: Optional[str] = None,
+        document_usage_id: Optional[str] = None
     ) -> List[ResolvedEntities]:
-        return b.ResolveEntities(entity_type=entity_type,
-            node_dicts_str=node_dicts_str)
+        # Use BAML tracking if user_id provided
+        if user_id:
+            from app.utils.baml_usage_tracker import track_baml_resolve_entities
+            return await track_baml_resolve_entities(
+                user_id=user_id,
+                entity_type=entity_type,
+                node_dicts_str=node_dicts_str,
+                transform_id=transform_id,
+                document_usage_id=document_usage_id
+            )
+        else:
+            # Original implementation without tracking
+            return b.ResolveEntities(entity_type=entity_type,
+                node_dicts_str=node_dicts_str)

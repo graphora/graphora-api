@@ -111,14 +111,16 @@ async def construct_knowledge_graph(
                 ontology_parser=parser,
                 chunks=chunks,
                 transform_id=transform_id, 
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                user_id=user_id
             )
         elif pdf_paths:
             graph = await build_graph_from_pdfs(
                 ontology_parser=parser,
                 pdf_paths=pdf_paths,
                 transform_id=transform_id, 
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                user_id=user_id
             )
 
         metrics = ExtractionMetrics(
