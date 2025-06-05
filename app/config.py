@@ -291,6 +291,12 @@ class Settings(BaseSettings):
         description="Supabase key"
     )
     
+    # Security Settings
+    ENCRYPTION_MASTER_KEY: Optional[str] = Field(
+        default=None,
+        description="Master encryption key for password encryption (base64 encoded)"
+    )
+    
     @property
     def ontology_dir(self) -> str:
         """Get the ontology directory path based on mode"""
