@@ -56,11 +56,12 @@ async def validate_ontology(
         parse_and_validate_yaml(request.text)
         
         # Store ontology in Supabase
+        ontology_name = request.name if request.name else f"Ontology {ontology_id[:8]}"
         success = await ontology_storage_service.store_ontology(
             user_id=user_id,
             ontology_id=ontology_id,
             yaml_content=request.text,
-            name=f"Ontology {ontology_id[:8]}",
+            name=ontology_name,
             description="User-defined ontology"
         )
         
@@ -217,6 +218,7 @@ async def get_ontology_by_id(
             ontology = result.data[0]
             return {
                 "id": ontology["id"],
+                "name": ontology.get("name", f"Ontology {ontology['id'][:8]}"),
                 "file_name": ontology.get("file_name") or f"{ontology['id']}.yaml",
                 "yaml_content": ontology["yaml_content"],
                 "version": ontology["version"],
@@ -314,13 +316,16 @@ async def update_ontology(
         # Parse and validate YAML
         parse_and_validate_yaml(request.text)
         
-        # Update ontology in Supabase
+        # Update ontology in Supabase with versioning
+        # Use the provided name if available, otherwise keep the existing name
+        updated_name = request.name if request.name else existing.get('name')
         success = await ontology_storage_service.store_ontology(
             user_id=user_id,
             ontology_id=ontology_id,
             yaml_content=request.text,
-            name=existing.get('name'),
-            description=existing.get('description')
+            name=updated_name,
+            description=existing.get('description'),
+            is_update=True  # This will create a new version and deactivate the old one
         )
         
         if not success:
@@ -379,4 +384,36 @@ async def update_ontology(
         raise HTTPException(
             status_code=500,
             detail=f"Error updating ontology: {str(e)}"
+        )
+
+
+@router.get("/ontology/{ontology_id}/versions")
+async def get_ontology_versions(
+    ontology_id: str,
+    user_id: str = Header(..., alias="user-id", description="User's ID")
+):
+    """
+    Get version history for a specific ontology
+    
+    Parameters:
+    - ontology_id: ID of the ontology
+    - user_id: User's ID (from header)
+    
+    Returns:
+    - List of ontology versions
+    """
+    try:
+        versions = await ontology_storage_service.get_ontology_versions(user_id, ontology_id)
+        
+        return {
+            "ontology_id": ontology_id,
+            "versions": versions,
+            "total_versions": len(versions)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting ontology versions {ontology_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting ontology versions: {str(e)}"
         )
