@@ -36,7 +36,8 @@ class ProgressTracker:
             TransformationStage.PARSE,
             TransformationStage.CHUNK,
             TransformationStage.TRANSFORM,
-            TransformationStage.LOAD
+            TransformationStage.LOAD,
+            TransformationStage.FAILED
         ]
     
     def _get_redis_key(self, transform_id: str, suffix: str) -> str:

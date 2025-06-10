@@ -10,6 +10,7 @@ class TransformationStage(str, Enum):
     CHUNK = "chunk"
     TRANSFORM = "transform"
     LOAD = "load"
+    FAILED = "failed"
 
 class StageStatus(str, Enum):
     """Status of a transformation stage"""
@@ -198,6 +199,7 @@ class DetailedTransformStatus(BaseModel):
             self.stages_progress[stage].fail(error)
         self.error_summary = error
         self.overall_status = TransformStatus.FAILED
+        self.current_stage = TransformationStage.FAILED
     
     def update_resource_metrics(
         self,
