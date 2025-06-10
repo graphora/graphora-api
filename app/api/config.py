@@ -36,13 +36,15 @@ async def get_user_config(
     """
     try:
         user_config = await config_service.get_user_config(user_id)
-        user_config.stagingDb.password = '******'
-        user_config.prodDb.password = '******'
         if not user_config:
             raise HTTPException(
                 status_code=404,
                 detail=f"Configuration not found for user: {user_id}"
             )
+        
+        # Mask passwords for security
+        user_config.stagingDb.password = '******'
+        user_config.prodDb.password = '******'
         
         return user_config
         
