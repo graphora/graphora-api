@@ -1,5 +1,6 @@
 // Learn more about clients at https://docs.boundaryml.com/docs/snippets/clients/overview
 
+// Legacy VertexAI client (kept for backward compatibility)
 client<llm> VertexAI {
   provider vertex-ai
   options {
@@ -7,6 +8,19 @@ client<llm> VertexAI {
     location env.VERTEXAI_LOCATION
     project_id env.VERTEXAI_PROJECT_ID
 
+    generationConfig {
+      temperature 0
+    }
+  }
+}
+
+// Dynamic Gemini client for user-specific credentials
+// This will be configured at runtime via ClientRegistry
+client<llm> DynamicGemini {
+  provider google-ai
+  options {
+    model "gemini-1.5-pro"  // Default model, will be overridden at runtime
+    api_key "placeholder"   // Will be overridden at runtime
     generationConfig {
       temperature 0
     }

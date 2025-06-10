@@ -56,7 +56,7 @@ function GeneratePropertyResolutionOptions(
   analysis: JsonObject,
   ontology: JsonObject
 ) -> ResolutionOptions {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Generate resolution options for the following property conflict.
     
@@ -89,7 +89,7 @@ function GenerateRelationshipResolutionOptions(
   analysis: JsonObject,
   ontology: JsonObject
 ) -> ResolutionOptions {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Generate resolution options for the following relationship conflict.
     
@@ -122,7 +122,7 @@ function GenerateEntityMatchResolutionOptions(
   analysis: JsonObject,
   ontology: JsonObject
 ) -> ResolutionOptions {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Generate resolution options for the following entity matching conflict.
     
@@ -156,7 +156,7 @@ function GenerateGenericResolutionOptions(
   analysis: JsonObject,
   ontology: JsonObject
 ) -> ResolutionOptions {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Generate resolution options for the following conflict.
     
@@ -189,7 +189,7 @@ function SelectBestResolution(
   options: JsonObject,
   ontology: JsonObject
 ) -> SelectedResolution {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Select the best resolution option for the following conflict.
     

@@ -5,7 +5,7 @@ class DynamicContainer {
 
 // Create a function to extract the nodes & edges from a string.
 function ExtractNodesFromChunk(chunk: string, context: string) -> DynamicContainer {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Extract structured information representing Entities from the text chunk according to the ontology specification.
 
@@ -39,7 +39,7 @@ function ExtractNodesFromChunk(chunk: string, context: string) -> DynamicContain
 }
 
 function ExtractRelationshipsFromChunk(chunk: string, context: string) -> DynamicContainer {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Extract structured information representing relationships from the text chunk according to the ontology specification.
 

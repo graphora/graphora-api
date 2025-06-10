@@ -34,7 +34,7 @@ function InferRelationship(rel_type: string,
   target_entities: string,
   existing_rels: string
 ) -> RelationshipInference[] {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Given these potentially disconnected entities, identify any missing {{ rel_type }} relationships that would connect them:
                     

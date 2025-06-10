@@ -50,10 +50,6 @@ async def get_graph_by_transform_id(
                 status_code=400,
                 detail="Maximum limit is 10000 nodes"
             )
-        
-        if settings.MOCK_MODE:
-            logger.info("Mock mode enabled, returning mock graph data")
-            return transform_graph
 
         # Get user's staging database (graph operations always use staging)
         graph_service = await UserDatabaseService.get_staging_graph_service(user_id)
@@ -111,12 +107,6 @@ async def save_graph_changes(
     """
     graph_service = None
     try:
-        if settings.MOCK_MODE:
-            logger.info("Mock mode enabled, returning mock save response")
-            return SaveGraphResponse(
-                data=transform_graph,
-                messages=None
-            )
         
         # Get user's staging database (graph operations always use staging)
         graph_service = await UserDatabaseService.get_staging_graph_service(user_id)

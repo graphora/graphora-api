@@ -185,74 +185,12 @@ class Settings(BaseSettings):
         description="Prefect workpool for document merging"
     )
     
-    # OpenAI Settings
-    OPENAI_API_KEY: Optional[str] = Field(
-        default=None,
-        description="OpenAI API key for LLM services"
-    )
-    OPENAI_MODEL: str = Field(
-        default="gpt-4",
-        description="OpenAI model to use for LLM analysis"
-    )
-    OPENAI_TEMPERATURE: float = Field(
-        default=0.2,
-        description="Temperature setting for OpenAI completions (0.0-1.0)"
-    )
-    OPENAI_MAX_TOKENS: int = Field(
-        default=1000,
-        description="Maximum number of tokens for OpenAI completions"
-    )
-    
     @property
     def REDIS_URL(self) -> str:
         """Construct Redis URL from components"""
         auth = f":{self.REDIS_PASSWORD}@" if self.REDIS_PASSWORD else ""
         return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
-    # LLM Settings
-    DEEPSEEK_API_KEY: Optional[str] = Field(
-        default=None,
-        description="DeepSeek API key for LLM operations"
-    )
-    DEEPSEEK_BASE_URL: Optional[str] = Field(
-        default=None,
-        description="DeepSeek API base URL for LLM operations"
-    )
-    ANTHROPIC_API_KEY: Optional[str] = Field(
-        default=None,
-        description="Anthropic API key for LLM operations"
-    )
-    GOOGLE_GEMINI_API_KEY: Optional[str] = Field(
-        default=None,
-        description="Google Gemini API key for LLM operations"
-    )
-    VERTEXAI_PROJECT_ID: Optional[str] = Field(
-        default=None,
-        description="Google VertexAI Project ID for LLM operations"
-    )
-    VERTEXAI_LOCATION: Optional[str] = Field(
-        default='us-east5',
-        description="Google VertexAI Project Location for LLM operations"
-    )
-    VERTEXAI_DEFAULT_MODEL: Optional[str] = Field(
-        default='gemini-2.0-flash-lite-001',
-        description="Google VertexAI default model for LLM operations"
-    )
-    
-    # GCP Settings
-    GCP_PROJECT_ID: str = Field(
-        default="",
-        description="Google Cloud Project ID"
-    )
-    GCP_LOCATION: str = Field(
-        default="us-central1",
-        description="Google Cloud region"
-    )
-    
-    MOCK_MODE: bool = Field(
-        default=False,
-        description="Enable mock mode for testing"
-    )
     
     # Logging
     LOG_LEVEL: str = Field(
@@ -316,8 +254,6 @@ def get_settings() -> Settings:
     """Create and cache application settings."""
     try:
         settings = Settings()
-        if not settings.DEEPSEEK_API_KEY and not settings.OPENAI_API_KEY and not settings.ANTHROPIC_API_KEY and not settings.GOOGLE_GEMINI_API_KEY and not settings.VERTEXAI_PROJECT_ID:
-            print("Warning: DEEPSEEK_API_KEY/OPENAI_API_KEY/ANTHROPIC_API_KEY/GOOGLE_GEMINI_API_KEY/VERTEXAI_PROJECT_ID not set")
         print(f"Loaded settings from environment with LOG_LEVEL={settings.LOG_LEVEL}")
         return settings
     except Exception as e:

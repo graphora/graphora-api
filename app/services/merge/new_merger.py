@@ -488,11 +488,18 @@ async def _map_production_entities(
         #analyse candidates and add to matches only if there is high confidence
         if len(candidates) > 0:
             from app.utils.baml_usage_tracker import track_baml_get_matching_nodes
+            from app.utils.llm_helper import get_user_llm_credentials, create_baml_client_registry
+            
+            # Get user's LLM credentials and create client registry
+            api_key, model_name = await get_user_llm_credentials(user_id)
+            client_registry = create_baml_client_registry(api_key, model_name)
+            
             matching_nodes = await track_baml_get_matching_nodes(
                 user_id=user_id,
                 candidate_sets=candidates,
                 merge_id=merge_id,
-                transform_id=transform_id
+                transform_id=transform_id,
+                client_registry=client_registry
             )
             for match in matching_nodes:
                 if match.node_id:
@@ -1130,13 +1137,20 @@ async def _classify_changes(
             continue
         change_log_string = "\n".join(changes)
         from app.utils.baml_usage_tracker import track_baml_eval_changes
+        from app.utils.llm_helper import get_user_llm_credentials, create_baml_client_registry
+        
+        # Get user's LLM credentials and create client registry
+        api_key, model_name = await get_user_llm_credentials(user_id)
+        client_registry = create_baml_client_registry(api_key, model_name)
+        
         eval_changes = await track_baml_eval_changes(
             user_id=user_id,
             change_logs=change_log_string,
             past_resolutions=past_resolutions,
             merge_id=merge_id,
             transform_id=transform_id,
-            ontology_id=ontology_id
+            ontology_id=ontology_id,
+            client_registry=client_registry
         )
         if len(eval_changes) > 0:
             for change in eval_changes:
