@@ -13,7 +13,7 @@ class StandardisedProperties {
 }
 
 function StandardiseProperties(entity_group_type: string, entities_json: string) -> StandardisedProperties[] {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     You are processing a group of similar entities that should be standardized.
     Below are the properties of these entities:

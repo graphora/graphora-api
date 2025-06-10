@@ -128,7 +128,7 @@ function AnalyzeConflict(
   production_value: string,
   value_type: string
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze the following property conflict between staging and production values.
     Consider the context, data types, and domain knowledge to suggest the best resolution.
@@ -154,7 +154,7 @@ function ClassifyConflict(
   analysis: string,
   conflict_type: string
 ) -> ConflictClassification {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Based on this conflict analysis:
     {{analysis}}
@@ -182,7 +182,7 @@ function GenerateResolutionOptions(
   staging_element: string,
   prod_element: string
 ) -> ResolutionOption[] {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     For this conflict:
 
@@ -216,7 +216,7 @@ function AssessResolutionComplexity(
   classification: string,
   resolution_option: string
 ) -> float {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Assess the complexity of implementing this resolution:
 
@@ -251,7 +251,7 @@ function AnalyzePropertyConflict(
   value_type: string,
   historical_resolutions: string
 ) -> PropertyConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this property conflict between staging and production values:
 
@@ -283,7 +283,7 @@ function AnalyzeConflictGroup(
   conflict_count: int,
   sample_conflicts: string
 ) -> ConflictGroupAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this group of similar conflicts to determine if they can be batch resolved:
 
@@ -312,7 +312,7 @@ function AnalyzeRelationshipConflict(
   production_details: string,
   graph_context: string
 ) -> RelationshipConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this relationship conflict between staging and production:
 
@@ -343,7 +343,7 @@ function AnalyzePropertyConflictWithOntology(
   conflict: JsonObject,
   ontology: JsonObject
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze the following property conflict between staging and production values.
     
@@ -368,7 +368,7 @@ function AnalyzeRelationshipConflictWithOntology(
   conflict: JsonObject,
   ontology: JsonObject
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze the following relationship conflict between staging and production.
     
@@ -393,7 +393,7 @@ function AnalyzeEntityMatchConflictWithOntology(
   conflict: JsonObject,
   ontology: JsonObject
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze the following entity matching conflict where a staging entity matches multiple production entities.
     
@@ -418,7 +418,7 @@ function AnalyzeGenericConflictWithOntology(
   conflict: JsonObject,
   ontology: JsonObject
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze the following conflict between staging and production data.
     
@@ -447,7 +447,7 @@ function AnalyzeRelationshipPropertyConflict(
   value_type: string,
   graph_context: string
 ) -> RelationshipConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this relationship property conflict between staging and production:
 
@@ -481,7 +481,7 @@ function AnalyzeMissingRelationshipConflict(
   exists_in: string,
   graph_context: string
 ) -> RelationshipConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this missing relationship conflict between staging and production:
 
@@ -515,7 +515,7 @@ function AnalyzeRelationshipTypeConflict(
   target_entity_id: string,
   graph_context: string
 ) -> RelationshipConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this relationship type conflict between staging and production:
 
@@ -548,7 +548,7 @@ function AnalyzeRelationshipDirectionConflict(
   production_target_id: string,
   graph_context: string
 ) -> RelationshipConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this relationship direction conflict between staging and production:
 
@@ -579,7 +579,7 @@ function AnalyzeDuplicateEntityConflict(
   similarity_scores: string,
   entity_properties: string
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this duplicate entity conflict where a staging entity matches multiple production entities:
 
@@ -617,7 +617,7 @@ function AnalyzeEntityMatchConflict(
   staging_properties: string,
   production_properties: string
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this entity match conflict where a staging entity potentially matches a production entity:
 
@@ -657,7 +657,7 @@ function AnalyzeSchemaConflict(
   production_schema: string,
   affected_properties: string
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this schema conflict between staging and production:
 
@@ -697,7 +697,7 @@ function GenerateSchemaConflictResolutionOptions(
   staging_schema: string,
   production_schema: string
 ) -> ResolutionOption[] {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     For this schema conflict:
 
@@ -735,7 +735,7 @@ function GenerateEntityMatchResolutionOptionsFromStagingAndProd(
   staging_properties: string,
   production_properties: string
 ) -> ResolutionOption[] {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     For this entity match conflict:
 
@@ -781,7 +781,7 @@ function AnalyzeEntityMatchWithOntology(
   conflict: JsonObject,
   ontology: JsonObject
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze the following entity match conflict where a staging entity potentially matches a production entity.
     
@@ -807,7 +807,7 @@ function AnalyzeSchemaConflictWithOntology(
   conflict: JsonObject,
   ontology: JsonObject
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze the following schema conflict between staging and production.
     
@@ -837,7 +837,7 @@ function AnalyzeEntityMatchResolutionOption(
   staging_properties: string,
   production_properties: string
 ) -> ConflictAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this specific resolution option for an entity match conflict:
 
@@ -877,7 +877,7 @@ function BatchAnalyzeConflicts(
   sample_conflicts: string,
   total_count: int
 ) -> ConflictGroupAnalysis {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     Analyze this batch of similar conflicts to identify patterns and recommend a unified approach:
 

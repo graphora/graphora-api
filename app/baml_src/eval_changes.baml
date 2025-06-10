@@ -29,7 +29,7 @@ function EvalChanges(
     change_logs: string,
     past_resolutions: string
 ) -> ChangeResult[] {
-    client VertexAI
+    client DynamicGemini
     prompt #"
         You are a helpful assistant that evaluates the changes made to a graph.
         You are given a list of change logs and learnings from past resolutions.

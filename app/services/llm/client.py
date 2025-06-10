@@ -20,6 +20,7 @@ from app.utils.func_helper import retry_async
 from app.utils.llm_usage_tracker import track_gemini_usage
 from app.schemas.usage import ModelProvider
 from app.utils.logger import logger
+from app.utils.llm_helper import get_user_llm_credentials, create_gemini_client, create_baml_client_registry
 dotenv.load_dotenv()
 reset_baml_env_vars(dict(os.environ))
 
@@ -39,17 +40,24 @@ class LLMClient:
         response_model: Type[BaseModel],
         ontology_yaml: str,
         context: str = "",
-        model_id: str = settings.VERTEXAI_DEFAULT_MODEL,
+        model_id: str = None,
         user_id: Optional[str] = None,
         transform_id: Optional[str] = None,
         document_usage_id: Optional[str] = None
     ) -> BaseModel:
         """Extract entities and relationships from PDF"""
-        client = genai.Client(
-            vertexai=True, 
-            project=settings.VERTEXAI_PROJECT_ID, 
-            location=settings.VERTEXAI_LOCATION,
-        )
+        if not user_id:
+            raise ValueError("user_id is required to get LLM credentials")
+        
+        # Get user's LLM credentials
+        api_key, model_name = await get_user_llm_credentials(user_id)
+        
+        # Use provided model_id or default to user's configured model
+        model_to_use = model_id if model_id else model_name
+        
+        # Create Gemini client with user's API key
+        client = create_gemini_client(api_key)
+        
         filepath = pathlib.Path(pdf_path)
         file = types.Part.from_bytes(
             data=filepath.read_bytes(),
@@ -86,7 +94,7 @@ class LLMClient:
         </rules>
         """
         request_timestamp = datetime.now(timezone.utc)
-        response = client.models.generate_content(model=model_id, 
+        response = client.models.generate_content(model=model_to_use, 
                                                   contents=[file, prompt], 
                                                   config={'response_mime_type': 'application/json', 'response_schema': response_model})
         response_timestamp = datetime.now(timezone.utc)
@@ -96,7 +104,7 @@ class LLMClient:
             try:
                 await track_gemini_usage(
                     user_id=user_id,
-                    model_name=model_id,
+                    model_name=model_to_use,
                     operation_type="pdf_entity_extraction",
                     response=response,
                     transform_id=transform_id,
@@ -131,17 +139,24 @@ class LLMClient:
         response_model: Type[BaseModel],
         ontology_yaml: str,
         context: str = "",
-        model_id: str = settings.VERTEXAI_DEFAULT_MODEL,
+        model_id: str = None,
         user_id: Optional[str] = None,
         transform_id: Optional[str] = None,
         document_usage_id: Optional[str] = None
     ) -> BaseModel:
         """Extract entities and relationships from PDF"""
-        client = genai.Client(
-            vertexai=True, 
-            project=settings.VERTEXAI_PROJECT_ID, 
-            location=settings.VERTEXAI_LOCATION,
-        )
+        if not user_id:
+            raise ValueError("user_id is required to get LLM credentials")
+        
+        # Get user's LLM credentials
+        api_key, model_name = await get_user_llm_credentials(user_id)
+        
+        # Use provided model_id or default to user's configured model
+        model_to_use = model_id if model_id else model_name
+        
+        # Create Gemini client with user's API key
+        client = create_gemini_client(api_key)
+        
         filepath = pathlib.Path(pdf_path)
         file = types.Part.from_bytes(
             data=filepath.read_bytes(),
@@ -175,7 +190,7 @@ class LLMClient:
         - Omit optional fields if information is not clearly present
         """
         request_timestamp = datetime.now(timezone.utc)
-        response = client.models.generate_content(model=model_id, 
+        response = client.models.generate_content(model=model_to_use, 
                                                   contents=[file, prompt], 
                                                   config={'response_mime_type': 'application/json', 'response_schema': response_model})
         response_timestamp = datetime.now(timezone.utc)
@@ -185,7 +200,7 @@ class LLMClient:
             try:
                 await track_gemini_usage(
                     user_id=user_id,
-                    model_name=model_id,
+                    model_name=model_to_use,
                     operation_type="pdf_relationship_extraction",
                     response=response,
                     transform_id=transform_id,
@@ -223,6 +238,13 @@ class LLMClient:
         document_usage_id: Optional[str] = None
     ) -> BaseModel:
         """Extract entities from text chunk"""
+        if not user_id:
+            raise ValueError("user_id is required to get LLM credentials")
+            
+        # Get user's LLM credentials and create client registry
+        api_key, model_name = await get_user_llm_credentials(user_id)
+        client_registry = create_baml_client_registry(api_key, model_name)
+        
         # Use BAML tracking if user_id provided
         if user_id:
             from app.utils.baml_usage_tracker import track_baml_extract_nodes_from_chunk
@@ -233,14 +255,15 @@ class LLMClient:
                 ontology_yaml=ontology_yaml,
                 context=context,
                 transform_id=transform_id,
-                document_usage_id=document_usage_id
+                document_usage_id=document_usage_id,
+                client_registry=client_registry
             )
         else:
-            # Original implementation without tracking
+            # Use dynamic client registry
             tb = TypeBuilder()
             res = build_from_pydantic(response_model, tb)
             tb.DynamicContainer.add_property("data", res)
-            result = b.ExtractNodesFromChunk(chunk, context, {"tb": tb})
+            result = b.ExtractNodesFromChunk(chunk, context, {"tb": tb, "client_registry": client_registry})
             return response_model.model_validate(result.data)
     
     @cached(ttl=86400, 
@@ -256,6 +279,13 @@ class LLMClient:
         document_usage_id: Optional[str] = None
     ) -> BaseModel:
         """Extract relationships from text chunk"""
+        if not user_id:
+            raise ValueError("user_id is required to get LLM credentials")
+            
+        # Get user's LLM credentials and create client registry
+        api_key, model_name = await get_user_llm_credentials(user_id)
+        client_registry = create_baml_client_registry(api_key, model_name)
+        
         # Use BAML tracking if user_id provided
         if user_id:
             from app.utils.baml_usage_tracker import track_baml_extract_relationships_from_chunk
@@ -266,14 +296,15 @@ class LLMClient:
                 ontology_yaml=ontology_yaml,
                 context=context,
                 transform_id=transform_id,
-                document_usage_id=document_usage_id
+                document_usage_id=document_usage_id,
+                client_registry=client_registry
             )
         else:
-            # Original implementation without tracking
+            # Use dynamic client registry
             tb = TypeBuilder()
             res = build_from_pydantic(response_model, tb)
             tb.DynamicContainer.add_property("data", res)
-            result = b.ExtractRelationshipsFromChunk(chunk, context, {"tb": tb})
+            result = b.ExtractRelationshipsFromChunk(chunk, context, {"tb": tb, "client_registry": client_registry})
             return response_model.model_validate(result.data)
     
     @cached(ttl=86400, 
@@ -290,6 +321,13 @@ class LLMClient:
         transform_id: Optional[str] = None,
         document_usage_id: Optional[str] = None
     ) -> List[RelationshipInference]:
+        if not user_id:
+            raise ValueError("user_id is required to get LLM credentials")
+            
+        # Get user's LLM credentials and create client registry
+        api_key, model_name = await get_user_llm_credentials(user_id)
+        client_registry = create_baml_client_registry(api_key, model_name)
+        
         # Use BAML tracking if user_id provided
         if user_id:
             from app.utils.baml_usage_tracker import track_baml_infer_relationship
@@ -302,16 +340,18 @@ class LLMClient:
                 target_entities=target_entities,
                 existing_rels=existing_rels,
                 transform_id=transform_id,
-                document_usage_id=document_usage_id
+                document_usage_id=document_usage_id,
+                client_registry=client_registry
             )
         else:
-            # Original implementation without tracking
+            # Use dynamic client registry
             return b.InferRelationship(rel_type=rel_type,
                 source_type=source_type,
                 source_entities=source_entities,
                 target_type=target_type,
                 target_entities=target_entities,
-                existing_rels=existing_rels)
+                existing_rels=existing_rels,
+                baml_options={"client_registry": client_registry})
     
     @cached(ttl=86400, 
         key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['entity_group_type']+':'+kwargs['entities_json'])}")
@@ -323,6 +363,13 @@ class LLMClient:
         transform_id: Optional[str] = None,
         document_usage_id: Optional[str] = None
     ) -> List[StandardisedProperties]:
+        if not user_id:
+            raise ValueError("user_id is required to get LLM credentials")
+            
+        # Get user's LLM credentials and create client registry
+        api_key, model_name = await get_user_llm_credentials(user_id)
+        client_registry = create_baml_client_registry(api_key, model_name)
+        
         # Use BAML tracking if user_id provided
         if user_id:
             from app.utils.baml_usage_tracker import track_baml_standardise_properties
@@ -331,12 +378,14 @@ class LLMClient:
                 entity_group_type=entity_group_type,
                 entities_json=entities_json,
                 transform_id=transform_id,
-                document_usage_id=document_usage_id
+                document_usage_id=document_usage_id,
+                client_registry=client_registry
             )
         else:
-            # Original implementation without tracking
+            # Use dynamic client registry
             return b.StandardiseProperties(entity_group_type=entity_group_type,
-                entities_json=entities_json)
+                entities_json=entities_json,
+                baml_options={"client_registry": client_registry})
     
     @cached(ttl=86400, 
         key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['entity_type']+':'+kwargs['node_dicts_str'])}")
@@ -348,6 +397,13 @@ class LLMClient:
         transform_id: Optional[str] = None,
         document_usage_id: Optional[str] = None
     ) -> List[ResolvedEntities]:
+        if not user_id:
+            raise ValueError("user_id is required to get LLM credentials")
+            
+        # Get user's LLM credentials and create client registry
+        api_key, model_name = await get_user_llm_credentials(user_id)
+        client_registry = create_baml_client_registry(api_key, model_name)
+        
         # Use BAML tracking if user_id provided
         if user_id:
             from app.utils.baml_usage_tracker import track_baml_resolve_entities
@@ -356,9 +412,11 @@ class LLMClient:
                 entity_type=entity_type,
                 node_dicts_str=node_dicts_str,
                 transform_id=transform_id,
-                document_usage_id=document_usage_id
+                document_usage_id=document_usage_id,
+                client_registry=client_registry
             )
         else:
-            # Original implementation without tracking
+            # Use dynamic client registry
             return b.ResolveEntities(entity_type=entity_type,
-                node_dicts_str=node_dicts_str)
+                node_dicts_str=node_dicts_str,
+                baml_options={"client_registry": client_registry})

@@ -244,7 +244,8 @@ async def track_baml_extract_nodes_from_chunk(
     ontology_yaml: Optional[str] = None,
     context: str = "",
     transform_id: Optional[str] = None,
-    document_usage_id: Optional[str] = None
+    document_usage_id: Optional[str] = None,
+    client_registry=None
 ):
     """
     Track BAML ExtractNodesFromChunk function call
@@ -269,11 +270,15 @@ async def track_baml_extract_nodes_from_chunk(
         res = build_from_pydantic(response_model, tb)
         tb.DynamicContainer.add_property("data", res)
         
-        # Execute with collector
+        # Execute with collector and client registry
+        baml_options = {"tb": tb, "collector": tracker.collector}
+        if client_registry:
+            baml_options["client_registry"] = client_registry
+            
         result = b.ExtractNodesFromChunk(
             chunk, 
             context, 
-            baml_options={"tb": tb, "collector": tracker.collector}
+            baml_options=baml_options
         )
         
         # Track usage
@@ -293,7 +298,8 @@ async def track_baml_extract_relationships_from_chunk(
     ontology_yaml: Optional[str] = None,
     context: str = "",
     transform_id: Optional[str] = None,
-    document_usage_id: Optional[str] = None
+    document_usage_id: Optional[str] = None,
+    client_registry=None
 ):
     """
     Track BAML ExtractRelationshipsFromChunk function call
@@ -318,11 +324,15 @@ async def track_baml_extract_relationships_from_chunk(
         res = build_from_pydantic(response_model, tb)
         tb.DynamicContainer.add_property("data", res)
         
-        # Execute with collector
+        # Execute with collector and client registry
+        baml_options = {"tb": tb, "collector": tracker.collector}
+        if client_registry:
+            baml_options["client_registry"] = client_registry
+            
         result = b.ExtractRelationshipsFromChunk(
             chunk, 
             context, 
-            baml_options={"tb": tb, "collector": tracker.collector}
+            baml_options=baml_options
         )
         
         # Track usage
@@ -344,7 +354,8 @@ async def track_baml_infer_relationship(
     target_entities: str = "",
     existing_rels: str = "",
     transform_id: Optional[str] = None,
-    document_usage_id: Optional[str] = None
+    document_usage_id: Optional[str] = None,
+    client_registry=None
 ):
     """
     Track BAML InferRelationship function call
@@ -362,7 +373,11 @@ async def track_baml_infer_relationship(
     )
     
     try:
-        # Execute with collector
+        # Execute with collector and client registry
+        baml_options = {"collector": tracker.collector}
+        if client_registry:
+            baml_options["client_registry"] = client_registry
+            
         result = b.InferRelationship(
             rel_type=rel_type,
             source_type=source_type,
@@ -370,7 +385,7 @@ async def track_baml_infer_relationship(
             target_type=target_type,
             target_entities=target_entities,
             existing_rels=existing_rels,
-            baml_options={"collector": tracker.collector}
+            baml_options=baml_options
         )
         
         # Track usage
@@ -388,7 +403,8 @@ async def track_baml_standardise_properties(
     entity_group_type: str,
     entities_json: str,
     transform_id: Optional[str] = None,
-    document_usage_id: Optional[str] = None
+    document_usage_id: Optional[str] = None,
+    client_registry=None
 ):
     """
     Track BAML StandardiseProperties function call
@@ -406,11 +422,15 @@ async def track_baml_standardise_properties(
     )
     
     try:
-        # Execute with collector
+        # Execute with collector and client registry
+        baml_options = {"collector": tracker.collector}
+        if client_registry:
+            baml_options["client_registry"] = client_registry
+            
         result = b.StandardiseProperties(
             entity_group_type=entity_group_type,
             entities_json=entities_json,
-            baml_options={"collector": tracker.collector}
+            baml_options=baml_options
         )
         
         # Track usage
@@ -428,7 +448,8 @@ async def track_baml_resolve_entities(
     entity_type: str,
     node_dicts_str: str,
     transform_id: Optional[str] = None,
-    document_usage_id: Optional[str] = None
+    document_usage_id: Optional[str] = None,
+    client_registry=None
 ):
     """
     Track BAML ResolveEntities function call
@@ -446,11 +467,15 @@ async def track_baml_resolve_entities(
     )
     
     try:
-        # Execute with collector
+        # Execute with collector and client registry
+        baml_options = {"collector": tracker.collector}
+        if client_registry:
+            baml_options["client_registry"] = client_registry
+            
         result = b.ResolveEntities(
             entity_type=entity_type,
             node_dicts_str=node_dicts_str,
-            baml_options={"collector": tracker.collector}
+            baml_options=baml_options
         )
         
         # Track usage
@@ -467,7 +492,8 @@ async def track_baml_get_matching_nodes(
     user_id: str,
     candidate_sets: List[str],
     merge_id: Optional[str] = None,
-    transform_id: Optional[str] = None
+    transform_id: Optional[str] = None,
+    client_registry=None
 ):
     """
     Track BAML GetMatchingNodes function call for merge operations
@@ -484,10 +510,14 @@ async def track_baml_get_matching_nodes(
     )
     
     try:
-        # Execute with collector
+        # Execute with collector and client registry
+        baml_options = {"collector": tracker.collector}
+        if client_registry:
+            baml_options["client_registry"] = client_registry
+            
         result = b.GetMatchingNodes(
             candidate_sets=candidate_sets,
-            baml_options={"collector": tracker.collector}
+            baml_options=baml_options
         )
         
         # Track usage
@@ -506,7 +536,8 @@ async def track_baml_eval_changes(
     past_resolutions: str,
     merge_id: Optional[str] = None,
     transform_id: Optional[str] = None,
-    ontology_id: Optional[str] = None
+    ontology_id: Optional[str] = None,
+    client_registry=None
 ):
     """
     Track BAML EvalChanges function call for merge conflict analysis
@@ -523,11 +554,15 @@ async def track_baml_eval_changes(
     )
     
     try:
-        # Execute with collector
+        # Execute with collector and client registry
+        baml_options = {"collector": tracker.collector}
+        if client_registry:
+            baml_options["client_registry"] = client_registry
+            
         result = b.EvalChanges(
             change_logs=change_logs,
             past_resolutions=past_resolutions,
-            baml_options={"collector": tracker.collector}
+            baml_options=baml_options
         )
         
         # Track usage

@@ -46,7 +46,7 @@ function AnalyzeEntitySimilarity(
     production_properties: string,
     domain_context: string
 ) -> EntitySimilarityAnalysis {
-    client VertexAI
+    client DynamicGemini
     prompt #"
         Analyze the similarity between these potentially matching entities:
 
@@ -92,7 +92,7 @@ class MatchingNode {
 function GetMatchingNodes(
     candidate_sets: string[]
 ) -> MatchingNode[] {
-    client VertexAI
+    client DynamicGemini
     prompt #"
         Given multiple sets of staging node and production candidates, pick the most likely Production Node that matches each Staging Node within the set:
 

@@ -15,7 +15,7 @@ class ResolvedEntities {
 
 
 function ResolveEntities(entity_type: string, node_dicts_str: string) -> ResolvedEntities[] {
-  client VertexAI
+  client DynamicGemini
   prompt #"
     You are performing entity resolution on a group of {{entity_type}} entities.
     Your task is to identify which entities refer to the same real-world entity and should be merged.
