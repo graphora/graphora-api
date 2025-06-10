@@ -80,7 +80,7 @@ async def _build_graph_from(
         context = await _build_nodes_context(nodes)
 
     # Step 2: Compare & Merge entities if they are the same.
-    nodes = await _compare_and_merge_nodes(nodes)
+    nodes = await _compare_and_merge_nodes(nodes, user_id=user_id, transform_id=transform_id, document_usage_id=document_usage_id)
     nodes, _ = await deduplicate_entities_with_splink(nodes, None, parsed_ontology=ontology_parser.parsed_ontology)
     logger.info(f"Nodes after comparison: {nodes}")
 
@@ -146,7 +146,12 @@ async def _build_relationships_context(
         context += f"({node.type}:{{'id': '{node.id}', 'properties': {node.properties}}})\n"
     return context
 
-async def _compare_and_merge_nodes(nodes: List[BaseNode]) -> List[BaseNode]:
+async def _compare_and_merge_nodes(
+    nodes: List[BaseNode], 
+    user_id: Optional[str] = None, 
+    transform_id: Optional[str] = None, 
+    document_usage_id: Optional[str] = None
+) -> List[BaseNode]:
     """Compare all nodes and resolve them using LLM."""
     if not nodes or len(nodes) <= 1:
         return nodes
@@ -172,7 +177,13 @@ async def _compare_and_merge_nodes(nodes: List[BaseNode]) -> List[BaseNode]:
           continue
           
       # Perform entity resolution for this group
-      resolved_groups = await resolve_entity_group(entity_type, nodes)
+      resolved_groups = await resolve_entity_group(
+          entity_type, 
+          nodes, 
+          user_id=user_id, 
+          transform_id=transform_id, 
+          document_usage_id=document_usage_id
+      )
       # Process resolved groups
       for group in resolved_groups:
           if len(group) == 1:

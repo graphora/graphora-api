@@ -6,7 +6,7 @@ from app.services.transform.models import (
     DocumentKnowledgeGraph
 )
 from pydantic import BaseModel
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import json
 import uuid
 from datetime import datetime, timezone
@@ -313,7 +313,13 @@ async def deduplicate_entities_with_splink(
         traceback.print_exc()
         return entities, relationships
 
-async def resolve_entity_group(entity_type: str, nodes: List[BaseNode]) -> List[List[BaseNode]]:
+async def resolve_entity_group(
+    entity_type: str, 
+    nodes: List[BaseNode], 
+    user_id: Optional[str] = None, 
+    transform_id: Optional[str] = None, 
+    document_usage_id: Optional[str] = None
+) -> List[List[BaseNode]]:
     """
     Use LLM to identify and group matching entities that should be merged.
     Returns list of groups, where each group contains matching nodes.
@@ -338,7 +344,12 @@ async def resolve_entity_group(entity_type: str, nodes: List[BaseNode]) -> List[
         # Call LLM for entity resolution
         print(f"Resolving `{entity_type}` entities")
         results = await llm_client.resolve_entities(
-            entity_type=entity_type, node_dicts_str=node_dicts_str)
+            entity_type=entity_type, 
+            node_dicts_str=node_dicts_str,
+            user_id=user_id,
+            transform_id=transform_id,
+            document_usage_id=document_usage_id
+        )
         
         if not results or len(results) == 0:
             # Fallback: treat each node as separate group
