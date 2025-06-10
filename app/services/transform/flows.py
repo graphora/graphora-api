@@ -88,6 +88,30 @@ async def update_stage_progress(transform_id: str, stage: TransformationStage,
     except Exception as e:
         logger.error(f"Failed to update progress: {str(e)}")
 
+def should_retry_flow_error(exc: Exception) -> bool:
+    """Determine if flow error should be retried"""
+    error_msg = str(exc).lower()
+    
+    # Don't retry authentication/configuration errors
+    non_retryable_patterns = [
+        'api key not valid',
+        'invalid api key',
+        'authentication failed',
+        'unauthorized',
+        'invalid_argument',
+        'permission denied',
+        'quota exceeded',
+        'billing',
+        'api_key_invalid',
+        'bamlclienthttperror'
+    ]
+    
+    for pattern in non_retryable_patterns:
+        if pattern in error_msg:
+            return False
+    
+    return True
+
 @flow(
     name="document-transformation",
     description="Transform document to knowledge graph",
@@ -255,15 +279,22 @@ async def document_transformation_flow(
         storage_time = 0
         storage_retries = 0
         for graph in graphs:
-            storage_result = await store_knowledge_graph(
-                graph,
-                transform_id,
-                user_id
-            )
-            nodes_stored = nodes_stored + storage_result.nodes_stored
-            relationships_stored = relationships_stored + storage_result.relationships_stored
-            storage_time = storage_time + storage_result.metrics.storage_time_ms
-            storage_retries = storage_retries + storage_result.metrics.retries
+            if graph is not None:  # Only store non-None graphs
+                storage_result = await store_knowledge_graph(
+                    graph,
+                    transform_id,
+                    user_id
+                )
+                nodes_stored = nodes_stored + storage_result.nodes_stored
+                relationships_stored = relationships_stored + storage_result.relationships_stored
+                storage_time = storage_time + storage_result.metrics.storage_time_ms
+                storage_retries = storage_retries + storage_result.metrics.retries
+            else:
+                logger.warning(f"Skipping None graph for transform {transform_id}")
+        
+        # Check if we have any stored graphs
+        if nodes_stored == 0 and relationships_stored == 0:
+            raise ValueError("No graphs were successfully processed and stored")
         
         # Update progress with storage metrics
         await update_stage_progress(transform_id, TransformationStage.LOAD, 
@@ -308,34 +339,53 @@ async def document_transformation_flow(
     except Exception as e:
         logger.error(f"Transform failed: {str(e)}")
         
-        # Get current stage from context
-        context = get_run_context()
-        current_task = context.task_run.task_key if context.task_run else None
-        stage_map = {
-            'chunk_document': TransformationStage.CHUNK,
-            'check_chunk_quality': TransformationStage.CHUNK,
-            'convert_pdf_to_markdown': TransformationStage.PARSE,
-            'store_document': TransformationStage.PARSE,
-            'validate_document': TransformationStage.PARSE,
-            'construct_knowledge_graph': TransformationStage.TRANSFORM,
-            'store_knowledge_graph': TransformationStage.LOAD
-        }
-        current_stage = stage_map.get(
-            current_task,
-            TransformationStage.PARSE
-        )
+        # Determine current stage based on error type and context
+        error_message = str(e).lower()
+        current_stage = TransformationStage.PARSE  # Default stage
+        
+        # Map error types to likely stages
+        if 'chunk' in error_message or 'chunking' in error_message:
+            current_stage = TransformationStage.CHUNK
+        elif 'pdf' in error_message or 'markdown' in error_message or 'conversion' in error_message:
+            current_stage = TransformationStage.PARSE
+        elif 'knowledge graph' in error_message or 'extraction' in error_message or 'baml' in error_message or 'api key' in error_message:
+            current_stage = TransformationStage.TRANSFORM
+        elif 'storage' in error_message or 'store' in error_message or 'database' in error_message:
+            current_stage = TransformationStage.LOAD
+        
+        # Determine if error is recoverable (should not retry)
+        is_recoverable = True
+        error_message_str = str(e)
+        
+        # Non-recoverable errors that should fail immediately
+        non_recoverable_patterns = [
+            'api key not valid',
+            'invalid api key',
+            'authentication failed',
+            'unauthorized',
+            'invalid_argument',
+            'permission denied',
+            'quota exceeded',
+            'billing',
+            'api_key_invalid'
+        ]
+        
+        for pattern in non_recoverable_patterns:
+            if pattern in error_message.lower():
+                is_recoverable = False
+                break
         
         # Record error
         error = ErrorSummary(
             stage=current_stage,
             error_type=type(e).__name__,
-            error_message=str(e),
+            error_message=error_message_str,
             error_timestamp=datetime.now(),
             stack_trace=None,  # TODO: Add stack trace
-            affected_components=[current_task] if current_task else [],
-            retry_count=context.task_run.run_count if context.task_run else 0,
-            is_recoverable=True,  # TODO: Determine if recoverable
-            recovery_instructions=None  # TODO: Add recovery instructions
+            affected_components=[],
+            retry_count=0,  # We can't get retry count from context reliably
+            is_recoverable=is_recoverable,
+            recovery_instructions="Check API key configuration" if not is_recoverable else None
         )
         
         await progress_tracker.fail_stage(

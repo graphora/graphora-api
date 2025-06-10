@@ -77,6 +77,30 @@ async def load_and_validate_ontology(
     except Exception as e:
         raise ValueError(f"Invalid ontology file: {str(e)}")
 
+def should_retry_extraction_error(exc: Exception) -> bool:
+    """Determine if extraction error should be retried"""
+    error_msg = str(exc).lower()
+    
+    # Don't retry authentication/configuration errors
+    non_retryable_patterns = [
+        'api key not valid',
+        'invalid api key',
+        'authentication failed',
+        'unauthorized',
+        'invalid_argument',
+        'permission denied',
+        'quota exceeded',
+        'billing',
+        'api_key_invalid',
+        'bamlclienthttperror'  # BAML client errors are often config issues
+    ]
+    
+    for pattern in non_retryable_patterns:
+        if pattern in error_msg:
+            return False
+    
+    return True
+
 @task(
     name="ontology-extraction",
     retries=settings.TRANSFORM_RETRIES,
