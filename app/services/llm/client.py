@@ -11,7 +11,7 @@ from app.baml_client import reset_baml_env_vars
 from app.config import settings
 import os
 import dotenv
-from aiocache import cached, Cache
+# from aiocache import cached, Cache
 import hashlib
 import pathlib
 from google.genai import types
@@ -31,8 +31,8 @@ def md5(text: str) -> str:
 class LLMClient:
     """Client for LLM-based extraction"""
 
-    @cached(ttl=86400, 
-        key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
+    # @cached(ttl=86400, 
+    #     key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
     @retry_async(max_attempts=5, delay=2, backoff=2, exceptions=(ValueError, Exception))  # Adjust exceptions
     async def extract_nodes_from_pdf(
         self,
@@ -130,8 +130,8 @@ class LLMClient:
         return response.parsed
     
 
-    @cached(ttl=86400, 
-        key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
+    # @cached(ttl=86400, 
+    #     key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
     @retry_async(max_attempts=5, delay=2, backoff=2, exceptions=(ValueError, Exception))  # Adjust exceptions
     async def extract_relationships_from_pdf(
         self,
@@ -225,8 +225,8 @@ class LLMClient:
             raise ValueError("Incorrect response parsed")
         return response.parsed
     
-    @cached(ttl=86400, 
-        key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
+    # @cached(ttl=86400, 
+    #     key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
     async def extract_nodes_from_chunk(
         self,
         chunk: str,
@@ -266,8 +266,8 @@ class LLMClient:
             result = b.ExtractNodesFromChunk(chunk, context, {"tb": tb, "client_registry": client_registry})
             return response_model.model_validate(result.data)
     
-    @cached(ttl=86400, 
-        key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
+    # @cached(ttl=86400, 
+    #     key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
     async def extract_relationships_from_chunk(
         self,
         chunk: str,
@@ -307,8 +307,8 @@ class LLMClient:
             result = b.ExtractRelationshipsFromChunk(chunk, context, {"tb": tb, "client_registry": client_registry})
             return response_model.model_validate(result.data)
     
-    @cached(ttl=86400, 
-        key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['rel_type']+':'+kwargs['source_type']+':'+kwargs['source_entities']+':'+kwargs['target_type']+':'+kwargs['target_entities'])}")
+    # @cached(ttl=86400, 
+    #     key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['rel_type']+':'+kwargs['source_type']+':'+kwargs['source_entities']+':'+kwargs['target_type']+':'+kwargs['target_entities'])}")
     async def infer_relationship(
         self,
         rel_type: str,
@@ -353,8 +353,8 @@ class LLMClient:
                 existing_rels=existing_rels,
                 baml_options={"client_registry": client_registry})
     
-    @cached(ttl=86400, 
-        key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['entity_group_type']+':'+kwargs['entities_json'])}")
+    # @cached(ttl=86400, 
+    #     key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['entity_group_type']+':'+kwargs['entities_json'])}")
     async def standardise_properties(
         self,
         entity_group_type: str,
@@ -387,8 +387,8 @@ class LLMClient:
                 entities_json=entities_json,
                 baml_options={"client_registry": client_registry})
     
-    @cached(ttl=86400, 
-        key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['entity_type']+':'+kwargs['node_dicts_str'])}")
+    # @cached(ttl=86400, 
+    #     key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['entity_type']+':'+kwargs['node_dicts_str'])}")
     async def resolve_entities(
         self,
         entity_type: str,
