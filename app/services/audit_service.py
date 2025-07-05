@@ -17,6 +17,10 @@ class OperationType(str, Enum):
     TRANSFORM_COMPLETED = "transform_completed"
     MERGE_STARTED = "merge_started"
     MERGE_COMPLETED = "merge_completed"
+    SCHEMA_GENERATION = "schema_generation"
+    SCHEMA_SEARCH = "schema_search"
+    SCHEMA_REFINEMENT = "schema_refinement"
+    SCHEMA_CREATE = "schema_create"
 
 class OperationStatus(str, Enum):
     """Status of operations"""
