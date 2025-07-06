@@ -304,6 +304,8 @@ class SchemaGenerationService:
 4. Relationships must have: target, and optionally properties
 5. Property types: str, int, float, bool, date
 6. Include meaningful descriptions for all properties and relationships
+8. Entity names in CamelCase; Relationship names in UPPER_CASE; Property names in camelCase;
+9. No bi-directional synonymous relationships. Just use one. For e.g: Instead of both `INVOLVES` and `INVOLVED_BY`, just use one which makes more sense.
 
 **Related Schemas for Reference:**
 """
