@@ -68,6 +68,17 @@ class Correction(BaseModel):
 class DynamicContainer(BaseModel):
     model_config = ConfigDict(extra='allow')
 
+class Entity(BaseModel):
+    properties: Dict[str, Optional["EntityProperty"]]
+    relationships: Optional[Dict[str, Optional["Relationship"]]] = None
+
+class EntityProperty(BaseModel):
+    type: Optional[str] = None
+    description: Optional[str] = None
+    required: Optional[bool] = None
+    unique: Optional[bool] = None
+    index: Optional[bool] = None
+
 class EntitySimilarityAnalysis(BaseModel):
     similarity_score: Optional[float] = None
     confidence: Optional[float] = None
@@ -77,6 +88,10 @@ class EntitySimilarityAnalysis(BaseModel):
     potential_merge_impact: Optional[str] = None
     recommended_action: Optional[str] = None
     reasoning: Optional[str] = None
+
+class GeneratedSchema(BaseModel):
+    version: Optional[str] = None
+    entities: Dict[str, Optional["Entity"]]
 
 class MatchingNode(BaseModel):
     staging_node_id: Optional[str] = None
@@ -89,6 +104,10 @@ class PropertyConflictAnalysis(BaseModel):
     explanation: Optional[str] = None
     can_auto_resolve: Optional[bool] = None
     potential_risks: List[str]
+
+class Relationship(BaseModel):
+    target: Optional[str] = None
+    properties: Optional[Dict[str, Optional["RelationshipProperty"]]] = None
 
 class RelationshipConflictAnalysis(BaseModel):
     recommended_strategy: Optional[types.ResolutionStrategy] = None
@@ -108,6 +127,11 @@ class RelationshipInference(BaseModel):
     properties: Dict[str, Optional[str]]
     confidence_score: Optional[float] = None
 
+class RelationshipProperty(BaseModel):
+    type: Optional[str] = None
+    description: Optional[str] = None
+    required: Optional[bool] = None
+
 class ResolutionOption(BaseModel):
     id: Optional[str] = None
     description: Optional[str] = None
@@ -124,6 +148,12 @@ class ResolutionOptions(BaseModel):
 class ResolvedEntities(BaseModel):
     matching_ids: List[str]
     confidence_score: Optional[float] = None
+    explanation: Optional[str] = None
+
+class SchemaGenerationResult(BaseModel):
+    generated_schema: Optional["GeneratedSchema"] = None
+    confidence: Optional[float] = None
+    suggestions: List[str]
     explanation: Optional[str] = None
 
 class SelectedResolution(BaseModel):

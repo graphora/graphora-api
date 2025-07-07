@@ -766,6 +766,38 @@ class AsyncHttpRequest:
         False,
       )
     
+    async def GenerateKnowledgeGraphSchema(
+        self,
+        use_case: str,domain: str,data_sources: str,key_entities: str,relationships: str,query_patterns: str,data_complexity: str,data_volume: str,temporal_requirements: str,related_schemas: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "GenerateKnowledgeGraphSchema",
+        {
+          "use_case": use_case,
+          "domain": domain,
+          "data_sources": data_sources,
+          "key_entities": key_entities,
+          "relationships": relationships,
+          "query_patterns": query_patterns,
+          "data_complexity": data_complexity,
+          "data_volume": data_volume,
+          "temporal_requirements": temporal_requirements,
+          "related_schemas": related_schemas,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
     async def GeneratePropertyResolutionOptions(
         self,
         conflict: types.JsonObject,analysis: types.JsonObject,ontology: types.JsonObject,
@@ -912,6 +944,32 @@ class AsyncHttpRequest:
           "source_entities": source_entities,
           "target_entities": target_entities,
           "existing_rels": existing_rels,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
+    async def RefineKnowledgeGraphSchema(
+        self,
+        current_schema_yaml: str,user_feedback: str,use_case: str,domain: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "RefineKnowledgeGraphSchema",
+        {
+          "current_schema_yaml": current_schema_yaml,
+          "user_feedback": user_feedback,
+          "use_case": use_case,
+          "domain": domain,
         },
         self.__ctx_manager.get(),
         tb,
@@ -1732,6 +1790,38 @@ class AsyncHttpStreamRequest:
         True,
       )
     
+    async def GenerateKnowledgeGraphSchema(
+        self,
+        use_case: str,domain: str,data_sources: str,key_entities: str,relationships: str,query_patterns: str,data_complexity: str,data_volume: str,temporal_requirements: str,related_schemas: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "GenerateKnowledgeGraphSchema",
+        {
+          "use_case": use_case,
+          "domain": domain,
+          "data_sources": data_sources,
+          "key_entities": key_entities,
+          "relationships": relationships,
+          "query_patterns": query_patterns,
+          "data_complexity": data_complexity,
+          "data_volume": data_volume,
+          "temporal_requirements": temporal_requirements,
+          "related_schemas": related_schemas,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
     async def GeneratePropertyResolutionOptions(
         self,
         conflict: types.JsonObject,analysis: types.JsonObject,ontology: types.JsonObject,
@@ -1878,6 +1968,32 @@ class AsyncHttpStreamRequest:
           "source_entities": source_entities,
           "target_entities": target_entities,
           "existing_rels": existing_rels,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
+    async def RefineKnowledgeGraphSchema(
+        self,
+        current_schema_yaml: str,user_feedback: str,use_case: str,domain: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "RefineKnowledgeGraphSchema",
+        {
+          "current_schema_yaml": current_schema_yaml,
+          "user_feedback": user_feedback,
+          "use_case": use_case,
+          "domain": domain,
         },
         self.__ctx_manager.get(),
         tb,

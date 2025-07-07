@@ -17,6 +17,7 @@ from app.services.schema_search_service import schema_search_service
 from app.services.question_sets import QUESTION_SETS
 from app.utils.llm_helper import get_user_llm_credentials, create_gemini_client
 from app.utils.llm_usage_tracker import track_gemini_usage
+from app.utils.baml_helper import create_baml_client, configure_baml_client_for_refinement
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -100,36 +101,43 @@ class SchemaGenerationService:
         """Refine an existing schema based on user feedback"""
         
         try:
-            # Get user's LLM credentials
+            # Get user's LLM credentials and setup BAML client for refinement
             api_key, model_name = await get_user_llm_credentials(user_id)
-            client = create_gemini_client(api_key)
+            client_registry = configure_baml_client_for_refinement(api_key, model_name)
             
-            # Prepare refinement prompt
-            refinement_prompt = self._build_refinement_prompt(
-                current_schema=current_schema,
+            # Extract context for refinement
+            context_dict = context or {}
+            use_case = context_dict.get('use_case', 'Not specified')
+            domain = context_dict.get('domain', 'Not specified')
+            
+            # Import BAML client locally to avoid module-level import issues
+            from app.baml_client import b
+            
+            # Call BAML structured refinement
+            result = b.RefineKnowledgeGraphSchema(
+                current_schema_yaml=current_schema,
                 user_feedback=user_feedback,
-                context=context or {}
+                use_case=str(use_case),
+                domain=str(domain),
+                baml_options={"client_registry": client_registry}
             )
             
-            # Call LLM for refinement
-            response = client.models.generate_content(
-                model=model_name,
-                contents=[refinement_prompt]
-            )
+            # Convert structured result to YAML
+            refined_schema = self._convert_structured_schema_to_yaml(result.generated_schema)
             
-            # Track LLM usage
+            # Track LLM usage (simplified since BAML handles the LLM call)
             await track_gemini_usage(
                 user_id=user_id,
                 model_name=model_name,
                 operation_type="schema_refinement",
-                response=response,
+                response=None,  # BAML handles this internally
                 operation_context="schema_refinement"
             )
             
-            # Parse response
-            refined_schema, changes_made, confidence, explanation = self._parse_refinement_response(
-                response.text
-            )
+            # Extract refinement details
+            changes_made = [result.explanation] if result.explanation else []
+            confidence = result.confidence
+            explanation = result.explanation or "Schema refined successfully"
             
             # Update stored schema
             await schema_storage_service.update_generated_schema(
@@ -234,44 +242,52 @@ class SchemaGenerationService:
         related_schemas: List[RelatedSchema],
         user_responses: List[UserResponse]
     ) -> Tuple[str, float, List[str]]:
-        """Generate schema using LLM based on context and related schemas"""
+        """Generate schema using BAML structured output for deterministic YAML format"""
         
         try:
-            # Get user's LLM credentials
+            # Get user's LLM credentials and setup BAML client
             api_key, model_name = await get_user_llm_credentials(user_id)
-            client = create_gemini_client(api_key)
+            client_registry = create_baml_client(api_key, model_name)
             
-            # Build generation prompt
-            prompt = self._build_generation_prompt(
-                context=context,
-                related_schemas=related_schemas,
-                user_responses=user_responses
+            # Prepare related schemas string
+            related_schemas_text = ""
+            for schema in related_schemas[:3]:  # Include top 3 related schemas
+                related_schemas_text += f"\n- {schema.title}: {schema.description} (similarity: {schema.similarity:.2f})"
+            
+            # Import BAML client locally to avoid module-level import issues
+            from app.baml_client import b
+            
+            # Call BAML structured generation with client registry
+            result = b.GenerateKnowledgeGraphSchema(
+                use_case=str(context.get('use_case', 'Not specified')),
+                domain=str(context.get('domain', 'Not specified')), 
+                data_sources=str(context.get('data_sources', 'Not specified')),
+                key_entities=str(context.get('key_entities', 'Not specified')),
+                relationships=str(context.get('relationships', 'Not specified')),
+                query_patterns=str(context.get('query_patterns', 'Not specified')),
+                data_complexity=str(context.get('data_complexity', 'Not specified')),
+                data_volume=str(context.get('data_volume', 'Not specified')),
+                temporal_requirements=str(context.get('temporal_requirements', 'Not specified')),
+                related_schemas=related_schemas_text,
+                baml_options={"client_registry": client_registry}
             )
             
-            # Call LLM
-            response = client.models.generate_content(
-                model=model_name,
-                contents=[prompt]
-            )
+            # Convert structured result to YAML
+            generated_schema = self._convert_structured_schema_to_yaml(result.generated_schema)
             
-            # Track usage
+            # Track usage (simplified since BAML handles the LLM call)
             await track_gemini_usage(
                 user_id=user_id,
                 model_name=model_name,
                 operation_type="schema_generation",
-                response=response,
+                response=None,  # BAML handles this internally
                 operation_context="schema_generation"
             )
             
-            # Parse and validate generated schema
-            generated_schema, confidence, suggestions = self._parse_generation_response(
-                response.text, context
-            )
-            
-            return generated_schema, confidence, suggestions
+            return generated_schema, result.confidence, result.suggestions
             
         except Exception as e:
-            logger.warning(f"LLM generation failed, falling back to template: {str(e)}")
+            logger.warning(f"BAML structured generation failed, falling back to template: {str(e)}")
             
             # Fallback to template-based generation
             return self._generate_template_based_schema(context)
@@ -692,6 +708,79 @@ entities:
         description: Date of transaction
         required: true"""
         }
+    
+    def _convert_structured_schema_to_yaml(self, structured_schema) -> str:
+        """Convert BAML structured schema to proper YAML format"""
+        try:
+            # Build YAML dictionary from structured schema
+            yaml_dict = {
+                "version": structured_schema.version,
+                "entities": {}
+            }
+            
+            # Convert entities
+            for entity_name, entity_data in structured_schema.entities.items():
+                yaml_dict["entities"][entity_name] = {
+                    "properties": {}
+                }
+                
+                # Convert properties
+                if entity_data.properties:
+                    for prop_name, prop_data in entity_data.properties.items():
+                        prop_dict = {
+                            "type": prop_data.type,
+                            "description": prop_data.description
+                        }
+                        
+                        # Add optional fields only if they exist
+                        if hasattr(prop_data, 'required') and prop_data.required is not None:
+                            prop_dict["required"] = prop_data.required
+                        if hasattr(prop_data, 'unique') and prop_data.unique is not None:
+                            prop_dict["unique"] = prop_data.unique
+                        if hasattr(prop_data, 'index') and prop_data.index is not None:
+                            prop_dict["index"] = prop_data.index
+                            
+                        yaml_dict["entities"][entity_name]["properties"][prop_name] = prop_dict
+                
+                # Convert relationships - CRITICAL: nested inside entities
+                if entity_data.relationships:
+                    yaml_dict["entities"][entity_name]["relationships"] = {}
+                    
+                    for rel_name, rel_data in entity_data.relationships.items():
+                        rel_dict = {
+                            "target": rel_data.target
+                        }
+                        
+                        # Add relationship properties if they exist
+                        if hasattr(rel_data, 'properties') and rel_data.properties:
+                            rel_dict["properties"] = {}
+                            for rel_prop_name, rel_prop_data in rel_data.properties.items():
+                                rel_prop_dict = {
+                                    "type": rel_prop_data.type,
+                                    "description": rel_prop_data.description
+                                }
+                                if hasattr(rel_prop_data, 'required') and rel_prop_data.required is not None:
+                                    rel_prop_dict["required"] = rel_prop_data.required
+                                    
+                                rel_dict["properties"][rel_prop_name] = rel_prop_dict
+                        
+                        yaml_dict["entities"][entity_name]["relationships"][rel_name] = rel_dict
+            
+            # Convert to YAML with proper formatting
+            yaml_output = yaml.dump(
+                yaml_dict, 
+                default_flow_style=False, 
+                sort_keys=False,
+                indent=2,
+                allow_unicode=True
+            )
+            
+            return yaml_output
+            
+        except Exception as e:
+            logger.error(f"Error converting structured schema to YAML: {str(e)}")
+            # Return a basic template as fallback
+            return self._generate_template_based_schema({})[0]
 
 
 # Global service instance

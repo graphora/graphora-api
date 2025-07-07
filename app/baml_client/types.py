@@ -79,6 +79,17 @@ class Correction(BaseModel):
 class DynamicContainer(BaseModel):
     model_config = ConfigDict(extra='allow')
 
+class Entity(BaseModel):
+    properties: Dict[str, "EntityProperty"]
+    relationships: Optional[Dict[str, "Relationship"]] = None
+
+class EntityProperty(BaseModel):
+    type: str
+    description: str
+    required: Optional[bool] = None
+    unique: Optional[bool] = None
+    index: Optional[bool] = None
+
 class EntitySimilarityAnalysis(BaseModel):
     similarity_score: float
     confidence: float
@@ -88,6 +99,10 @@ class EntitySimilarityAnalysis(BaseModel):
     potential_merge_impact: str
     recommended_action: str
     reasoning: str
+
+class GeneratedSchema(BaseModel):
+    version: str
+    entities: Dict[str, "Entity"]
 
 class MatchingNode(BaseModel):
     staging_node_id: str
@@ -100,6 +115,10 @@ class PropertyConflictAnalysis(BaseModel):
     explanation: str
     can_auto_resolve: bool
     potential_risks: List[str]
+
+class Relationship(BaseModel):
+    target: str
+    properties: Optional[Dict[str, "RelationshipProperty"]] = None
 
 class RelationshipConflictAnalysis(BaseModel):
     recommended_strategy: "ResolutionStrategy"
@@ -119,6 +138,11 @@ class RelationshipInference(BaseModel):
     properties: Dict[str, str]
     confidence_score: float
 
+class RelationshipProperty(BaseModel):
+    type: str
+    description: str
+    required: Optional[bool] = None
+
 class ResolutionOption(BaseModel):
     id: str
     description: str
@@ -136,6 +160,12 @@ class ResolvedEntities(BaseModel):
     matching_ids: List[str]
     confidence_score: float
     explanation: str
+
+class SchemaGenerationResult(BaseModel):
+    generated_schema: "GeneratedSchema"
+    confidence: float
+    suggestions: List[str]
+    explanation: Optional[str] = None
 
 class SelectedResolution(BaseModel):
     option_id: str
