@@ -856,6 +856,33 @@ class BamlAsyncClient:
       )
       return cast(types.ResolutionOptions, raw.cast_to(types, types, partial_types, False))
     
+    async def GenerateKnowledgeGraphSchema(
+        self,
+        use_case: str,domain: str,data_sources: str,key_entities: str,relationships: str,query_patterns: str,data_complexity: str,data_volume: str,temporal_requirements: str,related_schemas: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.SchemaGenerationResult:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+      raw = await self.__runtime.call_function(
+        "GenerateKnowledgeGraphSchema",
+        {
+          "use_case": use_case,"domain": domain,"data_sources": data_sources,"key_entities": key_entities,"relationships": relationships,"query_patterns": query_patterns,"data_complexity": data_complexity,"data_volume": data_volume,"temporal_requirements": temporal_requirements,"related_schemas": related_schemas,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+      return cast(types.SchemaGenerationResult, raw.cast_to(types, types, partial_types, False))
+    
     async def GeneratePropertyResolutionOptions(
         self,
         conflict: types.JsonObject,analysis: types.JsonObject,ontology: types.JsonObject,
@@ -1017,6 +1044,33 @@ class BamlAsyncClient:
         collectors,
       )
       return cast(List[types.RelationshipInference], raw.cast_to(types, types, partial_types, False))
+    
+    async def RefineKnowledgeGraphSchema(
+        self,
+        current_schema_yaml: str,user_feedback: str,use_case: str,domain: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.SchemaGenerationResult:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+      raw = await self.__runtime.call_function(
+        "RefineKnowledgeGraphSchema",
+        {
+          "current_schema_yaml": current_schema_yaml,"user_feedback": user_feedback,"use_case": use_case,"domain": domain,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+      return cast(types.SchemaGenerationResult, raw.cast_to(types, types, partial_types, False))
     
     async def ResolveEntities(
         self,
@@ -2120,6 +2174,48 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
       )
     
+    def GenerateKnowledgeGraphSchema(
+        self,
+        use_case: str,domain: str,data_sources: str,key_entities: str,relationships: str,query_patterns: str,data_complexity: str,data_volume: str,temporal_requirements: str,related_schemas: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.SchemaGenerationResult, types.SchemaGenerationResult]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+      raw = self.__runtime.stream_function(
+        "GenerateKnowledgeGraphSchema",
+        {
+          "use_case": use_case,
+          "domain": domain,
+          "data_sources": data_sources,
+          "key_entities": key_entities,
+          "relationships": relationships,
+          "query_patterns": query_patterns,
+          "data_complexity": data_complexity,
+          "data_volume": data_volume,
+          "temporal_requirements": temporal_requirements,
+          "related_schemas": related_schemas,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+
+      return baml_py.BamlStream[partial_types.SchemaGenerationResult, types.SchemaGenerationResult](
+        raw,
+        lambda x: cast(partial_types.SchemaGenerationResult, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.SchemaGenerationResult, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
     def GeneratePropertyResolutionOptions(
         self,
         conflict: types.JsonObject,analysis: types.JsonObject,ontology: types.JsonObject,
@@ -2330,6 +2426,42 @@ class BamlStreamClient:
         raw,
         lambda x: cast(List[partial_types.RelationshipInference], x.cast_to(types, types, partial_types, True)),
         lambda x: cast(List[types.RelationshipInference], x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def RefineKnowledgeGraphSchema(
+        self,
+        current_schema_yaml: str,user_feedback: str,use_case: str,domain: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[partial_types.SchemaGenerationResult, types.SchemaGenerationResult]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+      raw = self.__runtime.stream_function(
+        "RefineKnowledgeGraphSchema",
+        {
+          "current_schema_yaml": current_schema_yaml,
+          "user_feedback": user_feedback,
+          "use_case": use_case,
+          "domain": domain,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+
+      return baml_py.BamlStream[partial_types.SchemaGenerationResult, types.SchemaGenerationResult](
+        raw,
+        lambda x: cast(partial_types.SchemaGenerationResult, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.SchemaGenerationResult, x.cast_to(types, types, partial_types, False)),
         self.__ctx_manager.get(),
       )
     
