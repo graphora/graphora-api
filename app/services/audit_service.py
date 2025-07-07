@@ -164,6 +164,55 @@ class AuditService:
             logger.error(f"Error logging operation failure: {str(e)}")
             return False
     
+    async def log_operation_end(
+        self,
+        user_id: str,
+        operation_id: str,
+        status: OperationStatus,
+        duration_ms: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        error_message: Optional[str] = None
+    ) -> bool:
+        """Log the end of an operation by finding and updating the audit record"""
+        try:
+            # Find the audit record by user_id and operation_id
+            existing_record = self.supabase.table("audit_trail").select("id, metadata").eq("user_id", user_id).eq("operation_id", operation_id).order("created_at", desc=True).limit(1).execute()
+            
+            if not existing_record.data or len(existing_record.data) == 0:
+                logger.error(f"No audit record found for user {user_id} and operation {operation_id}")
+                return False
+            
+            audit_id = existing_record.data[0]["id"]
+            existing_metadata = existing_record.data[0].get("metadata", {})
+            
+            update_data = {
+                "status": status.value,
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            
+            if duration_ms is not None:
+                update_data["duration_ms"] = duration_ms
+            
+            if error_message:
+                update_data["error_message"] = error_message
+            
+            if metadata:
+                # Merge with existing metadata
+                update_data["metadata"] = {**existing_metadata, **metadata}
+            
+            result = self.supabase.table("audit_trail").update(update_data).eq("id", audit_id).execute()
+            
+            if result.data and len(result.data) > 0:
+                logger.info(f"Logged end of operation {operation_id} for user {user_id} with status {status.value}")
+                return True
+            else:
+                logger.error(f"Failed to update audit trail {audit_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error logging operation end: {str(e)}")
+            return False
+    
     async def log_direct_operation(
         self,
         user_id: str,
