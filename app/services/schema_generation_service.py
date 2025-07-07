@@ -324,7 +324,16 @@ class SchemaGenerationService:
 6. Ensure the schema supports the specified use case effectively
 
 **Output Format:**
-Return only the YAML schema content, followed by:
+Return ONLY the YAML schema content starting with 'version: 0.1.0' and 'entities:'.
+DO NOT wrap the schema in any additional keys like 'ontology:' or any other wrapper.
+The response should start directly with 'version: 0.1.0'.
+
+Example of correct format:
+version: 0.1.0
+entities:
+  EntityName:
+    properties: ...
+
 CONFIDENCE: [0.0-1.0]
 SUGGESTIONS: [comma-separated list of suggestions]
 
@@ -361,7 +370,16 @@ Generate the schema now:"""
 5. Maintain YAML format and property types
 
 **Output Format:**
-Return the refined schema, followed by:
+Return ONLY the YAML schema content starting with 'version: 0.1.0' and 'entities:'.
+DO NOT wrap the schema in any additional keys like 'ontology:' or any other wrapper.
+The response should start directly with 'version: 0.1.0'.
+
+Example of correct format:
+version: 0.1.0
+entities:
+  EntityName:
+    properties: ...
+
 CHANGES_MADE: [list of specific changes made]
 CONFIDENCE: [0.0-1.0]
 EXPLANATION: [brief explanation of the changes]
