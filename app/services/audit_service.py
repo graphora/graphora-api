@@ -21,6 +21,13 @@ class OperationType(str, Enum):
     SCHEMA_SEARCH = "schema_search"
     SCHEMA_REFINEMENT = "schema_refinement"
     SCHEMA_CREATE = "schema_create"
+    
+    # Chat-related operations
+    CHAT_SESSION_STARTED = "chat_session_started"
+    CHAT_MESSAGE_SENT = "chat_message_sent"
+    CHAT_MESSAGE_RECEIVED = "chat_message_received"
+    CHAT_SESSION_ENDED = "chat_session_ended"
+    CHAT_SCHEMA_REFINEMENT = "chat_schema_refinement"
 
 class OperationStatus(str, Enum):
     """Status of operations"""

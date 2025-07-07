@@ -83,10 +83,8 @@ class SchemaSearchService:
         """Perform text-based search as fallback"""
         
         try:
-            # Build base query
-            select_fields = "id, title, description, domain, tags, created_at, updated_at, usage_count, user_id"
-            if include_content:
-                select_fields += ", content"
+            # Build base query - always include content field for StoredSchema compatibility
+            select_fields = "id, title, description, content, domain, tags, created_at, updated_at, usage_count, user_id"
             
             # Search in public schemas and user's own schemas
             query_builder = self.supabase.table(self.schemas_table)\
@@ -108,7 +106,25 @@ class SchemaSearchService:
             # Convert to StoredSchema objects for easier handling
             schemas = []
             for item in result.data:
-                schemas.append(StoredSchema(**item))
+                try:
+                    # Ensure required fields have default values if missing
+                    schema_data = {
+                        "id": item.get("id", ""),
+                        "title": item.get("title", "Untitled Schema"),
+                        "description": item.get("description", ""),
+                        "content": item.get("content", "version: 0.1.0\nentities: {}"),
+                        "domain": item.get("domain", "Other"),
+                        "tags": item.get("tags", []),
+                        "user_id": item.get("user_id", "unknown"),
+                        "is_public": item.get("is_public", False),
+                        "usage_count": item.get("usage_count", 0),
+                        "created_at": item.get("created_at", datetime.utcnow()),
+                        "updated_at": item.get("updated_at", datetime.utcnow())
+                    }
+                    schemas.append(StoredSchema(**schema_data))
+                except Exception as e:
+                    logger.warning(f"Skipping invalid schema record {item.get('id', 'unknown')}: {str(e)}")
+                    continue
             
             # Calculate text similarity scores
             search_results = []
@@ -143,6 +159,8 @@ class SchemaSearchService:
             
         except Exception as e:
             logger.error(f"Error in text-based search: {str(e)}")
+            # Log more details for debugging
+            logger.error(f"Query: {query}, Domain: {domain}, User: {user_id}")
             return []
     
     def _calculate_text_similarity(self, schema: StoredSchema, query_terms: set) -> float:
