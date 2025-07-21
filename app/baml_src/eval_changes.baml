@@ -16,11 +16,13 @@ class ChangeResult {
     "#)
     corrections Correction[] @description(#"
         Any corrections to the change log. If no corrections are needed, return an empty list.
+        Corrections should be logical or based on past resolutions and learnings. If there is change in value for e.g price=100 to price=200, then it needs a manual review.
+        In this case, the confidence should be 50% or less. But if its a simple typo or a minor change, then it can be corrected with high confidence.
         Only do corrections if you are more than 95% confident that the change is incorrect.
         Corrections should be relevant and not out of context.
     "#)
     confidence_score float @description(#"
-        Overall confidence score for all the corrections (0-1)
+        Overall confidence score for all the corrections (0-1). 
         E.g: 0.95
     "#)
 }
@@ -31,17 +33,28 @@ function EvalChanges(
 ) -> ChangeResult[] {
     client DynamicGemini
     prompt #"
-        You are a helpful assistant that evaluates the changes made to a graph.
-        You are given a list of change logs and learnings from past resolutions.
-        You need to evaluate the changes and determine if they are correct.
-        Please validate the changes against the past resolutions and make corrections if necessary.
-        Please return the ID of the change log and the corrections needed.
+        You are evaluating property changes in a knowledge graph merge.
 
-        Past Resolutions & Learnings:
-        {{past_resolutions}}
+          IMPORTANT GUIDELINES:
+          - Only make corrections for obvious errors (typos, formatting issues)
+          - For value changes (e.g., price: 100 -> 200), set confidence ≤ 0.5 to trigger human review
+          - Do NOT auto-correct factual differences - let humans decide
+          - Only correct if >95% confident it's an ERROR, not a legitimate update
 
-        Change Logs:
-        {{change_logs}}
+          Examples of CORRECTIONS (high confidence):
+          - "Jhon" -> "John" (typo)
+          - "2023-13-45" -> "2023-12-31" (invalid date)
+
+          Examples of HUMAN REVIEW (low confidence ≤ 0.5):
+          - Medical codes: "847.2" -> "12000" (could be legitimate update)
+          - Prices: "$100" -> "$200" (business decision)
+          - Status changes: "Active" -> "Inactive" (operational change)
+
+          Past Resolutions & Learnings:
+          {{past_resolutions}}
+
+          Change Logs:
+          {{change_logs}}
 
         {{ ctx.output_format }}
     "#
