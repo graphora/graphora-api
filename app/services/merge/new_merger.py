@@ -95,16 +95,37 @@ async def merge_flow(
 
         # Step-3: Compare Graphs & Identify Conflicts
         change_logs = []
+        total_comparisons = 0
+        conflicts_detected = 0
+        
         for node_id, match in prod_mapping_result.matches.items():
             if match.best_match:
                 staging_node = next((n for n in merged_graph.nodes if n.id == node_id), None)
+                if not staging_node:
+                    logger.warning(f"Staging node {node_id} not found in merged_graph")
+                    continue
+                    
+                total_comparisons += 1
                 ontology_props = ontology['entities'][staging_node.type]['properties']
-                change_log = ChangeLog(
-                    staging_node=staging_node,
-                    prod_node=match.best_match,
-                    prop_changes=_get_prop_changes(staging_node, match.best_match, ontology_props)
-                )
-                change_logs.append(change_log)
+                prop_changes = _get_prop_changes(staging_node, match.best_match, ontology_props)
+                
+                # Only create change log if there are actual property changes
+                if prop_changes:
+                    conflicts_detected += 1
+                    change_log = ChangeLog(
+                        staging_node=staging_node,
+                        prod_node=match.best_match,
+                        prop_changes=prop_changes
+                    )
+                    change_logs.append(change_log)
+                    logger.info(f"Conflict detected for node {node_id} ({staging_node.type}): {len(prop_changes)} property changes")
+                else:
+                    logger.debug(f"No conflicts detected for node {node_id} ({staging_node.type})")
+        
+        logger.info(f"Conflict detection summary: {conflicts_detected} conflicts found in {total_comparisons} node comparisons")
+        
+        # Add detailed debugging for mapping results
+        _log_mapping_debug_info(prod_mapping_result, merged_graph.nodes, ontology)
 
         change_log_by_entity_type = _group_changes_by_entity_type(change_logs)
         high_conf_changes, changes_for_human_review = await _classify_changes(
@@ -735,19 +756,34 @@ async def _get_matching_nodes(
         strategy = MatchStrategy.EXACT_NAME
         matches = []
         best_match = None
-        logger.info(node)
-        # Fall back to name-based matching
-        if not matches and "name" in node.properties:
+        
+        logger.debug(f"Finding matches for staging node {node.id} ({node.type}) with properties: {node.properties}")
+        
+        # Strategy 1: Try exact name matching first
+        if "name" in node.properties and node.properties["name"]:
             matches = await storage.find_nodes_by_property_value(
                 label=node.label,
                 property_name="name",
                 property_value=node.properties["name"]
             )
-            logger.info(matches)
-            if len(matches) > 0:
+            logger.debug(f"Name-based matching found {len(matches)} candidates for '{node.properties['name']}'")
+            if matches:
                 best_match = matches[0]
+                strategy = MatchStrategy.EXACT_NAME
+        
+        # Strategy 2: Try ID-based matching if no name matches
+        if not matches and "id" in node.properties and node.properties["id"]:
+            matches = await storage.find_nodes_by_property_value(
+                label=node.label,
+                property_name="id",
+                property_value=node.properties["id"]
+            )
+            logger.debug(f"ID-based matching found {len(matches)} candidates for ID '{node.properties['id']}'")
+            if matches:
+                best_match = matches[0]
+                strategy = MatchStrategy.EXACT_NAME
             
-        # Use property similarity as last resort
+        # Strategy 3: Use property similarity as fallback
         if not matches:
             strategy = MatchStrategy.PROPERTY_SIMILARITY
             matches = await storage.find_similar_nodes(
@@ -755,25 +791,34 @@ async def _get_matching_nodes(
                 properties=node.properties,
                 similarity_threshold=similarity_threshold
             )
-            logger.info(matches)
+            logger.debug(f"Similarity-based matching found {len(matches)} candidates (threshold: {similarity_threshold})")
         
         # Calculate confidence based on strategy and number of matches
-        confidence = 0.8 if strategy == MatchStrategy.EXACT_NAME else 0.2
+        if strategy == MatchStrategy.EXACT_NAME:
+            confidence = 0.9 if len(matches) == 1 else 0.7  # Lower confidence if multiple exact matches
+        else:
+            confidence = 0.3  # Lower confidence for similarity matches
+        
+        if matches:
+            logger.info(f"Found {len(matches)} potential matches for staging node {node.id} using {strategy.value}")
+        else:
+            logger.info(f"No matches found for staging node {node.id} - will be treated as new node")
         
         return EntityMatch(
             staging_id=node.id,
             production_matches=matches,
-            best_match = best_match,
+            best_match=best_match,
             match_confidence=confidence,
             match_strategy=strategy,
             metadata={
                 "total_matches": len(matches),
-                "node_label": node.label
+                "node_label": node.label,
+                "matching_property": "name" if "name" in node.properties else "similarity"
             }
         )
         
     except Exception as e:
-        logger.error(f"Failed to get matching nodes: {str(e)}")
+        logger.error(f"Failed to get matching nodes for {node.id}: {str(e)}")
         raise
 
 @task(name="persist_to_prod")
@@ -1093,8 +1138,101 @@ def _get_node_string(node: Node, properties: Dict[str, Any]) -> str:
     props = { k: v for k, v in node.properties.items() if k in properties }
     return f"(Node Id: {node.id}, properties: {props})"
 
+def _validate_node_comparison(staging_node: Node, prod_node: Node) -> bool:
+    """Validate that two nodes can be meaningfully compared"""
+    if not staging_node or not prod_node:
+        logger.warning("One of the nodes is None")
+        return False
+    
+    if staging_node.type != prod_node.type:
+        logger.warning(f"Node types don't match: staging={staging_node.type}, prod={prod_node.type}")
+        return False
+    
+    return True
+
+def _log_mapping_debug_info(mapping_result: 'EntityMappingResult', staging_nodes: List[Node], ontology: Dict[str, Any]):
+    """Log detailed debugging information about entity mapping and potential conflicts"""
+    logger.info(f"=== MAPPING DEBUG INFO ===")
+    logger.info(f"Total staging nodes: {len(staging_nodes)}")
+    logger.info(f"Total mapped entities: {mapping_result.matched_entities}")
+    logger.info(f"Mapping success rate: {mapping_result.matched_entities}/{mapping_result.total_entities}")
+    
+    # Log unmapped staging nodes
+    unmapped_count = 0
+    for node in staging_nodes:
+        if node.id not in mapping_result.matches or not mapping_result.matches[node.id].best_match:
+            unmapped_count += 1
+            logger.debug(f"Unmapped staging node: {node.id} ({node.type}) - {node.properties}")
+    
+    logger.info(f"Unmapped staging nodes: {unmapped_count}")
+    
+    # Log nodes with matches but no conflicts detected
+    matched_no_conflicts = 0
+    for node_id, match in mapping_result.matches.items():
+        if match.best_match:
+            staging_node = next((n for n in staging_nodes if n.id == node_id), None)
+            if staging_node:
+                ontology_props = ontology['entities'][staging_node.type]['properties']
+                prop_changes = _get_prop_changes(staging_node, match.best_match, ontology_props)
+                if not prop_changes:
+                    matched_no_conflicts += 1
+                    logger.debug(f"Matched node with no conflicts: {node_id} ({staging_node.type})")
+                    logger.debug(f"  Staging props: {staging_node.properties}")
+                    logger.debug(f"  Production props: {match.best_match.properties}")
+    
+    logger.info(f"Matched nodes with no conflicts: {matched_no_conflicts}")
+    logger.info(f"=== END MAPPING DEBUG INFO ===")
+
 def _get_prop_changes(staging_node: Node, prod_node: Node, props: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
-    return { k: (staging_node.properties[k], prod_node.properties.get(k, None)) for k, v in props.items() if k in staging_node.properties and staging_node.properties[k] != prod_node.properties.get(k, None)}
+    """
+    Detect property changes between staging and production nodes.
+    Returns a dictionary with property_name -> (staging_value, prod_value) for all changes.
+    """
+    if not _validate_node_comparison(staging_node, prod_node):
+        return {}
+    
+    changes = {}
+    
+    logger.debug(f"Comparing nodes - Staging: {staging_node.id} vs Production: {prod_node.id}")
+    logger.debug(f"Staging properties: {staging_node.properties}")
+    logger.debug(f"Production properties: {prod_node.properties}")
+    logger.debug(f"Ontology properties to check: {list(props.keys())}")
+    
+    # Check all properties defined in the ontology
+    for prop_name in props.keys():
+        staging_value = staging_node.properties.get(prop_name)
+        prod_value = prod_node.properties.get(prop_name)
+        
+        logger.debug(f"Checking property '{prop_name}': staging='{staging_value}' vs prod='{prod_value}'")
+        
+        # Case 1: Property exists in both - check for value differences
+        if staging_value is not None and prod_value is not None:
+            # Convert to strings for comparison to handle type differences
+            staging_str = str(staging_value).strip()
+            prod_str = str(prod_value).strip()
+            logger.debug(f"  String comparison: '{staging_str}' vs '{prod_str}'")
+            if staging_str != prod_str:
+                changes[prop_name] = (staging_value, prod_value)
+                logger.info(f"Property conflict detected - {prop_name}: '{prod_str}' -> '{staging_str}'")
+            else:
+                logger.debug(f"  No change detected for property '{prop_name}'")
+        
+        # Case 2: Property exists only in staging (new property)
+        elif staging_value is not None and prod_value is None:
+            changes[prop_name] = (staging_value, None)
+            logger.info(f"New property detected - {prop_name}: None -> '{staging_value}'")
+        
+        # Case 3: Property exists only in production (property deletion)
+        elif staging_value is None and prod_value is not None:
+            changes[prop_name] = (None, prod_value)
+            logger.info(f"Property deletion detected - {prop_name}: '{prod_value}' -> None")
+        
+        # Case 4: Property exists in neither (skip)
+        else:
+            logger.debug(f"  Property '{prop_name}' exists in neither node")
+    
+    logger.debug(f"Total changes detected: {len(changes)}")
+    return changes
 
 def _group_changes_by_entity_type(change_logs: List[ChangeLog]) -> Dict[str, List[ChangeLog]]:
     change_log_by_entity_type = {}
@@ -1185,3 +1323,32 @@ def _apply_corrections(ontology_props, change_log):
         if change_log.prop_changes and prop in change_log.prop_changes:
             change_log.staging_node.properties[prop] = change_log.prop_changes[prop][1]
     return change_log
+
+def test_conflict_detection(staging_node_props: Dict, prod_node_props: Dict, ontology_props: Dict) -> Dict:
+    """
+    Test function to manually check conflict detection logic.
+    Useful for debugging specific property conflict scenarios.
+    
+    Example usage:
+    staging_props = {"A": "456", "name": "test_node"}
+    prod_props = {"A": "123", "name": "test_node"}
+    ontology_props = {"A": {"type": "string"}, "name": {"type": "string"}}
+    conflicts = test_conflict_detection(staging_props, prod_props, ontology_props)
+    """
+    from app.schemas.graph import Node
+    
+    staging_node = Node(
+        id="test_staging",
+        label="TestNode",
+        type="TestType",
+        properties=staging_node_props
+    )
+    
+    prod_node = Node(
+        id="test_prod",
+        label="TestNode", 
+        type="TestType",
+        properties=prod_node_props
+    )
+    
+    return _get_prop_changes(staging_node, prod_node, ontology_props)
