@@ -74,11 +74,11 @@ class Settings(BaseSettings):
 
     # Chunking Settings
     MAX_CHUNK_SIZE: int = Field(
-        default=1000,
+        default=32000,
         description="Maximum size of a text chunk"
     )
     MIN_CHUNK_SIZE: int = Field(
-        default=32000,
+        default=1000,
         description="Minimum size of a text chunk"
     )
     MIN_SEMANTIC_CHUNK_SIZE: int = Field(

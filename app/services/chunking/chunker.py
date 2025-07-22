@@ -15,21 +15,44 @@ from app.services.chunking.models import (
 from app.utils.logger import logger
 from app.config import settings
 
+# Global embedding model cache - initialized once per process
+_embedding_cache = None
+_text_splitter_cache = None
+
+def _get_cached_embeddings():
+    """Get or create cached embedding model"""
+    global _embedding_cache
+    if _embedding_cache is None:
+        logger.info(f"Initializing embedding model cache: {settings.EMBEDDING_MODEL}")
+        _embedding_cache = HuggingFaceEmbeddings(
+            model_name=settings.EMBEDDING_MODEL
+        )
+        logger.info("Embedding model cached successfully")
+    return _embedding_cache
+
+def _get_cached_text_splitter():
+    """Get or create cached semantic text splitter"""
+    global _text_splitter_cache
+    if _text_splitter_cache is None:
+        logger.info("Initializing semantic text splitter cache")
+        embeddings = _get_cached_embeddings()
+        _text_splitter_cache = SemanticChunker(
+            embeddings=embeddings,
+            breakpoint_threshold_type="gradient",
+            min_chunk_size=settings.MIN_SEMANTIC_CHUNK_SIZE
+        )
+        logger.info("Semantic text splitter cached successfully")
+    return _text_splitter_cache
+
 class DocumentChunker:
     """Chunk documents using semantic chunking"""
     
     def __init__(self):
-        """Initialize chunker with semantic text splitter"""
+        """Initialize chunker with cached semantic text splitter"""
         try:
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name=settings.EMBEDDING_MODEL
-            )
-            self.text_splitter = SemanticChunker(
-                embeddings=self.embeddings,
-                breakpoint_threshold_type="gradient",
-                min_chunk_size=settings.MIN_SEMANTIC_CHUNK_SIZE
-            )
-            logger.info("Initialized semantic chunker")
+            self.embeddings = _get_cached_embeddings()
+            self.text_splitter = _get_cached_text_splitter()
+            logger.info("Initialized semantic chunker with cached models")
         except Exception as e:
             logger.error(f"Failed to initialize chunker: {str(e)}")
             traceback.print_exc()
