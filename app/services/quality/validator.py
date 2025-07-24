@@ -52,7 +52,7 @@ class QualityValidator:
             entity_quality = entity_def.get('quality', {})
             if entity_quality:
                 rules = self.parser.parse_entity_quality_rules(entity_type, entity_quality)
-                entity_rules[entity_type]['_entity_level'].extend(rules)
+                entity_rules[entity_type]['_entityLevel'].extend(rules)
         
         return dict(entity_rules)
     
@@ -216,7 +216,7 @@ class QualityValidator:
                         violations.append(violation)
             
             # Validate entity-level rules
-            entity_level_rules = self.entity_rules[entity_type].get('_entity_level', [])
+            entity_level_rules = self.entity_rules[entity_type].get('_entityLevel', [])
             for rule in entity_level_rules:
                 if not rule.is_enabled():
                     continue

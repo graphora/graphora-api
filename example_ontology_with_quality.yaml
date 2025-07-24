@@ -34,7 +34,7 @@ entities:
             pattern: "^[A-Z][a-zA-Z0-9\\s&.,-]+$"
             minLength: 2
             maxLength: 100
-            caseFormat: "title_case"
+            caseFormat: "titleCase"
           business:
             forbiddenValues: ["Unknown Company", "N/A", "TBD", ""]
             requiredWords: []
@@ -42,7 +42,7 @@ entities:
             uniquenessCheck: true
     
     quality:
-      entity_level:
+      entityLevel:
         completeness:
           requiredPropertyRatio: 0.8
     
@@ -50,7 +50,7 @@ entities:
       CLASSIFIED_AS:
         target: Industry
         quality:
-          relationship_level:
+          relationshipLevel:
             cardinality:
               min: 1
               max: 3
@@ -58,7 +58,7 @@ entities:
           description:
             type: string
             description: A human-readable description of this specific relationship instance.
-          classification_source:
+          classificationSource:
             type: string
             description: The source or standard used for this classification (e.g., 'GICS', 'NAICS', 'Internal Analysis').
             required: true

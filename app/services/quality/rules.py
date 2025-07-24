@@ -202,7 +202,7 @@ class CaseFormatRule(QualityRule):
             )
             return ValidationResult(is_valid=False, message=violation.message, violations=[violation])
         
-        elif case_format == 'title_case' and str_value != str_value.title():
+        elif case_format == 'titleCase' and str_value != str_value.title():
             violation = self._create_violation(
                 message="Value should be in title case",
                 expected="Title Case Format",
