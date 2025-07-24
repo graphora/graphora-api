@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 import logging
 
-from app.services.storage.neo4j import Neo4jService
+from app.services.storage.neo4j import Neo4jStorage
 from app.utils.logger import logger
 
 from .models import QualityResults, QualityViolation, QualitySeverity
@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 class QualityService:
     """Service for managing quality validation results and user interactions."""
     
-    def __init__(self, neo4j_service: Neo4jService):
-        self.neo4j = neo4j_service
+    def __init__(self, neo4j_storage: Neo4jStorage):
+        self.neo4j = neo4j_storage
     
     async def store_quality_results(
         self, 
