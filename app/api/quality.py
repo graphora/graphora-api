@@ -3,6 +3,8 @@
 import traceback
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from typing import Optional, List
+from pydantic import BaseModel
+from datetime import datetime, timezone
 import logging
 
 # Import quality models and services
@@ -11,9 +13,17 @@ try:
     from app.services.quality.service import QualityService
     from app.services.storage.neo4j import Neo4jStorage
     from app.services.user_db_service import UserDatabaseService
+    from app.services.feedback_service import feedback_service, FeedbackType
     QUALITY_API_AVAILABLE = True
 except ImportError:
     QUALITY_API_AVAILABLE = False
+
+# Request models
+class RejectQualityRequest(BaseModel):
+    rejection_reason: str
+
+class ApprovalRequest(BaseModel):
+    approval_comment: Optional[str] = None
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +65,7 @@ if QUALITY_API_AVAILABLE:
     @router.post("/approve/{transform_id}")
     async def approve_quality_results(
         transform_id: str,
-        approval_comment: Optional[str] = None,
+        request: ApprovalRequest,
         user_id: str = Header(..., alias="user-id")
     ):
         """User approves quality results and proceeds to merge."""
@@ -72,7 +82,26 @@ if QUALITY_API_AVAILABLE:
             )
             quality_service = QualityService(neo4j_storage)
             
-            await quality_service.approve_quality_results(transform_id, user_id, approval_comment)
+            await quality_service.approve_quality_results(transform_id, user_id, request.approval_comment)
+            
+            # Store approval feedback in Supabase  
+            try:
+                await feedback_service.store_quality_feedback(
+                    user_id=user_id,
+                    transform_id=transform_id,
+                    feedback_type=FeedbackType.QUALITY_APPROVAL,
+                    feedback_content=request.approval_comment or "Quality approved for merge",
+                    metadata={
+                        "action": "approve",
+                        "source": "quality_dashboard",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
+                )
+                logger.info(f"Quality approval feedback stored for transform {transform_id}")
+                
+            except Exception as feedback_error:
+                logger.warning(f"Failed to store approval feedback: {feedback_error}")
+                # Don't fail the main operation if feedback storage fails
             
             # TODO: Trigger merge process here
             # merge_id = await merge_service.start_auto_merge(transform_id, user_id)
@@ -90,8 +119,8 @@ if QUALITY_API_AVAILABLE:
     @router.post("/reject/{transform_id}")
     async def reject_quality_results(
         transform_id: str,
-        rejection_reason: str,
-        user_id: str = Header(..., alias="user-id"),
+        request: RejectQualityRequest,
+        user_id: str = Header(..., alias="user-id")
     ):
         """User rejects quality results - stops the process."""
         try:
@@ -107,7 +136,26 @@ if QUALITY_API_AVAILABLE:
             )
             quality_service = QualityService(neo4j_storage)
             
-            await quality_service.reject_quality_results(transform_id, rejection_reason, user_id)
+            await quality_service.reject_quality_results(transform_id, request.rejection_reason, user_id)
+            
+            # Store feedback in Supabase
+            try:
+                await feedback_service.store_quality_feedback(
+                    user_id=user_id,
+                    transform_id=transform_id,
+                    feedback_type=FeedbackType.QUALITY_REJECTION,
+                    feedback_content=request.rejection_reason,
+                    metadata={
+                        "action": "reject",
+                        "source": "quality_dashboard",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
+                )
+                logger.info(f"Quality rejection feedback stored for transform {transform_id}")
+                
+            except Exception as feedback_error:
+                logger.warning(f"Failed to store feedback: {feedback_error}")
+                # Don't fail the main operation if feedback storage fails
             
             # TODO: Mark transform as failed in transform service
             # await transform_service.mark_transform_failed(transform_id, "User rejected quality results")
@@ -116,7 +164,7 @@ if QUALITY_API_AVAILABLE:
                 "message": "Quality rejected successfully",
                 "transform_id": transform_id,
                 "status": "rejected",
-                "reason": rejection_reason
+                "reason": request.rejection_reason
             }
         except Exception as e:
             logger.error(f"Failed to reject quality results for {transform_id}: {e}")
