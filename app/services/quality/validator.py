@@ -75,7 +75,7 @@ class QualityValidator:
         """Build global/cross-entity quality rules from ontology."""
         global_rules = []
         
-        global_quality = self.ontology.get('data_quality_config', {})
+        global_quality = self.ontology.get('dataQualityConfig', {})
         if global_quality:
             rules = self.parser.parse_global_quality_rules(global_quality)
             global_rules.extend(rules)
