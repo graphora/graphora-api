@@ -23,15 +23,7 @@ class FeedbackService:
             logger.warning("Supabase credentials not configured, feedback service will be disabled")
             self.client = None
         else:
-            # Create client with service role key that can bypass RLS
-            self.client: Client = create_client(
-                settings.SUPABASE_URL, 
-                settings.SUPABASE_KEY,
-                options={
-                    "auto_refresh_token": False,
-                    "persist_session": False
-                }
-            )
+            self.client: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
     
     async def store_quality_feedback(
         self,
