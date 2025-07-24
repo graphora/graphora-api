@@ -55,7 +55,7 @@ class OntologyQualityParser:
         
         try:
             # Parse entity-level rules like completeness, consistency
-            entity_level = entity_quality_config.get('entity_level', {})
+            entity_level = entity_quality_config.get('entityLevel', {})
             if entity_level:
                 rules.extend(self._parse_entity_level_rules(entity_type, entity_level))
             
@@ -74,7 +74,7 @@ class OntologyQualityParser:
         
         try:
             # Parse relationship-level rules
-            relationship_level = quality_config.get('relationship_level', {})
+            relationship_level = quality_config.get('relationshipLevel', {})
             if relationship_level:
                 rules.extend(self._parse_relationship_level_rules(relationship_name, relationship_level))
             
