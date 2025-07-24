@@ -17,19 +17,13 @@ from app.schemas.transform import (
 from app.services.transform.validators import FileValidator
 from app.services.transform.storage import DocumentStorage
 from app.config import settings
-from prefect.logging import get_run_logger
+from app.services.quality.tasks import quality_validation_task
 from app.services.marker.tasks import convert_pdf_to_markdown
 from app.services.chunking.tasks import chunk_document, check_chunk_quality
 from app.services.transform.tasks import construct_knowledge_graph
 from app.services.storage.tasks import store_knowledge_graph
 from app.services.transform.progress_tracker import ProgressTracker
-# Quality validation imports (optional feature)
-try:
-    from app.services.quality.tasks import quality_validation_task, auto_approval_check_task
-    QUALITY_VALIDATION_AVAILABLE = True
-except ImportError:
-    QUALITY_VALIDATION_AVAILABLE = False
-    logger.warning("Quality validation not available - continuing without quality checks")
+
 from app.services.transform.status_models import (
     TransformationStage,
     ErrorSummary
@@ -282,7 +276,8 @@ async def document_transformation_flow(
         
         # Optional: Quality validation step (if available and enabled)
         quality_results = None
-        if QUALITY_VALIDATION_AVAILABLE and len(graphs) > 0:
+        print(len(graphs))
+        if len(graphs) > 0:
             try:
                 # For now, validate the first non-None graph
                 # TODO: Handle multiple graphs or combine them
@@ -293,7 +288,7 @@ async def document_transformation_flow(
                     # Load ontology for quality rules (simplified for now)
                     from app.services.ontology_storage_service import OntologyStorageService
                     ontology_service = OntologyStorageService()
-                    ontology_with_rules = await ontology_service.get_ontology(ontology_id, user_id)
+                    ontology_with_rules = await ontology_service.get_ontology(user_id, ontology_id)
                     
                     if ontology_with_rules:
                         # Run quality validation
