@@ -1,0 +1,154 @@
+# Example ontology with quality rules for testing
+version: 1.0.0
+entities:
+  Company:
+    properties:
+      description:
+        type: string
+        description: Description about the company
+        quality:
+          format:
+            min_length: 10
+            max_length: 500
+          business:
+            forbidden_values: ["Unknown", "N/A", "TBD", ""]
+      
+      companyId:
+        type: string
+        description: A primary unique identifier for the company.
+        unique: true
+        quality:
+          format:
+            pattern: "^[A-Z0-9-]{2,20}$"
+            examples: ["AAPL", "MSFT-001", "GOOGL"]
+          business:
+            forbidden_values: ["", "null", "unknown"]
+      
+      name:
+        type: string
+        description: The legal name of the company.
+        required: true
+        index: true
+        quality:
+          format:
+            pattern: "^[A-Z][a-zA-Z0-9\\s&.,-]+$"
+            min_length: 2
+            max_length: 100
+            case_format: "title_case"
+          business:
+            forbidden_values: ["Unknown Company", "N/A", "TBD", ""]
+            required_words: []
+          validation:
+            uniqueness_check: true
+    
+    quality:
+      entity_level:
+        completeness:
+          required_property_ratio: 0.8
+    
+    relationships:
+      CLASSIFIED_AS:
+        target: Industry
+        quality:
+          relationship_level:
+            cardinality:
+              min: 1
+              max: 3
+        properties:
+          description:
+            type: string
+            description: A human-readable description of this specific relationship instance.
+          classification_source:
+            type: string
+            description: The source or standard used for this classification (e.g., 'GICS', 'NAICS', 'Internal Analysis').
+            required: true
+            quality:
+              business:
+                allowed_values: ["GICS", "NAICS", "ISIC", "Internal", "Manual"]
+          confidenceScore:
+            type: number
+            description: A score from 0.0 to 1.0 indicating confidence in this classification.
+            quality:
+              business:
+                min_value: 0.0
+                max_value: 1.0
+     
+  Industry:
+    properties:
+      description:
+        type: string
+        description: A human-readable description of this entity.
+        quality:
+          format:
+            min_length: 5
+            max_length: 200
+          business:
+            forbidden_values: ["Unknown", "N/A"]
+      
+      industryId:
+        type: string
+        description: A unique identifier for the industry.
+        unique: true
+        quality:
+          format:
+            pattern: "^[A-Z0-9]{2,10}$"
+      
+      name:
+        type: string
+        description: The name of the industry.
+        required: true
+        index: true
+        quality:
+          format:
+            min_length: 3
+            max_length: 50
+          business:
+            forbidden_values: ["Unknown", "Other", "Misc"]
+      
+      classification:
+        type: string
+        description: Classification standard (e.g., 'GICS', 'ICB').
+        quality:
+          business:
+            allowed_values: ["GICS", "ICB", "NAICS", "ISIC"]
+    
+    relationships:
+      PART_OF:
+        target: Sector
+        properties:
+          description:
+            type: string
+            description: A human-readable description of this specific relationship instance.
+          hierarchyStandard:
+            type: string
+            description: The standard defining this hierarchical relationship (e.g., 'GICS', 'Internal').
+            required: true
+            quality:
+              business:
+                allowed_values: ["GICS", "Internal", "Custom"]
+
+# Global quality configuration
+data_quality_config:
+  extraction_standards:
+    confidence_thresholds:
+      entity_extraction: 0.7
+      relationship_extraction: 0.6
+      property_extraction: 0.5
+      
+    completeness_requirements:
+      min_entities_per_document: 3
+      required_entity_types: ["Company"]
+      
+  distribution_rules:
+    entity_balance:
+      max_single_type_ratio: 0.8
+      expected_ratios:
+        Company: {min: 0.2, max: 0.7}
+        Industry: {min: 0.1, max: 0.4}
+        
+  cross_validation_rules:
+    - name: "company_industry_consistency"
+      description: "Companies should be consistently classified across chunks"
+      rule_type: "cross_chunk_consistency"
+      entities: ["Company", "Industry"]
+      relationships: ["CLASSIFIED_AS"]

@@ -17,12 +17,13 @@ from app.schemas.transform import (
 from app.services.transform.validators import FileValidator
 from app.services.transform.storage import DocumentStorage
 from app.config import settings
-from prefect.logging import get_run_logger
+from app.services.quality.tasks import quality_validation_task
 from app.services.marker.tasks import convert_pdf_to_markdown
 from app.services.chunking.tasks import chunk_document, check_chunk_quality
 from app.services.transform.tasks import construct_knowledge_graph
 from app.services.storage.tasks import store_knowledge_graph
 from app.services.transform.progress_tracker import ProgressTracker
+
 from app.services.transform.status_models import (
     TransformationStage,
     ErrorSummary
@@ -272,6 +273,47 @@ async def document_transformation_flow(
             transform_id,
             TransformationStage.LOAD
         )
+        
+        # Optional: Quality validation step (if available and enabled)
+        quality_results = None
+        print(len(graphs))
+        if len(graphs) > 0:
+            try:
+                # For now, validate the first non-None graph
+                # TODO: Handle multiple graphs or combine them
+                graph_to_validate = next((g for g in graphs if g is not None), None)
+                if graph_to_validate:
+                    logger.info(f"Starting quality validation for transform {transform_id}")
+                    
+                    # Load ontology for quality rules (simplified for now)
+                    from app.services.ontology_storage_service import OntologyStorageService
+                    ontology_service = OntologyStorageService()
+                    ontology_with_rules = await ontology_service.get_ontology(user_id, ontology_id)
+                    
+                    if ontology_with_rules:
+                        # Run quality validation
+                        quality_results = await quality_validation_task(
+                            knowledge_graph=graph_to_validate,
+                            ontology_with_rules=ontology_with_rules,
+                            transform_id=transform_id,
+                            user_id=user_id
+                        )
+                        
+                        logger.info(
+                            f"Quality validation completed: Score={quality_results.overall_score:.1f}, "
+                            f"Grade={quality_results.grade}, Violations={len(quality_results.violations)}"
+                        )
+                        
+                        # Check for auto-approval
+                        if quality_results.overall_score >= 90.0 and not quality_results.requires_review:
+                            logger.info(f"Transform {transform_id} auto-approved for high quality")
+                        else:
+                            logger.info(f"Transform {transform_id} requires manual quality review")
+                    
+            except Exception as e:
+                logger.error(f"Quality validation failed for transform {transform_id}: {e}")
+                # Continue with storage even if quality validation fails
+                quality_results = None
         
         # Store knowledge graph
         nodes_stored = 0

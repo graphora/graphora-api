@@ -12,6 +12,7 @@ from app.api.usage import router as usage_router
 from app.api.schema import router as schema_router
 from app.api.chat import router as chat_router
 from app.domain.healthcare import router as healthcare_router
+from app.api.quality import router as quality_router
 from app.config import settings
 from app.utils.logger import logger
 from app.services.transform.prefect_client import configure_prefect
@@ -59,6 +60,7 @@ app.include_router(usage_router)
 app.include_router(schema_router)
 app.include_router(chat_router)
 app.include_router(healthcare_router)
+app.include_router(quality_router)
 
 @app.get("/health")
 async def health_check():
