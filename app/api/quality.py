@@ -1,5 +1,6 @@
 """Quality validation API endpoints."""
 
+import traceback
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from typing import Optional, List
 import logging
@@ -48,6 +49,7 @@ if QUALITY_API_AVAILABLE:
             return results
         except Exception as e:
             logger.error(f"Failed to get quality results for {transform_id}: {e}")
+            traceback.print_exc()
             raise HTTPException(status_code=500, detail="Failed to retrieve quality results")
     
     @router.post("/approve/{transform_id}")

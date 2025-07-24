@@ -1,14 +1,15 @@
 """Prefect tasks for quality validation."""
 
 from prefect import task
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
 from app.services.transform.models import DocumentKnowledgeGraph
 from app.services.quality.validator import QualityValidator
 from app.services.quality.models import QualityResults
 from app.services.quality.service import QualityService
-from app.services.storage.neo4j import Neo4jService
+from app.services.storage.neo4j import Neo4jStorage
+from app.services.user_db_service import UserDatabaseService
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,15 @@ async def quality_validation_task(
         quality_results = await validator.validate_extraction(knowledge_graph, transform_id)
         
         # Store results for user review
-        neo4j_service = Neo4jService()
-        quality_service = QualityService(neo4j_service)
+        user_config = await UserDatabaseService.get_user_config(user_id)
+        
+        storage = Neo4jStorage(
+            uri=user_config.stagingDb.uri,
+            username=user_config.stagingDb.username,
+            password=user_config.stagingDb.password,
+            database="neo4j"  # Default database name
+        )
+        quality_service = QualityService(storage)
         await quality_service.store_quality_results(transform_id, quality_results, user_id)
         
         logger.info(
