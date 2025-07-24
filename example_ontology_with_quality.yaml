@@ -8,10 +8,10 @@ entities:
         description: Description about the company
         quality:
           format:
-            min_length: 10
-            max_length: 500
+            minLength: 10
+            maxLength: 500
           business:
-            forbidden_values: ["Unknown", "N/A", "TBD", ""]
+            forbiddenValues: ["Unknown", "N/A", "TBD", ""]
       
       companyId:
         type: string
@@ -22,7 +22,7 @@ entities:
             pattern: "^[A-Z0-9-]{2,20}$"
             examples: ["AAPL", "MSFT-001", "GOOGL"]
           business:
-            forbidden_values: ["", "null", "unknown"]
+            forbiddenValues: ["", "null", "unknown"]
       
       name:
         type: string
@@ -32,19 +32,19 @@ entities:
         quality:
           format:
             pattern: "^[A-Z][a-zA-Z0-9\\s&.,-]+$"
-            min_length: 2
-            max_length: 100
-            case_format: "title_case"
+            minLength: 2
+            maxLength: 100
+            caseFormat: "title_case"
           business:
-            forbidden_values: ["Unknown Company", "N/A", "TBD", ""]
-            required_words: []
+            forbiddenValues: ["Unknown Company", "N/A", "TBD", ""]
+            requiredWords: []
           validation:
-            uniqueness_check: true
+            uniquenessCheck: true
     
     quality:
       entity_level:
         completeness:
-          required_property_ratio: 0.8
+          requiredPropertyRatio: 0.8
     
     relationships:
       CLASSIFIED_AS:
@@ -64,14 +64,14 @@ entities:
             required: true
             quality:
               business:
-                allowed_values: ["GICS", "NAICS", "ISIC", "Internal", "Manual"]
+                allowedValues: ["GICS", "NAICS", "ISIC", "Internal", "Manual"]
           confidenceScore:
             type: number
             description: A score from 0.0 to 1.0 indicating confidence in this classification.
             quality:
               business:
-                min_value: 0.0
-                max_value: 1.0
+                minValue: 0.0
+                maxValue: 1.0
      
   Industry:
     properties:
@@ -80,10 +80,10 @@ entities:
         description: A human-readable description of this entity.
         quality:
           format:
-            min_length: 5
-            max_length: 200
+            minLength: 5
+            maxLength: 200
           business:
-            forbidden_values: ["Unknown", "N/A"]
+            forbiddenValues: ["Unknown", "N/A"]
       
       industryId:
         type: string
@@ -100,17 +100,17 @@ entities:
         index: true
         quality:
           format:
-            min_length: 3
-            max_length: 50
+            minLength: 3
+            maxLength: 50
           business:
-            forbidden_values: ["Unknown", "Other", "Misc"]
+            forbiddenValues: ["Unknown", "Other", "Misc"]
       
       classification:
         type: string
         description: Classification standard (e.g., 'GICS', 'ICB').
         quality:
           business:
-            allowed_values: ["GICS", "ICB", "NAICS", "ISIC"]
+            allowedValues: ["GICS", "ICB", "NAICS", "ISIC"]
     
     relationships:
       PART_OF:
@@ -125,30 +125,30 @@ entities:
             required: true
             quality:
               business:
-                allowed_values: ["GICS", "Internal", "Custom"]
+                allowedValues: ["GICS", "Internal", "Custom"]
 
 # Global quality configuration
-data_quality_config:
-  extraction_standards:
-    confidence_thresholds:
-      entity_extraction: 0.7
-      relationship_extraction: 0.6
-      property_extraction: 0.5
+dataQualityConfig:
+  extractionStandards:
+    confidenceThresholds:
+      entityExtraction: 0.7
+      relationshipExtraction: 0.6
+      propertyExtraction: 0.5
       
-    completeness_requirements:
-      min_entities_per_document: 3
-      required_entity_types: ["Company"]
+    completenessRequirements:
+      minEntitiesPerDocument: 3
+      requiredEntityTypes: ["Company"]
       
-  distribution_rules:
-    entity_balance:
-      max_single_type_ratio: 0.8
-      expected_ratios:
+  distributionRules:
+    entityBalance:
+      maxSingleTypeRatio: 0.8
+      expectedRatios:
         Company: {min: 0.2, max: 0.7}
         Industry: {min: 0.1, max: 0.4}
         
-  cross_validation_rules:
+  crossValidationRules:
     - name: "company_industry_consistency"
       description: "Companies should be consistently classified across chunks"
-      rule_type: "cross_chunk_consistency"
+      ruleType: "cross_chunk_consistency"
       entities: ["Company", "Industry"]
       relationships: ["CLASSIFIED_AS"]

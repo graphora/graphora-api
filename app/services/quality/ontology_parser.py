@@ -89,12 +89,12 @@ class OntologyQualityParser:
         
         try:
             # Parse distribution rules
-            distribution_rules = global_config.get('distribution_rules', {})
+            distribution_rules = global_config.get('distributionRules', {})
             if distribution_rules:
                 rules.extend(self._parse_distribution_rules(distribution_rules))
             
             # Parse cross-validation rules
-            cross_validation = global_config.get('cross_validation_rules', [])
+            cross_validation = global_config.get('crossValidationRules', [])
             if cross_validation:
                 rules.extend(self._parse_cross_validation_rules(cross_validation))
             
@@ -131,8 +131,8 @@ class OntologyQualityParser:
             rules.append(QualityRuleFactory.create_rule(rule_config))
         
         # Length rules
-        min_length = format_config.get('min_length')
-        max_length = format_config.get('max_length')
+        min_length = format_config.get('minLength')
+        max_length = format_config.get('maxLength')
         if min_length is not None or max_length is not None:
             rule_config = QualityRuleConfig(
                 rule_id=f"{entity_type}.{property_name}.length",
@@ -142,14 +142,14 @@ class OntologyQualityParser:
                 description=f"Value length constraints",
                 parameters={
                     'rule_class': 'length',
-                    'min_length': min_length,
-                    'max_length': max_length
+                    'minLength': min_length,
+                    'maxLength': max_length
                 }
             )
             rules.append(QualityRuleFactory.create_rule(rule_config))
         
         # Case format rule
-        case_format = format_config.get('case_format')
+        case_format = format_config.get('caseFormat')
         if case_format:
             rule_config = QualityRuleConfig(
                 rule_id=f"{entity_type}.{property_name}.case_format",
@@ -159,7 +159,7 @@ class OntologyQualityParser:
                 description=f"Value should be in {case_format} format",
                 parameters={
                     'rule_class': 'case_format',
-                    'case_format': case_format
+                    'caseFormat': case_format
                 }
             )
             rules.append(QualityRuleFactory.create_rule(rule_config))
@@ -176,7 +176,7 @@ class OntologyQualityParser:
         rules = []
         
         # Forbidden values rule
-        forbidden_values = business_config.get('forbidden_values')
+        forbidden_values = business_config.get('forbiddenValues')
         if forbidden_values:
             rule_config = QualityRuleConfig(
                 rule_id=f"{entity_type}.{property_name}.forbidden_values",
@@ -186,13 +186,13 @@ class OntologyQualityParser:
                 description=f"Value should not be one of: {', '.join(map(str, forbidden_values))}",
                 parameters={
                     'rule_class': 'forbidden_values',
-                    'forbidden_values': forbidden_values
+                    'forbiddenValues': forbidden_values
                 }
             )
             rules.append(QualityRuleFactory.create_rule(rule_config))
         
         # Allowed values rule
-        allowed_values = business_config.get('allowed_values')
+        allowed_values = business_config.get('allowedValues')
         if allowed_values:
             rule_config = QualityRuleConfig(
                 rule_id=f"{entity_type}.{property_name}.allowed_values",
@@ -202,14 +202,14 @@ class OntologyQualityParser:
                 description=f"Value must be one of: {', '.join(map(str, allowed_values))}",
                 parameters={
                     'rule_class': 'allowed_values',
-                    'allowed_values': allowed_values
+                    'allowedValues': allowed_values
                 }
             )
             rules.append(QualityRuleFactory.create_rule(rule_config))
         
         # Range rule (for numeric values)
-        min_value = business_config.get('min_value')
-        max_value = business_config.get('max_value')
+        min_value = business_config.get('minValue')
+        max_value = business_config.get('maxValue')
         if min_value is not None or max_value is not None:
             rule_config = QualityRuleConfig(
                 rule_id=f"{entity_type}.{property_name}.range",
@@ -219,15 +219,15 @@ class OntologyQualityParser:
                 description=f"Value must be within specified range",
                 parameters={
                     'rule_class': 'range',
-                    'min_value': min_value,
-                    'max_value': max_value,
+                    'minValue': min_value,
+                    'maxValue': max_value,
                     'inclusive': business_config.get('inclusive', True)
                 }
             )
             rules.append(QualityRuleFactory.create_rule(rule_config))
         
         # Required words (value must contain certain words)
-        required_words = business_config.get('required_words')
+        required_words = business_config.get('requiredWords')
         if required_words:
             # Convert to pattern rule
             pattern = '|'.join(required_words)  # Simple OR pattern
@@ -246,7 +246,7 @@ class OntologyQualityParser:
             rules.append(QualityRuleFactory.create_rule(rule_config))
         
         # Forbidden patterns (regex patterns that should not match)
-        forbidden_patterns = business_config.get('forbidden_patterns')
+        forbidden_patterns = business_config.get('forbiddenPatterns')
         if forbidden_patterns:
             for i, pattern in enumerate(forbidden_patterns):
                 rule_config = QualityRuleConfig(

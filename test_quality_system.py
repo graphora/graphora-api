@@ -89,7 +89,7 @@ async def test_quality_system():
                 target_id="industry_1", 
                 type="CLASSIFIED_AS",
                 properties={
-                    "classification_source": "GICS",
+                    "classificationSource": "GICS",
                     "confidenceScore": 0.9,
                     "description": "Apple is classified in the Technology Hardware industry"
                 }
@@ -101,7 +101,7 @@ async def test_quality_system():
                 target_id="industry_2",
                 type="CLASSIFIED_AS", 
                 properties={
-                    "classification_source": "Invalid Source",  # Bad: not in allowed values
+                    "classificationSource": "Invalid Source",  # Bad: not in allowed values
                     "confidenceScore": 1.5,  # Bad: exceeds max value
                     "description": ""
                 }

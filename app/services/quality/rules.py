@@ -136,8 +136,8 @@ class LengthRule(QualityRule):
         str_value = str(value).strip()
         length = len(str_value)
         
-        min_length = self.parameters.get('min_length')
-        max_length = self.parameters.get('max_length')
+        min_length = self.parameters.get('minLength')
+        max_length = self.parameters.get('maxLength')
         
         violations = []
         
@@ -180,7 +180,7 @@ class CaseFormatRule(QualityRule):
             return ValidationResult(is_valid=True, message="Empty value, skipping case validation")
         
         str_value = str(value).strip()
-        case_format = self.parameters.get('case_format')
+        case_format = self.parameters.get('caseFormat')
         
         if case_format == 'upper' and str_value != str_value.upper():
             violation = self._create_violation(
@@ -226,7 +226,7 @@ class AllowedValuesRule(QualityRule):
         if value is None:
             return ValidationResult(is_valid=True, message="Value is None, skipping allowed values check")
         
-        allowed_values = self.parameters.get('allowed_values', [])
+        allowed_values = self.parameters.get('allowedValues', [])
         if not allowed_values:
             return ValidationResult(is_valid=True, message="No allowed values specified")
         
@@ -251,7 +251,7 @@ class ForbiddenValuesRule(QualityRule):
         if value is None:
             return ValidationResult(is_valid=True, message="Value is None, skipping forbidden values check")
         
-        forbidden_values = self.parameters.get('forbidden_values', [])
+        forbidden_values = self.parameters.get('forbiddenValues', [])
         if not forbidden_values:
             return ValidationResult(is_valid=True, message="No forbidden values specified")
         
@@ -289,8 +289,8 @@ class RangeRule(QualityRule):
             )
             return ValidationResult(is_valid=False, message=violation.message, violations=[violation])
         
-        min_value = self.parameters.get('min_value')
-        max_value = self.parameters.get('max_value')
+        min_value = self.parameters.get('minValue')
+        max_value = self.parameters.get('maxValue')
         inclusive = self.parameters.get('inclusive', True)
         
         violations = []
