@@ -1536,6 +1536,10 @@ class Neo4jStorage(GraphStorageInterface):
             
         return records[0][0] > 0
 
+    async def execute_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Any]:
+        """Public method to execute a Cypher query and return results"""
+        return await self._execute_query(query, params)
+
     async def close(self):
         """Close the database connection"""
         if hasattr(self, 'driver') and self.driver:
