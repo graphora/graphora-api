@@ -29,11 +29,18 @@ class QualityValidator:
         self.relationship_rules = self._build_relationship_rules()
         self.global_rules = self._build_global_rules()
         
+        logger.info(
+            f"Quality validator initialized with {len(self.entity_rules)} entity rule sets, "
+            f"{len(self.relationship_rules)} relationship rule sets, "
+            f"{len(self.global_rules)} global rules"
+        )
+        
     def _build_entity_rules(self) -> Dict[str, Dict[str, List[QualityRule]]]:
         """Build entity-level quality rules from ontology."""
         entity_rules = defaultdict(lambda: defaultdict(list))
         
         for entity_type, entity_def in self.ontology.get('entities', {}).items():
+            logger.debug(f"Processing entity type: {entity_type}")
             # Property-level rules
             for prop_name, prop_def in entity_def.get('properties', {}).items():
                 quality_config = prop_def.get('quality', {})
@@ -42,18 +49,22 @@ class QualityValidator:
                         entity_type, prop_name, quality_config
                     )
                     entity_rules[entity_type][prop_name].extend(rules)
+                    logger.debug(f"Added {len(rules)} quality rules for {entity_type}.{prop_name}")
                 
                 # Add required property rule if property is required
                 if prop_def.get('required', False):
                     required_rule = self._create_required_property_rule(entity_type, prop_name)
                     entity_rules[entity_type][prop_name].append(required_rule)
+                    logger.debug(f"Added required rule for {entity_type}.{prop_name}")
             
             # Entity-level rules
             entity_quality = entity_def.get('quality', {})
             if entity_quality:
                 rules = self.parser.parse_entity_quality_rules(entity_type, entity_quality)
                 entity_rules[entity_type]['_entityLevel'].extend(rules)
+                logger.debug(f"Added {len(rules)} entity-level rules for {entity_type}")
         
+        logger.debug(f"Built entity rules for {len(entity_rules)} entity types")
         return dict(entity_rules)
     
     def _build_relationship_rules(self) -> Dict[str, List[QualityRule]]:
@@ -323,26 +334,53 @@ class QualityValidator:
         }
         
         # Calculate property completeness (non-system properties)
+        # Use both required properties and all defined properties for a more complete picture
         required_properties = 0
-        filled_properties = 0
+        filled_required_properties = 0
+        total_expected_properties = 0
+        total_filled_properties = 0
         
         for entity_type, entity_def in self.ontology.get('entities', {}).items():
-            entity_count = len([e for e in kg.nodes if e.type == entity_type])
+            entities_of_type = [e for e in kg.nodes if e.type == entity_type]
+            entity_count = len(entities_of_type)
+            
             for prop_name, prop_def in entity_def.get('properties', {}).items():
                 if prop_name in SYSTEM_PROPERTIES:
                     continue
+                
+                # Count all defined properties (for overall completeness)
+                total_expected_properties += entity_count
+                filled_count = len([
+                    e for e in entities_of_type
+                    if prop_name in e.properties and 
+                    e.properties[prop_name] is not None and
+                    str(e.properties[prop_name]).strip() != ""
+                ])
+                total_filled_properties += filled_count
+                
+                # Also track required properties specifically
                 if prop_def.get('required', False):
                     required_properties += entity_count
-                    filled_count = len([
-                        e for e in kg.nodes 
-                        if e.type == entity_type and 
-                        prop_name in e.properties and 
-                        e.properties[prop_name] is not None and
-                        str(e.properties[prop_name]).strip() != ""
-                    ])
-                    filled_properties += filled_count
+                    filled_required_properties += filled_count
+                    logger.debug(
+                        f"Required property: {entity_type}.{prop_name} - "
+                        f"entities: {entity_count}, filled: {filled_count}"
+                    )
         
-        property_completeness_rate = (filled_properties / max(required_properties, 1)) * 100
+        # Use required properties if available, otherwise use all properties
+        if required_properties > 0:
+            property_completeness_rate = (filled_required_properties / required_properties) * 100
+            logger.info(
+                f"Property completeness (required): {filled_required_properties}/{required_properties} = {property_completeness_rate:.1f}%"
+            )
+        elif total_expected_properties > 0:
+            property_completeness_rate = (total_filled_properties / total_expected_properties) * 100
+            logger.info(
+                f"Property completeness (all): {total_filled_properties}/{total_expected_properties} = {property_completeness_rate:.1f}%"
+            )
+        else:
+            property_completeness_rate = 100.0  # No properties defined, consider complete
+            logger.info("No properties defined in ontology, setting completeness to 100%")
         
         # Entity type coverage
         entity_type_coverage = defaultdict(int)
@@ -459,15 +497,25 @@ class QualityValidator:
         all_rules = []
         
         # Entity rules
+        entity_rule_count = 0
         for entity_type, prop_rules in self.entity_rules.items():
             for prop_name, rules in prop_rules.items():
+                entity_rule_count += len(rules)
                 all_rules.extend(rules)
         
         # Relationship rules
+        relationship_rule_count = 0
         for rel_type, rules in self.relationship_rules.items():
+            relationship_rule_count += len(rules)
             all_rules.extend(rules)
         
         # Global rules
+        global_rule_count = len(self.global_rules)
         all_rules.extend(self.global_rules)
+        
+        logger.info(
+            f"Total rules count: {len(all_rules)} "
+            f"(Entity: {entity_rule_count}, Relationship: {relationship_rule_count}, Global: {global_rule_count})"
+        )
         
         return all_rules
