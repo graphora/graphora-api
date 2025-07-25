@@ -50,13 +50,19 @@ if QUALITY_API_AVAILABLE:
             )
             quality_service = QualityService(neo4j_storage)
             
+            logger.info(f"Retrieving quality results for transform {transform_id}, user {user_id}")
             results = await quality_service.get_quality_results(transform_id, user_id)
             if not results:
+                logger.warning(f"Quality results not found for transform {transform_id}, user {user_id}")
                 raise HTTPException(
                     status_code=404, 
                     detail=f"Quality results not found for transform {transform_id}"
                 )
+            logger.info(f"Successfully retrieved quality results for transform {transform_id}")
             return results
+        except HTTPException:
+            # Re-raise HTTP exceptions (like 404) without wrapping them
+            raise
         except Exception as e:
             logger.error(f"Failed to get quality results for {transform_id}: {e}")
             traceback.print_exc()

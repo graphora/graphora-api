@@ -33,9 +33,8 @@ class QualityService:
             
             # Store in Neo4j or your preferred storage
             query = """
-            MERGE (qr:QualityResults {transform_id: $transform_id})
-            SET qr.user_id = $user_id,
-                qr.results_json = $results_json,
+            MERGE (qr:QualityResults {transform_id: $transform_id, user_id: $user_id})
+            SET qr.results_json = $results_json,
                 qr.overall_score = $overall_score,
                 qr.grade = $grade,
                 qr.requires_review = $requires_review,
@@ -57,7 +56,11 @@ class QualityService:
                 'updated_at': datetime.now(timezone.utc).isoformat()
             })
             
-            logger.info(f"Stored quality results for transform {transform_id}")
+            logger.info(
+                f"Successfully stored quality results for transform {transform_id}: "
+                f"Score={quality_results.overall_score:.1f}, Grade={quality_results.grade}, "
+                f"Violations={len(quality_results.violations)}"
+            )
             
         except Exception as e:
             logger.error(f"Failed to store quality results for transform {transform_id}: {e}")
@@ -81,6 +84,9 @@ class QualityService:
             })
             
             if not result or not result[0]:
+                logger.warning(
+                    f"No quality results found in Neo4j for transform {transform_id}, user {user_id}"
+                )
                 return None
             
             results_json = result[0].get('results_json')

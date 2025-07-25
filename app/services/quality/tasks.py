@@ -57,7 +57,9 @@ async def quality_validation_task(
             database="neo4j"  # Default database name
         )
         quality_service = QualityService(storage)
+        logger.info(f"Storing quality results for transform {transform_id}, user {user_id}")
         await quality_service.store_quality_results(transform_id, quality_results, user_id)
+        logger.info(f"Quality results stored successfully for transform {transform_id}")
         
         logger.info(
             f"Quality validation completed for transform {transform_id}: "

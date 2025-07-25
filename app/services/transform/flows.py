@@ -276,19 +276,37 @@ async def document_transformation_flow(
         
         # Optional: Quality validation step (if available and enabled)
         quality_results = None
-        print(len(graphs))
+        logger.info(f"Quality validation check: {len(graphs)} graphs generated")
         if len(graphs) > 0:
             try:
                 # For now, validate the first non-None graph
                 # TODO: Handle multiple graphs or combine them
                 graph_to_validate = next((g for g in graphs if g is not None), None)
                 if graph_to_validate:
-                    logger.info(f"Starting quality validation for transform {transform_id}")
+                    logger.info(
+                        f"Starting quality validation for transform {transform_id} "
+                        f"with graph containing {len(graph_to_validate.nodes)} nodes, "
+                        f"{len(graph_to_validate.relationships)} relationships"
+                    )
                     
                     # Load ontology for quality rules (simplified for now)
                     from app.services.ontology_storage_service import OntologyStorageService
+                    import yaml
+                    
                     ontology_service = OntologyStorageService()
-                    ontology_with_rules = await ontology_service.get_ontology(user_id, ontology_id)
+                    ontology_record = await ontology_service.get_ontology(user_id, ontology_id)
+                    
+                    if ontology_record and ontology_record.get('yaml_content'):
+                        # Parse the YAML content to get the actual ontology structure
+                        try:
+                            ontology_with_rules = yaml.safe_load(ontology_record['yaml_content'])
+                            logger.info(f"Successfully loaded ontology with {len(ontology_with_rules.get('entities', {}))} entity types")
+                        except yaml.YAMLError as e:
+                            logger.error(f"Failed to parse ontology YAML: {e}")
+                            ontology_with_rules = None
+                    else:
+                        logger.warning(f"No ontology found or no content for ontology_id {ontology_id}, user {user_id}")
+                        ontology_with_rules = None
                     
                     if ontology_with_rules:
                         # Run quality validation
@@ -310,10 +328,24 @@ async def document_transformation_flow(
                         else:
                             logger.info(f"Transform {transform_id} requires manual quality review")
                     
+                    else:
+                        logger.warning(
+                            f"Skipping quality validation for transform {transform_id}: no ontology available"
+                        )
+                else:
+                    logger.warning(
+                        f"Skipping quality validation for transform {transform_id}: no valid graphs to validate"
+                    )
             except Exception as e:
                 logger.error(f"Quality validation failed for transform {transform_id}: {e}")
+                import traceback
+                traceback.print_exc()
                 # Continue with storage even if quality validation fails
                 quality_results = None
+        else:
+            logger.warning(
+                f"Skipping quality validation for transform {transform_id}: no graphs generated"
+            )
         
         # Store knowledge graph
         nodes_stored = 0
