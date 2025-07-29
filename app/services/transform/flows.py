@@ -1,7 +1,7 @@
 from prefect import flow, task
 from prefect.context import get_run_context
 from datetime import datetime
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from pathlib import Path
 import aiofiles
 import asyncio
@@ -125,7 +125,8 @@ async def document_transformation_flow(
     ontology_id: str,
     file_paths: List[str],
     metadata: List[DocumentMetadata],
-    user_id: str
+    user_id: str,
+    chunking_config: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Main transformation flow
@@ -211,7 +212,7 @@ async def document_transformation_flow(
                 pdf_splits = split_pdf(input_pdf=processed_path, location=pdf_folder, pages=100)
                 pdf_files.extend(pdf_splits)
             else:
-                doc_chunk_results = await chunk_documents(transform_id, processed_path, doc_chunk_results)
+                doc_chunk_results = await chunk_documents(transform_id, processed_path, doc_chunk_results, chunking_config)
             await update_stage_progress(transform_id, TransformationStage.CHUNK, 
                                     len(doc_chunk_results), len(processed_paths))
         await progress_tracker.complete_stage(
@@ -539,24 +540,26 @@ async def parse_docs(transform_id, file_paths, metadata) -> List[str]:
 
 async def chunk_documents(transform_id: str, 
                           processed_path: str, 
-                          doc_chunk_results: List[Tuple[ChunkingResult, List[ChunkMetadata]]]
+                          doc_chunk_results: List[Tuple[ChunkingResult, List[ChunkMetadata]]],
+                          chunking_config: Optional[Any] = None
                           ) -> List[Tuple[ChunkingResult, List[ChunkMetadata]]]:
     
     result, doc_chunks = await chunk_document(
             file_path=Path(processed_path),
-            transform_id=transform_id
+            transform_id=transform_id,
+            config=chunking_config
         )
     if doc_chunks:
         doc_chunk_results.append((result, doc_chunks))
         logger.info(f"Document chunked into {len(doc_chunks)} parts")
         
         # Verify chunk quality
-        quality_ok = await check_chunk_quality(doc_chunks)
-        if not quality_ok:
-            logger.warning(
-                f"Chunk quality check failed",
-                extra={"transform_id": transform_id}
-            )
+        # quality_ok = await check_chunk_quality(doc_chunks)
+        # if not quality_ok:
+        #     logger.warning(
+        #         f"Chunk quality check failed",
+        #         extra={"transform_id": transform_id}
+        #     )
             
     return doc_chunk_results
 
