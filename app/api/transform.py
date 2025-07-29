@@ -1,9 +1,10 @@
-from fastapi import APIRouter, File, UploadFile, HTTPException, Request, BackgroundTasks, Query, Header
-from typing import List
+from fastapi import APIRouter, File, UploadFile, HTTPException, Request, BackgroundTasks, Query, Header, Form
+from typing import List, Optional
 import aiofiles
 import uuid
 import traceback
 import time
+import json
 from fastapi.responses import JSONResponse
 from app.utils.logger import logger
 from app.schemas.transform import (
@@ -23,6 +24,7 @@ from app.config import settings
 from pathlib import Path
 from datetime import datetime, timezone
 from app.services.audit_service import audit_service, OperationType, OperationStatus
+from app.services.chunking.config import ChunkingConfig, ChunkingStrategy
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
 
@@ -32,7 +34,8 @@ async def run_transform_flow(
     file_paths: List[Path],
     metadata: List[DocumentMetadata],
     user_id: str,
-    audit_id: str
+    audit_id: str,
+    chunking_config: Optional[ChunkingConfig] = None
 ):
     """Run the transform flow asynchronously with user context and audit logging"""
     flow_start_time = time.time()
@@ -53,13 +56,14 @@ async def run_transform_flow(
         # Convert Path objects to strings
         file_paths_str = [str(path) for path in file_paths]
         
-        # Run the flow with user ID context (transforms use staging database)
+        # Run the flow with user ID context and chunking config (transforms use staging database)
         flow_state = await document_transformation_flow(
             transform_id=transform_id,
             ontology_id=ontology_id,
             file_paths=file_paths_str,
             metadata=metadata,
-            user_id=user_id  # Pass user ID to the flow
+            user_id=user_id,  # Pass user ID to the flow
+            chunking_config=chunking_config  # Pass chunking configuration
         )
         
         logger.info(f"Completed transform flow for user {user_id} with state: {flow_state}")
@@ -100,7 +104,8 @@ async def upload_documents(
     background_tasks: BackgroundTasks,
     ontology_id: str,
     user_id: str = Header(..., alias="user-id", description="User's ID"),
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    chunking_config: Optional[str] = Form(None, description="JSON string of chunking configuration")
 ) -> TransformInitResponse:
     """
     Upload documents for processing using Prefect workflow
@@ -123,6 +128,16 @@ async def upload_documents(
     try:
         logger.info(f"Starting document upload for user: {user_id}")
         
+        # Parse chunking configuration if provided
+        parsed_chunking_config = None
+        if chunking_config:
+            try:
+                config_dict = json.loads(chunking_config)
+                parsed_chunking_config = ChunkingConfig(**config_dict)
+                logger.info(f"Using custom chunking config: {parsed_chunking_config.strategy}")
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Invalid chunking config provided: {e}. Using defaults.")
+        
         # Start audit trail for transform operation
         audit_id = await audit_service.log_operation_start(
             user_id=user_id,
@@ -132,7 +147,8 @@ async def upload_documents(
             metadata={
                 "ontology_id": ontology_id,
                 "files_count": len(files),
-                "file_names": [file.filename for file in files]
+                "file_names": [file.filename for file in files],
+                "chunking_strategy": parsed_chunking_config.strategy.value if parsed_chunking_config else "default"
             }
         )
         
@@ -193,7 +209,7 @@ async def upload_documents(
             TransformationStage.UPLOAD
         )
         
-        # Start Prefect flow in background with user context and audit ID
+        # Start Prefect flow in background with user context, audit ID, and chunking config
         background_tasks.add_task(
             run_transform_flow,
             transform_id=transform_id,
@@ -201,7 +217,8 @@ async def upload_documents(
             file_paths=file_paths,
             metadata=doc_metadata,
             user_id=user_id,
-            audit_id=audit_id
+            audit_id=audit_id,
+            chunking_config=parsed_chunking_config
         )
         
         logger.info(f"Started transformation flow for user {user_id} with transform_id: {transform_id}")

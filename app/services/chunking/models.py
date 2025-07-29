@@ -8,6 +8,11 @@ class ChunkQualityMetrics(BaseModel):
     coherence_score: float = 0.0
     relevance_score: float = 0.0
     size_score: float = 0.0
+    # Additional fields for compatibility with hybrid chunker
+    token_count: int = 0
+    sentence_count: int = 0
+    avg_sentence_length: float = 0.0
+    semantic_score: float = 0.0
 
 class ChunkProcessingMetrics(BaseModel):
     """Metrics for parallel processing"""
@@ -21,15 +26,26 @@ class ChunkProcessingMetrics(BaseModel):
 
 class ChunkMetadata(BaseModel):
     """Metadata for a single chunk"""
+    # Core identification
+    transform_id: str = ""
     chunk_id: Optional[str] = None
-    start_pos: int = 0  # Default to start of document
-    end_pos: int = 0    # Default to start of document
-    content_hash: str = ""  # Default empty hash
+    chunk_index: int = 0
+    
+    # Position and content
+    start_position: int = 0  # Renamed for consistency
+    end_position: int = 0    # Renamed for consistency
+    chunk_size: int = 0      # Added for size tracking
+    chunk_hash: str = ""     # Renamed from content_hash
+    
+    # Quality and processing
     semantic_score: Optional[float] = None
     is_forced_split: bool = False
     is_merged: bool = False
     quality_metrics: Optional[ChunkQualityMetrics] = None
     processing_metrics: Optional[ChunkProcessingMetrics] = None
+    processing_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    # Content analysis
     tokens: Optional[int] = None
     sentences: Optional[int] = None
     language_detected: Optional[str] = None
@@ -73,6 +89,10 @@ class ChunkingResult(BaseModel):
     """Result of document chunking process"""
     transform_id: str
     chunks: List[str] = Field(default_factory=list)  # Default empty list
+    num_chunks: int = 0  # Added for compatibility
+    total_tokens: int = 0  # Added for compatibility
+    semantic_processing_time: float = 0.0  # Added for compatibility
+    chunk_processing_time: float = 0.0  # Added for compatibility
     chunk_metadata: List[ChunkMetadata] = Field(default_factory=list)  # Default empty list
     metrics: Dict[str, Any] = Field(default_factory=dict)  # Default empty dict
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())  # Default to current ISO timestamp

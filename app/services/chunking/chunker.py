@@ -1,6 +1,6 @@
 import hashlib
 from datetime import datetime, timezone
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import traceback
 
 from langchain_experimental.text_splitter import SemanticChunker
@@ -12,6 +12,12 @@ from app.services.chunking.models import (
     ChunkMetadata,
     ChunkQualityMetrics
 )
+from app.services.chunking.hybrid_chunker import (
+    HybridDocumentChunker,
+    ChunkingStrategy,
+    DocumentType
+)
+from app.services.chunking.config import ChunkingConfig, DEFAULT_CONFIGS
 from app.utils.logger import logger
 from app.config import settings
 
@@ -44,15 +50,48 @@ def _get_cached_text_splitter():
         logger.info("Semantic text splitter cached successfully")
     return _text_splitter_cache
 
-class DocumentChunker:
-    """Chunk documents using semantic chunking"""
+def _create_semantic_chunker_with_config(config: ChunkingConfig):
+    """Create a semantic chunker with specific configuration"""
+    embeddings = _get_cached_embeddings()
     
-    def __init__(self):
-        """Initialize chunker with cached semantic text splitter"""
+    # Create semantic chunker with configuration
+    semantic_chunker = SemanticChunker(
+        embeddings=embeddings,
+        breakpoint_threshold_type="percentile",  # Use percentile for better threshold control
+        breakpoint_threshold_amount=config.semantic_threshold,
+        min_chunk_size=config.min_chunk_size
+    )
+    
+    logger.info(f"Created semantic chunker with threshold={config.semantic_threshold}, min_size={config.min_chunk_size}")
+    return semantic_chunker
+
+class DocumentChunker:
+    """Advanced document chunker with multiple strategies"""
+    
+    def __init__(self, config: Optional[ChunkingConfig] = None):
+        """Initialize chunker with configurable strategy"""
         try:
-            self.embeddings = _get_cached_embeddings()
-            self.text_splitter = _get_cached_text_splitter()
-            logger.info("Initialized semantic chunker with cached models")
+            # Use provided config or default hybrid config
+            self.config = config or DEFAULT_CONFIGS["hybrid"]
+            
+            # Initialize semantic components if needed
+            if self.config.strategy in [ChunkingStrategy.SEMANTIC, ChunkingStrategy.HYBRID]:
+                self.embeddings = _get_cached_embeddings()
+                # Use config-specific semantic chunker instead of cached version
+                self.text_splitter = _create_semantic_chunker_with_config(self.config)
+                logger.info(f"Created semantic chunker with min_chunk_size={self.config.min_chunk_size}")
+            else:
+                self.embeddings = None
+                self.text_splitter = None
+            
+            # Initialize hybrid chunker with config
+            self.hybrid_chunker = HybridDocumentChunker(
+                semantic_chunker=self.text_splitter,
+                strategy=self.config.strategy,
+                config=self.config
+            )
+            
+            logger.info(f"Initialized chunker with {self.config.strategy} strategy")
         except Exception as e:
             logger.error(f"Failed to initialize chunker: {str(e)}")
             traceback.print_exc()
@@ -73,69 +112,25 @@ class DocumentChunker:
     async def process_document(
         self,
         text: str,
-        transform_id: str
+        transform_id: str,
+        strategy_override: Optional[ChunkingStrategy] = None
     ) -> Tuple[ChunkingResult, List[ChunkMetadata]]:
-        """Process document and return chunks with metadata"""
+        """Process document using configured or hybrid chunking strategy"""
         try:
-            # Semantic chunking
-            semantic_start = datetime.now(timezone.utc)
-            if(len(text) <= settings.MIN_CHUNK_SIZE):
-                documents = [Document(page_content=text)]
-            else:
-                documents = self.text_splitter.create_documents([text])
-            semantic_time = datetime.now(timezone.utc) - semantic_start
-            # Process chunks
-            chunk_start = datetime.now(timezone.utc)
-            chunk_texts = []
-            chunk_metadata = []
+            logger.info(f"Processing document with {len(text)} characters")
             
-            for i, doc in enumerate(documents):
-                chunk_text = doc.page_content
-                
-                # Find chunk position in original text
-                start_idx = text.find(chunk_text)
-                end_idx = start_idx + len(chunk_text)
-                
-                # Compute quality metrics
-                quality = self._compute_chunk_quality(chunk_text)
-                
-                # Create hash
-                chunk_hash = hashlib.sha256(chunk_text.encode()).hexdigest()
-                
-                # Create metadata
-                metadata = ChunkMetadata(
-                    transform_id=transform_id,
-                    chunk_id=f"{transform_id}_chunk_{i}",
-                    chunk_index=i,
-                    chunk_hash=chunk_hash,
-                    start_position=start_idx,
-                    end_position=end_idx,
-                    chunk_size=len(chunk_text),
-                    quality_metrics=quality,
-                    processing_timestamp=datetime.now(timezone.utc)
-                )
-                
-                chunk_texts.append(chunk_text)
-                chunk_metadata.append(metadata)
-            
-            chunk_time = datetime.now(timezone.utc) - chunk_start
-
-            print('*'*30)
-            print([len(c) for c in chunk_texts])
-            print('*'*30)
-            
-            # Create result
-            result = ChunkingResult(
+            # Use hybrid chunker for intelligent processing
+            result, metadata = await self.hybrid_chunker.process_document(
+                text=text,
                 transform_id=transform_id,
-                chunks=chunk_texts,
-                num_chunks=len(documents),
-                total_tokens=sum(len(c.split()) for c in chunk_texts),
-                semantic_processing_time=semantic_time.total_seconds(),
-                chunk_processing_time=chunk_time.total_seconds(),
-                timestamp=datetime.now(timezone.utc).isoformat()
+                strategy_override=strategy_override
             )
             
-            return result, chunk_metadata
+            # Log results for debugging
+            logger.info(f"Generated {result.num_chunks} chunks")
+            logger.info(f"Chunk sizes: {[len(c) for c in result.chunks]}")
+            
+            return result, metadata
             
         except Exception as e:
             logger.error(f"Failed to process document: {str(e)}")

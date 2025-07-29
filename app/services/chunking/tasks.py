@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import aiofiles
 from app.services.chunking.chunker import (
     DocumentChunker,
@@ -8,6 +8,7 @@ from app.services.chunking.models import (
     ChunkMetadata,
     ChunkingResult
 )
+from app.services.chunking.config import ChunkingConfig, ChunkingStrategy
 from app.config import settings
 from app.utils.logger import logger
 from prefect import task
@@ -19,28 +20,37 @@ from prefect import task
 )
 async def chunk_document(
     file_path: str,
-    transform_id: str
+    transform_id: str,
+    config: Optional[ChunkingConfig] = None,
+    strategy_override: Optional[ChunkingStrategy] = None
 ) -> Tuple[ChunkingResult, List[ChunkMetadata]]:
     """
-    Chunk document into semantically meaningful chunks
+    Chunk document using configurable chunking strategies
     
     Args:
         file_path: Path to document file
         transform_id: Transform ID
+        config: Optional chunking configuration
+        strategy_override: Optional strategy override
         
     Returns:
         Tuple of (ChunkingResult, List[ChunkMetadata])
     """
     try:
-        # Initialize chunker with CPU device
-        chunker = DocumentChunker()
+        # Initialize chunker with provided configuration
+        chunker = DocumentChunker(config=config)
         
         # Read file content
         async with aiofiles.open(file_path, 'r') as f:
             content = await f.read()
             
-        logger.info("Starting document chunking")
-        result = await chunker.process_document(content, transform_id)
+        logger.info("Starting document chunking with strategy: %s", 
+                   strategy_override or (config.strategy if config else 'hybrid'))
+        result = await chunker.process_document(
+            content, 
+            transform_id, 
+            strategy_override=strategy_override
+        )
         
         if not result:
             raise ChunkingError("Chunking failed")
