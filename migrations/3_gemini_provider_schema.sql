@@ -64,6 +64,19 @@ ON CONFLICT (provider_id, name) DO UPDATE SET
     version = EXCLUDED.version,
     updated_at = NOW();
 
+INSERT INTO ai_models (provider_id, name, display_name, version, is_active) 
+SELECT 
+    p.id,
+    'gemini-2.5-flash-lite',
+    'Gemini 2.5 Flash Lite',
+    'latest',
+    true
+FROM ai_providers p WHERE p.name = 'gemini'
+ON CONFLICT (provider_id, name) DO UPDATE SET
+    display_name = EXCLUDED.display_name,
+    version = EXCLUDED.version,
+    updated_at = NOW();
+
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_ai_models_provider_id ON ai_models(provider_id);
 CREATE INDEX IF NOT EXISTS idx_ai_provider_configs_provider_id ON ai_provider_configs(provider_id);
