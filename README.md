@@ -1,4 +1,12 @@
-# graphora-api
+# Graphora API
+
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green)](https://fastapi.tiangolo.com/)
+[![Neo4j](https://img.shields.io/badge/Neo4j-5.0+-008CC1)](https://neo4j.com/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
+> AI-powered knowledge graph construction from unstructured data
 
 A sophisticated document processing backend that leverages AI-powered intelligent document analysis with flexible and modular preprocessing capabilities. The system uses FastAPI, LLM, and Neo4j to create an intelligent document processing pipeline.
 
@@ -126,8 +134,59 @@ When deploying to production:
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+### Before Contributing
+
+1. Read the [Code of Conduct](CODE_OF_CONDUCT.md)
+2. Sign the [Contributor License Agreement](CLA.md)
+3. Check out [good first issues](https://github.com/graphora/graphora-api/labels/good%20first%20issue)
+
+## Documentation
+
+- [Contributing Guide](CONTRIBUTING.md) - How to contribute
+- [Security Policy](SECURITY.md) - How to report security issues
+- [Support](SUPPORT.md) - How to get help
+- [Trademark Policy](TRADEMARK.md) - Trademark usage guidelines
+
+## Related Repositories
+
+- **Frontend**: [graphora/graphora-fe](https://github.com/graphora/graphora-fe)
+- **Python Client**: [graphora/graphora-client](https://github.com/graphora/graphora-client)
+
+## License
+
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+
+- ✅ Use for free under AGPL v3 terms
+- ✅ Modify and distribute with source code
+- ❌ Cannot use as closed-source SaaS without commercial license
+
+For commercial licensing (closed-source SaaS, enterprise deployments, OEM), contact: **sales@graphora.io**
+
+See [LICENSE](LICENSE) for full terms.
+
+## Commercial Support
+
+- **Enterprise Support**: SLA-backed support for production deployments
+- **Consulting**: Custom integrations, training, architecture design
+- **Commercial Licensing**: Closed-source and SaaS deployments
+- **Database Vendor Partnerships**: OEM licensing for database companies
+
+Contact: **support@graphora.io**
+
+## Community
+
+- **GitHub Discussions**: [Ask questions, share ideas](https://github.com/graphora/graphora-api/discussions)
+- **Discord**: Coming soon
+- **Twitter**: Coming soon
+
+## Security
+
+Please report security vulnerabilities to **support@graphora.io**
+
+See [SECURITY.md](SECURITY.md) for details.
+
+---
+
+Made with ❤️ by [Arivan Labs](https://arivanlabs.com)
