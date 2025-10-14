@@ -5,7 +5,7 @@ This module provides endpoints for viewing usage statistics,
 checking limits, and generating billing reports.
 """
 
-from fastapi import APIRouter, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from typing import Optional, List
 from datetime import datetime, timedelta
@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.services.usage_tracking import usage_tracking_service
 from app.schemas.usage import UsageReport, LimitCheckResult, ModelProviderSchema, ModelPricingSchema
 from app.utils.logger import logger
+from app.auth import get_current_user_id
 from decimal import Decimal
 
 settings = get_settings()
@@ -22,7 +23,7 @@ router = APIRouter(prefix=settings.API_V1_STR, tags=["Usage & Billing"])
 
 @router.get("/usage/limits", response_model=LimitCheckResult)
 async def check_usage_limits(
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> LimitCheckResult:
     """
     Check current usage against tier limits.
@@ -51,7 +52,7 @@ async def check_usage_limits(
 
 @router.get("/usage/report", response_model=UsageReport)
 async def get_usage_report(
-    user_id: str = Header(..., alias="user-id", description="User's ID"),
+    user_id: str = Depends(get_current_user_id),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     days: Optional[int] = Query(30, description="Number of days back from today")
@@ -121,7 +122,7 @@ async def get_usage_report(
 
 @router.get("/usage/summary")
 async def get_usage_summary(
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> JSONResponse:
     """
     Get a quick usage summary for the current billing period.
@@ -186,7 +187,7 @@ async def get_usage_summary(
 
 @router.get("/usage/models")
 async def get_model_usage_breakdown(
-    user_id: str = Header(..., alias="user-id", description="User's ID"),
+    user_id: str = Depends(get_current_user_id),
     days: int = Query(30, description="Number of days back from today")
 ) -> JSONResponse:
     """
@@ -256,7 +257,7 @@ async def get_model_usage_breakdown(
 
 @router.get("/usage/documents")
 async def get_document_usage_history(
-    user_id: str = Header(..., alias="user-id", description="User's ID"),
+    user_id: str = Depends(get_current_user_id),
     days: int = Query(30, description="Number of days back from today"),
     limit: int = Query(50, description="Maximum number of documents to return"),
     status: Optional[str] = Query(None, description="Filter by processing status")

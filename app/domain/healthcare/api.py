@@ -1,7 +1,7 @@
 """
 Healthcare domain-specific API endpoints
 """
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 from app.domain.healthcare.schemas import PatientListResponse, PatientJourney, LaboratoryResultsResponse
 from app.domain.healthcare.service import HealthcareService
@@ -9,11 +9,12 @@ from app.services.storage.neo4j import Neo4jStorage
 from app.services.user_db_service import UserDatabaseService
 from app.config import settings
 from app.utils.logger import logger
+from app.auth import get_current_user_id
 import traceback
 
 router = APIRouter(prefix="/api/v1/domain/healthcare", tags=["Healthcare"])
 
-async def get_healthcare_service(user_id: str = Header(..., alias="user-id", description="User's ID")):
+async def get_healthcare_service(user_id: str = Depends(get_current_user_id)):
     """
     Dependency to get a healthcare service instance with user-specific database
     """

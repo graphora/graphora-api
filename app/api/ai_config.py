@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from typing import List
 import traceback
@@ -7,11 +7,11 @@ from app.schemas.ai_config import (
     AIProvider,
     AIModel,
     GeminiConfigRequest,
-    AIConfigResponse,
     UserAIConfigDisplay
 )
 from app.services.ai_config_service import ai_config_service
 from app.utils.logger import logger
+from app.auth import get_current_user_id
 
 settings = get_settings()
 router = APIRouter(prefix=settings.API_V1_STR, tags=["AI Configuration"])
@@ -19,7 +19,7 @@ router = APIRouter(prefix=settings.API_V1_STR, tags=["AI Configuration"])
 
 @router.get("/ai-config", response_model=UserAIConfigDisplay)
 async def get_user_ai_config(
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> UserAIConfigDisplay:
     """
     Get user's AI configuration
@@ -57,7 +57,7 @@ async def get_user_ai_config(
 @router.post("/ai-config/gemini", response_model=UserAIConfigDisplay)
 async def create_gemini_config(
     config_request: GeminiConfigRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> UserAIConfigDisplay:
     """
     Create a new Gemini configuration for a user
@@ -95,7 +95,7 @@ async def create_gemini_config(
 @router.put("/ai-config/gemini", response_model=UserAIConfigDisplay)
 async def update_gemini_config(
     config_request: GeminiConfigRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> UserAIConfigDisplay:
     """
     Update an existing Gemini configuration for a user

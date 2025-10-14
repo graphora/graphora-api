@@ -54,7 +54,7 @@ class ConfigService:
             # Convert to UserConfig schema with password decryption
             user_config = UserConfig(
                 id=config_data['id'],
-                userEmail=config_data['user_id'],  # Map user_id to userEmail for compatibility
+                userId=config_data['user_id'],
                 stagingDb=DatabaseConfig(
                     id=config_data['staging_db']['id'],
                     name=config_data['staging_db']['name'],
@@ -80,7 +80,7 @@ class ConfigService:
             logger.error(f"Error retrieving user config for {user_id}: {str(e)}")
             raise
     
-    async def create_user_config(self, config_request: ConfigRequest) -> UserConfig:
+    async def create_user_config(self, user_id: str, config_request: ConfigRequest) -> UserConfig:
         """
         Create a new user configuration
         
@@ -91,8 +91,6 @@ class ConfigService:
             Created UserConfig
         """
         try:
-            user_id = config_request.userEmail  # userEmail field contains user_id
-            
             # Check if user already has a configuration
             existing_config = await self.get_user_config(user_id)
             if existing_config:
@@ -145,10 +143,10 @@ class ConfigService:
             return created_config
             
         except Exception as e:
-            logger.error(f"Error creating user config for {config_request.userEmail}: {str(e)}")
+            logger.error(f"Error creating user config for {user_id}: {str(e)}")
             raise
     
-    async def update_user_config(self, config_request: ConfigRequest) -> UserConfig:
+    async def update_user_config(self, user_id: str, config_request: ConfigRequest) -> UserConfig:
         """
         Update an existing user configuration
         
@@ -159,8 +157,6 @@ class ConfigService:
             Updated UserConfig
         """
         try:
-            user_id = config_request.userEmail  # userEmail field contains user_id
-            
             # Get existing configuration
             existing_config = await self.get_user_config(user_id)
             if not existing_config:
@@ -207,7 +203,7 @@ class ConfigService:
             return updated_config
             
         except Exception as e:
-            logger.error(f"Error updating user config for {config_request.userEmail}: {str(e)}")
+            logger.error(f"Error updating user config for {user_id}: {str(e)}")
             raise
     
     async def delete_user_config(self, user_id: str) -> bool:

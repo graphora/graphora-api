@@ -117,11 +117,11 @@ class LLMClient:
                 logger.error(f"Failed to track Gemini usage: {str(e)}")
         
         # Convert the response to the pydantic model and return it
-        print('*'*30)
-        print(response)
-        print('*'*30)
-        print(response.usage_metadata)
-        print('*'*30)
+        logger.debug('*' * 30)
+        logger.debug(response)
+        logger.debug('*' * 30)
+        logger.debug(response.usage_metadata)
+        logger.debug('*' * 30)
         output_perc = 3
         if response.usage_metadata:
             output_perc = (response.usage_metadata.candidates_token_count * 100) / response.usage_metadata.total_token_count
@@ -213,11 +213,11 @@ class LLMClient:
                 logger.error(f"Failed to track Gemini usage: {str(e)}")
         
         # Convert the response to the pydantic model and return it
-        print('*'*30)
-        print(response)
-        print('*'*30)
-        print(response.usage_metadata)
-        print('*'*30)
+        logger.debug('*' * 30)
+        logger.debug(response)
+        logger.debug('*' * 30)
+        logger.debug(response.usage_metadata)
+        logger.debug('*' * 30)
         output_perc = 3
         if response.usage_metadata:
             output_perc = (response.usage_metadata.candidates_token_count * 100) / response.usage_metadata.total_token_count

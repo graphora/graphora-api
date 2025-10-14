@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Union, Type
-from pydantic import BaseModel, Field, create_model, validator, ConfigDict
+from pydantic import BaseModel, Field, create_model, ConfigDict
 from enum import Enum
 import uuid
 
@@ -62,8 +62,7 @@ class BaseNode(BaseModel):
     provenance: Optional[NodeProvenance] = None
     confidence_score: Optional[float] = None
     
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class RelationshipInstance(BaseModel):
     """A relationship between two nodes"""
@@ -146,8 +145,7 @@ class KnowledgeGraph(BaseModel):
     
     # These will be dynamically populated based on the ontology
     
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
         
 class DocumentKnowledgeGraph(KnowledgeGraph):
     """Generic Knowledge Graph for storing extracted information"""

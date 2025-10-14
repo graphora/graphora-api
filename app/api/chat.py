@@ -4,7 +4,7 @@ This module provides REST API endpoints for managing chat sessions and schema re
 Supports multi-turn conversations with persistent session state and context management.
 """
 import logging
-from fastapi import APIRouter, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
 
 from app.schemas.chat import (
@@ -17,8 +17,7 @@ from app.schemas.chat import (
     SchemaRefinementRequest,
     SchemaRefinementResponse,
     GetCurrentSchemaResponse,
-    OperationResponse,
-    ErrorResponse
+    OperationResponse
 )
 from app.services.chat_session_service import (
     chat_session_service, 
@@ -27,6 +26,7 @@ from app.services.chat_session_service import (
 )
 from app.services.schema_refinement_service import schema_refinement_service
 from app.config import settings
+from app.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ router = APIRouter(prefix="/api/v1/chat", tags=["Chat Sessions"])
 @router.post("/sessions/start", response_model=StartSessionResponse)
 async def start_chat_session(
     request: StartSessionRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> StartSessionResponse:
     """
     Start a new chat session for multi-turn conversations.
@@ -87,7 +87,7 @@ async def start_chat_session(
 async def send_message(
     session_id: str,
     request: SendMessageRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> OperationResponse:
     """
     Send a message to an existing chat session.
@@ -137,7 +137,7 @@ async def send_message(
 @router.get("/sessions/{session_id}/history", response_model=ChatSessionResponse)
 async def get_session_history(
     session_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID"),
+    user_id: str = Depends(get_current_user_id),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of messages to return")
 ) -> ChatSessionResponse:
     """
@@ -190,7 +190,7 @@ async def get_session_history(
 
 @router.get("/sessions", response_model=UserSessionsResponse)
 async def get_user_sessions(
-    user_id: str = Header(..., alias="user-id", description="User's ID"),
+    user_id: str = Depends(get_current_user_id),
     context_type: Optional[str] = Query(None, description="Filter by context type"),
     limit: int = Query(20, ge=1, le=50, description="Maximum number of sessions to return")
 ) -> UserSessionsResponse:
@@ -238,7 +238,7 @@ async def get_user_sessions(
 @router.post("/sessions/{session_id}/end", response_model=OperationResponse)
 async def end_session(
     session_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID"),
+    user_id: str = Depends(get_current_user_id),
     request: Optional[EndSessionRequest] = None
 ) -> OperationResponse:
     """
@@ -284,7 +284,7 @@ async def end_session(
 @router.post("/schema-refinement", response_model=SchemaRefinementResponse)
 async def refine_schema(
     request: SchemaRefinementRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> SchemaRefinementResponse:
     """
     Refine a schema through conversational AI with multi-turn support.
@@ -345,7 +345,7 @@ async def refine_schema(
 @router.get("/schema-refinement/{session_id}/current", response_model=GetCurrentSchemaResponse)
 async def get_current_schema(
     session_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> GetCurrentSchemaResponse:
     """
     Get the current schema state from a refinement session.

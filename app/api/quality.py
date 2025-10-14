@@ -1,7 +1,7 @@
 """Quality validation API endpoints."""
 
 import traceback
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime, timezone
@@ -14,6 +14,8 @@ try:
     from app.services.storage.neo4j import Neo4jStorage
     from app.services.user_db_service import UserDatabaseService
     from app.services.feedback_service import feedback_service, FeedbackType
+    from app.auth import get_current_user_id
+
     QUALITY_API_AVAILABLE = True
 except ImportError:
     QUALITY_API_AVAILABLE = False
@@ -34,7 +36,7 @@ if QUALITY_API_AVAILABLE:
     @router.get("/results/{transform_id}", response_model=QualityResults)
     async def get_quality_results(
         transform_id: str,
-        user_id: str = Header(..., alias="user-id")
+        user_id: str = Depends(get_current_user_id)
     ):
         """Get quality validation results for a transform."""
         try:
@@ -72,7 +74,7 @@ if QUALITY_API_AVAILABLE:
     async def approve_quality_results(
         transform_id: str,
         request: ApprovalRequest,
-        user_id: str = Header(..., alias="user-id")
+        user_id: str = Depends(get_current_user_id)
     ):
         """User approves quality results and proceeds to merge."""
         try:
@@ -126,7 +128,7 @@ if QUALITY_API_AVAILABLE:
     async def reject_quality_results(
         transform_id: str,
         request: RejectQualityRequest,
-        user_id: str = Header(..., alias="user-id")
+        user_id: str = Depends(get_current_user_id)
     ):
         """User rejects quality results - stops the process."""
         try:
@@ -179,7 +181,7 @@ if QUALITY_API_AVAILABLE:
     @router.get("/violations/{transform_id}")
     async def get_detailed_violations(
         transform_id: str,
-        user_id: str = Header(..., alias="user-id"),
+        user_id: str = Depends(get_current_user_id),
         violation_type: Optional[QualityRuleType] = Query(None, description="Filter by violation type"),
         severity: Optional[QualitySeverity] = Query(None, description="Filter by severity"),
         entity_type: Optional[str] = Query(None, description="Filter by entity type"),
@@ -226,7 +228,7 @@ if QUALITY_API_AVAILABLE:
     
     @router.get("/summary")
     async def get_quality_summary(
-        user_id: str = Header(..., alias="user-id"),
+        user_id: str = Depends(get_current_user_id),
         limit: int = Query(10, ge=1, le=50, description="Number of recent results to return"),
     ):
         """Get summary of recent quality results for a user."""
@@ -245,7 +247,7 @@ if QUALITY_API_AVAILABLE:
     @router.delete("/results/{transform_id}")
     async def delete_quality_results(
         transform_id: str,
-        user_id: str = Header(..., alias="user-id"),
+        user_id: str = Depends(get_current_user_id),
     ):
         """Delete quality results for a transform."""
         try:

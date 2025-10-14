@@ -53,7 +53,7 @@ class LLMUsageTracker:
         logger.debug(f"Started tracking LLM usage: {self.model_provider}:{self.model_name}")
         return self
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, _exc_tb):
         """End tracking and record usage"""
         self.response_timestamp = datetime.now(timezone.utc)
         

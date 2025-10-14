@@ -1,18 +1,18 @@
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Optional
 import traceback
 from neo4j import GraphDatabase
 from app.config import get_settings
 from app.schemas.config import (
-    UserConfig, 
-    ConfigRequest, 
-    ConfigResponse, 
-    ConnectionTestRequest, 
-    ConnectionTestResponse
+    UserConfig,
+    ConfigRequest,
+    ConnectionTestRequest,
+    ConnectionTestResponse,
 )
 from app.services.config_service import config_service
 from app.utils.logger import logger
+from app.auth import get_current_user_id
 
 settings = get_settings()
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Configuration"])
@@ -20,7 +20,7 @@ router = APIRouter(prefix=settings.API_V1_STR, tags=["Configuration"])
 
 @router.get("/config", response_model=UserConfig)
 async def get_user_config(
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> UserConfig:
     """
     Get user configuration by user ID
@@ -60,12 +60,15 @@ async def get_user_config(
 
 
 @router.post("/config", response_model=UserConfig)
-async def create_user_config(config_request: ConfigRequest) -> UserConfig:
+async def create_user_config(
+    config_request: ConfigRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> UserConfig:
     """
     Create a new user configuration
     
     Args:
-        config_request: Configuration data (userEmail field contains user_id)
+        config_request: Configuration data (user derived from auth context)
         
     Returns:
         UserConfig: Created configuration
@@ -81,17 +84,17 @@ async def create_user_config(config_request: ConfigRequest) -> UserConfig:
                 detail="Staging and production database URIs must be different"
             )
         
-        user_config = await config_service.create_user_config(config_request)
+        user_config = await config_service.create_user_config(user_id, config_request)
         return user_config
         
     except ValueError as e:
-        logger.warning(f"Validation error creating config for {config_request.userEmail}: {str(e)}")
+        logger.warning(f"Validation error creating config for {user_id}: {str(e)}")
         raise HTTPException(
             status_code=400,
             detail=str(e)
         )
     except Exception as e:
-        logger.error(f"Error creating configuration for {config_request.userEmail}: {str(e)}")
+        logger.error(f"Error creating configuration for {user_id}: {str(e)}")
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -100,12 +103,15 @@ async def create_user_config(config_request: ConfigRequest) -> UserConfig:
 
 
 @router.put("/config", response_model=UserConfig)
-async def update_user_config(config_request: ConfigRequest) -> UserConfig:
+async def update_user_config(
+    config_request: ConfigRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> UserConfig:
     """
     Update an existing user configuration
     
     Args:
-        config_request: Updated configuration data (userEmail field contains user_id)
+        config_request: Updated configuration data (user derived from auth context)
         
     Returns:
         UserConfig: Updated configuration
@@ -121,17 +127,17 @@ async def update_user_config(config_request: ConfigRequest) -> UserConfig:
                 detail="Staging and production database URIs must be different"
             )
         
-        user_config = await config_service.update_user_config(config_request)
+        user_config = await config_service.update_user_config(user_id, config_request)
         return user_config
         
     except ValueError as e:
-        logger.warning(f"Validation error updating config for {config_request.userEmail}: {str(e)}")
+        logger.warning(f"Validation error updating config for {user_id}: {str(e)}")
         raise HTTPException(
             status_code=404,
             detail=str(e)
         )
     except Exception as e:
-        logger.error(f"Error updating configuration for {config_request.userEmail}: {str(e)}")
+        logger.error(f"Error updating configuration for {user_id}: {str(e)}")
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
@@ -141,7 +147,7 @@ async def update_user_config(config_request: ConfigRequest) -> UserConfig:
 
 @router.delete("/config")
 async def delete_user_config(
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> JSONResponse:
     """
     Delete a user configuration

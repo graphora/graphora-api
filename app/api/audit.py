@@ -1,14 +1,15 @@
 """Audit Trail API endpoints"""
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional, List
 from app.config import settings
 from app.services.audit_service import audit_service, OperationType
+from app.auth import get_current_user_id
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Audit Trail"])
 
 @router.get("/audit/summary")
 async def get_audit_summary(
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Get audit trail summary for dashboard
@@ -32,7 +33,7 @@ async def get_audit_summary(
 
 @router.get("/audit/trail")
 async def get_audit_trail(
-    user_id: str = Header(..., alias="user-id", description="User's ID"),
+    user_id: str = Depends(get_current_user_id),
     operation_type: Optional[str] = None,
     limit: int = 50,
     offset: int = 0
@@ -84,7 +85,7 @@ async def get_audit_trail(
 
 @router.get("/audit/conflicts")
 async def get_conflicts_summary(
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Get conflicts summary for dashboard

@@ -95,7 +95,7 @@ class MarkerAPIClient:
                 # Make request with retries
                 for attempt in range(self.max_retries):
                     try:
-                        print(f"Starting PDF conversion attempt {attempt + 1}/{self.max_retries}")
+                        logger.debug(f"Starting PDF conversion attempt {attempt + 1}/{self.max_retries}")
                         logger.info(f"Starting PDF conversion attempt {attempt + 1}/{self.max_retries}")
                         async with session.post(f"{self.base_url}/marker/upload", data=data) as response:
                             if response.status >= 400:

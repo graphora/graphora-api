@@ -1,5 +1,5 @@
 """Chat and Schema Refinement Pydantic Models"""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -54,14 +54,15 @@ class SchemaRefinementRequest(BaseModel):
     user_request: str = Field(..., description="Refinement request")
     context: Optional[Dict[str, Any]] = Field(None, description="Additional context")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "user_request": "Add timestamps to all entities",
                 "session_id": "uuid-string",
                 "context": {"domain": "healthcare"}
             }
         }
+    )
 
 class SchemaRefinementResponse(BaseModel):
     """Response model for schema refinement"""

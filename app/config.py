@@ -234,6 +234,24 @@ class Settings(BaseSettings):
         default=None,
         description="Master encryption key for password encryption (base64 encoded)"
     )
+
+    # Auth Settings (Clerk)
+    CLERK_JWKS_URL: str = Field(
+        default="",
+        description="URL to Clerk JWKS for token verification"
+    )
+    CLERK_ISSUER: str = Field(
+        default="",
+        description="Expected issuer for Clerk tokens"
+    )
+    CLERK_AUDIENCE: str = Field(
+        default="",
+        description="Expected audience for Clerk tokens"
+    )
+    CLERK_API_KEY: Optional[str] = Field(
+        default=None,
+        description="Clerk backend API key for management operations"
+    )
     
     @property
     def ontology_dir(self) -> str:

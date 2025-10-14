@@ -2,7 +2,7 @@ import logging
 import time
 import uuid
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.schemas.schema import (
     SchemaGenerationRequest,
@@ -21,6 +21,7 @@ from app.services.schema_search_service import schema_search_service
 from app.services.schema_storage_service import schema_storage_service
 from app.services.audit_service import audit_service, OperationType
 from app.config import settings
+from app.auth import AuthContext, get_current_auth
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ router = APIRouter(prefix=settings.API_V1_STR, tags=["Schema Generation"])
 @router.post("/schema/generate", response_model=SchemaGenerationResponse)
 async def generate_schema(
     request: SchemaGenerationRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth),
 ) -> SchemaGenerationResponse:
     """Generate a schema based on user responses and context"""
     
@@ -41,7 +42,7 @@ async def generate_schema(
     try:
         # Start audit trail
         audit_id = await audit_service.log_operation_start(
-            user_id=user_id,
+            user_id=auth.user_id,
             operation_type=OperationType.SCHEMA_GENERATION,
             operation_id=operation_id,
             resource_name="Schema Generation",
@@ -53,7 +54,7 @@ async def generate_schema(
         
         # Generate schema
         result = await schema_generation_service.generate_schema(
-            user_id=user_id,
+            user_id=auth.user_id,
             request=request
         )
         
@@ -70,8 +71,11 @@ async def generate_schema(
         )
         
         logger.info(
-            f"Generated schema {result.id} for user {user_id} "
-            f"(confidence: {result.confidence:.2f}, time: {duration_ms}ms)"
+            "Generated schema %s for user %s (confidence: %.2f, time: %sms)",
+            result.id,
+            auth.user_id,
+            result.confidence,
+            duration_ms,
         )
         
         return result
@@ -86,17 +90,18 @@ async def generate_schema(
                 duration_ms=duration_ms
             )
         
-        logger.error(f"Error generating schema for user {user_id}: {str(e)}")
+        logger.error("Error generating schema for user %s: %s", auth.user_id, str(e))
         raise HTTPException(status_code=500, detail="Failed to generate schema")
 
 
 @router.post("/schema/search", response_model=SchemaSearchResponse)
 async def search_schemas(
     request: SchemaSearchRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth)
 ) -> SchemaSearchResponse:
     """Search for schemas using text or vector similarity"""
-    
+    user_id = auth.user_id
+
     start_time = time.time()
     operation_id = str(uuid.uuid4())
     audit_id = ""
@@ -148,7 +153,7 @@ async def search_schemas(
                 duration_ms=duration_ms
             )
         
-        logger.error(f"Error searching schemas for user {user_id}: {str(e)}")
+        logger.error("Error searching schemas for user %s: %s", auth.user_id, str(e))
         raise HTTPException(status_code=500, detail="Failed to search schemas")
 
 
@@ -156,7 +161,7 @@ async def search_schemas(
 async def get_popular_schemas(
     domain: Optional[str] = Query(None, description="Domain filter"),
     limit: int = Query(10, ge=1, le=50, description="Maximum results"),
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth)
 ) -> SchemaSearchResponse:
     """Get popular schemas, optionally filtered by domain"""
     
@@ -186,10 +191,11 @@ async def get_popular_schemas(
 @router.post("/schema/refine", response_model=SchemaRefinementResponse)
 async def refine_schema(
     request: SchemaRefinementRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth)
 ) -> SchemaRefinementResponse:
     """Refine an existing schema based on user feedback"""
-    
+    user_id = auth.user_id
+
     start_time = time.time()
     operation_id = str(uuid.uuid4())
     audit_id = ""
@@ -247,7 +253,7 @@ async def refine_schema(
                 duration_ms=duration_ms
             )
         
-        logger.error(f"Error refining schema for user {user_id}: {str(e)}")
+        logger.error("Error refining schema for user %s: %s", auth.user_id, str(e))
         raise HTTPException(status_code=500, detail="Failed to refine schema")
 
 
@@ -255,7 +261,7 @@ async def refine_schema(
 async def get_question_configuration(
     domain: Optional[str] = Query(None, description="Domain to get questions for"),
     include_optional: bool = Query(True, description="Include optional questions"),
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth)
 ) -> QuestionConfigResponse:
     """Get the configuration of questions for schema generation"""
     
@@ -286,10 +292,11 @@ async def get_question_configuration(
 @router.post("/schema", response_model=StoredSchema)
 async def create_schema(
     request: CreateSchemaRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth)
 ) -> StoredSchema:
     """Create a new schema"""
-    
+    user_id = auth.user_id
+
     start_time = time.time()
     operation_id = str(uuid.uuid4())
     audit_id = ""
@@ -339,21 +346,21 @@ async def create_schema(
                 duration_ms=duration_ms
             )
         
-        logger.error(f"Error creating schema for user {user_id}: {str(e)}")
+        logger.error("Error creating schema for user %s: %s", auth.user_id, str(e))
         raise HTTPException(status_code=500, detail="Failed to create schema")
 
 
 @router.get("/schema/{schema_id}", response_model=StoredSchema)
 async def get_schema(
     schema_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth)
 ) -> StoredSchema:
     """Get a specific schema by ID"""
     
     try:
         result = await schema_storage_service.get_schema(
             schema_id=schema_id,
-            user_id=user_id
+            user_id=auth.user_id
         )
         
         if not result:
@@ -362,7 +369,7 @@ async def get_schema(
         # Log usage event
         await schema_storage_service.log_usage_event(
             schema_id=schema_id,
-            user_id=user_id,
+            user_id=auth.user_id,
             event_type="view"
         )
         
@@ -379,10 +386,11 @@ async def get_schema(
 async def update_schema(
     schema_id: str,
     request: UpdateSchemaRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth)
 ) -> StoredSchema:
     """Update an existing schema"""
-    
+    user_id = auth.user_id
+
     try:
         result = await schema_storage_service.update_schema(
             schema_id=schema_id,
@@ -405,10 +413,11 @@ async def update_schema(
 @router.delete("/schema/{schema_id}")
 async def delete_schema(
     schema_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth)
 ) -> dict:
     """Delete a schema"""
-    
+    user_id = auth.user_id
+
     try:
         success = await schema_storage_service.delete_schema(
             schema_id=schema_id,
@@ -432,10 +441,11 @@ async def list_user_schemas(
     limit: int = Query(50, ge=1, le=100, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     include_public: bool = Query(True, description="Include public schemas"),
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth)
 ) -> list[StoredSchema]:
     """List schemas for the current user"""
-    
+    user_id = auth.user_id
+
     try:
         results = await schema_storage_service.list_user_schemas(
             user_id=user_id,
@@ -447,7 +457,7 @@ async def list_user_schemas(
         return results
         
     except Exception as e:
-        logger.error(f"Error listing schemas for user {user_id}: {str(e)}")
+        logger.error("Error listing schemas for user %s: %s", auth.user_id, str(e))
         raise HTTPException(status_code=500, detail="Failed to list schemas")
 
 
@@ -455,14 +465,14 @@ async def list_user_schemas(
 async def get_related_schemas(
     schema_id: str,
     limit: int = Query(5, ge=1, le=20, description="Maximum results"),
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    auth: AuthContext = Depends(get_current_auth)
 ) -> list[StoredSchema]:
     """Get schemas related to a specific schema"""
     
     try:
         results = await schema_search_service.get_related_schemas(
             schema_id=schema_id,
-            user_id=user_id,
+            user_id=auth.user_id,
             limit=limit
         )
         

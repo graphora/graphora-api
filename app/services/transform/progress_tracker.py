@@ -1,11 +1,12 @@
 from typing import Dict, List, Optional
 from datetime import datetime
 import json
+import platform
+import time
+
 import psutil
 import redis
 from prefect import get_client
-import platform
-import time
 
 from app.services.transform.status_models import (
     TransformationStage,
@@ -17,6 +18,7 @@ from app.services.transform.status_models import (
     ResourceMetrics
 )
 from app.config import settings
+from app.utils.logger import logger
 
 class ProgressTracker:
     """Track transformation progress and resource usage"""
@@ -197,7 +199,7 @@ class ProgressTracker:
                 )
             
         except Exception as e:
-            print(f"Failed to update progress: {str(e)}")
+            logger.debug(f"Failed to update progress: {str(e)}")
     
     def _store_stage_timing(
         self,
@@ -241,7 +243,7 @@ class ProgressTracker:
             )
             
         except Exception as e:
-            print(f"Failed to store timing: {str(e)}")
+            logger.debug(f"Failed to store timing: {str(e)}")
     
     def _get_historical_timings(
         self
@@ -262,7 +264,7 @@ class ProgressTracker:
                     ]
                     
         except Exception as e:
-            print(f"Failed to get timings: {str(e)}")
+            logger.debug(f"Failed to get timings: {str(e)}")
         
         return timings
     
@@ -301,7 +303,7 @@ class ProgressTracker:
             return status
             
         except Exception as e:
-            print(f"Failed to get status: {str(e)}")
+            logger.debug(f"Failed to get status: {str(e)}")
             return None
     
     async def start_stage(
@@ -335,7 +337,7 @@ class ProgressTracker:
             )
             
         except Exception as e:
-            print(f"Failed to start stage: {str(e)}")
+            logger.debug(f"Failed to start stage: {str(e)}")
     
     async def complete_stage(
         self,
@@ -365,7 +367,7 @@ class ProgressTracker:
             )
             
         except Exception as e:
-            print(f"Failed to complete stage: {str(e)}")
+            logger.debug(f"Failed to complete stage: {str(e)}")
     
     async def fail_stage(
         self,
@@ -396,7 +398,7 @@ class ProgressTracker:
             )
             
         except Exception as e:
-            print(f"Failed to fail stage: {str(e)}")
+            logger.debug(f"Failed to fail stage: {str(e)}")
     
     def cleanup_transform(self, transform_id: str):
         """Clean up transformation data"""
@@ -407,4 +409,4 @@ class ProgressTracker:
             )
             
         except Exception as e:
-            print(f"Failed to cleanup: {str(e)}")
+            logger.debug(f"Failed to cleanup: {str(e)}")

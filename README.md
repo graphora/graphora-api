@@ -46,6 +46,14 @@ A sophisticated document processing backend that leverages AI-powered intelligen
    ```
 - [Setup BAML](https://docs.boundaryml.com/guide/installation-language/python)
 
+### Developer Shortcuts
+
+- `make install` – sync Python dependencies via uv
+- `uv sync --group dev` – install optional dev tools (e.g. Vulture for dead-code checks)
+- `make compose-up` – start local Neo4j and Redis containers (see [Local Development Guide](docs/LOCAL_DEVELOPMENT.md))
+- `make lint`, `make test`, `make typecheck` – run quality gates before committing
+- `make deadcode` – run Vulture against the codebase to surface unused definitions
+
 
 
 ### Running the Project
@@ -61,6 +69,11 @@ python -m app.main
 The API will be available at:
 - API Documentation: `/api/v1/docs`
 - OpenAPI Specification: `/api/v1/openapi.json`
+
+### Authentication
+- All API requests must include a Clerk-issued bearer token: `Authorization: Bearer <token>`.
+- Configure the backend with Clerk credentials via `.env`: `CLERK_JWKS_URL`, `CLERK_ISSUER`, `CLERK_AUDIENCE`, and `CLERK_API_KEY` if server-to-server calls are required.
+- Clients no longer send the legacy `user-id` header; the backend derives the user from the JWT subject claim.
 
 ## Development Guide
 
@@ -145,6 +158,8 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 ## Documentation
 
 - [Contributing Guide](CONTRIBUTING.md) - How to contribute
+- [Repository Guidelines](AGENTS.md) - Quick contributor reference
+- [Local Development Guide](docs/LOCAL_DEVELOPMENT.md) - Spin up dependencies and run the API locally
 - [Security Policy](SECURITY.md) - How to report security issues
 - [Support](SUPPORT.md) - How to get help
 - [Trademark Policy](TRADEMARK.md) - Trademark usage guidelines

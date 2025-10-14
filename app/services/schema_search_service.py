@@ -221,11 +221,11 @@ class SchemaSearchService:
     
     async def search_by_vector_similarity(
         self,
-        user_id: str,
-        query_embedding: List[float],
-        domain: Optional[str] = None,
-        limit: int = 10,
-        threshold: float = 0.7
+        _user_id: str,
+        _query_embedding: List[float],
+        _domain: Optional[str] = None,
+        _limit: int = 10,
+        _threshold: float = 0.7
     ) -> List[SchemaSearchResult]:
         """Search schemas using vector similarity (requires embeddings)"""
         

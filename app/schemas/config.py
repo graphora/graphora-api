@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import datetime
 
@@ -11,7 +11,7 @@ class DatabaseConfig(BaseModel):
     username: str = Field(..., description="Database username")
     password: str = Field(..., description="Database password")
     
-    @validator('uri')
+    @field_validator('uri')
     def validate_uri(cls, v):
         """Validate Neo4j URI format"""
         valid_prefixes = ['neo4j://', 'bolt://', 'neo4j+s://', 'bolt+s://']
@@ -23,23 +23,23 @@ class DatabaseConfig(BaseModel):
 class UserConfig(BaseModel):
     """Schema for user configuration containing staging and production databases"""
     id: Optional[str] = None
-    userEmail: str = Field(..., description="User's email address")
+    userId: str = Field(..., description="Authenticated user identifier")
     stagingDb: DatabaseConfig = Field(..., description="Staging database configuration")
     prodDb: DatabaseConfig = Field(..., description="Production database configuration")
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None
     
-    @validator('prodDb')
-    def validate_different_databases(cls, v, values):
+    @field_validator('prodDb')
+    def validate_different_databases(cls, v, info):
         """Ensure staging and production databases have different URIs"""
-        if 'stagingDb' in values and v.uri == values['stagingDb'].uri:
+        staging_db = info.data.get('stagingDb')
+        if staging_db and v.uri == staging_db.uri:
             raise ValueError('Staging and production database URIs must be different')
         return v
 
 
 class ConfigRequest(BaseModel):
     """Schema for creating/updating user configuration"""
-    userEmail: str = Field(..., description="User's email address")
     stagingDb: DatabaseConfig = Field(..., description="Staging database configuration")
     prodDb: DatabaseConfig = Field(..., description="Production database configuration")
 
