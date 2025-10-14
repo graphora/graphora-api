@@ -1,6 +1,6 @@
 """Models for graph data structures"""
 from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 import pytz
 
@@ -14,9 +14,7 @@ class Node(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc), description="When the node was created")
     updated_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc), description="When the node was last updated")
     
-    class Config:
-        """Pydantic configuration"""
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class Edge(BaseModel):
     """Model representing an edge/relationship in a graph"""
@@ -28,9 +26,7 @@ class Edge(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc), description="When the relationship was created")
     updated_at: datetime = Field(default_factory=lambda: datetime.now(pytz.utc), description="When the relationship was last updated")
     
-    class Config:
-        """Pydantic configuration"""
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class GraphResponse(BaseModel):
     """Model representing a graph response"""

@@ -266,10 +266,10 @@ class OntologyQualityParser:
         return rules
     
     def _parse_validation_rules(
-        self, 
-        entity_type: str, 
-        property_name: str, 
-        validation_config: Dict[str, Any]
+        self,
+        _entity_type: str,
+        _property_name: str,
+        _validation_config: Dict[str, Any]
     ) -> List[QualityRule]:
         """Parse validation-specific quality rules."""
         rules = []
@@ -280,9 +280,9 @@ class OntologyQualityParser:
         return rules
     
     def _parse_entity_level_rules(
-        self, 
-        entity_type: str, 
-        entity_config: Dict[str, Any]
+        self,
+        _entity_type: str,
+        _entity_config: Dict[str, Any]
     ) -> List[QualityRule]:
         """Parse entity-level quality rules."""
         rules = []
@@ -293,9 +293,9 @@ class OntologyQualityParser:
         return rules
     
     def _parse_relationship_level_rules(
-        self, 
-        relationship_name: str, 
-        relationship_config: Dict[str, Any]
+        self,
+        _relationship_name: str,
+        _relationship_config: Dict[str, Any]
     ) -> List[QualityRule]:
         """Parse relationship-level quality rules."""
         rules = []
@@ -305,7 +305,7 @@ class OntologyQualityParser:
         
         return rules
     
-    def _parse_distribution_rules(self, distribution_config: Dict[str, Any]) -> List[QualityRule]:
+    def _parse_distribution_rules(self, _distribution_config: Dict[str, Any]) -> List[QualityRule]:
         """Parse distribution/statistical quality rules."""
         rules = []
         
@@ -314,7 +314,7 @@ class OntologyQualityParser:
         
         return rules
     
-    def _parse_cross_validation_rules(self, cross_validation_config: List[Dict[str, Any]]) -> List[QualityRule]:
+    def _parse_cross_validation_rules(self, _cross_validation_config: List[Dict[str, Any]]) -> List[QualityRule]:
         """Parse cross-entity validation rules."""
         rules = []
         

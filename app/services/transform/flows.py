@@ -1,5 +1,4 @@
 from prefect import flow, task
-from prefect.context import get_run_context
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
 from pathlib import Path
@@ -19,7 +18,7 @@ from app.services.transform.storage import DocumentStorage
 from app.config import settings
 from app.services.quality.tasks import quality_validation_task
 from app.services.marker.tasks import convert_pdf_to_markdown
-from app.services.chunking.tasks import chunk_document, check_chunk_quality
+from app.services.chunking.tasks import chunk_document
 from app.services.transform.tasks import construct_knowledge_graph
 from app.services.storage.tasks import store_knowledge_graph
 from app.services.transform.progress_tracker import ProgressTracker
@@ -267,7 +266,7 @@ async def document_transformation_flow(
             TransformationStage.TRANSFORM
         )
         
-        print(graphs)
+        logger.debug("Transformation graphs snapshot: %s", graphs)
         
         # Start LOAD stage
         await progress_tracker.start_stage(

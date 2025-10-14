@@ -121,7 +121,7 @@ async def convert_pdf_to_markdown(
             max_retries=settings.MARKER_API_MAX_RETRIES,
             backoff_factor=settings.MARKER_API_BACKOFF_FACTOR
         )
-        print(client)
+        logger.debug("Marker client configuration: %s", client)
         
         # Track conversion start
         logger.info(f"Starting PDF conversion for {transform_id}")

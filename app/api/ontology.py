@@ -2,7 +2,7 @@ import traceback
 import time
 import logging
 from app.services.transform.ontology_helper import OntologyParser
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from uuid import uuid4
 import yaml
 import os
@@ -15,6 +15,7 @@ from app.services.audit_service import audit_service, OperationType, OperationSt
 from app.services.ontology_storage_service import ontology_storage_service
 from datetime import datetime
 from supabase import create_client
+from app.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Ontology"])
@@ -26,7 +27,7 @@ def ensure_ontology_dir():
 @router.post("/ontology", response_model=OntologyResponse)
 async def validate_ontology(
     request: OntologyRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> OntologyResponse:
     """
     Validate and process ontology YAML.
@@ -130,7 +131,7 @@ async def validate_ontology(
 @router.get("/ontology/{ontology_id}", response_model=OntologyRequest)
 async def get_ontology(
     ontology_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> OntologyRequest:
     """
     Get ontology by ID from Supabase database only
@@ -165,7 +166,7 @@ async def get_ontology(
 
 @router.get("/ontologies")
 async def list_ontologies(
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     List all ontologies for a user from Supabase database only
@@ -203,7 +204,7 @@ async def list_ontologies(
 @router.get("/ontologies/{ontology_id}")
 async def get_ontology_by_id(
     ontology_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Get a specific ontology by ID from Supabase database only
@@ -246,7 +247,7 @@ async def get_ontology_by_id(
 @router.delete("/ontology/{ontology_id}")
 async def delete_ontology(
     ontology_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Delete an ontology
@@ -279,7 +280,7 @@ async def delete_ontology(
 async def update_ontology(
     ontology_id: str,
     request: OntologyRequest,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> OntologyResponse:
     """
     Update an existing ontology by ID.
@@ -390,7 +391,7 @@ async def update_ontology(
 @router.get("/ontology/{ontology_id}/versions")
 async def get_ontology_versions(
     ontology_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Get version history for a specific ontology

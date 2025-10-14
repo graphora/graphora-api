@@ -59,10 +59,10 @@ def transform_as_nodes(ontology: Dict[str, Any], entity_result: BaseModel) -> Li
 
 def transform_as_relationships(ontology: Dict[str, Any], 
                                nodes: List[BaseNode], relationship_result: BaseModel) -> List[RelationshipInstance]:
-    print("#"*30)
-    print("relationship_result", relationship_result)
-    print("nodes", nodes)
-    print("#"*30)
+    logger.debug("%s", "#" * 30)
+    logger.debug("relationship_result: %s", relationship_result)
+    logger.debug("nodes: %s", nodes)
+    logger.debug("%s", "#" * 30)
     relationships = []
     for field_name in dir(relationship_result):
         if field_name.endswith('_list') or field_name.startswith('_') or '_' not in field_name:
@@ -87,7 +87,7 @@ def transform_as_relationships(ontology: Dict[str, Any],
 
         # Infer target_type from ontology if not in field_name
         relationships_def = ontology['entities'].get(source_type, {}).get('relationships', {})
-        logger.info("relationships_def: ", relationships_def)
+        logger.info("relationships_def: %s", relationships_def)
         if rel_type in relationships_def:
             target_type = target_type or relationships_def[rel_type].get('target')
         else:
@@ -97,7 +97,7 @@ def transform_as_relationships(ontology: Dict[str, Any],
         if not target_type or target_type not in ontology.get('entities', {}):
             logger.warning(f"Skipping relationship {field_name}: Could not determine valid target_type")
             continue
-        logger.info('rel_list: ', rel_list)
+        logger.info('rel_list: %s', rel_list)
         for rel_item in rel_list:
             if not rel_item:
                 continue
@@ -155,7 +155,7 @@ async def deduplicate_entities_with_splink(
     """
     try:
         logging.info(f"Starting entity deduplication with {len(entities)} entities")
-        print(f"Starting entity deduplication with {len(entities)} entities")
+        logger.debug(f"Starting entity deduplication with {len(entities)} entities")
         if relationships:
             logging.info(f"Using {len(relationships)} relationships for context")
         
@@ -226,7 +226,7 @@ async def deduplicate_entities_with_splink(
             
             # Run Splink deduplication
             logging.info(f"Running Splink deduplication for type '{current_type}'...")
-            print(f"Running Splink deduplication for type '{current_type}'...")
+            logger.debug(f"Running Splink deduplication for type '{current_type}'...")
             id_to_representative = _run_splink_deduplication(df, comparisons, blocking_rules, threshold)
             
             if not id_to_representative:
@@ -249,7 +249,7 @@ async def deduplicate_entities_with_splink(
             if resolved_nodes:
                 logging.info(f"Resolved nodes for type '{current_type}':")
                 for rep_id, duplicate_ids in resolved_nodes.items():
-                    print(f"  Representative {rep_id} <- duplicates: {duplicate_ids}")
+                    logger.debug(f"  Representative {rep_id} <- duplicates: {duplicate_ids}")
                     logging.info(f"  Representative {rep_id} <- duplicates: {duplicate_ids}")
             
             logging.info(f"Found {len(set(id_to_representative.values()))} clusters for type '{current_type}'")
@@ -259,7 +259,7 @@ async def deduplicate_entities_with_splink(
             all_deduplicated_entities.extend(type_deduplicated_entities)
             
             logging.info(f"Reduced {len(type_entities)} entities to {len(type_deduplicated_entities)} for type '{current_type}'")
-            print(f"Reduced {len(type_entities)} entities to {len(type_deduplicated_entities)} for type '{current_type}'")
+            logger.debug(f"Reduced {len(type_entities)} entities to {len(type_deduplicated_entities)} for type '{current_type}'")
         
         # Update relationships to use the representative node IDs
         updated_relationships = []
@@ -342,7 +342,7 @@ async def resolve_entity_group(
 
     try:
         # Call LLM for entity resolution
-        print(f"Resolving `{entity_type}` entities")
+        logger.debug(f"Resolving `{entity_type}` entities")
         results = await llm_client.resolve_entities(
             entity_type=entity_type, 
             node_dicts_str=node_dicts_str,
@@ -381,7 +381,7 @@ async def resolve_entity_group(
         for node in nodes:
             if node not in included_nodes:
                 resolved_groups.append([node])
-        print("resolved_groups", resolved_groups)
+        logger.debug("resolved_groups: %s", resolved_groups)
         return resolved_groups
         
     except Exception as e:

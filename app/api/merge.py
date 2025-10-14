@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from app.baml_client.types import ResolutionStrategy
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Header
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 import logging
 import uuid
 import traceback
@@ -13,6 +13,7 @@ from app.services.merge.new_merger import (
 )
 from app.services.merge.models import MergeInitResponse, MergeStatus, ChangeLog
 from app.config import settings
+from app.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ async def start_merge(
     session_id: str,
     transform_id: str,
     background_tasks: BackgroundTasks,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> MergeInitResponse:
     """Start a new merge process for user's production database"""
     try:
@@ -81,7 +82,7 @@ async def start_merge(
 @router.get("/{merge_id}/status", response_model=MergeStatus)
 def get_merge_status_api(
     merge_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> MergeStatus:
     """Get current status of a merge process for user"""
     try:
@@ -114,7 +115,7 @@ def get_merge_status_api(
 )
 async def get_conflicts(
     merge_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> List[ChangeLog]:
     """Get conflicts for a merge process for user"""
     try:
@@ -138,7 +139,7 @@ async def resolve_conflict(
     changed_props: Dict[str, Any],
     resolution: ResolutionStrategy,
     learning_comment: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> bool:
     """
     Apply a resolution to a specific conflict for user
@@ -174,7 +175,7 @@ async def resolve_conflict(
 )
 async def get_merge_statistics_api(
     merge_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> Dict[str, Any]:
     """Get detailed statistics of a merge operation for user"""
     try:
@@ -203,7 +204,7 @@ async def get_merge_statistics_api(
 async def get_graph_by_merge_id(
     merge_id: str,
     transform_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> GraphResponse:
     """Get graph data for merge operation for user (from production database)"""
     try:

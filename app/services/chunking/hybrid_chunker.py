@@ -8,7 +8,6 @@ import traceback
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-from langchain_core.documents import Document
 
 from app.services.chunking.models import (
     ChunkingResult,
@@ -266,33 +265,33 @@ class HybridDocumentChunker:
             strategy = strategy_override or self.strategy
             logger.info(f"Chunking strategy: {strategy} " +
                        (f"(overridden from default: {self.strategy})" if strategy_override else "(default)"))
-            print(f"Chunking strategy: {strategy} " +
+            logger.debug(f"Chunking strategy: {strategy} " +
                        (f"(overridden from default: {self.strategy})" if strategy_override else "(default)"))
             
             # Apply chunking based on strategy and document type
             if strategy == ChunkingStrategy.HYBRID:
                 logger.info(f"Applying hybrid chunking for document type: {doc_type}")
-                print(f"Applying hybrid chunking for document type: {doc_type}")
+                logger.debug(f"Applying hybrid chunking for document type: {doc_type}")
                 chunks = await self._hybrid_chunk(text, doc_type)
             elif strategy == ChunkingStrategy.STRUCTURAL:
                 logger.info("Applying structural chunking strategy")
-                print("Applying structural chunking strategy")
+                logger.debug("Applying structural chunking strategy")
                 chunks = self.structural_chunker.chunk_text(text)
             elif strategy == ChunkingStrategy.SEMANTIC and self.semantic_chunker:
                 logger.info("Applying semantic chunking strategy")
-                print("Applying semantic chunking strategy")
+                logger.debug("Applying semantic chunking strategy")
                 documents = self.semantic_chunker.create_documents([text])
                 chunks = [doc.page_content for doc in documents]
             else:
                 # Fallback to recursive
                 fallback_reason = "semantic chunker not available" if strategy == ChunkingStrategy.SEMANTIC else "fallback"
                 logger.info(f"Applying recursive chunking strategy ({fallback_reason})")
-                print(f"Applying recursive chunking strategy ({fallback_reason})")
+                logger.debug(f"Applying recursive chunking strategy ({fallback_reason})")
                 documents = self.recursive_chunker.create_documents([text])
                 chunks = [doc.page_content for doc in documents]
             
             logger.info(f"Generated {len(chunks)} chunks using {strategy} strategy")
-            print(f"Generated {len(chunks)} chunks using {strategy} strategy")
+            logger.debug(f"Generated {len(chunks)} chunks using {strategy} strategy")
 
             # Log chunk statistics
             if chunks:
@@ -303,12 +302,12 @@ class HybridDocumentChunker:
                 logger.info(f"  - Average size: {sum(chunk_sizes) / len(chunk_sizes):.1f} chars")
                 logger.info(f"  - Total content: {sum(chunk_sizes)} chars")
                 logger.info(f"  - Coverage: {(sum(chunk_sizes) / len(text) * 100):.1f}%")
-                print(f"Chunk size statistics:")
-                print(f"  - Min size: {min(chunk_sizes)} chars")
-                print(f"  - Max size: {max(chunk_sizes)} chars")
-                print(f"  - Average size: {sum(chunk_sizes) / len(chunk_sizes):.1f} chars")
-                print(f"  - Total content: {sum(chunk_sizes)} chars")
-                print(f"  - Coverage: {(sum(chunk_sizes) / len(text) * 100):.1f}%")
+                logger.debug(f"Chunk size statistics:")
+                logger.debug(f"  - Min size: {min(chunk_sizes)} chars")
+                logger.debug(f"  - Max size: {max(chunk_sizes)} chars")
+                logger.debug(f"  - Average size: {sum(chunk_sizes) / len(chunk_sizes):.1f} chars")
+                logger.debug(f"  - Total content: {sum(chunk_sizes)} chars")
+                logger.debug(f"  - Coverage: {(sum(chunk_sizes) / len(text) * 100):.1f}%")
 
             # Process chunks into metadata
             chunk_texts = []

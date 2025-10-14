@@ -9,12 +9,11 @@ import json
 from datetime import datetime, timezone
 import time
 from app.utils.constants import VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID, SYSTEM_PROPERTIES, get_full_text_index_name
-import traceback
 from neo4j import AsyncGraphDatabase, GraphDatabase
 from neo4j.exceptions import ServiceUnavailable, AuthError, DatabaseError, SessionExpired, TransientError
 from neo4j.time import DateTime as Neo4jDateTime
 from .interface import GraphStorageInterface
-from .models import StorageBatchResult, StorageCheckpoint, StorageStage, TransformationResult
+from .models import StorageBatchResult, StorageCheckpoint, StorageStage
 from .exceptions import (
     StorageConnectionError,
     StorageAuthError,
@@ -197,7 +196,7 @@ class Neo4jStorage(GraphStorageInterface):
             node_alias = 'n'
             prop_names = [f'{node_alias}.{prop}' for prop in properties]
             query = f"CREATE FULLTEXT INDEX {index_name} FOR ({node_alias}:`{entity_name}`) ON EACH [{', '.join(prop_names)}];"
-            print(query)
+            logger.debug(query)
             await session.run(query)
             
     async def create_or_replace_ft_index_for_relationship(
@@ -230,7 +229,7 @@ class Neo4jStorage(GraphStorageInterface):
                 FOR ()-[{rel_alias}:`{rel_name}`]->() 
                 ON EACH [{', '.join(prop_names)}];
                 """
-                print(query)
+                logger.debug(query)
                 await session.run(query)
                 logger.info(f"Created full-text index {index_name} for relationship {rel_name}")
             except Exception as e:
@@ -1129,9 +1128,9 @@ class Neo4jStorage(GraphStorageInterface):
                 seen_ids.add(node.id)
                 
         # Limit to max_results
-        print("************************************************")
-        print(combined_results[:max_results])
-        print("************************************************")
+        logger.debug("************************************************")
+        logger.debug(combined_results[:max_results])
+        logger.debug("************************************************")
         return combined_results[:max_results]
 
     async def get_nodes(
@@ -1230,7 +1229,7 @@ class Neo4jStorage(GraphStorageInterface):
         Returns:
             Updated Node object
         """
-        print(f"DEBUG: Updating node {node_id} with properties: {properties}")
+        logger.debug(f"DEBUG: Updating node {node_id} with properties: {properties}")
         async def _execute_query(node_id, properties={}, tx=None):
             query = """
             MATCH (n)
@@ -1290,7 +1289,7 @@ class Neo4jStorage(GraphStorageInterface):
             
             node_data = records[0][0]
             node_properties = dict(node_data.items())
-            print(f"DEBUG: Updated node {node_id}, new properties: {node_properties}")
+            logger.debug(f"DEBUG: Updated node {node_id}, new properties: {node_properties}")
             return Node(
                 id=node_data.get("id", ''),
                 label=list(node_data.labels)[0],
@@ -1426,7 +1425,7 @@ class Neo4jStorage(GraphStorageInterface):
 
     async def get_node_by_id(self, node_id: str) -> Optional[Node]:
         """Get a node by its ID"""
-        # print(f"DEBUG: Getting node by ID: {node_id}")
+        # logger.debug(f"DEBUG: Getting node by ID: {node_id}")
         query = """
                 MATCH (n)
                 WHERE n.id = $id
@@ -1434,13 +1433,13 @@ class Neo4jStorage(GraphStorageInterface):
                 """
         records = await self._execute_query(query, {"id": node_id})
         if not records:
-            # print(f"DEBUG: No node found with ID: {node_id}")
+            # logger.debug(f"DEBUG: No node found with ID: {node_id}")
             return None
 
         record = records[0]
         labels = list(record[0].labels) if record[0].labels else []
         properties = dict(record[0].items())
-        # print(f"DEBUG: Found node with ID: {node_id}, properties: {properties}")
+        # logger.debug(f"DEBUG: Found node with ID: {node_id}, properties: {properties}")
         return Node(
             id=properties.get("id", ''),
             label=labels[0] if labels else None,
@@ -1553,7 +1552,7 @@ class Neo4jStorage(GraphStorageInterface):
         """Async context manager entry"""
         return self
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, _exc_tb):
         """Async context manager exit"""
         if self:
             try:
@@ -1674,16 +1673,16 @@ class Neo4jStorage(GraphStorageInterface):
             """
             await self._execute_query(test_query, {"index_name": index_name})
             # If we get here, the index exists
-            print(f"Full-text index {index_name} exists.")
+            logger.debug(f"Full-text index {index_name} exists.")
         except Exception as e:
             # If we get an error about the index not existing, skip full-text search
             error_str = str(e)
             if "no such fulltext schema index" in error_str.lower() or "no procedure" in error_str.lower():
-                print(f"Full-text index {index_name} does not exist. Skipping full-text search.")
+                logger.debug(f"Full-text index {index_name} does not exist. Skipping full-text search.")
                 return []
             else:
                 # Some other error occurred
-                print(f"Error checking if index exists: {error_str}")
+                logger.debug(f"Error checking if index exists: {error_str}")
                 # Continue anyway - we'll try the search and handle errors there
                 pass
         
@@ -1757,6 +1756,6 @@ class Neo4jStorage(GraphStorageInterface):
                                     return all_results
                     except Exception as e:
                         # If the index doesn't exist or other error, log and continue
-                        print(f"Full-text search error for {search_query}: {str(e)}")
+                        logger.debug(f"Full-text search error for {search_query}: {str(e)}")
         
         return all_results

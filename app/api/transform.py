@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, UploadFile, HTTPException, Request, BackgroundTasks, Query, Header, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from typing import List, Optional
 import aiofiles
 import uuid
@@ -25,6 +25,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from app.services.audit_service import audit_service, OperationType, OperationStatus
 from app.services.chunking.config import ChunkingConfig, ChunkingStrategy
+from app.auth import get_current_user_id
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
 
@@ -103,7 +104,7 @@ async def upload_documents(
     request: Request,
     background_tasks: BackgroundTasks,
     ontology_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID"),
+    user_id: str = Depends(get_current_user_id),
     files: List[UploadFile] = File(...),
     chunking_config: Optional[str] = Form(None, description="JSON string of chunking configuration")
 ) -> TransformInitResponse:
@@ -272,7 +273,7 @@ async def upload_documents(
 async def get_transform_status(
     request: Request,
     transform_id: str,
-    user_id: str = Header(..., alias="user-id", description="User's ID"),
+    user_id: str = Depends(get_current_user_id),
     include_metrics: bool = True
 ) -> DetailedTransformStatus:
     """
@@ -326,7 +327,7 @@ async def cleanup_transform_status(
     request: Request,
     transform_id: str,
     background_tasks: BackgroundTasks,
-    user_id: str = Header(..., alias="user-id", description="User's ID")
+    user_id: str = Depends(get_current_user_id)
 ) -> JSONResponse:
     """
     Clean up transformation status data

@@ -5,8 +5,6 @@ import traceback
 
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-from langchain_core.documents import Document
-
 from app.services.chunking.models import (
     ChunkingResult,
     ChunkMetadata,
