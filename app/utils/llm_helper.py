@@ -93,7 +93,12 @@ def create_baml_client_registry(
         options={
             "model": model_name,
             "api_key": api_key,
-            "generationConfig": {"temperature": 0.0},
+            "generationConfig": {
+                "temperature": 0.0,
+                "topP": 0.0,
+                "topK": 1,
+                "candidateCount": 1,
+            },
         },
     )
 

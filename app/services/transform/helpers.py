@@ -41,10 +41,14 @@ def transform_as_nodes(
             if not item:
                 continue
             raw_properties = _extract_properties(item)
-            properties = _filter_properties_by_ontology(
+            properties = _normalize_entity_properties(
                 ontology, entity_type, raw_properties
             )
-            if not _is_node_valuable(ontology, entity_type, properties):
+            if properties is None:
+                logger.debug(
+                    "Skipping %s node due to ontology validation failure",
+                    entity_type,
+                )
                 continue
             node_key = _generate_node_key(ontology, entity_type, properties)
             node_id = str(uuid.uuid4())
@@ -141,7 +145,16 @@ def transform_as_relationships(
                 )
                 continue
 
-            rel_properties = _extract_properties(getattr(rel_item, "properties", {}))
+            raw_properties = _extract_properties(getattr(rel_item, "properties", {}))
+            rel_properties = _normalize_relationship_properties(
+                ontology, source_type, rel_type, raw_properties
+            )
+            if rel_properties is None:
+                logger.debug(
+                    "Skipping relationship %s due to ontology validation failure",
+                    rel_type,
+                )
+                continue
             rel_id = str(uuid.uuid4())
             rel = RelationshipInstance(
                 id=rel_id,
@@ -671,31 +684,6 @@ def _get_possible_relationships_for_type(
     return possible_rels
 
 
-def _filter_properties_by_ontology(
-    parsed_ontology, entity_type: str, properties: Dict[str, Any]
-) -> Dict[str, Any]:
-    entity_def = parsed_ontology.get("entities", {}).get(entity_type)
-    if not entity_def:
-        return {}
-    defined_properties = entity_def.get("properties", {})
-    if not defined_properties:
-        return {}
-    filtered_props = {}
-    for prop_name, prop_value in properties.items():
-        if prop_name in defined_properties and prop_value is not None:
-            filtered_props[prop_name] = prop_value
-    return filtered_props
-
-
-def _is_node_valuable(
-    parsed_ontology, entity_type: str, properties: Dict[str, Any]
-) -> bool:
-    filtered_props = _filter_properties_by_ontology(
-        parsed_ontology, entity_type, properties
-    )
-    return len(filtered_props) > 0
-
-
 def _generate_node_key(
     parsed_ontology, entity_type: str, properties: Dict[str, Any]
 ) -> str:
@@ -767,6 +755,172 @@ def _extract_properties(item: BaseModel) -> Dict[str, Any]:
             except Exception:
                 pass
         return properties
+
+
+def _normalize_entity_properties(
+    parsed_ontology: Dict[str, Any],
+    entity_type: str,
+    raw_properties: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    entity_def = parsed_ontology.get("entities", {}).get(entity_type)
+    if not entity_def:
+        return None
+
+    defined_properties = entity_def.get("properties", {})
+    if not defined_properties:
+        return None
+
+    normalized: Dict[str, Any] = {}
+    for prop_name, prop_def in defined_properties.items():
+        value = raw_properties.get(prop_name)
+        if value is None:
+            if prop_def.get("required"):
+                logger.debug(
+                    "Required property %s missing for %s", prop_name, entity_type
+                )
+                return None
+            continue
+
+        coerced = _coerce_property_value(prop_def, value)
+        if coerced is None:
+            logger.debug("Failed to coerce property %s for %s", prop_name, entity_type)
+            return None
+
+        enum_value = _match_enum_value(prop_def, coerced)
+        if enum_value is None:
+            logger.debug(
+                "Value %s not allowed for %s.%s",
+                coerced,
+                entity_type,
+                prop_name,
+            )
+            return None
+
+        normalized[prop_name] = enum_value
+
+    if not normalized:
+        return None
+
+    return normalized
+
+
+def _normalize_relationship_properties(
+    parsed_ontology: Dict[str, Any],
+    source_type: str,
+    relationship_type: str,
+    raw_properties: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    relationships_def = (
+        parsed_ontology.get("entities", {})
+        .get(source_type, {})
+        .get("relationships", {})
+        .get(relationship_type, {})
+    )
+    property_defs = relationships_def.get("properties", {})
+    if not property_defs:
+        return {}
+
+    normalized: Dict[str, Any] = {}
+    for prop_name, prop_def in property_defs.items():
+        value = raw_properties.get(prop_name)
+        if value is None:
+            if prop_def.get("required"):
+                logger.debug(
+                    "Required relationship property %s missing for %s",
+                    prop_name,
+                    relationship_type,
+                )
+                return None
+            continue
+
+        coerced = _coerce_property_value(prop_def, value)
+        if coerced is None:
+            logger.debug(
+                "Failed to coerce relationship property %s for %s",
+                prop_name,
+                relationship_type,
+            )
+            return None
+
+        enum_value = _match_enum_value(prop_def, coerced)
+        if enum_value is None:
+            logger.debug(
+                "Value %s not allowed for relationship %s.%s",
+                coerced,
+                relationship_type,
+                prop_name,
+            )
+            return None
+
+        normalized[prop_name] = enum_value
+
+    return normalized
+
+
+def _coerce_property_value(prop_def: Dict[str, Any], value: Any) -> Optional[Any]:
+    prop_type = (prop_def.get("type") or "string").lower()
+
+    try:
+        if prop_type in {"string", "str"}:
+            coerced = str(value).strip()
+            case_format = (
+                prop_def.get("quality", {}).get("format", {}).get("caseFormat")
+            )
+            if case_format:
+                coerced = _apply_case_format(coerced, case_format)
+            return coerced
+
+        if prop_type in {"integer", "int"}:
+            return int(value)
+
+        if prop_type in {"number", "float", "double"}:
+            return float(value)
+
+        if prop_type in {"boolean", "bool"}:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in {"true", "1", "yes"}:
+                    return True
+                if lowered in {"false", "0", "no"}:
+                    return False
+            return bool(value)
+
+        if prop_type in {"array", "list"}:
+            if isinstance(value, list):
+                return value
+            if isinstance(value, str):
+                return [v.strip() for v in value.split(",") if v.strip()]
+            return [value]
+
+        return value
+    except (ValueError, TypeError):
+        return None
+
+
+def _match_enum_value(prop_def: Dict[str, Any], value: Any) -> Optional[Any]:
+    enum_values = prop_def.get("enum") or prop_def.get("allowedValues")
+    if not enum_values:
+        return value
+
+    if isinstance(value, str):
+        for enum_value in enum_values:
+            if isinstance(enum_value, str) and enum_value.lower() == value.lower():
+                return enum_value
+
+    return value if value in enum_values else None
+
+
+def _apply_case_format(value: str, case_format: str) -> str:
+    formatter = case_format.lower()
+    if formatter == "lowercase":
+        return value.lower()
+    if formatter == "uppercase":
+        return value.upper()
+    if formatter == "titlecase":
+        return value.title()
+    return value
 
 
 def _prepare_entities_for_deduplication(

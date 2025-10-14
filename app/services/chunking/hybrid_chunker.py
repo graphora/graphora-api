@@ -356,6 +356,8 @@ class HybridDocumentChunker:
                 documents = self.recursive_chunker.create_documents([text])
                 chunks = [doc.page_content for doc in documents]
 
+            chunks = self._enforce_size_limits(chunks)
+
             logger.info(f"Generated {len(chunks)} chunks using {strategy} strategy")
             logger.debug(f"Generated {len(chunks)} chunks using {strategy} strategy")
 
@@ -490,6 +492,71 @@ class HybridDocumentChunker:
             chunks = [doc.page_content for doc in documents]
             logger.info(f"→ Recursive chunking produced {len(chunks)} chunks")
             return chunks
+
+    def _enforce_size_limits(self, chunks: List[str]) -> List[str]:
+        """Ensure all chunks respect configured size limits deterministically."""
+
+        if not chunks:
+            return []
+
+        max_size = (
+            self.config.max_chunk_size
+            if self.config and self.config.max_chunk_size
+            else settings.MAX_CHUNK_SIZE
+        )
+
+        if not max_size:
+            return chunks
+
+        bounded: List[str] = []
+        for chunk in chunks:
+            if len(chunk) <= max_size:
+                bounded.append(chunk)
+                continue
+            bounded.extend(self._split_chunk_to_size(chunk, max_size))
+        return bounded
+
+    def _split_chunk_to_size(self, chunk: str, max_size: int) -> List[str]:
+        """Split an oversized chunk into deterministic sections no larger than max_size."""
+
+        paragraphs = [para.strip() for para in chunk.split("\n\n") if para.strip()]
+        if not paragraphs:
+            return [chunk[i : i + max_size] for i in range(0, len(chunk), max_size)]
+
+        segments: List[str] = []
+        current: List[str] = []
+        current_len = 0
+
+        for paragraph in paragraphs:
+            addition = ("\n\n" + paragraph) if current else paragraph
+            if current and current_len + len(addition) > max_size:
+                segments.append("\n\n".join(current))
+                current = [paragraph]
+                current_len = len(paragraph)
+            else:
+                if current:
+                    current.append(paragraph)
+                    current_len += len(addition)
+                else:
+                    current = [paragraph]
+                    current_len = len(paragraph)
+
+        if current:
+            segments.append("\n\n".join(current))
+
+        bounded: List[str] = []
+        for segment in segments:
+            if len(segment) <= max_size:
+                bounded.append(segment)
+            else:
+                bounded.extend(
+                    [
+                        segment[i : i + max_size]
+                        for i in range(0, len(segment), max_size)
+                    ]
+                )
+
+        return bounded
 
 
 class ChunkingError(Exception):

@@ -1,6 +1,6 @@
 from prefect import flow, task
 from datetime import datetime
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 import aiofiles
 import asyncio
@@ -14,13 +14,13 @@ from app.services.transform.storage import DocumentStorage
 from app.config import settings
 from app.services.quality.tasks import quality_validation_task
 from app.services.marker.tasks import convert_pdf_to_markdown
-from app.services.chunking.tasks import chunk_document
+from app.services.chunking.tasks import chunk_documents
 from app.services.transform.tasks import construct_knowledge_graph
 from app.services.storage.tasks import store_knowledge_graph
 from app.services.transform.progress_tracker import ProgressTracker
+from app.services.quality.models import QualityResults
 
 from app.services.transform.status_models import TransformationStage, ErrorSummary
-from app.services.chunking.models import ChunkingResult, ChunkMetadata
 from app.services.usage_tracking import usage_tracking_service
 from app.schemas.usage import DocumentUsageRequest, ProcessingStatus
 from PyPDF2 import PdfReader, PdfWriter
@@ -92,6 +92,7 @@ def should_retry_flow_error(exc: Exception) -> bool:
         "billing",
         "api_key_invalid",
         "bamlclienthttperror",
+        "quality validation failed",
     ]
 
     for pattern in non_retryable_patterns:
@@ -189,6 +190,7 @@ async def document_transformation_flow(
         await progress_tracker.start_stage(transform_id, TransformationStage.CHUNK)
         pdf_folder = Path(settings.UPLOAD_DIR) / transform_id / "pdf"
         pdf_folder.mkdir(parents=True, exist_ok=True)
+        text_paths: List[str] = []
         for processed_path in processed_paths:
             if Path(processed_path).suffix.lower() == ".pdf":
                 pdf_splits = split_pdf(
@@ -196,15 +198,23 @@ async def document_transformation_flow(
                 )
                 pdf_files.extend(pdf_splits)
             else:
-                doc_chunk_results = await chunk_documents(
-                    transform_id, processed_path, doc_chunk_results, chunking_config
-                )
+                text_paths.append(processed_path)
+
+        if text_paths:
+            text_chunk_results = await chunk_documents(
+                transform_id=transform_id,
+                processed_paths=text_paths,
+                chunking_config=chunking_config,
+            )
+            doc_chunk_results.extend(text_chunk_results)
             await update_stage_progress(
                 transform_id,
                 TransformationStage.CHUNK,
-                len(doc_chunk_results),
-                len(processed_paths),
+                len(text_chunk_results),
+                len(text_paths),
             )
+        else:
+            logger.info("No textual documents to chunk for transform %s", transform_id)
         await progress_tracker.complete_stage(transform_id, TransformationStage.CHUNK)
 
         # Start TRANSFORM stage
@@ -283,22 +293,33 @@ async def document_transformation_flow(
                     )
 
                     if ontology_record and ontology_record.get("yaml_content"):
-                        # Parse the YAML content to get the actual ontology structure
                         try:
                             ontology_with_rules = yaml.safe_load(
                                 ontology_record["yaml_content"]
                             )
                             logger.info(
-                                f"Successfully loaded ontology with {len(ontology_with_rules.get('entities', {}))} entity types"
+                                "Successfully loaded ontology with %s entity types",
+                                len(ontology_with_rules.get("entities", {})),
                             )
-                        except yaml.YAMLError as e:
-                            logger.error(f"Failed to parse ontology YAML: {e}")
-                            ontology_with_rules = None
+                        except yaml.YAMLError as yaml_error:
+                            logger.error(
+                                "Failed to parse ontology YAML for transform %s: %s",
+                                transform_id,
+                                yaml_error,
+                            )
+                            raise ValueError(
+                                "Quality validation failed: ontology content invalid"
+                            )
                     else:
-                        logger.warning(
-                            f"No ontology found or no content for ontology_id {ontology_id}, user {user_id}"
+                        logger.error(
+                            "No ontology found or empty content for transform %s (ontology_id=%s, user=%s)",
+                            transform_id,
+                            ontology_id,
+                            user_id,
                         )
-                        ontology_with_rules = None
+                        raise ValueError(
+                            "Quality validation failed: ontology not available"
+                        )
 
                     if ontology_with_rules:
                         # Run quality validation
@@ -310,21 +331,57 @@ async def document_transformation_flow(
                         )
 
                         logger.info(
-                            f"Quality validation completed: Score={quality_results.overall_score:.1f}, "
-                            f"Grade={quality_results.grade}, Violations={len(quality_results.violations)}"
+                            "Quality validation completed",
+                            extra={
+                                "transform_id": transform_id,
+                                "score": quality_results.overall_score,
+                                "grade": quality_results.grade,
+                                "violations": len(quality_results.violations),
+                            },
                         )
 
-                        # Check for auto-approval
+                        if quality_results.overall_score < settings.QUALITY_FAIL_SCORE:
+                            logger.error(
+                                "Quality score %.1f below minimum %.1f",
+                                quality_results.overall_score,
+                                settings.QUALITY_FAIL_SCORE,
+                            )
+                            raise ValueError(
+                                "Quality validation failed: score below minimum threshold"
+                            )
+
                         if (
-                            quality_results.overall_score >= 90.0
-                            and not quality_results.requires_review
+                            settings.QUALITY_FAIL_ON_VIOLATION
+                            and quality_results.violations
+                            and quality_results.requires_review
                         ):
+                            logger.error(
+                                "Quality validation found %s violations requiring review",
+                                len(quality_results.violations),
+                            )
+                            raise ValueError(
+                                "Quality validation failed: unresolved violations"
+                            )
+
+                        if quality_results.overall_score >= settings.QUALITY_MIN_SCORE:
                             logger.info(
-                                f"Transform {transform_id} auto-approved for high quality"
+                                f"Transform {transform_id} meets auto-approval threshold"
                             )
                         else:
                             logger.info(
-                                f"Transform {transform_id} requires manual quality review"
+                                f"Transform {transform_id} requires manual review; score %.1f below auto-approve %.1f",
+                                quality_results.overall_score,
+                                settings.QUALITY_MIN_SCORE,
+                            )
+                            await _persist_quality_violations(
+                                transform_id,
+                                user_id,
+                                quality_results,
+                            )
+                            await _persist_quality_violations(
+                                transform_id,
+                                user_id,
+                                quality_results,
                             )
 
                     else:
@@ -332,9 +389,10 @@ async def document_transformation_flow(
                             f"Skipping quality validation for transform {transform_id}: no ontology available"
                         )
                 else:
-                    logger.warning(
+                    logger.error(
                         f"Skipping quality validation for transform {transform_id}: no valid graphs to validate"
                     )
+                    raise ValueError("Quality validation failed: no graphs generated")
             except Exception as e:
                 logger.error(
                     f"Quality validation failed for transform {transform_id}: {e}"
@@ -342,12 +400,12 @@ async def document_transformation_flow(
                 import traceback
 
                 traceback.print_exc()
-                # Continue with storage even if quality validation fails
-                quality_results = None
+                raise
         else:
-            logger.warning(
+            logger.error(
                 f"Skipping quality validation for transform {transform_id}: no graphs generated"
             )
+            raise ValueError("Quality validation failed: no graphs generated")
 
         # Store knowledge graph
         nodes_stored = 0
@@ -567,31 +625,35 @@ async def parse_docs(transform_id, file_paths, metadata) -> List[str]:
     return processed_paths
 
 
-async def chunk_documents(
+async def _persist_quality_violations(
     transform_id: str,
-    processed_path: str,
-    doc_chunk_results: List[Tuple[ChunkingResult, List[ChunkMetadata]]],
-    chunking_config: Optional[Any] = None,
-) -> List[Tuple[ChunkingResult, List[ChunkMetadata]]]:
+    user_id: str,
+    quality_results: QualityResults,
+) -> None:
+    """Persist quality violations for review. Currently logs details; extend to storage later."""
 
-    result, doc_chunks = await chunk_document(
-        file_path=Path(processed_path),
-        transform_id=transform_id,
-        config=chunking_config,
+    if not quality_results or not quality_results.violations:
+        return
+
+    violations_summary = [
+        {
+            "rule": violation.rule_type,
+            "severity": violation.severity,
+            "entity": violation.entity_type,
+            "message": violation.message,
+        }
+        for violation in quality_results.violations
+    ]
+
+    logger.warning(
+        "Quality violations recorded for transform %s",
+        transform_id,
+        extra={
+            "transform_id": transform_id,
+            "user_id": user_id,
+            "violations": violations_summary,
+        },
     )
-    if doc_chunks:
-        doc_chunk_results.append((result, doc_chunks))
-        logger.info(f"Document chunked into {len(doc_chunks)} parts")
-
-        # Verify chunk quality
-        # quality_ok = await check_chunk_quality(doc_chunks)
-        # if not quality_ok:
-        #     logger.warning(
-        #         f"Chunk quality check failed",
-        #         extra={"transform_id": transform_id}
-        #     )
-
-    return doc_chunk_results
 
 
 def split_pdf(input_pdf: str, location: Path, pages=100):
