@@ -6,9 +6,13 @@ class AuthContext(BaseModel):
     """Represents the authenticated user and raw token claims."""
 
     user_id: str = Field(..., description="Clerk user identifier")
-    session_id: Optional[str] = Field(None, description="Active Clerk session identifier")
+    session_id: Optional[str] = Field(
+        None, description="Active Clerk session identifier"
+    )
     token: str = Field(..., description="Original bearer token")
-    claims: Dict[str, Any] = Field(default_factory=dict, description="Decoded JWT claims")
+    claims: Dict[str, Any] = Field(
+        default_factory=dict, description="Decoded JWT claims"
+    )
 
     @property
     def email(self) -> Optional[str]:

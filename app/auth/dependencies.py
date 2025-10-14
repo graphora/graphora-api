@@ -102,7 +102,9 @@ def get_current_auth(
 
     session_id = claims.get("sid") or claims.get("session_id")
 
-    return AuthContext(user_id=user_id, session_id=session_id, token=token, claims=claims)
+    return AuthContext(
+        user_id=user_id, session_id=session_id, token=token, claims=claims
+    )
 
 
 def get_current_user_id(auth: AuthContext = Depends(get_current_auth)) -> str:

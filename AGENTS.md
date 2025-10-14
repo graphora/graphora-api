@@ -4,7 +4,7 @@
 - `app/main.py` boots the FastAPI service and registers routers declared under `app/api/*`.
 - Place HTTP handlers in `app/api/<feature>` packages, keeping shared request/response models in `app/schemas/`.
 - Orchestrate business logic inside `app/services/` (graph, transform, quality); cross-cutting helpers belong in `app/utils/`.
-- Agent workflows and prompt logic live in `app/agents/`; configuration defaults reside in `app/config.py` and `.env` files.
+- Prefect tasks, ingestion flows, and background jobs sit in `app/services/transform/`; configuration defaults reside in `app/config.py` and `.env` files.
 - Migration assets stay in `migrations/`, docs in `docs/`, and the sample system test in `test_quality_system.py` shows expected fixtures.
 
 ## Build, Test, and Development Commands

@@ -1,34 +1,17 @@
-UV ?= uv
-PYTHON ?= $(UV) run python
+.PHONY: dev start test help
 
-.PHONY: install lint format typecheck test compose-up compose-down clean deadcode
+help:
+	@echo "Available commands:"
+	@echo "  make dev    - Start development server with auto-reload"
+	@echo "                (takes ~5s to start, watches app/ directory only)"
+	@echo "  make start  - Start production server without auto-reload"
+	@echo "  make test   - Run tests"
 
-install:
-	$(UV) sync
+dev:
+	LOG_LEVEL=DEBUG uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 
-lint:
-	$(UV) run ruff check .
-	$(UV) run black --check .
-
-format:
-	$(UV) run black .
-
-typecheck:
-	$(UV) run mypy app
+start:
+	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 test:
-	$(UV) run pytest
-
-compose-up:
-	docker compose -f docker-compose.local.yml up -d
-
-compose-down:
-	docker compose -f docker-compose.local.yml down
-
-clean:
-	rm -rf .pytest_cache
-	rm -rf .ruff_cache
-	rm -rf .mypy_cache
-
-deadcode:
-	$(UV) run python scripts/find_dead_code.py
+	uv run pytest
