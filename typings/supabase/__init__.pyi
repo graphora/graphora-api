@@ -1,0 +1,6 @@
+from typing import Any
+
+class Client:
+    ...
+
+def create_client(url: str, key: str, /) -> Client: ...
