@@ -1,4 +1,7 @@
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any
+import asyncio
+from pathlib import Path
+
 import aiofiles
 from app.services.chunking.chunker import DocumentChunker, ChunkingError
 from app.services.chunking.models import ChunkMetadata, ChunkingResult
@@ -53,7 +56,11 @@ async def chunk_document(
         return result
 
     except Exception as e:
-        logger.error(f"Chunking failed: {str(e)}")
+        logger.error(
+            "Chunking failed: %s",
+            str(e),
+            extra={"transform_id": transform_id, "file_path": str(file_path)},
+        )
         raise ChunkingError(f"Failed to chunk document: {str(e)}")
 
 
@@ -94,3 +101,64 @@ async def check_chunk_quality(chunks: List[ChunkMetadata]) -> bool:
     except Exception as e:
         logger.error(f"Quality check failed: {str(e)}")
         return False
+
+
+async def chunk_documents(
+    transform_id: str,
+    processed_paths: List[str],
+    chunking_config: Optional[Any] = None,
+) -> List[Tuple[ChunkingResult, List[ChunkMetadata]]]:
+    """Chunk multiple documents concurrently with deterministic strategy selection."""
+
+    if not processed_paths:
+        return []
+
+    semaphore = asyncio.Semaphore(settings.CHUNKING_MAX_CONCURRENCY)
+    results: List[Tuple[ChunkingResult, List[ChunkMetadata]]] = []
+    failures: List[Tuple[str, str]] = []
+
+    async def _chunk(path: str):
+        strategy_override: Optional[ChunkingStrategy] = None
+        suffix = Path(path).suffix.lower()
+        if suffix in {".md", ".markdown", ".txt"}:
+            strategy_override = ChunkingStrategy.STRUCTURAL
+
+        async with semaphore:
+            return (
+                path,
+                await chunk_document(
+                    file_path=Path(path),
+                    transform_id=transform_id,
+                    config=chunking_config,
+                    strategy_override=strategy_override,
+                ),
+            )
+
+    task_map = {asyncio.create_task(_chunk(path)): path for path in processed_paths}
+
+    for future in asyncio.as_completed(task_map):
+        source_path = task_map[future]
+        try:
+            path, (chunk_result, chunk_metadata) = await future
+            if chunk_result and chunk_metadata:
+                logger.info(
+                    "Chunked %s into %s segments",
+                    Path(path).name,
+                    len(chunk_metadata),
+                )
+                results.append((chunk_result, chunk_metadata))
+            else:
+                failures.append((path, "No chunks produced"))
+        except ChunkingError as exc:
+            failures.append((source_path, str(exc)))
+        except Exception as exc:  # pragma: no cover - defensive
+            failures.append((source_path, str(exc)))
+
+    if failures:
+        logger.warning(
+            "Chunking completed with %s failure(s)",
+            len(failures),
+            extra={"transform_id": transform_id, "failures": failures},
+        )
+
+    return results

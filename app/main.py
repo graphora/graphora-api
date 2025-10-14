@@ -2,12 +2,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-print("Loading Graphora API modules...", flush=True)
-
 from app.config import settings
 from app.utils.logger import logger
 
-print("Loading routers...", flush=True)
 from app.api.ontology import router as ontology_router
 from app.api.transform import router as transform_router
 from app.api.graph import router as graph_router
@@ -21,8 +18,6 @@ from app.api.chat import router as chat_router
 from app.domain.healthcare import router as healthcare_router
 from app.api.quality import router as quality_router
 from app.api.chunking import router as chunking_router
-
-print("Configuring services...", flush=True)
 from app.services.transform.prefect_client import configure_prefect
 
 

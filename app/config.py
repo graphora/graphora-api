@@ -97,6 +97,13 @@ class Settings(BaseSettings):
         default=3, description="Number of retries for extraction task"
     )
     CHUNK_BATCH_SIZE: int = Field(default=5, description="Batch size for chunking")
+    CHUNKING_MAX_CONCURRENCY: int = Field(
+        default=4, description="Maximum number of documents chunked in parallel"
+    )
+    LLM_CACHE_MAX_ENTRIES: int = Field(
+        default=128,
+        description="Maximum number of LLM responses cached per process",
+    )
 
     # Timing Settings
     TIMING_WINDOW_HOURS: int = Field(
@@ -159,6 +166,19 @@ class Settings(BaseSettings):
     )
     LOG_BACKUP_COUNT: int = Field(
         default=5, description="Number of backup log files to keep"
+    )
+
+    QUALITY_MIN_SCORE: float = Field(
+        default=85.0,
+        description="Minimum overall score required to auto-approve a transform",
+    )
+    QUALITY_FAIL_SCORE: float = Field(
+        default=70.0,
+        description="Minimum score required to proceed; below this the transform fails",
+    )
+    QUALITY_FAIL_ON_VIOLATION: bool = Field(
+        default=True,
+        description="Fail the transform when violations are present and auto-approval is off",
     )
 
     SUPABASE_URL: str = Field(default="", description="Supabase URL")

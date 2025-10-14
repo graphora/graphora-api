@@ -1,6 +1,9 @@
-from typing import List, Type, Optional
+from typing import List, Type, Optional, Any
 from datetime import datetime, timezone
 from pathlib import Path
+from collections import OrderedDict
+import asyncio
+from copy import deepcopy
 
 from app.baml_client.type_builder import TypeBuilder
 from pydantic import BaseModel
@@ -27,6 +30,7 @@ from app.utils.llm_helper import (
     create_gemini_client,
     create_baml_client_registry,
 )
+from app.config import settings
 
 dotenv.load_dotenv()
 reset_baml_env_vars(dict(os.environ))
@@ -34,6 +38,49 @@ reset_baml_env_vars(dict(os.environ))
 
 def md5(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()
+
+
+class _AsyncLRUCache:
+    """Simple asyncio-safe LRU cache for storing serialized LLM responses."""
+
+    def __init__(self, max_size: int = 128) -> None:
+        self._max_size = max_size
+        self._data: OrderedDict[str, Any] = OrderedDict()
+        self._lock = asyncio.Lock()
+
+    async def get(self, key: str) -> Optional[Any]:
+        async with self._lock:
+            value = self._data.get(key)
+            if value is None:
+                return None
+            self._data.move_to_end(key)
+            return deepcopy(value)
+
+    async def set(self, key: str, value: Any) -> None:
+        async with self._lock:
+            self._data[key] = deepcopy(value)
+            self._data.move_to_end(key)
+            while len(self._data) > self._max_size:
+                self._data.popitem(last=False)
+
+
+_CACHE_SIZE = getattr(settings, "LLM_CACHE_MAX_ENTRIES", 128)
+_PDF_NODE_CACHE = _AsyncLRUCache(max_size=_CACHE_SIZE)
+_PDF_REL_CACHE = _AsyncLRUCache(max_size=_CACHE_SIZE)
+_CHUNK_NODE_CACHE = _AsyncLRUCache(max_size=_CACHE_SIZE)
+_CHUNK_REL_CACHE = _AsyncLRUCache(max_size=_CACHE_SIZE)
+
+
+def _cache_key(*parts: str) -> str:
+    normalized = "||".join(part or "" for part in parts)
+    return md5(normalized)
+
+
+def _preview(text: Optional[str], limit: int = 200) -> str:
+    if not text:
+        return ""
+    clean = text.replace("\n", " ")
+    return clean[:limit] + ("…" if len(clean) > limit else "")
 
 
 class LLMClient:
@@ -69,10 +116,35 @@ class LLMClient:
         client = create_gemini_client(api_key)
 
         filepath = pathlib.Path(pdf_path)
+        file_bytes = filepath.read_bytes()
         file = types.Part.from_bytes(
-            data=filepath.read_bytes(),
+            data=file_bytes,
             mime_type="application/pdf",
         )
+        content_hash = hashlib.md5(file_bytes).hexdigest()
+        ontology_hash = md5(ontology_yaml or "")
+        context_hash = md5(context or "")
+        cache_key = _cache_key(
+            "pdf-nodes",
+            user_id or "",
+            model_to_use,
+            content_hash,
+            ontology_hash,
+            context_hash,
+        )
+
+        cached = await _PDF_NODE_CACHE.get(cache_key)
+        if cached:
+            logger.debug(
+                "Using cached Gemini PDF entity extraction",
+                extra={
+                    "transform_id": transform_id,
+                    "file": filepath.name,
+                    "cache_key": cache_key,
+                },
+            )
+            return response_model.model_validate(cached)
+
         # Generate a structured response using the Gemini API
         prompt = f"""
         Extract structured information from the PDF file according to the ontology specification.
@@ -104,12 +176,25 @@ class LLMClient:
         </rules>
         """
         request_timestamp = datetime.now(timezone.utc)
+        logger.debug(
+            "Gemini PDF extraction request",
+            extra={
+                "transform_id": transform_id,
+                "file": filepath.name,
+                "prompt_preview": _preview(prompt),
+                "context_length": len(context or ""),
+            },
+        )
         response = client.models.generate_content(
             model=model_to_use,
             contents=[file, prompt],
             config={
                 "response_mime_type": "application/json",
                 "response_schema": response_model,
+                "temperature": 0.0,
+                "top_p": 0.0,
+                "top_k": 1,
+                "candidate_count": 1,
             },
         )
         response_timestamp = datetime.now(timezone.utc)
@@ -144,7 +229,21 @@ class LLMClient:
             ) / response.usage_metadata.total_token_count
         if response.parsed is None or output_perc < 4:
             raise ValueError("Incorrect response parsed")
-        return response.parsed
+        result_model = response.parsed
+        await _PDF_NODE_CACHE.set(cache_key, result_model.model_dump(mode="json"))
+        logger.debug(
+            "Gemini PDF extraction response",
+            extra={
+                "transform_id": transform_id,
+                "file": filepath.name,
+                "response_preview": _preview(getattr(response, "text", "")),
+                "total_tokens": getattr(
+                    response.usage_metadata, "total_token_count", None
+                ),
+                "cache_key": cache_key,
+            },
+        )
+        return result_model
 
     # @cached(ttl=86400,
     #     key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
@@ -176,10 +275,34 @@ class LLMClient:
         client = create_gemini_client(api_key)
 
         filepath = pathlib.Path(pdf_path)
+        file_bytes = filepath.read_bytes()
         file = types.Part.from_bytes(
-            data=filepath.read_bytes(),
+            data=file_bytes,
             mime_type="application/pdf",
         )
+        content_hash = hashlib.md5(file_bytes).hexdigest()
+        ontology_hash = md5(ontology_yaml or "")
+        context_hash = md5(context or "")
+        cache_key = _cache_key(
+            "pdf-relationships",
+            user_id or "",
+            model_to_use,
+            content_hash,
+            ontology_hash,
+            context_hash,
+        )
+
+        cached = await _PDF_REL_CACHE.get(cache_key)
+        if cached:
+            logger.debug(
+                "Using cached Gemini PDF relationship extraction",
+                extra={
+                    "transform_id": transform_id,
+                    "file": filepath.name,
+                    "cache_key": cache_key,
+                },
+            )
+            return response_model.model_validate(cached)
         # Generate a structured response using the Gemini API
         prompt = f"""
         Extract structured information from the PDF file according to the ontology specification.
@@ -208,12 +331,25 @@ class LLMClient:
         - Omit optional fields if information is not clearly present
         """
         request_timestamp = datetime.now(timezone.utc)
+        logger.debug(
+            "Gemini PDF relationship request",
+            extra={
+                "transform_id": transform_id,
+                "file": filepath.name,
+                "prompt_preview": _preview(prompt),
+                "context_length": len(context or ""),
+            },
+        )
         response = client.models.generate_content(
             model=model_to_use,
             contents=[file, prompt],
             config={
                 "response_mime_type": "application/json",
                 "response_schema": response_model,
+                "temperature": 0.0,
+                "top_p": 0.0,
+                "top_k": 1,
+                "candidate_count": 1,
             },
         )
         response_timestamp = datetime.now(timezone.utc)
@@ -248,7 +384,21 @@ class LLMClient:
             ) / response.usage_metadata.total_token_count
         if response.parsed is None or output_perc < 4:
             raise ValueError("Incorrect response parsed")
-        return response.parsed
+        result_model = response.parsed
+        await _PDF_REL_CACHE.set(cache_key, result_model.model_dump(mode="json"))
+        logger.debug(
+            "Gemini PDF relationship response",
+            extra={
+                "transform_id": transform_id,
+                "file": filepath.name,
+                "response_preview": _preview(getattr(response, "text", "")),
+                "total_tokens": getattr(
+                    response.usage_metadata, "total_token_count", None
+                ),
+                "cache_key": cache_key,
+            },
+        )
+        return result_model
 
     # @cached(ttl=86400,
     #     key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
@@ -270,11 +420,44 @@ class LLMClient:
         api_key, model_name = await get_user_llm_credentials(user_id)
         client_registry = create_baml_client_registry(api_key, model_name)
 
-        # Use BAML tracking if user_id provided
+        chunk_hash = md5(chunk)
+        ontology_hash = md5(ontology_yaml or "")
+        context_hash = md5(context or "")
+        cache_key = _cache_key(
+            "chunk-nodes",
+            user_id or "",
+            model_name,
+            chunk_hash,
+            context_hash,
+            ontology_hash,
+        )
+
+        cached = await _CHUNK_NODE_CACHE.get(cache_key)
+        if cached:
+            logger.debug(
+                "Using cached chunk entity extraction",
+                extra={
+                    "transform_id": transform_id,
+                    "chunk_chars": len(chunk),
+                    "cache_key": cache_key,
+                },
+            )
+            return response_model.model_validate(cached)
+
+        logger.debug(
+            "BAML chunk entity extraction request",
+            extra={
+                "transform_id": transform_id,
+                "chunk_preview": _preview(chunk),
+                "context_length": len(context or ""),
+                "ontology_hash": ontology_hash,
+            },
+        )
+
         if user_id:
             from app.utils.baml_usage_tracker import track_baml_extract_nodes_from_chunk
 
-            return await track_baml_extract_nodes_from_chunk(
+            result_model = await track_baml_extract_nodes_from_chunk(
                 user_id=user_id,
                 chunk=chunk,
                 response_model=response_model,
@@ -285,14 +468,27 @@ class LLMClient:
                 client_registry=client_registry,
             )
         else:
-            # Use dynamic client registry
             tb = TypeBuilder()
             res = build_from_pydantic(response_model, tb)
             tb.DynamicContainer.add_property("data", res)
             result = b.ExtractNodesFromChunk(
-                chunk, context, {"tb": tb, "client_registry": client_registry}
+                chunk,
+                context,
+                {"tb": tb, "client_registry": client_registry},
             )
-            return response_model.model_validate(result.data)
+            result_model = response_model.model_validate(result.data)
+
+        await _CHUNK_NODE_CACHE.set(cache_key, result_model.model_dump(mode="json"))
+        logger.debug(
+            "BAML chunk entity extraction response",
+            extra={
+                "transform_id": transform_id,
+                "chunk_chars": len(chunk),
+                "cached": False,
+                "cache_key": cache_key,
+            },
+        )
+        return result_model
 
     # @cached(ttl=86400,
     #     key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")
@@ -314,13 +510,46 @@ class LLMClient:
         api_key, model_name = await get_user_llm_credentials(user_id)
         client_registry = create_baml_client_registry(api_key, model_name)
 
-        # Use BAML tracking if user_id provided
+        chunk_hash = md5(chunk)
+        ontology_hash = md5(ontology_yaml or "")
+        context_hash = md5(context or "")
+        cache_key = _cache_key(
+            "chunk-relationships",
+            user_id or "",
+            model_name,
+            chunk_hash,
+            context_hash,
+            ontology_hash,
+        )
+
+        cached = await _CHUNK_REL_CACHE.get(cache_key)
+        if cached:
+            logger.debug(
+                "Using cached chunk relationship extraction",
+                extra={
+                    "transform_id": transform_id,
+                    "chunk_chars": len(chunk),
+                    "cache_key": cache_key,
+                },
+            )
+            return response_model.model_validate(cached)
+
+        logger.debug(
+            "BAML chunk relationship extraction request",
+            extra={
+                "transform_id": transform_id,
+                "chunk_preview": _preview(chunk),
+                "context_length": len(context or ""),
+                "ontology_hash": ontology_hash,
+            },
+        )
+
         if user_id:
             from app.utils.baml_usage_tracker import (
                 track_baml_extract_relationships_from_chunk,
             )
 
-            return await track_baml_extract_relationships_from_chunk(
+            result_model = await track_baml_extract_relationships_from_chunk(
                 user_id=user_id,
                 chunk=chunk,
                 response_model=response_model,
@@ -331,14 +560,25 @@ class LLMClient:
                 client_registry=client_registry,
             )
         else:
-            # Use dynamic client registry
             tb = TypeBuilder()
             res = build_from_pydantic(response_model, tb)
             tb.DynamicContainer.add_property("data", res)
             result = b.ExtractRelationshipsFromChunk(
                 chunk, context, {"tb": tb, "client_registry": client_registry}
             )
-            return response_model.model_validate(result.data)
+            result_model = response_model.model_validate(result.data)
+
+        await _CHUNK_REL_CACHE.set(cache_key, result_model.model_dump(mode="json"))
+        logger.debug(
+            "BAML chunk relationship extraction response",
+            extra={
+                "transform_id": transform_id,
+                "chunk_chars": len(chunk),
+                "cached": False,
+                "cache_key": cache_key,
+            },
+        )
+        return result_model
 
     # @cached(ttl=86400,
     #     key_builder=lambda f, *args, **kwargs: f"{md5(kwargs['rel_type']+':'+kwargs['source_type']+':'+kwargs['source_entities']+':'+kwargs['target_type']+':'+kwargs['target_entities'])}")
