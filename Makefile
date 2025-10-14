@@ -1,4 +1,4 @@
-.PHONY: dev start test help lint format
+.PHONY: dev start test help lint format deadcode
 
 help:
 	@echo "Available commands:"
@@ -8,6 +8,7 @@ help:
 	@echo "  make test   - Run tests"
 	@echo "  make lint   - Run Ruff and Black checks"
 	@echo "  make format - Format the codebase with Black"
+	@echo "  make deadcode - Run the dead code scanner"
 
 dev:
 	LOG_LEVEL=DEBUG uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
@@ -24,3 +25,6 @@ lint:
 
 format:
 	uv run black .
+
+deadcode:
+	uv run python scripts/find_dead_code.py

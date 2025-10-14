@@ -181,6 +181,22 @@ class Settings(BaseSettings):
         description="Fail the transform when violations are present and auto-approval is off",
     )
 
+    MERGE_ID_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.8,
+        description="Minimum confidence required to treat a production match as authoritative when reconciling IDs",
+    )
+
+    MERGE_NODE_BATCH_SIZE: int = Field(
+        default=250,
+        ge=1,
+        description="Number of nodes to persist per batch when writing merged graphs",
+    )
+    MERGE_REL_BATCH_SIZE: int = Field(
+        default=500,
+        ge=1,
+        description="Number of relationships to persist per batch when writing merged graphs",
+    )
+
     SUPABASE_URL: str = Field(default="", description="Supabase URL")
     SUPABASE_KEY: str = Field(default="", description="Supabase key")
 

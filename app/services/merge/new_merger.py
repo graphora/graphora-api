@@ -1,5 +1,4 @@
 from app.baml_client.types import ResolutionStrategy
-from app.services.transform.helpers import deduplicate_entities_with_splink
 from prefect import flow, task
 from app.services.storage.interface import GraphStorageInterface
 from app.services.storage.neo4j import Neo4jStorage
@@ -12,9 +11,17 @@ import logging
 import time
 import traceback
 import copy
-from app.services.merge.models import EntityMappingResult, EntityMatch, MatchStrategy
-from app.services.merge.models import ChangeLog, MergeStatus
-from typing import Dict, Any, Optional, Tuple, List
+from app.services.merge.models import (
+    EntityMappingResult,
+    EntityMatch,
+    MatchStrategy,
+    ChangeLog,
+    ChangeLogRecord,
+    ChangeLogResolution,
+    MergePerformanceMetrics,
+    MergeStatus,
+)
+from typing import Dict, Any, Optional, Tuple, List, Callable, Iterable
 import uuid
 import json
 from datetime import datetime
@@ -47,6 +54,14 @@ def custom_cache_key_fn(context, parameters):
     return str(hash(frozenset(safe_params.items())))
 
 
+def _safe_supabase_call(description: str, func: Callable[[], Any]):
+    try:
+        return func()
+    except Exception as exc:  # pragma: no cover - external service
+        logger.error("Supabase %s failed: %s", description, exc)
+        raise
+
+
 @flow(
     name="graph-merge-flow",
     description="Merge Staging to Production knowledge graph",
@@ -57,6 +72,8 @@ def custom_cache_key_fn(context, parameters):
 async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id: str):
     """Merge two graphs"""
     start_time = time.time()
+    flow_timer = time.perf_counter()
+    metrics = MergePerformanceMetrics()
 
     # Start audit trail for merge operation
     audit_id = await audit_service.log_operation_start(
@@ -73,9 +90,15 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
         ontology = ontology_parser.parsed_ontology
 
         # Step-1: Extract Staging Graph (using user's staging database)
+        stage_timer = time.perf_counter()
         staging_graph: GraphResponse = await _extract_staging_graph(
             transform_id, user_id
         )
+        metrics.record_stage(
+            "extract_staging_graph", (time.perf_counter() - stage_timer) * 1000
+        )
+        metrics.staging_nodes = staging_graph.total_nodes
+        metrics.staging_relationships = staging_graph.total_edges
         merged_graph = copy.deepcopy(staging_graph)
 
         # Check merge status
@@ -105,6 +128,7 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
             _update_merge_status(merge_id, MergeStatus.STARTED)
 
         # Step-2: Extract Production Graph
+        stage_timer = time.perf_counter()
         prod_mapping_result: EntityMappingResult = await _map_production_entities(
             merged_graph,
             ontology,
@@ -112,7 +136,20 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
             merge_id=merge_id,
             transform_id=transform_id,
         )
+        metrics.record_stage(
+            "map_production_entities", (time.perf_counter() - stage_timer) * 1000
+        )
         logger.debug(f"Production mapping result: {prod_mapping_result}")
+
+        stage_timer = time.perf_counter()
+        _apply_id_reconciliation(
+            merged_graph,
+            prod_mapping_result,
+            confidence_threshold=settings.MERGE_ID_CONFIDENCE_THRESHOLD,
+        )
+        metrics.record_stage(
+            "id_reconciliation", (time.perf_counter() - stage_timer) * 1000
+        )
 
         # Step-3: Compare Graphs & Identify Conflicts
         change_logs = []
@@ -141,6 +178,8 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
                         staging_node=staging_node,
                         prod_node=match.best_match,
                         prop_changes=prop_changes,
+                        match_confidence=match.match_confidence,
+                        match_strategy=match.match_strategy,
                     )
                     change_logs.append(change_log)
                     logger.info(
@@ -154,17 +193,22 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
         logger.info(
             f"Conflict detection summary: {conflicts_detected} conflicts found in {total_comparisons} node comparisons"
         )
+        metrics.conflicts_detected = conflicts_detected
 
         # Add detailed debugging for mapping results
         _log_mapping_debug_info(prod_mapping_result, merged_graph.nodes, ontology)
 
         change_log_by_entity_type = _group_changes_by_entity_type(change_logs)
+        stage_timer = time.perf_counter()
         high_conf_changes, changes_for_human_review = await _classify_changes(
             ontology_id,
             change_log_by_entity_type,
             merge_id=merge_id,
             transform_id=transform_id,
             user_id=user_id,
+        )
+        metrics.record_stage(
+            "classify_changes", (time.perf_counter() - stage_timer) * 1000
         )
 
         if changes_for_human_review:
@@ -190,6 +234,8 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
                         "auto_resolved_count": len(high_conf_changes),
                     },
                 )
+            metrics.total_duration_ms = (time.perf_counter() - flow_timer) * 1000
+            _record_merge_metrics(merge_id, metrics)
         else:
             _update_merge_status(merge_id, MergeStatus.AUTO_RESOLVE)
             for change_log in high_conf_changes:
@@ -204,7 +250,24 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
                     merged_graph,
                 )
             _update_merge_status(merge_id, MergeStatus.MERGE_IN_PROGRESS)
-            await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
+            persist_timer = time.perf_counter()
+            persistence_summary = await _persist_to_prod(
+                merged_graph,
+                merge_id,
+                transform_id,
+                user_id,
+                metrics=metrics,
+            )
+            metrics.record_stage(
+                "persist_to_prod", (time.perf_counter() - persist_timer) * 1000
+            )
+            metrics.total_duration_ms = (time.perf_counter() - flow_timer) * 1000
+            _add_ingestion_stats(
+                merge_id,
+                persistence_summary["nodes"],
+                persistence_summary["edges"],
+                metrics,
+            )
 
             # Create separate merge_completed audit record for auto-resolution
             completion_audit_id = await audit_service.log_operation_start(
@@ -282,14 +345,22 @@ def _reconcile_graphs(
 
 
 def log_merge_failure(merge_id: str, error: str):
-    supabase.table("merge_status").update(
-        {"status": MergeStatus.FAILED, "error": error}
-    ).eq("merge_id", merge_id).execute()
+    _safe_supabase_call(
+        "log_merge_failure",
+        lambda: supabase.table("merge_status")
+        .update({"status": MergeStatus.FAILED, "error": error})
+        .eq("merge_id", merge_id)
+        .execute(),
+    )
 
 
 def get_merge_status(merge_id: str) -> MergeStatus:
-    merge_status = (
-        supabase.table("merge_status").select("*").eq("merge_id", merge_id).execute()
+    merge_status = _safe_supabase_call(
+        "get_merge_status",
+        lambda: supabase.table("merge_status")
+        .select("*")
+        .eq("merge_id", merge_id)
+        .execute(),
     )
     if not merge_status.data:
         return MergeStatus.NOT_FOUND
@@ -297,37 +368,42 @@ def get_merge_status(merge_id: str) -> MergeStatus:
 
 
 def get_human_review_items(merge_id: str) -> List[ChangeLog]:
-    change_logs_data = (
-        supabase.table("change_logs")
+    change_logs_data = _safe_supabase_call(
+        "get_human_review_items",
+        lambda: supabase.table("change_logs")
         .select("*")
         .eq("merge_id", merge_id)
         .eq("need_human_review", True)
-        .execute()
+        .execute(),
     )
     change_logs = []
     for change_log in change_logs_data.data:
+        record = ChangeLogRecord.from_supabase(change_log)
+        prop_changes = {
+            key: (record.changed_props.get(key), record.previous_props.get(key))
+            for key in record.changed_props
+        }
+
         change_logs.append(
             ChangeLog(
-                id=change_log["id"],
-                prop_changes={
-                    k: (
-                        change_log["changed_props"][k],
-                        change_log["previous_props"].get(k, None),
-                    )
-                    for k in change_log["changed_props"]
-                },
+                id=record.id,
+                prop_changes=prop_changes,
                 staging_node=Node(
-                    id=change_log["node_id"],
-                    label=change_log["node_type"],
-                    type=change_log["node_type"],
-                    properties=change_log["changed_props"],
+                    id=record.node_id,
+                    label=record.node_type,
+                    type=record.node_type,
+                    properties=record.changed_props,
                 ),
                 prod_node=Node(
-                    id=change_log["prod_node_id"],
-                    label=change_log["node_type"],
-                    type=change_log["node_type"],
-                    properties=change_log["previous_props"],
+                    id=record.prod_node_id,
+                    label=record.node_type,
+                    type=record.node_type,
+                    properties=record.previous_props,
                 ),
+                created_at=record.created_at or datetime.utcnow(),
+                need_human_review=record.need_human_review,
+                match_confidence=record.match_confidence,
+                match_strategy=record.match_strategy,
             )
         )
     return change_logs
@@ -354,22 +430,24 @@ async def apply_resolution(
     Returns:
         True if the resolution was applied successfully, False otherwise
     """
-    change_log = (
-        supabase.table("change_logs")
+    change_log = _safe_supabase_call(
+        "fetch_change_log",
+        lambda: supabase.table("change_logs")
         .select("*")
         .eq("merge_id", merge_id)
         .eq("id", change_log_id)
-        .execute()
+        .execute(),
     )
     if len(change_log.data) > 0:
-        conflict_data = change_log.data[0]
+        conflict_record = ChangeLogRecord.from_supabase(change_log.data[0])
 
         # Get ontology_id from merge_status
-        merge_info = (
-            supabase.table("merge_status")
+        merge_info = _safe_supabase_call(
+            "fetch_merge_info",
+            lambda: supabase.table("merge_status")
             .select("ontology_id")
             .eq("merge_id", merge_id)
-            .execute()
+            .execute(),
         )
         if not merge_info.data:
             logger.error(f"Could not find merge info for merge_id {merge_id}")
@@ -382,22 +460,23 @@ async def apply_resolution(
             merge_id=merge_id,
             change_log_id=change_log_id,
             ontology_id=ontology_id,
-            node_id=conflict_data["node_id"],
-            node_type=conflict_data["node_type"],
-            previous_props=conflict_data["previous_props"],
-            changed_props=conflict_data["changed_props"],
+            node_id=conflict_record.node_id,
+            node_type=conflict_record.node_type,
+            previous_props=conflict_record.previous_props,
+            changed_props=conflict_record.changed_props,
             resolved_props=resolved_props,
             resolution=resolution,
             learning_comment=learning_comment,
         )
 
         # Check if all conflicts are resolved
-        unresolved_conflicts = (
-            supabase.table("change_logs")
+        unresolved_conflicts = _safe_supabase_call(
+            "fetch_unresolved_conflicts",
+            lambda: supabase.table("change_logs")
             .select("*")
             .eq("merge_id", merge_id)
             .eq("need_human_review", True)
-            .execute()
+            .execute(),
         )
         if len(unresolved_conflicts.data) == 0:
             _update_merge_status(merge_id, MergeStatus.READY_TO_MERGE)
@@ -596,7 +675,9 @@ async def _map_production_entities(
         candidates = []
 
         for node in staging_graph.nodes:
-            match = await _get_matching_nodes(storage, node, similarity_threshold)
+            match = await _get_matching_nodes(
+                storage, node, ontology, similarity_threshold
+            )
             matches[node.id] = match
             if match.production_matches:
                 if match.best_match is None:
@@ -645,29 +726,6 @@ async def _map_production_entities(
                     )
                     matches[match.staging_node_id].best_match = best_match
 
-            # For each staging node, use splink to find the best production match
-            for node_id, match_info in matches.items():
-                # Skip if we already have a best match from BAML
-                if match_info.best_match:
-                    continue
-
-                # Get the staging node and its production candidates
-                staging_node = next(
-                    (n for n in staging_graph.nodes if n.id == node_id), None
-                )
-                if not staging_node or not match_info.production_matches:
-                    continue
-
-                # Use splink to find the best match
-                best_match = await _find_best_production_match_with_splink(
-                    staging_node=staging_node,
-                    production_candidates=match_info.production_matches,
-                    ontology=ontology,
-                )
-
-                if best_match:
-                    matches[node_id].best_match = best_match
-
         duration_ms = (time.time() - start_time) * 1000
         logger.info(
             f"Mapped {matched_count}/{len(staging_graph.nodes)} entities "
@@ -684,77 +742,6 @@ async def _map_production_entities(
     except Exception as e:
         logger.error(f"Failed to map production entities: {str(e)}")
         raise
-
-
-async def _find_best_production_match_with_splink(
-    staging_node: Node,
-    production_candidates: List[Node],
-    ontology: Dict[str, Any],
-    threshold: float = 0.95,
-) -> Optional[Node]:
-    """
-    Use splink deduplication to find the best matching production node for a staging node.
-
-    Args:
-        staging_node: The staging node to find a match for
-        production_candidates: List of potential production node matches
-        ontology: The ontology definition
-        threshold: Match probability threshold (default: 0.95)
-
-    Returns:
-        The best matching production node or None if no match found
-    """
-    if not production_candidates:
-        return None
-
-    # Combine staging node with production candidates for deduplication
-    all_nodes = [staging_node] + production_candidates
-
-    # Run splink deduplication
-    deduplicated_nodes, _ = await deduplicate_entities_with_splink(
-        entities=all_nodes, threshold=threshold, parsed_ontology=ontology
-    )
-
-    # If the number of deduplicated nodes is less than the original count,
-    # it means some nodes were considered duplicates
-    if len(deduplicated_nodes) < len(all_nodes):
-        # Find which production node was merged with the staging node
-        staging_node_id = staging_node.id
-
-        # Check if the staging node ID is still in the deduplicated results
-        staging_node_exists = any(
-            node.id == staging_node_id for node in deduplicated_nodes
-        )
-
-        if not staging_node_exists:
-            # If staging node was merged with a production node, find which one
-            # by checking which production node is still in the results
-            for prod_node in production_candidates:
-                if any(node.id == prod_node.id for node in deduplicated_nodes):
-                    logger.info(
-                        f"Splink found match: staging node {staging_node_id} -> production node {prod_node.id}"
-                    )
-                    return prod_node
-        else:
-            # If staging node still exists, check if any production nodes were removed
-            # (meaning they were considered duplicates of something else)
-            remaining_prod_ids = {
-                node.id for node in deduplicated_nodes if node.id != staging_node_id
-            }
-            removed_prod_ids = {
-                node.id for node in production_candidates
-            } - remaining_prod_ids
-
-            if removed_prod_ids:
-                # Find the first production node that was removed (considered a duplicate)
-                for prod_node in production_candidates:
-                    if prod_node.id not in remaining_prod_ids:
-                        logger.info(
-                            f"Splink found match: staging node {staging_node_id} -> production node {prod_node.id}"
-                        )
-                        return prod_node
-
-    return None
 
 
 def _merge_nodes(
@@ -879,6 +866,109 @@ def _merge_nodes(
     return merged_graph
 
 
+def _apply_id_reconciliation(
+    merged_graph: GraphResponse,
+    mapping_result: EntityMappingResult,
+    confidence_threshold: float,
+) -> None:
+    """Update staging node IDs to production IDs where matches are confident."""
+
+    id_map: Dict[str, str] = {}
+    target_claims: Dict[str, str] = {}
+
+    for staging_id, match in mapping_result.matches.items():
+        if not match.best_match:
+            continue
+        if match.match_confidence < confidence_threshold:
+            logger.debug(
+                "Skipping ID reconciliation for %s: confidence %.2f below threshold %.2f",
+                staging_id,
+                match.match_confidence,
+                confidence_threshold,
+            )
+            continue
+
+        target_id = match.best_match.id
+        previous_staging = target_claims.get(target_id)
+        if previous_staging:
+            prev_conf = mapping_result.matches[previous_staging].match_confidence
+            if match.match_confidence > prev_conf:
+                logger.warning(
+                    "Reassigning production node %s from staging %s to %s based on higher confidence %.2f > %.2f",
+                    target_id,
+                    previous_staging,
+                    staging_id,
+                    match.match_confidence,
+                    prev_conf,
+                )
+                id_map.pop(previous_staging, None)
+                id_map[staging_id] = target_id
+                target_claims[target_id] = staging_id
+            else:
+                logger.warning(
+                    "Multiple staging nodes map to production %s; keeping %s (confidence %.2f) over %s (confidence %.2f)",
+                    target_id,
+                    previous_staging,
+                    prev_conf,
+                    staging_id,
+                    match.match_confidence,
+                )
+                continue
+        else:
+            id_map[staging_id] = target_id
+            target_claims[target_id] = staging_id
+
+        match.metadata["id_reconciled"] = True
+        match.metadata["mapped_to"] = target_id
+    for staging_id, match in mapping_result.matches.items():
+        if staging_id not in id_map:
+            match.metadata.setdefault("id_reconciled", False)
+
+    if not id_map:
+        return
+
+    logger.info("Reconciling %s staging IDs with production IDs", len(id_map))
+
+    # Update nodes
+    reconciled_nodes: Dict[str, Node] = {}
+    updated_nodes: List[Node] = []
+    for node in merged_graph.nodes:
+        original_id = node.id
+        if original_id in id_map:
+            node.properties.setdefault("_staging_id", original_id)
+            node.id = id_map[original_id]
+
+        existing = reconciled_nodes.get(node.id)
+        if existing:
+            existing.properties = {**node.properties, **existing.properties}
+        else:
+            reconciled_nodes[node.id] = node
+            updated_nodes.append(node)
+
+    merged_graph.nodes = updated_nodes
+
+    # Update edges to reference reconciled IDs
+    for edge in merged_graph.edges:
+        if edge.source in id_map:
+            edge.source = id_map[edge.source]
+        if edge.target in id_map:
+            edge.target = id_map[edge.target]
+
+    # Deduplicate edges after ID updates
+    edge_seen: Dict[Tuple[str, str, str], Edge] = {}
+    deduped_edges: List[Edge] = []
+    for edge in merged_graph.edges:
+        key = (edge.source, edge.target, edge.type)
+        existing = edge_seen.get(key)
+        if existing:
+            existing.properties = {**edge.properties, **existing.properties}
+        else:
+            edge_seen[key] = edge
+            deduped_edges.append(edge)
+
+    merged_graph.edges = deduped_edges
+
+
 def _update_to_prod_node_id_in_edges(
     old_id: str, new_id: str, merged_graph: GraphResponse
 ):
@@ -892,7 +982,10 @@ def _update_to_prod_node_id_in_edges(
 
 
 async def _get_matching_nodes(
-    storage: GraphStorageInterface, node: Node, similarity_threshold: float
+    storage: GraphStorageInterface,
+    node: Node,
+    ontology: Dict[str, Any],
+    similarity_threshold: float,
 ) -> EntityMatch:
     """Find matching nodes in production based on node type and properties"""
     try:
@@ -905,19 +998,51 @@ async def _get_matching_nodes(
             f"Finding matches for staging node {node.id} ({node.type}) with properties: {node.properties}"
         )
 
-        # Strategy 1: Try exact name matching first
-        if "name" in node.properties and node.properties["name"]:
+        entity_props = (
+            ontology.get("entities", {}).get(node.type, {}).get("properties", {})
+        )
+        matched_property = None
+
+        # Strategy 1: Try unique property matching first
+        unique_props = [
+            (prop_name, node.properties.get(prop_name))
+            for prop_name, prop_def in entity_props.items()
+            if prop_def.get("unique") and node.properties.get(prop_name)
+        ]
+        for prop_name, prop_value in unique_props:
             matches = await storage.find_nodes_by_property_value(
                 label=node.label,
-                property_name="name",
-                property_value=node.properties["name"],
+                property_name=prop_name,
+                property_value=prop_value,
             )
             logger.debug(
-                f"Name-based matching found {len(matches)} candidates for '{node.properties['name']}'"
+                "Unique-property matching on %s=%s found %s candidate(s)",
+                prop_name,
+                prop_value,
+                len(matches),
             )
             if matches:
-                best_match = matches[0]
-                strategy = MatchStrategy.EXACT_NAME
+                strategy = MatchStrategy.UNIQUE_PROPERTY
+                best_match = matches[0] if len(matches) == 1 else None
+                matched_property = prop_name
+                break
+
+        # If no unique property match, try exact name
+        if not matches:
+            # Strategy 1: Try exact name matching first
+            if "name" in node.properties and node.properties["name"]:
+                matches = await storage.find_nodes_by_property_value(
+                    label=node.label,
+                    property_name="name",
+                    property_value=node.properties["name"],
+                )
+                logger.debug(
+                    f"Name-based matching found {len(matches)} candidates for '{node.properties['name']}'"
+                )
+                if matches:
+                    best_match = matches[0] if len(matches) == 1 else None
+                    strategy = MatchStrategy.EXACT_NAME
+                    matched_property = "name"
 
         # Strategy 2: Try ID-based matching if no name matches
         if not matches and "id" in node.properties and node.properties["id"]:
@@ -930,8 +1055,9 @@ async def _get_matching_nodes(
                 f"ID-based matching found {len(matches)} candidates for ID '{node.properties['id']}'"
             )
             if matches:
-                best_match = matches[0]
+                best_match = matches[0] if len(matches) == 1 else None
                 strategy = MatchStrategy.EXACT_NAME
+                matched_property = "id"
 
         # Strategy 3: Use property similarity as fallback
         if not matches:
@@ -967,12 +1093,15 @@ async def _get_matching_nodes(
             production_matches=matches,
             best_match=best_match,
             match_confidence=confidence,
-            match_strategy=strategy,
+            match_strategy=strategy.value,
             metadata={
                 "total_matches": len(matches),
                 "node_label": node.label,
-                "matching_property": (
-                    "name" if "name" in node.properties else "similarity"
+                "matching_property": matched_property
+                or (
+                    "name"
+                    if "name" in node.properties and node.properties.get("name")
+                    else "similarity"
                 ),
             },
         )
@@ -984,8 +1113,12 @@ async def _get_matching_nodes(
 
 @task(name="persist_to_prod")
 async def _persist_to_prod(
-    merged_graph: GraphResponse, merge_id: str, transform_id: str, user_id: str
-) -> Tuple[StorageBatchResult, StorageBatchResult]:
+    merged_graph: GraphResponse,
+    merge_id: str,
+    transform_id: str,
+    user_id: str,
+    metrics: Optional[MergePerformanceMetrics] = None,
+) -> Dict[str, Any]:
     # Get user's production database configuration
     user_config = await UserDatabaseService.get_user_config(user_id)
 
@@ -996,13 +1129,21 @@ async def _persist_to_prod(
         database="neo4j",  # Default database name
     )
 
-    # Store nodes first
-    node_batch_result = await storage.store_nodes(
-        merged_graph.nodes, 0, transform_id, merge_id
-    )
-    if not node_batch_result.success:
-        logger.error(f"Failed to persist nodes: {node_batch_result.error}")
-        raise Exception(f"Node persistence failed: {node_batch_result.error}")
+    node_results: List[StorageBatchResult] = []
+    for batch_index, chunk in enumerate(
+        _iter_chunks(merged_graph.nodes, settings.MERGE_NODE_BATCH_SIZE)
+    ):
+        batch_timer = time.perf_counter()
+        result = await storage.store_nodes(chunk, batch_index, transform_id, merge_id)
+        node_results.append(result)
+
+        batch_duration = (time.perf_counter() - batch_timer) * 1000
+        if metrics:
+            metrics.record_node_batch(batch_duration, result.items_processed)
+
+        if not result.success:
+            logger.error(f"Failed to persist node batch {batch_index}: {result.error}")
+            raise Exception(f"Node persistence failed: {result.error}")
 
     # Create a node map from persisted nodes
     node_map = {n.id: n for n in merged_graph.nodes}
@@ -1028,28 +1169,134 @@ async def _persist_to_prod(
             )
 
     # Store relationships with versioning logic
-    edge_batch_result = await storage.store_relationships(
-        edges_as_rel_instances, 0, transform_id, merge_id, merge=True
-    )
-    if not edge_batch_result.success:
-        logger.error(f"Failed to persist edges: {edge_batch_result.error}")
-        raise Exception(f"Edge persistence failed: {edge_batch_result.error}")
+    edge_results: List[StorageBatchResult] = []
+    for batch_index, chunk in enumerate(
+        _iter_chunks(edges_as_rel_instances, settings.MERGE_REL_BATCH_SIZE)
+    ):
+        batch_timer = time.perf_counter()
+        result = await storage.store_relationships(
+            chunk, batch_index, transform_id, merge_id, merge=True
+        )
+        edge_results.append(result)
 
-    # Update merge status
-    _add_ingestion_stats(merge_id, node_batch_result, edge_batch_result)
-    return node_batch_result, edge_batch_result
+        batch_duration = (time.perf_counter() - batch_timer) * 1000
+        if metrics:
+            metrics.record_relationship_batch(batch_duration, result.items_processed)
+
+        if not result.success:
+            logger.error(
+                f"Failed to persist relationship batch {batch_index}: {result.error}"
+            )
+            raise Exception(f"Edge persistence failed: {result.error}")
+
+    node_summary = _summarize_batch_results(node_results)
+    edge_summary = _summarize_batch_results(edge_results)
+
+    return {
+        "nodes": node_summary,
+        "edges": edge_summary,
+    }
 
 
-def _add_ingestion_stats(merge_id, node_batch_result, edge_batch_result):
-    supabase.table("merge_status").update(
-        {
-            "statistics": {
-                "nodes_stored": node_batch_result.model_dump(),
-                "edges_stored": edge_batch_result.model_dump(),
-            },
-            "status": MergeStatus.COMPLETED,
+def _iter_chunks(items: List[Any], chunk_size: int) -> Iterable[List[Any]]:
+    """Yield fixed-size chunks from a list."""
+    if chunk_size <= 0:
+        yield items
+        return
+
+    for index in range(0, len(items), chunk_size):
+        yield items[index : index + chunk_size]
+
+
+def _summarize_batch_results(results: List[StorageBatchResult]) -> Dict[str, Any]:
+    """Create a consolidated view of batch execution results."""
+
+    if not results:
+        return {
+            "total_items": 0,
+            "total_time_ms": 0.0,
+            "batches": [],
+            "success": True,
+            "warnings": [],
         }
-    ).eq("merge_id", merge_id).execute()
+
+    total_items = sum(result.items_processed for result in results)
+    total_time_ms = sum(result.processing_time_ms for result in results)
+    success = all(result.success for result in results)
+    warnings: List[str] = []
+    for result in results:
+        warnings.extend(result.warnings)
+
+    return {
+        "total_items": total_items,
+        "total_time_ms": total_time_ms,
+        "batches": [result.model_dump() for result in results],
+        "success": success,
+        "warnings": warnings,
+    }
+
+
+def _add_ingestion_stats(
+    merge_id: str,
+    node_summary: Dict[str, Any],
+    edge_summary: Dict[str, Any],
+    metrics: Optional[MergePerformanceMetrics] = None,
+) -> None:
+    statistics = {
+        "nodes_stored": node_summary,
+        "edges_stored": edge_summary,
+    }
+    if metrics:
+        statistics["performance"] = metrics.model_dump(mode="json")
+    else:
+        existing_stats = _safe_supabase_call(
+            "fetch_existing_statistics",
+            lambda: supabase.table("merge_status")
+            .select("statistics")
+            .eq("merge_id", merge_id)
+            .execute(),
+        )
+        if existing_stats.data:
+            performance = (
+                existing_stats.data[0].get("statistics", {}).get("performance")
+            )
+            if performance is not None:
+                statistics["performance"] = performance
+
+    _safe_supabase_call(
+        "update_merge_statistics",
+        lambda: supabase.table("merge_status")
+        .update({"statistics": statistics, "status": MergeStatus.COMPLETED})
+        .eq("merge_id", merge_id)
+        .execute(),
+    )
+
+
+def _record_merge_metrics(merge_id: str, metrics: MergePerformanceMetrics) -> None:
+    """Persist performance metrics for visibility in the merge dashboard."""
+    existing_stats = _safe_supabase_call(
+        "fetch_existing_statistics",
+        lambda: supabase.table("merge_status")
+        .select("statistics")
+        .eq("merge_id", merge_id)
+        .execute(),
+    )
+
+    statistics: Dict[str, Any] = {}
+    if existing_stats.data:
+        existing_statistics = existing_stats.data[0].get("statistics") or {}
+        if isinstance(existing_statistics, dict):
+            statistics.update(existing_statistics)
+
+    statistics["performance"] = metrics.model_dump(mode="json")
+
+    _safe_supabase_call(
+        "record_merge_metrics",
+        lambda: supabase.table("merge_status")
+        .update({"statistics": statistics})
+        .eq("merge_id", merge_id)
+        .execute(),
+    )
 
 
 async def _get_prod_graph(merge_id: str, user_id: str) -> GraphResponse:
@@ -1112,17 +1359,15 @@ async def get_past_resolution(ontology_id: str, node_type: str) -> str:
 
 
 def save_change_log(merge_id, change_log, need_human_review: bool = False):
-    supabase.table("change_logs").insert(
-        {
-            "merge_id": merge_id,
-            "node_id": change_log.staging_node.id,
-            "prod_node_id": change_log.prod_node.id,
-            "node_type": change_log.staging_node.type,
-            "previous_props": change_log.prod_node.properties,
-            "changed_props": {k: v[0] for k, v in change_log.prop_changes.items()},
-            "need_human_review": need_human_review,
-        }
-    ).execute()
+    record = change_log.to_record(merge_id, need_human_review=need_human_review)
+    payload = record.to_supabase_payload()
+
+    _safe_supabase_call(
+        "save_change_log",
+        lambda: supabase.table("change_logs")
+        .upsert(payload, on_conflict="id")
+        .execute(),
+    )
 
 
 def save_resolution(
@@ -1151,50 +1396,70 @@ def save_resolution(
         learning_comment: User comment about the resolution decision
     """
     logger.info(f"Saving resolution for node {node_id} of type {node_type}")
-    try:
-        supabase.table("resolutions").insert(
-            {
-                "ontology_id": ontology_id,
-                "node_type": node_type,
-                "previous_props": previous_props,
-                "changed_props": changed_props,
-                "resolved_props": resolved_props,
-                "resolution": resolution.value,
-                "learning_comment": learning_comment,
-            }
-        ).execute()
+    resolution_record = ChangeLogResolution(
+        merge_id=merge_id,
+        ontology_id=ontology_id,
+        node_id=node_id,
+        node_type=node_type,
+        previous_props=previous_props,
+        changed_props=changed_props,
+        resolved_props=resolved_props,
+        resolution=resolution,
+        learning_comment=learning_comment or None,
+    )
 
-        # Update the change log
-        supabase.table("change_logs").update(
+    payload = resolution_record.to_supabase_payload()
+
+    _safe_supabase_call(
+        "save_resolution",
+        lambda: supabase.table("resolutions")
+        .upsert(payload, on_conflict="id")
+        .execute(),
+    )
+
+    updated_props = {} if resolution == ResolutionStrategy.KEEP_BOTH else resolved_props
+
+    _safe_supabase_call(
+        "mark_change_log_resolved",
+        lambda: supabase.table("change_logs")
+        .update(
             {
                 "need_human_review": False,
-                "changed_props": (
-                    {} if resolution == ResolutionStrategy.KEEP_BOTH else resolved_props
-                ),
+                "changed_props": updated_props,
             }
-        ).eq("merge_id", merge_id).eq("id", change_log_id).execute()
+        )
+        .eq("merge_id", merge_id)
+        .eq("id", change_log_id)
+        .execute(),
+    )
 
-        logger.info(f"Successfully saved resolution for node {node_id}")
-    except Exception as e:
-        logger.error(f"Failed to save resolution: {str(e)}")
-        traceback.print_exc()
+    logger.info(f"Successfully saved resolution for node {node_id}")
 
 
 def _start_merge_status(merge_id, transform_id, ontology_id):
-    supabase.table("merge_status").insert(
-        {
-            "merge_id": merge_id,
-            "transform_id": transform_id,
-            "ontology_id": ontology_id,
-            "status": MergeStatus.STARTED,
-        }
-    ).execute()
+    _safe_supabase_call(
+        "start_merge_status",
+        lambda: supabase.table("merge_status")
+        .insert(
+            {
+                "merge_id": merge_id,
+                "transform_id": transform_id,
+                "ontology_id": ontology_id,
+                "status": MergeStatus.STARTED,
+            }
+        )
+        .execute(),
+    )
 
 
 def _update_merge_status(merge_id, status):
-    supabase.table("merge_status").update({"status": status}).eq(
-        "merge_id", merge_id
-    ).execute()
+    _safe_supabase_call(
+        "update_merge_status",
+        lambda: supabase.table("merge_status")
+        .update({"status": status})
+        .eq("merge_id", merge_id)
+        .execute(),
+    )
 
 
 @task(name="complete_prod_merge")
@@ -1219,15 +1484,24 @@ async def _complete_prod_merge(
 
     try:
         # Get all change logs for this merge
-        change_logs = (
-            supabase.table("change_logs").select("*").eq("merge_id", merge_id).execute()
+        change_logs = _safe_supabase_call(
+            "fetch_change_logs",
+            lambda: supabase.table("change_logs")
+            .select("*")
+            .eq("merge_id", merge_id)
+            .execute(),
         )
 
         if not change_logs.data:
             logger.info(
                 f"No change logs found for merge {merge_id}, proceeding with direct merge"
             )
-            await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
+            summary = await _persist_to_prod(
+                merged_graph, merge_id, transform_id, user_id
+            )
+            _add_ingestion_stats(
+                merge_id, summary["nodes"], summary["edges"], metrics=None
+            )
             _update_merge_status(merge_id, MergeStatus.COMPLETED)
 
             # Log completion
@@ -1286,7 +1560,8 @@ async def _complete_prod_merge(
                 logger.error(f"Error processing change log during prod merge: {str(e)}")
 
         # Persist the merged graph to production
-        await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
+        summary = await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
+        _add_ingestion_stats(merge_id, summary["nodes"], summary["edges"], metrics=None)
         _update_merge_status(merge_id, MergeStatus.COMPLETED)
 
         # Log successful completion
