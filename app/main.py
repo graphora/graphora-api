@@ -1,6 +1,10 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.config import settings
+from app.utils.logger import logger
+
 from app.api.ontology import router as ontology_router
 from app.api.transform import router as transform_router
 from app.api.graph import router as graph_router
@@ -14,21 +18,24 @@ from app.api.chat import router as chat_router
 from app.domain.healthcare import router as healthcare_router
 from app.api.quality import router as quality_router
 from app.api.chunking import router as chunking_router
-from app.config import settings
-from app.utils.logger import logger
 from app.services.transform.prefect_client import configure_prefect
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    print("=" * 60, flush=True)
+    print("GRAPHORA API STARTING...", flush=True)
     logger.info("Starting Graphora API")
-    # Add any additional startup tasks here
     configure_prefect()
-    
+    print("✓ GRAPHORA API READY - Server is now accepting requests", flush=True)
+    print("=" * 60, flush=True)
+
     yield  # Server is running
+
     # Shutdown
     logger.info("Shutting down Graphora API")
-    # Add any cleanup tasks here
+
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -36,7 +43,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url=f"{settings.API_V1_STR}/docs",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Configure CORS
@@ -64,18 +71,21 @@ app.include_router(healthcare_router)
 app.include_router(quality_router)
 app.include_router(chunking_router)
 
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     logger.info("Starting uvicorn server")
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level=settings.LOG_LEVEL.lower()
+        log_level=settings.LOG_LEVEL.lower(),
     )

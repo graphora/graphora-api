@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, oss ]
+  pull_request:
+    branches: [ main, oss ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "${HOME}/.local/bin" >> $GITHUB_PATH
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Install dev tooling
+        run: uv sync --group dev
+
+      - name: Lint
+        run: make lint
+
+      - name: Type check (temporary allow-fail)
+        run: make typecheck
+        continue-on-error: true
+
+      - name: Run tests
+        run: make test
+
+      - name: Dead code scan
+        run: make deadcode

@@ -7,31 +7,32 @@ import traceback
 from app.services.transform.models import (
     DocumentKnowledgeGraph,
     ExtractionMetrics,
-    OntologyDefinition
+    OntologyDefinition,
 )
-from app.services.transform.ontology_helper import (
-    OntologyParser
-)
+from app.services.transform.ontology_helper import OntologyParser
 from app.services.transform.graph_transformer import (
     build_graph_from_chunks,
-    build_graph_from_pdfs
+    build_graph_from_pdfs,
 )
 from app.config import settings
+
 
 def log_extraction_metrics(metrics: ExtractionMetrics, transform_id: str) -> None:
     """Log extraction metrics to Prefect"""
     logger = get_run_logger()
-    
+
     # Calculate summary metrics
     success_rate = (
         metrics.successful_chunks / metrics.total_chunks
-        if metrics.total_chunks > 0 else 0
+        if metrics.total_chunks > 0
+        else 0
     )
     avg_extraction_time = (
         sum(metrics.extraction_times) / len(metrics.extraction_times)
-        if metrics.extraction_times else 0
+        if metrics.extraction_times
+        else 0
     )
-    
+
     logger.info(
         "Knowledge Graph Extraction Metrics",
         extra={
@@ -44,67 +45,68 @@ def log_extraction_metrics(metrics: ExtractionMetrics, transform_id: str) -> Non
                 "total_relationships": metrics.total_relationships,
                 "performance": {
                     "avg_extraction_time_ms": avg_extraction_time,
-                    "peak_memory_mb": metrics.peak_memory_mb
+                    "peak_memory_mb": metrics.peak_memory_mb,
                 },
                 "llm_usage": metrics.llm_token_usage,
-                "entity_resolution": metrics.entity_resolution_stats
-            }
-        }
+                "entity_resolution": metrics.entity_resolution_stats,
+            },
+        },
     )
-    
+
     # Log failed chunks for investigation
     if metrics.failed_chunks:
         logger.warning(
             f"Failed chunks: {len(metrics.failed_chunks)}",
             extra={
                 "transform_id": transform_id,
-                "failed_chunks": metrics.failed_chunks
-            }
+                "failed_chunks": metrics.failed_chunks,
+            },
         )
 
-async def load_and_validate_ontology(
-    ontology_path: Path
-) -> OntologyDefinition:
+
+async def load_and_validate_ontology(ontology_path: Path) -> OntologyDefinition:
     """Load and validate ontology file"""
     try:
         with open(ontology_path) as f:
             ontology_yaml = f.read()
-        
+
         # Parse and validate
         ontology_dict = yaml.safe_load(ontology_yaml)
         return OntologyDefinition(**ontology_dict)
-        
+
     except Exception as e:
         raise ValueError(f"Invalid ontology file: {str(e)}")
+
 
 def should_retry_extraction_error(exc: Exception) -> bool:
     """Determine if extraction error should be retried"""
     error_msg = str(exc).lower()
-    
+
     # Don't retry authentication/configuration errors
     non_retryable_patterns = [
-        'api key not valid',
-        'invalid api key',
-        'authentication failed',
-        'unauthorized',
-        'invalid_argument',
-        'permission denied',
-        'quota exceeded',
-        'billing',
-        'api_key_invalid',
-        'bamlclienthttperror'  # BAML client errors are often config issues
+        "api key not valid",
+        "invalid api key",
+        "authentication failed",
+        "unauthorized",
+        "invalid_argument",
+        "permission denied",
+        "quota exceeded",
+        "billing",
+        "api_key_invalid",
+        "bamlclienthttperror",  # BAML client errors are often config issues
     ]
-    
+
     for pattern in non_retryable_patterns:
         if pattern in error_msg:
             return False
-    
+
     return True
+
 
 @task(
     name="ontology-extraction",
     retries=settings.TRANSFORM_RETRIES,
-    retry_delay_seconds=settings.RETRY_DELAY_SECONDS
+    retry_delay_seconds=settings.RETRY_DELAY_SECONDS,
 )
 async def construct_knowledge_graph(
     ontology_path: Union[str, Path],
@@ -112,48 +114,50 @@ async def construct_knowledge_graph(
     chunks: List[str] = [],
     pdf_paths: List[Path] = [],
     progress_callback: Optional[Callable[[int, int], None]] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
 ) -> Tuple[Optional[DocumentKnowledgeGraph], Optional[ExtractionMetrics]]:
     """Construct knowledge graph from chunks using ontology"""
     logger = get_run_logger()
-    
+
     try:
         logger.info(f"Processing {len(chunks)} chunks for transform {transform_id}")
-        
+
         # Load and validate ontology with user_id for Supabase fallback
         parser = OntologyParser(ontology_path, user_id)
-        
+
         # Process chunks with controlled concurrency
-        concurrency=settings.EXTRACTION_CONCURRENCY
+        concurrency = settings.EXTRACTION_CONCURRENCY
         if len(chunks) < concurrency:
             concurrency = len(chunks)
-        logger.info(f"Large document detected, using parallel processing with concurrency {concurrency}")
-        if(len(chunks) == 0 and len(pdf_paths) == 0):
+        logger.info(
+            f"Large document detected, using parallel processing with concurrency {concurrency}"
+        )
+        if len(chunks) == 0 and len(pdf_paths) == 0:
             return None, None
         if chunks:
             graph = await build_graph_from_chunks(
                 ontology_parser=parser,
                 chunks=chunks,
-                transform_id=transform_id, 
+                transform_id=transform_id,
                 progress_callback=progress_callback,
-                user_id=user_id
+                user_id=user_id,
             )
         elif pdf_paths:
             graph = await build_graph_from_pdfs(
                 ontology_parser=parser,
                 pdf_paths=pdf_paths,
-                transform_id=transform_id, 
+                transform_id=transform_id,
                 progress_callback=progress_callback,
-                user_id=user_id
+                user_id=user_id,
             )
 
         metrics = ExtractionMetrics(
             start_time=datetime.now(timezone.utc),
             total_nodes=len(graph.nodes),
             total_relationships=len(graph.relationships),
-            merged_nodes=graph.metrics.merged_nodes if graph.metrics else 0
+            merged_nodes=graph.metrics.merged_nodes if graph.metrics else 0,
         )
-        
+
         # Finalize metrics
         if metrics:
             metrics.finalize()
@@ -164,9 +168,9 @@ async def construct_knowledge_graph(
                 f"{metrics.total_relationships} relationships, "
                 f"{metrics.failed_chunks}/{metrics.total_chunks} chunks failed"
             )
-        
+
         return graph, metrics
-        
+
     except Exception as e:
         logger.error(f"Knowledge graph extraction failed: {str(e)}")
         traceback.print_exc()

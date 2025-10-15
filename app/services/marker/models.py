@@ -1,6 +1,7 @@
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 from datetime import datetime
+
 
 class ConversionMetadata(BaseModel):
     pages: int
@@ -9,10 +10,12 @@ class ConversionMetadata(BaseModel):
     conversion_timestamp: datetime
     settings: Dict[str, Any]
 
+
 class MarkerResponse(BaseModel):
     status: str
     markdown_content: str
     conversion_metadata: ConversionMetadata
+
 
 class ConversionResult(BaseModel):
     transform_id: str
@@ -21,6 +24,7 @@ class ConversionResult(BaseModel):
     metadata: ConversionMetadata
     status: str
     error: Optional[str] = None
+
 
 class HealthStatus(BaseModel):
     status: str

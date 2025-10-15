@@ -1,11 +1,13 @@
-from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Union, Type
-from pydantic import BaseModel, Field, create_model, validator, ConfigDict
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Type
+from pydantic import BaseModel, Field, create_model, ConfigDict
 from enum import Enum
 import uuid
 
+
 class PropertyType(str, Enum):
     """Supported property types in ontology"""
+
     STRING = "string"
     INTEGER = "integer"
     FLOAT = "float"
@@ -15,58 +17,75 @@ class PropertyType(str, Enum):
     OBJECT = "object"
     REFERENCE = "reference"
 
+
 class PropertyDefinition(BaseModel):
     """Definition of a property in the ontology"""
+
     type: PropertyType
     required: bool = False
     description: Optional[str] = None
     default: Optional[Any] = None
     items_type: Optional[PropertyType] = None  # For list types
     reference_to: Optional[str] = None  # For reference types
-    nested_properties: Optional[Dict[str, 'PropertyDefinition']] = None  # For object types
-    model_config = ConfigDict(extra='ignore')
+    nested_properties: Optional[Dict[str, "PropertyDefinition"]] = (
+        None  # For object types
+    )
+    model_config = ConfigDict(extra="ignore")
+
 
 class EntityDefinition(BaseModel):
     """Definition of an entity in the ontology"""
+
     name: str
     description: Optional[str] = None
     properties: Dict[str, PropertyDefinition]
-    relationships: Optional[Dict[str, 'RelationshipDefinition']] = None
-    model_config = ConfigDict(extra='ignore')
+    relationships: Optional[Dict[str, "RelationshipDefinition"]] = None
+    model_config = ConfigDict(extra="ignore")
+
 
 class RelationshipDefinition(BaseModel):
     """Definition of a relationship between entities"""
+
     target_entity: str
     relationship_type: str
     cardinality: str  # one-to-one, one-to-many, many-to-many
     properties: Optional[Dict[str, PropertyDefinition]] = None
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra="ignore")
+
 
 class OntologyDefinition(BaseModel):
     """Complete ontology definition"""
+
     version: str
     entities: Dict[str, EntityDefinition]
     metadata: Optional[Dict[str, Any]] = None
 
+
 class NodeProvenance(BaseModel):
     """Information about where a node came from"""
+
     chunk_ids: List[str] = Field(default_factory=list)
-    extraction_timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    extraction_timestamp: str = Field(
+        default_factory=lambda: datetime.now().isoformat()
+    )
     confidence_score: Optional[float] = None
+
 
 class BaseNode(BaseModel):
     """Base class for all nodes in the knowledge graph"""
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     type: str
     properties: Dict[str, Any] = Field(default_factory=dict)
     provenance: Optional[NodeProvenance] = None
     confidence_score: Optional[float] = None
-    
-    class Config:
-        arbitrary_types_allowed = True
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
 
 class RelationshipInstance(BaseModel):
     """A relationship between two nodes"""
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     type: str
     source_id: str
@@ -76,9 +95,11 @@ class RelationshipInstance(BaseModel):
     properties: Dict[str, Any] = Field(default_factory=dict)
     provenance: Optional[NodeProvenance] = None
     confidence_score: Optional[float] = None
-     
+
+
 class ExtractionMetrics(BaseModel):
     """Metrics for the extraction process"""
+
     start_time: datetime
     end_time: Optional[datetime] = None
     total_chunks: int = 0
@@ -91,72 +112,73 @@ class ExtractionMetrics(BaseModel):
     invalid_relationships: int = 0
     total_tokens: int = 0
     chunk_metrics: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
-    
+
     def track_extraction(
         self,
         chunk_id: str,
         duration_ms: float,
         llm_token_usage: Dict[str, int],
-        entity_count: int
+        entity_count: int,
     ) -> None:
         """Track metrics for a single chunk extraction"""
         self.processed_chunks += 1
-        
+
         # Track tokens
-        total_tokens = llm_token_usage.get('total', 0)
+        total_tokens = llm_token_usage.get("total", 0)
         self.total_tokens += total_tokens
-        
+
         # Store chunk metrics
         self.chunk_metrics[chunk_id] = {
-            'duration_ms': duration_ms,
-            'token_usage': llm_token_usage,
-            'entity_count': entity_count,
-            'success': True
+            "duration_ms": duration_ms,
+            "token_usage": llm_token_usage,
+            "entity_count": entity_count,
+            "success": True,
         }
-    
+
     def record_failure(self, chunk_id: str, error: str) -> None:
         """Record a chunk processing failure"""
         self.failed_chunks += 1
-        self.chunk_metrics[chunk_id] = {
-            'success': False,
-            'error': error
-        }
-    
+        self.chunk_metrics[chunk_id] = {"success": False, "error": error}
+
     def record_node_stats(
-        self,
-        new_nodes: int,
-        merged_nodes: int,
-        relationships: int
+        self, new_nodes: int, merged_nodes: int, relationships: int
     ) -> None:
         """Update node and relationship statistics"""
         self.new_nodes = new_nodes
         self.merged_nodes = merged_nodes
         self.total_relationships = relationships
-    
+
     def finalize(self) -> None:
         """Mark extraction as complete and calculate final stats"""
         self.end_time = datetime.now()
 
+
 class KnowledgeGraph(BaseModel):
     """Generic Knowledge Graph for storing extracted information"""
-    extraction_timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+    extraction_timestamp: str = Field(
+        default_factory=lambda: datetime.now().isoformat()
+    )
     tokens_used: Optional[int] = None
     confidence_score: Optional[float] = None
     metrics: Optional[ExtractionMetrics] = None
-    
+
     # These will be dynamically populated based on the ontology
-    
-    class Config:
-        arbitrary_types_allowed = True
-        
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
 class DocumentKnowledgeGraph(KnowledgeGraph):
     """Generic Knowledge Graph for storing extracted information"""
+
     nodes: List[BaseNode] = Field(default_factory=list)
     relationships: List[RelationshipInstance] = Field(default_factory=list)
+
 
 class OntologyBasedExtractionModels:
     class PropertyType(str, Enum):
         """Property types supported in the ontology"""
+
         STRING = "string"
         INTEGER = "integer"
         FLOAT = "float"
@@ -178,21 +200,21 @@ class OntologyBasedExtractionModels:
                     default_factory=lambda: {
                         "chunk_ids": [],
                         "extraction_timestamp": "",
-                        "confidence_score": 0.0
+                        "confidence_score": 0.0,
                     }
-                )
-            )
+                ),
+            ),
         }
-        
+
         model_name = f"{entity_def.name}Node"
         return create_model(
-            model_name,
-            **properties,
-            __config__=ConfigDict(extra='ignore')
+            model_name, **properties, __config__=ConfigDict(extra="ignore")
         )
 
     @classmethod
-    def create_relationship_class(cls, rel_def: RelationshipDefinition) -> Type[BaseModel]:
+    def create_relationship_class(
+        cls, rel_def: RelationshipDefinition
+    ) -> Type[BaseModel]:
         """Create a Pydantic model class for a relationship"""
         properties = {
             "source_id": (str, ...),
@@ -205,15 +227,13 @@ class OntologyBasedExtractionModels:
                     default_factory=lambda: {
                         "chunk_ids": [],
                         "extraction_timestamp": "",
-                        "confidence_score": 0.0
+                        "confidence_score": 0.0,
                     }
-                )
-            )
+                ),
+            ),
         }
-        
+
         model_name = f"{rel_def.relationship_type}Relationship"
         return create_model(
-            model_name,
-            **properties,
-            __config__=ConfigDict(extra='ignore')
+            model_name, **properties, __config__=ConfigDict(extra="ignore")
         )
