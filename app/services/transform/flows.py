@@ -1,6 +1,6 @@
 from prefect import flow, task
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import aiofiles
 import asyncio
@@ -14,7 +14,9 @@ from app.services.transform.storage import DocumentStorage
 from app.config import settings
 from app.services.quality.tasks import quality_validation_task
 from app.services.marker.tasks import convert_pdf_to_markdown
-from app.services.chunking.tasks import chunk_documents
+from app.services.chunking.tasks import chunk_document
+from app.services.chunking.config import ChunkingStrategy
+from app.services.chunking.models import ChunkingResult, ChunkMetadata
 from app.services.transform.tasks import construct_knowledge_graph
 from app.services.storage.tasks import store_knowledge_graph
 from app.services.transform.progress_tracker import ProgressTracker
@@ -26,6 +28,42 @@ from app.schemas.usage import DocumentUsageRequest, ProcessingStatus
 from PyPDF2 import PdfReader, PdfWriter
 
 progress_tracker = ProgressTracker()
+
+
+@task(name="usage-track-document", retries=2, retry_delay_seconds=10)
+async def track_document_usage_task(
+    user_id: str, request: DocumentUsageRequest, processing_started_at: datetime
+):
+    """Record the start of document processing for usage tracking."""
+
+    return await usage_tracking_service.track_document_processing(
+        user_id=user_id, request=request, processing_started_at=processing_started_at
+    )
+
+
+@task(name="usage-update-document", retries=2, retry_delay_seconds=10)
+async def update_document_usage_task(
+    document_usage_id: str,
+    completed_at: datetime,
+    processing_status: ProcessingStatus,
+    chunks_created: int = 0,
+    nodes_extracted: int = 0,
+    relationships_extracted: int = 0,
+    success_rate: Optional[float] = None,
+    error_message: Optional[str] = None,
+):
+    """Finalize document usage tracking metrics."""
+
+    return await usage_tracking_service.update_document_processing(
+        document_usage_id=document_usage_id,
+        processing_completed_at=completed_at,
+        processing_status=processing_status,
+        chunks_created=chunks_created,
+        nodes_extracted=nodes_extracted,
+        relationships_extracted=relationships_extracted,
+        success_rate=success_rate,
+        error_message=error_message,
+    )
 
 
 @task(
@@ -164,7 +202,7 @@ async def document_transformation_flow(
                     page_count=page_count,
                 )
 
-                usage_record = await usage_tracking_service.track_document_processing(
+                usage_record = await track_document_usage_task(
                     user_id=user_id,
                     request=usage_request,
                     processing_started_at=processing_start_time,
@@ -176,45 +214,132 @@ async def document_transformation_flow(
                 logger.error(f"Failed to track usage for {file_path}: {str(e)}")
                 # Continue processing even if tracking fails
 
-        processed_paths = []
-        doc_chunk_results = []
-        pdf_files = []
+        processed_paths: List[str] = []
+        doc_chunk_results: List[Tuple[ChunkingResult, List[ChunkMetadata]]] = []
+        pdf_files: List[str] = []
         graphs = []
 
         # Start PARSE stage
         await progress_tracker.start_stage(transform_id, TransformationStage.PARSE)
-        processed_paths = await parse_docs(transform_id, file_paths, metadata)
+        total_documents = len(file_paths)
+
+        if total_documents:
+            for index, (file_path, doc_metadata) in enumerate(
+                zip(file_paths, metadata), start=1
+            ):
+                try:
+                    validation_result = await validate_document(file_path)
+
+                    if not validation_result.is_valid:
+                        logger.error(
+                            "Validation failed for %s: %s",
+                            file_path,
+                            validation_result.errors,
+                        )
+                        continue
+
+                    storage_location = await store_document(
+                        file_path, transform_id, doc_metadata
+                    )
+                    stored_path = storage_location.original_path
+                    processed_path = stored_path
+
+                    if (
+                        settings.PDF_PROCESSOR == "marker"
+                        and Path(stored_path).suffix.lower() == ".pdf"
+                    ):
+                        try:
+                            conversion_result = await convert_pdf_to_markdown(
+                                file_path=Path(stored_path),
+                                transform_id=transform_id,
+                            )
+                            if conversion_result:
+                                processed_path = conversion_result.markdown_path
+                        except Exception as conversion_error:
+                            logger.error(
+                                "PDF conversion failed for %s: %s",
+                                stored_path,
+                                conversion_error,
+                            )
+
+                    processed_paths.append(processed_path)
+
+                except Exception as parse_error:
+                    logger.error(
+                        "Failed to prepare document %s: %s",
+                        file_path,
+                        parse_error,
+                        extra={"transform_id": transform_id},
+                    )
+                finally:
+                    await update_stage_progress(
+                        transform_id,
+                        TransformationStage.PARSE,
+                        index,
+                        total_documents,
+                    )
+
         await progress_tracker.complete_stage(transform_id, TransformationStage.PARSE)
 
         # Start CHUNK stage
         await progress_tracker.start_stage(transform_id, TransformationStage.CHUNK)
         pdf_folder = Path(settings.UPLOAD_DIR) / transform_id / "pdf"
         pdf_folder.mkdir(parents=True, exist_ok=True)
-        text_paths: List[str] = []
+
+        # Collect paths to chunk
+        doc_paths_to_chunk: List[Tuple[str, Optional[ChunkingStrategy]]] = []
         for processed_path in processed_paths:
-            if Path(processed_path).suffix.lower() == ".pdf":
+            suffix = Path(processed_path).suffix.lower()
+            if suffix == ".pdf":
                 pdf_splits = split_pdf(
                     input_pdf=processed_path, location=pdf_folder, pages=100
                 )
                 pdf_files.extend(pdf_splits)
             else:
-                text_paths.append(processed_path)
+                strategy_override = (
+                    ChunkingStrategy.STRUCTURAL
+                    if suffix in {".md", ".markdown", ".txt"}
+                    else None
+                )
+                doc_paths_to_chunk.append((processed_path, strategy_override))
 
-        if text_paths:
-            text_chunk_results = await chunk_documents(
-                transform_id=transform_id,
-                processed_paths=text_paths,
-                chunking_config=chunking_config,
-            )
-            doc_chunk_results.extend(text_chunk_results)
-            await update_stage_progress(
-                transform_id,
-                TransformationStage.CHUNK,
-                len(text_chunk_results),
-                len(text_paths),
-            )
+        chunk_failures: List[Tuple[str, str]] = []
+        total_chunk_jobs = len(doc_paths_to_chunk)
+        if total_chunk_jobs:
+            for index, (source_path, strategy_override) in enumerate(doc_paths_to_chunk, start=1):
+                try:
+                    chunk_result, chunk_metadata = await chunk_document(
+                        file_path=source_path,
+                        transform_id=transform_id,
+                        config=chunking_config,
+                        strategy_override=strategy_override,
+                    )
+                    if chunk_result and chunk_metadata:
+                        doc_chunk_results.append((chunk_result, chunk_metadata))
+                    else:
+                        chunk_failures.append((source_path, "No chunks produced"))
+                except Exception as exc:
+                    chunk_failures.append((source_path, str(exc)))
+                finally:
+                    await update_stage_progress(
+                        transform_id,
+                        TransformationStage.CHUNK,
+                        index,
+                        total_chunk_jobs,
+                    )
+
+            if chunk_failures:
+                logger.warning(
+                    "Chunking completed with %s failure(s)",
+                    len(chunk_failures),
+                    extra={
+                        "transform_id": transform_id,
+                        "failures": chunk_failures,
+                    },
+                )
         else:
             logger.info("No textual documents to chunk for transform %s", transform_id)
+
         await progress_tracker.complete_stage(transform_id, TransformationStage.CHUNK)
 
         # Start TRANSFORM stage
@@ -225,12 +350,38 @@ async def document_transformation_flow(
         total_relationships = 0
         ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
 
-        # Process each document
-        for res in doc_chunk_results:
-            result, graph = res
-            if result and result.chunks:
-                graph, metrics = await construct_knowledge_graph(
-                    chunks=result.chunks,
+        # Process chunked documents
+        for chunk_result, chunk_metadata in doc_chunk_results:
+            if chunk_result and getattr(chunk_result, "chunks", None):
+                try:
+                    graph_result, metrics = await construct_knowledge_graph(
+                        chunks=chunk_result.chunks,
+                        ontology_path=ontology_path,
+                        transform_id=transform_id,
+                        progress_callback=lambda i, t: asyncio.create_task(
+                            update_stage_progress(
+                                transform_id, TransformationStage.TRANSFORM, i, t
+                            )
+                        ),
+                        user_id=user_id,
+                    )
+                    if graph_result:
+                        graphs.append(graph_result)
+                        if metrics:
+                            total_nodes += metrics.total_nodes
+                            total_relationships += metrics.total_relationships
+                except Exception as extraction_error:
+                    logger.error(
+                        "Knowledge graph construction failed: %s",
+                        extraction_error,
+                        extra={"transform_id": transform_id},
+                    )
+
+        # Process PDF files
+        if pdf_files:
+            try:
+                pdf_graph_result, metrics = await construct_knowledge_graph(
+                    pdf_paths=[Path(p) for p in pdf_files],
                     ontology_path=ontology_path,
                     transform_id=transform_id,
                     progress_callback=lambda i, t: asyncio.create_task(
@@ -240,22 +391,17 @@ async def document_transformation_flow(
                     ),
                     user_id=user_id,
                 )
-                if graph and metrics:
-                    total_nodes += metrics.total_nodes
-                    total_relationships += metrics.total_relationships
-                graphs.append(graph)
-
-        pdf_graph, metrics = await construct_knowledge_graph(
-            pdf_paths=pdf_files,
-            ontology_path=ontology_path,
-            transform_id=transform_id,
-            progress_callback=lambda i, t: asyncio.create_task(
-                update_stage_progress(transform_id, TransformationStage.TRANSFORM, i, t)
-            ),
-            user_id=user_id,
-        )
-        if pdf_graph:
-            graphs.append(pdf_graph)
+                if pdf_graph_result:
+                    graphs.append(pdf_graph_result)
+                    if metrics:
+                        total_nodes += metrics.total_nodes
+                        total_relationships += metrics.total_relationships
+            except Exception as extraction_error:
+                logger.error(
+                    "PDF knowledge graph construction failed: %s",
+                    extraction_error,
+                    extra={"transform_id": transform_id},
+                )
 
         await progress_tracker.complete_stage(
             transform_id, TransformationStage.TRANSFORM
@@ -412,31 +558,28 @@ async def document_transformation_flow(
         relationships_stored = 0
         storage_time = 0
         storage_retries = 0
-        for graph in graphs:
-            if graph is not None:  # Only store non-None graphs
-                storage_result = await store_knowledge_graph(
-                    graph, transform_id, user_id
-                )
-                nodes_stored = nodes_stored + storage_result.nodes_stored
-                relationships_stored = (
-                    relationships_stored + storage_result.relationships_stored
-                )
-                storage_time = storage_time + storage_result.metrics.storage_time_ms
-                storage_retries = storage_retries + storage_result.metrics.retries
-            else:
-                logger.warning(f"Skipping None graph for transform {transform_id}")
 
-        # Check if we have any stored graphs
-        if nodes_stored == 0 and relationships_stored == 0:
+        # Filter out None graphs
+        graphs_to_store = [g for g in graphs if g is not None]
+        if not graphs_to_store:
             raise ValueError("No graphs were successfully processed and stored")
 
-        # Update progress with storage metrics
-        await update_stage_progress(
-            transform_id,
-            TransformationStage.LOAD,
-            (nodes_stored + relationships_stored),
-            (total_nodes + total_relationships),
-        )
+        for index, graph in enumerate(graphs_to_store, start=1):
+            storage_result = await store_knowledge_graph(graph, transform_id, user_id)
+            nodes_stored += storage_result.nodes_stored
+            relationships_stored += storage_result.relationships_stored
+            storage_time += storage_result.metrics.storage_time_ms
+            storage_retries += storage_result.metrics.retries
+
+            await update_stage_progress(
+                transform_id,
+                TransformationStage.LOAD,
+                nodes_stored + relationships_stored,
+                max(total_nodes + total_relationships, 1),
+            )
+
+        if nodes_stored == 0 and relationships_stored == 0:
+            raise ValueError("No graphs were successfully processed and stored")
 
         await progress_tracker.complete_stage(transform_id, TransformationStage.LOAD)
 
@@ -456,9 +599,9 @@ async def document_transformation_flow(
                     else 0
                 )
 
-                await usage_tracking_service.update_document_processing(
+                await update_document_usage_task(
                     document_usage_id=usage_record.id,
-                    processing_completed_at=datetime.now(timezone.utc),
+                    completed_at=datetime.now(timezone.utc),
                     processing_status=ProcessingStatus.SUCCESS,
                     chunks_created=doc_chunks,
                     nodes_extracted=doc_nodes,
@@ -554,9 +697,9 @@ async def document_transformation_flow(
         # Update usage tracking for failed processing
         for usage_record in document_usage_records:
             try:
-                await usage_tracking_service.update_document_processing(
+                await update_document_usage_task(
                     document_usage_id=usage_record.id,
-                    processing_completed_at=datetime.now(timezone.utc),
+                    completed_at=datetime.now(timezone.utc),
                     processing_status=ProcessingStatus.FAILED,
                     success_rate=0.0,
                     error_message=str(e),
@@ -567,62 +710,6 @@ async def document_transformation_flow(
                 )
 
         raise
-
-
-async def parse_docs(transform_id, file_paths, metadata) -> List[str]:
-    processed_paths = []
-    for file_path, doc_metadata in zip(file_paths, metadata):
-        try:
-            # Validate document
-            validation_result = await validate_document(file_path)
-            if not validation_result.is_valid:
-                logger.error(
-                    f"Validation failed for {file_path}: {validation_result.errors}"
-                )
-                continue
-
-                # Store document
-            storage_location = await store_document(
-                file_path, transform_id, doc_metadata
-            )
-            logger.info(f"Document stored at {storage_location.original_path}")
-
-            # Convert PDF to markdown if needed
-            if settings.PDF_PROCESSOR == "marker":
-                if Path(file_path).suffix.lower() == ".pdf":
-                    conversion_result = await convert_pdf_to_markdown(
-                        file_path=Path(file_path), transform_id=transform_id
-                    )
-                    if conversion_result:
-                        processed_paths.append(conversion_result.markdown_path)
-                        logger.info(
-                            f"PDF converted to markdown: {conversion_result.markdown_path}"
-                        )
-                else:
-                    # For non-PDF files, use the original path
-                    processed_paths.append(file_path)
-                    logger.info(f"Using original file: {file_path}")
-            else:
-                # For gemini files, use the original path
-                processed_paths.append(file_path)
-                logger.info(f"Using original file: {file_path}")
-
-                # Update progress
-            await update_stage_progress(
-                transform_id,
-                TransformationStage.PARSE,
-                len(processed_paths),
-                len(file_paths),
-            )
-
-        except Exception as e:
-            logger.error(
-                f"Processing failed for file {file_path}",
-                extra={"transform_id": transform_id, "error": str(e)},
-            )
-            continue
-
-    return processed_paths
 
 
 async def _persist_quality_violations(
