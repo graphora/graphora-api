@@ -306,7 +306,9 @@ async def document_transformation_flow(
         chunk_failures: List[Tuple[str, str]] = []
         total_chunk_jobs = len(doc_paths_to_chunk)
         if total_chunk_jobs:
-            for index, (source_path, strategy_override) in enumerate(doc_paths_to_chunk, start=1):
+            for index, (source_path, strategy_override) in enumerate(
+                doc_paths_to_chunk, start=1
+            ):
                 try:
                     chunk_result, chunk_metadata = await chunk_document(
                         file_path=source_path,
