@@ -15,7 +15,7 @@ from app.services.merge.new_merger import (
     apply_resolution,
     get_merge_statistics,
     get_merge_graph,
-    log_merge_failure,
+    log_merge_failure_task,
 )
 from app.services.merge.models import MergeInitResponse, MergeStatus, ChangeLog
 from app.config import settings
@@ -70,7 +70,7 @@ async def start_merge(
             except Exception as e:
                 traceback.print_exc()
                 logger.error(f"Failed to start merge flow for user {user_id}: {str(e)}")
-                log_merge_failure(merge_id, str(e))
+                log_merge_failure_task(merge_id, str(e))
 
         # Add background task
         background_tasks.add_task(run_merge_flow)

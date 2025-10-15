@@ -62,6 +62,48 @@ def _safe_supabase_call(description: str, func: Callable[[], Any]):
         raise
 
 
+@task(name="merge-persist-node-batch", retries=3, retry_delay_seconds=5)
+async def persist_node_batch_task(
+    uri: str,
+    username: str,
+    password: str,
+    node_batch: List[Node],
+    batch_index: int,
+    transform_id: str,
+    merge_id: str,
+) -> StorageBatchResult:
+    storage = Neo4jStorage(
+        uri=uri, username=username, password=password, database="neo4j"
+    )
+    try:
+        return await storage.store_nodes(
+            node_batch, batch_index, transform_id, merge_id
+        )
+    finally:
+        await storage.driver.close()
+
+
+@task(name="merge-persist-relationship-batch", retries=3, retry_delay_seconds=5)
+async def persist_relationship_batch_task(
+    uri: str,
+    username: str,
+    password: str,
+    relationships: List[RelationshipInstance],
+    batch_index: int,
+    transform_id: str,
+    merge_id: str,
+) -> StorageBatchResult:
+    storage = Neo4jStorage(
+        uri=uri, username=username, password=password, database="neo4j"
+    )
+    try:
+        return await storage.store_relationships(
+            relationships, batch_index, transform_id, merge_id, merge=True
+        )
+    finally:
+        await storage.driver.close()
+
+
 @flow(
     name="graph-merge-flow",
     description="Merge Staging to Production knowledge graph",
@@ -109,7 +151,9 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
             .execute()
         )
         if not merge_status.data:
-            _start_merge_status(merge_id, transform_id, ontology_id)
+            start_merge_status_task(
+                merge_id, transform_id, ontology_id
+            )
         elif merge_status.data[0]["status"] == MergeStatus.READY_TO_MERGE:
             merged_graph = await _complete_prod_merge(
                 merge_id,
@@ -125,7 +169,9 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
             # For re-merge, load existing prod graph and reconcile
             prod_graph = await _get_prod_graph(merge_id, user_id)
             merged_graph = _reconcile_graphs(staging_graph, prod_graph)
-            _update_merge_status(merge_id, MergeStatus.STARTED)
+            update_merge_status_task(
+                merge_id, MergeStatus.STARTED
+            )
 
         # Step-2: Extract Production Graph
         stage_timer = time.perf_counter()
@@ -212,15 +258,19 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
         )
 
         if changes_for_human_review:
-            _update_merge_status(merge_id, MergeStatus.HUMAN_REVIEW)
+            update_merge_status_task(
+                merge_id, MergeStatus.HUMAN_REVIEW
+            )
             for change_log in changes_for_human_review:
-                save_change_log(merge_id, change_log, need_human_review=True)
+                save_change_log_task(
+                    merge_id, change_log, need_human_review=True
+                )
             for change_log in high_conf_changes:
                 ontology_props = ontology["entities"][change_log.staging_node.type][
                     "properties"
                 ]
                 change_log = _apply_corrections(ontology_props, change_log)
-                save_change_log(merge_id, change_log)
+                save_change_log_task(merge_id, change_log)
 
             # Log pending human review - keep using original audit_id for merge_started
             duration_ms = int((time.time() - start_time) * 1000)
@@ -235,9 +285,11 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
                     },
                 )
             metrics.total_duration_ms = (time.perf_counter() - flow_timer) * 1000
-            _record_merge_metrics(merge_id, metrics)
+            record_merge_metrics_task(merge_id, metrics)
         else:
-            _update_merge_status(merge_id, MergeStatus.AUTO_RESOLVE)
+            update_merge_status_task(
+                merge_id, MergeStatus.AUTO_RESOLVE
+            )
             for change_log in high_conf_changes:
                 ontology_props = ontology["entities"][change_log.staging_node.type][
                     "properties"
@@ -249,7 +301,9 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
                     ontology_props,
                     merged_graph,
                 )
-            _update_merge_status(merge_id, MergeStatus.MERGE_IN_PROGRESS)
+            update_merge_status_task(
+                merge_id, MergeStatus.MERGE_IN_PROGRESS
+            )
             persist_timer = time.perf_counter()
             persistence_summary = await _persist_to_prod(
                 merged_graph,
@@ -262,7 +316,7 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
                 "persist_to_prod", (time.perf_counter() - persist_timer) * 1000
             )
             metrics.total_duration_ms = (time.perf_counter() - flow_timer) * 1000
-            _add_ingestion_stats(
+            add_ingestion_stats_task(
                 merge_id,
                 persistence_summary["nodes"],
                 persistence_summary["edges"],
@@ -344,7 +398,7 @@ def _reconcile_graphs(
     return merged_graph
 
 
-def log_merge_failure(merge_id: str, error: str):
+def _log_merge_failure(merge_id: str, error: str):
     _safe_supabase_call(
         "log_merge_failure",
         lambda: supabase.table("merge_status")
@@ -352,6 +406,11 @@ def log_merge_failure(merge_id: str, error: str):
         .eq("merge_id", merge_id)
         .execute(),
     )
+
+
+@task(name="merge-log-failure", retries=3, retry_delay_seconds=10)
+def log_merge_failure_task(merge_id: str, error: str):
+    _log_merge_failure(merge_id, error)
 
 
 def get_merge_status(merge_id: str) -> MergeStatus:
@@ -456,7 +515,7 @@ async def apply_resolution(
         ontology_id = merge_info.data[0].get("ontology_id")
 
         # Save resolution for future learning
-        save_resolution(
+        save_resolution_task(
             merge_id=merge_id,
             change_log_id=change_log_id,
             ontology_id=ontology_id,
@@ -479,7 +538,9 @@ async def apply_resolution(
             .execute(),
         )
         if len(unresolved_conflicts.data) == 0:
-            _update_merge_status(merge_id, MergeStatus.READY_TO_MERGE)
+            update_merge_status_task(
+                merge_id, MergeStatus.READY_TO_MERGE
+            )
             transform_id = merge_info.data[0].get("transform_id")
             if transform_id and ontology_id:
                 await merge_flow(merge_id, transform_id, ontology_id, user_id)
@@ -1122,24 +1183,23 @@ async def _persist_to_prod(
     # Get user's production database configuration
     user_config = await UserDatabaseService.get_user_config(user_id)
 
-    storage = Neo4jStorage(
-        uri=user_config.prodDb.uri,
-        username=user_config.prodDb.username,
-        password=user_config.prodDb.password,
-        database="neo4j",  # Default database name
-    )
-
     node_results: List[StorageBatchResult] = []
     for batch_index, chunk in enumerate(
         _iter_chunks(merged_graph.nodes, settings.MERGE_NODE_BATCH_SIZE)
     ):
-        batch_timer = time.perf_counter()
-        result = await storage.store_nodes(chunk, batch_index, transform_id, merge_id)
+        result = await persist_node_batch_task(
+            uri=user_config.prodDb.uri,
+            username=user_config.prodDb.username,
+            password=user_config.prodDb.password,
+            node_batch=chunk,
+            batch_index=batch_index,
+            transform_id=transform_id,
+            merge_id=merge_id,
+        )
         node_results.append(result)
 
-        batch_duration = (time.perf_counter() - batch_timer) * 1000
         if metrics:
-            metrics.record_node_batch(batch_duration, result.items_processed)
+            metrics.record_node_batch(result.processing_time_ms, result.items_processed)
 
         if not result.success:
             logger.error(f"Failed to persist node batch {batch_index}: {result.error}")
@@ -1173,15 +1233,21 @@ async def _persist_to_prod(
     for batch_index, chunk in enumerate(
         _iter_chunks(edges_as_rel_instances, settings.MERGE_REL_BATCH_SIZE)
     ):
-        batch_timer = time.perf_counter()
-        result = await storage.store_relationships(
-            chunk, batch_index, transform_id, merge_id, merge=True
+        result = await persist_relationship_batch_task(
+            uri=user_config.prodDb.uri,
+            username=user_config.prodDb.username,
+            password=user_config.prodDb.password,
+            relationships=chunk,
+            batch_index=batch_index,
+            transform_id=transform_id,
+            merge_id=merge_id,
         )
         edge_results.append(result)
 
-        batch_duration = (time.perf_counter() - batch_timer) * 1000
         if metrics:
-            metrics.record_relationship_batch(batch_duration, result.items_processed)
+            metrics.record_relationship_batch(
+                result.processing_time_ms, result.items_processed
+            )
 
         if not result.success:
             logger.error(
@@ -1272,6 +1338,16 @@ def _add_ingestion_stats(
     )
 
 
+@task(name="merge-add-ingestion-stats", retries=3, retry_delay_seconds=10)
+def add_ingestion_stats_task(
+    merge_id: str,
+    node_summary: Dict[str, Any],
+    edge_summary: Dict[str, Any],
+    metrics: Optional[MergePerformanceMetrics] = None,
+) -> None:
+    _add_ingestion_stats(merge_id, node_summary, edge_summary, metrics)
+
+
 def _record_merge_metrics(merge_id: str, metrics: MergePerformanceMetrics) -> None:
     """Persist performance metrics for visibility in the merge dashboard."""
     existing_stats = _safe_supabase_call(
@@ -1297,6 +1373,11 @@ def _record_merge_metrics(merge_id: str, metrics: MergePerformanceMetrics) -> No
         .eq("merge_id", merge_id)
         .execute(),
     )
+
+
+@task(name="merge-record-metrics", retries=3, retry_delay_seconds=10)
+def record_merge_metrics_task(merge_id: str, metrics: MergePerformanceMetrics) -> None:
+    _record_merge_metrics(merge_id, metrics)
 
 
 async def _get_prod_graph(merge_id: str, user_id: str) -> GraphResponse:
@@ -1358,7 +1439,7 @@ async def get_past_resolution(ontology_id: str, node_type: str) -> str:
     return "\n".join(learnings)
 
 
-def save_change_log(merge_id, change_log, need_human_review: bool = False):
+def _save_change_log(merge_id, change_log, need_human_review: bool = False):
     record = change_log.to_record(merge_id, need_human_review=need_human_review)
     payload = record.to_supabase_payload()
 
@@ -1370,7 +1451,14 @@ def save_change_log(merge_id, change_log, need_human_review: bool = False):
     )
 
 
-def save_resolution(
+@task(name="save-change-log", retries=3, retry_delay_seconds=10)
+def save_change_log_task(
+    merge_id: str, change_log: ChangeLog, need_human_review: bool = False
+):
+    _save_change_log(merge_id, change_log, need_human_review)
+
+
+def _save_resolution(
     merge_id: str,
     change_log_id: str,
     ontology_id: str,
@@ -1436,7 +1524,34 @@ def save_resolution(
     logger.info(f"Successfully saved resolution for node {node_id}")
 
 
-def _start_merge_status(merge_id, transform_id, ontology_id):
+@task(name="save-resolution", retries=3, retry_delay_seconds=10)
+def save_resolution_task(
+    merge_id: str,
+    change_log_id: str,
+    ontology_id: str,
+    node_id: str,
+    node_type: str,
+    previous_props: Dict,
+    changed_props: Dict,
+    resolved_props: Dict,
+    resolution: ResolutionStrategy,
+    learning_comment: str,
+):
+    _save_resolution(
+        merge_id,
+        change_log_id,
+        ontology_id,
+        node_id,
+        node_type,
+        previous_props,
+        changed_props,
+        resolved_props,
+        resolution,
+        learning_comment,
+    )
+
+
+def _start_merge_status_impl(merge_id, transform_id, ontology_id):
     _safe_supabase_call(
         "start_merge_status",
         lambda: supabase.table("merge_status")
@@ -1452,7 +1567,12 @@ def _start_merge_status(merge_id, transform_id, ontology_id):
     )
 
 
-def _update_merge_status(merge_id, status):
+@task(name="merge-start-status", retries=3, retry_delay_seconds=10)
+def start_merge_status_task(merge_id, transform_id, ontology_id):
+    _start_merge_status_impl(merge_id, transform_id, ontology_id)
+
+
+def _update_merge_status_impl(merge_id, status):
     _safe_supabase_call(
         "update_merge_status",
         lambda: supabase.table("merge_status")
@@ -1460,6 +1580,11 @@ def _update_merge_status(merge_id, status):
         .eq("merge_id", merge_id)
         .execute(),
     )
+
+
+@task(name="merge-update-status", retries=3, retry_delay_seconds=10)
+def update_merge_status_task(merge_id, status):
+    _update_merge_status_impl(merge_id, status)
 
 
 @task(name="complete_prod_merge")
@@ -1499,10 +1624,12 @@ async def _complete_prod_merge(
             summary = await _persist_to_prod(
                 merged_graph, merge_id, transform_id, user_id
             )
-            _add_ingestion_stats(
+            add_ingestion_stats_task(
                 merge_id, summary["nodes"], summary["edges"], metrics=None
             )
-            _update_merge_status(merge_id, MergeStatus.COMPLETED)
+            update_merge_status_task(
+                merge_id, MergeStatus.COMPLETED
+            )
 
             # Log completion
             duration_ms = int((time.time() - start_time) * 1000)
@@ -1560,9 +1687,13 @@ async def _complete_prod_merge(
                 logger.error(f"Error processing change log during prod merge: {str(e)}")
 
         # Persist the merged graph to production
-        summary = await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
-        _add_ingestion_stats(merge_id, summary["nodes"], summary["edges"], metrics=None)
-        _update_merge_status(merge_id, MergeStatus.COMPLETED)
+        summary = await _persist_to_prod(
+            merged_graph, merge_id, transform_id, user_id
+        )
+        add_ingestion_stats_task(
+            merge_id, summary["nodes"], summary["edges"], metrics=None
+        )
+        update_merge_status_task(merge_id, MergeStatus.COMPLETED)
 
         # Log successful completion
         duration_ms = int((time.time() - start_time) * 1000)
@@ -1592,7 +1723,7 @@ async def _complete_prod_merge(
             )
 
         traceback.print_exc()
-        log_merge_failure(merge_id, str(e))
+        log_merge_failure_task(merge_id, str(e))
         raise
 
 
