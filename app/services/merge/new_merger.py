@@ -151,9 +151,7 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
             .execute()
         )
         if not merge_status.data:
-            start_merge_status_task(
-                merge_id, transform_id, ontology_id
-            )
+            start_merge_status_task(merge_id, transform_id, ontology_id)
         elif merge_status.data[0]["status"] == MergeStatus.READY_TO_MERGE:
             merged_graph = await _complete_prod_merge(
                 merge_id,
@@ -169,9 +167,7 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
             # For re-merge, load existing prod graph and reconcile
             prod_graph = await _get_prod_graph(merge_id, user_id)
             merged_graph = _reconcile_graphs(staging_graph, prod_graph)
-            update_merge_status_task(
-                merge_id, MergeStatus.STARTED
-            )
+            update_merge_status_task(merge_id, MergeStatus.STARTED)
 
         # Step-2: Extract Production Graph
         stage_timer = time.perf_counter()
@@ -258,13 +254,9 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
         )
 
         if changes_for_human_review:
-            update_merge_status_task(
-                merge_id, MergeStatus.HUMAN_REVIEW
-            )
+            update_merge_status_task(merge_id, MergeStatus.HUMAN_REVIEW)
             for change_log in changes_for_human_review:
-                save_change_log_task(
-                    merge_id, change_log, need_human_review=True
-                )
+                save_change_log_task(merge_id, change_log, need_human_review=True)
             for change_log in high_conf_changes:
                 ontology_props = ontology["entities"][change_log.staging_node.type][
                     "properties"
@@ -287,9 +279,7 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
             metrics.total_duration_ms = (time.perf_counter() - flow_timer) * 1000
             record_merge_metrics_task(merge_id, metrics)
         else:
-            update_merge_status_task(
-                merge_id, MergeStatus.AUTO_RESOLVE
-            )
+            update_merge_status_task(merge_id, MergeStatus.AUTO_RESOLVE)
             for change_log in high_conf_changes:
                 ontology_props = ontology["entities"][change_log.staging_node.type][
                     "properties"
@@ -301,9 +291,7 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
                     ontology_props,
                     merged_graph,
                 )
-            update_merge_status_task(
-                merge_id, MergeStatus.MERGE_IN_PROGRESS
-            )
+            update_merge_status_task(merge_id, MergeStatus.MERGE_IN_PROGRESS)
             persist_timer = time.perf_counter()
             persistence_summary = await _persist_to_prod(
                 merged_graph,
@@ -538,9 +526,7 @@ async def apply_resolution(
             .execute(),
         )
         if len(unresolved_conflicts.data) == 0:
-            update_merge_status_task(
-                merge_id, MergeStatus.READY_TO_MERGE
-            )
+            update_merge_status_task(merge_id, MergeStatus.READY_TO_MERGE)
             transform_id = merge_info.data[0].get("transform_id")
             if transform_id and ontology_id:
                 await merge_flow(merge_id, transform_id, ontology_id, user_id)
@@ -1627,9 +1613,7 @@ async def _complete_prod_merge(
             add_ingestion_stats_task(
                 merge_id, summary["nodes"], summary["edges"], metrics=None
             )
-            update_merge_status_task(
-                merge_id, MergeStatus.COMPLETED
-            )
+            update_merge_status_task(merge_id, MergeStatus.COMPLETED)
 
             # Log completion
             duration_ms = int((time.time() - start_time) * 1000)
@@ -1687,9 +1671,7 @@ async def _complete_prod_merge(
                 logger.error(f"Error processing change log during prod merge: {str(e)}")
 
         # Persist the merged graph to production
-        summary = await _persist_to_prod(
-            merged_graph, merge_id, transform_id, user_id
-        )
+        summary = await _persist_to_prod(merged_graph, merge_id, transform_id, user_id)
         add_ingestion_stats_task(
             merge_id, summary["nodes"], summary["edges"], metrics=None
         )
