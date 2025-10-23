@@ -73,9 +73,15 @@ def transform_upload_setup(monkeypatch, tmp_path):
         "complete_stage",
         fake_complete,
     )
-    monkeypatch.setattr(transform_api.audit_service, "log_operation_start", fake_log_start)
-    monkeypatch.setattr(transform_api.audit_service, "log_operation_success", fake_log_success)
-    monkeypatch.setattr(transform_api.audit_service, "log_operation_failure", fake_log_success)
+    monkeypatch.setattr(
+        transform_api.audit_service, "log_operation_start", fake_log_start
+    )
+    monkeypatch.setattr(
+        transform_api.audit_service, "log_operation_success", fake_log_success
+    )
+    monkeypatch.setattr(
+        transform_api.audit_service, "log_operation_failure", fake_log_success
+    )
     monkeypatch.setattr(transform_api, "run_transform_flow", fake_run_transform_flow)
 
     yield recorded

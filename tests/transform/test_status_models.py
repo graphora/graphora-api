@@ -53,11 +53,18 @@ def test_detailed_transform_status_percentage_and_failure():
     )
 
     status.start_stage(TransformationStage.UPLOAD)
-    status.update_stage_progress(TransformationStage.UPLOAD, items_processed=3, items_total=6)
-    assert status.stages_progress[TransformationStage.UPLOAD].percentage_complete == 50.0
+    status.update_stage_progress(
+        TransformationStage.UPLOAD, items_processed=3, items_total=6
+    )
+    assert (
+        status.stages_progress[TransformationStage.UPLOAD].percentage_complete == 50.0
+    )
 
     status.complete_stage(TransformationStage.UPLOAD)
-    assert status.stages_progress[TransformationStage.UPLOAD].status == StageStatus.COMPLETED
+    assert (
+        status.stages_progress[TransformationStage.UPLOAD].status
+        == StageStatus.COMPLETED
+    )
     assert status.percentage_complete == 50.0
 
     error = ErrorSummary(
@@ -72,6 +79,11 @@ def test_detailed_transform_status_percentage_and_failure():
     assert status.overall_status == TransformStatus.FAILED
     assert status.current_stage == TransformationStage.FAILED
     assert status.error_summary.error_message == "Failed to parse"
-    assert status.stages_progress[TransformationStage.PARSE].status == StageStatus.FAILED
-    assert status.stages_progress[TransformationStage.PARSE].error_details["error_message"] == "Failed to parse"
+    assert (
+        status.stages_progress[TransformationStage.PARSE].status == StageStatus.FAILED
+    )
+    assert (
+        status.stages_progress[TransformationStage.PARSE].error_details["error_message"]
+        == "Failed to parse"
+    )
     assert status.duration_ms >= 0.0
