@@ -6,8 +6,12 @@ Run this to verify the quality system works correctly.
 
 import asyncio
 import sys
-import yaml
 from pathlib import Path
+
+import pytest
+import yaml
+
+pytestmark = pytest.mark.integration
 
 # Add the app directory to the path
 sys.path.append(str(Path(__file__).parent))

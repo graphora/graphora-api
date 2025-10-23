@@ -1,4 +1,4 @@
-.PHONY: dev start test help lint format deadcode
+.PHONY: dev start test test-unit test-integration help lint format deadcode
 
 help:
 	@echo "Available commands:"
@@ -6,6 +6,8 @@ help:
 	@echo "                (takes ~5s to start, watches app/ directory only)"
 	@echo "  make start  - Start production server without auto-reload"
 	@echo "  make test   - Run tests"
+	@echo "  make test-unit - Run unit tests (excludes integration marked tests)"
+	@echo "  make test-integration - Run integration tests only"
 	@echo "  make lint   - Run Ruff and Black checks"
 	@echo "  make format - Format the codebase with Black"
 	@echo "  make deadcode - Run the dead code scanner"
@@ -18,6 +20,12 @@ start:
 
 test:
 	uv run pytest
+
+test-unit:
+	uv run pytest -m "not integration"
+
+test-integration:
+	uv run pytest -m integration
 
 lint:
 	uv run ruff check .
