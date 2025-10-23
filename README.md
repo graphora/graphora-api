@@ -52,6 +52,7 @@ A sophisticated document processing backend that leverages AI-powered intelligen
 - `uv sync --group dev` – install optional dev tools (e.g. Vulture for dead-code checks)
 - `make compose-up` – start local Neo4j and Redis containers (see [Local Development Guide](docs/LOCAL_DEVELOPMENT.md))
 - `make lint`, `make test`, `make typecheck` – run quality gates before committing
+- `make test-unit`, `make test-integration` – run just unit or integration slices as needed
 - `make deadcode` – run Vulture against the codebase to surface unused definitions
 
 
