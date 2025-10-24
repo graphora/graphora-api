@@ -105,7 +105,7 @@ Refer to `docs/` for detailed API descriptions and the Python client quickstart 
 make lint       # Ruff + Black checks
 make format     # Apply Black formatting
 make typecheck  # Run mypy on the app package
-make test       # Execute pytest suite
+make test       # Execute pytest suite (writes coverage.xml and terminal summary)
 make test-unit  # Run unit tests only (skips integration)
 make test-integration  # Run integration tests only
 uv sync --group dev  # Install optional dev tooling (Vulture)
