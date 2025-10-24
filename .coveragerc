@@ -1,0 +1,17 @@
+[run]
+branch = True
+source = app
+omit =
+    app/__main__.py
+    **/__init__.py
+
+[report]
+skip_empty = True
+precision = 1
+show_missing = True
+exclude_also =
+    if __name__ == "__main__":
+    pragma: no cover
+
+[xml]
+output = coverage.xml
