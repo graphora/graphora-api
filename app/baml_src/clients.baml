@@ -19,7 +19,7 @@ client<llm> VertexAI {
 client<llm> DynamicGemini {
   provider google-ai
   options {
-    model "gemini-1.5-pro"  // Default model, will be overridden at runtime
+    model "gemini-2.0-flash"  // Default model, will be overridden at runtime
     api_key "placeholder"   // Will be overridden at runtime
     generationConfig {
       temperature 0

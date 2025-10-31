@@ -153,7 +153,7 @@ def track_llm_usage(
         @track_llm_usage(
             user_id="user123",
             model_provider=ModelProvider.GEMINI,
-            model_name="gemini-2.0-flash-lite-001",
+            model_name="gemini-2.0-flash",
             operation_type="entity_extraction"
         )
         async def extract_entities(text: str) -> dict:
@@ -204,7 +204,7 @@ async def track_llm_call(
         async with track_llm_call(
             user_id="user123",
             model_provider=ModelProvider.GEMINI,
-            model_name="gemini-2.0-flash-lite-001",
+            model_name="gemini-2.0-flash",
             operation_type="entity_extraction"
         ) as tracker:
             response = await llm_client.generate(text)
