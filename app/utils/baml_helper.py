@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 def create_baml_client(
-    api_key: str, model_name: str = "gemini-1.5-pro"
+    api_key: str, model_name: str = "gemini-2.0-flash"
 ) -> baml_py.ClientRegistry:
     """
     Create and configure a BAML client for user-specific credentials
@@ -51,7 +51,7 @@ def create_baml_client(
 
 
 def configure_baml_client_for_refinement(
-    api_key: str, model_name: str = "gemini-1.5-pro"
+    api_key: str, model_name: str = "gemini-2.0-flash"
 ) -> baml_py.ClientRegistry:
     """
     Configure BAML client specifically for schema refinement with higher creativity

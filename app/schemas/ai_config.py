@@ -17,7 +17,7 @@ class AIModel(BaseModel):
 
     id: Optional[str] = None
     provider_id: str = Field(..., description="Reference to AI provider")
-    name: str = Field(..., description="Model identifier (e.g., 'gemini-1.5-pro')")
+    name: str = Field(..., description="Model identifier (e.g., 'gemini-2.0-flash')")
     display_name: str = Field(..., description="Human-readable model name")
     version: Optional[str] = Field(
         None, description="Model version (e.g., '001', 'latest')"
@@ -61,7 +61,7 @@ class GeminiConfigRequest(BaseModel):
 
     api_key: str = Field(..., description="Gemini API key")
     default_model_name: str = Field(
-        ..., description="Default model name (e.g., 'gemini-1.5-pro')"
+        ..., description="Default model name (e.g., 'gemini-2.0-flash')"
     )
 
     @validator("api_key")
