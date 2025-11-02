@@ -13,6 +13,11 @@ from app.services.transform.validators import FileValidator
 from app.services.transform.storage import DocumentStorage
 from app.config import settings
 from app.services.quality.tasks import quality_validation_task
+from app.services.quality.exceptions import (
+    QualityValidationError,
+    QualityThresholdNotMetError,
+    QualityViolationError,
+)
 from app.services.marker.tasks import convert_pdf_to_markdown
 from app.services.chunking.tasks import chunk_document
 from app.services.chunking.config import ChunkingStrategy
@@ -116,6 +121,9 @@ async def update_stage_progress(
 
 def should_retry_flow_error(exc: Exception) -> bool:
     """Determine if flow error should be retried"""
+    if isinstance(exc, QualityValidationError):
+        return exc.retry_allowed
+
     error_msg = str(exc).lower()
 
     # Don't retry authentication/configuration errors
@@ -144,8 +152,7 @@ def should_retry_flow_error(exc: Exception) -> bool:
     name="document-transformation",
     description="Transform document to knowledge graph",
     version="1.0.0",
-    retries=2,
-    retry_delay_seconds=30,
+    retries=0,
 )
 async def document_transformation_flow(
     transform_id: str,
@@ -494,8 +501,15 @@ async def document_transformation_flow(
                                 quality_results.overall_score,
                                 settings.QUALITY_FAIL_SCORE,
                             )
-                            raise ValueError(
-                                "Quality validation failed: score below minimum threshold"
+                            raise QualityThresholdNotMetError(
+                                "Quality validation failed: score below minimum threshold",
+                                score=float(quality_results.overall_score),
+                                threshold=float(settings.QUALITY_FAIL_SCORE),
+                                violations=[
+                                    violation.model_dump()
+                                    for violation in quality_results.violations
+                                ],
+                                quality_results=quality_results.model_dump(),
                             )
 
                         if (
@@ -507,8 +521,13 @@ async def document_transformation_flow(
                                 "Quality validation found %s violations requiring review",
                                 len(quality_results.violations),
                             )
-                            raise ValueError(
-                                "Quality validation failed: unresolved violations"
+                            raise QualityViolationError(
+                                "Quality validation failed: unresolved violations",
+                                violations=[
+                                    violation.model_dump()
+                                    for violation in quality_results.violations
+                                ],
+                                quality_results=quality_results.model_dump(),
                             )
 
                         if quality_results.overall_score >= settings.QUALITY_MIN_SCORE:
@@ -540,7 +559,13 @@ async def document_transformation_flow(
                     logger.error(
                         f"Skipping quality validation for transform {transform_id}: no valid graphs to validate"
                     )
-                    raise ValueError("Quality validation failed: no graphs generated")
+                    raise QualityValidationError(
+                        "Quality validation failed: no graphs generated",
+                        details={
+                            "reason": "no_graphs_generated",
+                            "documents_processed": len(document_usage_records),
+                        },
+                    )
             except Exception as e:
                 logger.error(
                     f"Quality validation failed for transform {transform_id}: {e}"
@@ -553,7 +578,13 @@ async def document_transformation_flow(
             logger.error(
                 f"Skipping quality validation for transform {transform_id}: no graphs generated"
             )
-            raise ValueError("Quality validation failed: no graphs generated")
+            raise QualityValidationError(
+                "Quality validation failed: no graphs generated",
+                details={
+                    "reason": "no_graphs_generated",
+                    "documents_processed": len(document_usage_records),
+                },
+            )
 
         # Store knowledge graph
         nodes_stored = 0
@@ -672,12 +703,20 @@ async def document_transformation_flow(
             "quota exceeded",
             "billing",
             "api_key_invalid",
+            "quality validation failed",
         ]
 
         for pattern in non_recoverable_patterns:
             if pattern in error_message.lower():
                 is_recoverable = False
                 break
+
+        failure_code = None
+        failure_details = {}
+        if isinstance(e, QualityValidationError):
+            failure_code = e.code
+            failure_details = e.details
+            is_recoverable = False
 
         # Record error
         error = ErrorSummary(
@@ -692,6 +731,8 @@ async def document_transformation_flow(
             recovery_instructions=(
                 "Check API key configuration" if not is_recoverable else None
             ),
+            failure_code=failure_code,
+            details=failure_details,
         )
 
         await progress_tracker.fail_stage(transform_id, current_stage, error)

@@ -68,6 +68,8 @@ class ErrorSummary(BaseModel):
     retry_count: int = Field(default=0, ge=0)
     is_recoverable: bool = True
     recovery_instructions: Optional[str] = None
+    failure_code: Optional[str] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage"""
@@ -154,6 +156,8 @@ class DetailedTransformStatus(BaseModel):
     estimated_completion_time: Optional[datetime] = None
     error_summary: Optional[ErrorSummary] = None
     resource_metrics: ResourceMetrics
+    failure_code: Optional[str] = None
+    failure_details: Dict[str, Any] = Field(default_factory=dict)
 
     @property
     def duration_ms(self) -> float:
@@ -202,6 +206,8 @@ class DetailedTransformStatus(BaseModel):
         self.error_summary = error
         self.overall_status = TransformStatus.FAILED
         self.current_stage = TransformationStage.FAILED
+        self.failure_code = error.failure_code
+        self.failure_details = error.details or {}
 
     def update_resource_metrics(self, metrics: Dict[str, float]):
         """Update resource metrics"""
