@@ -67,6 +67,33 @@ def _canonicalize_company_name(value: str) -> str:
     return " ".join(words)
 
 
+def _basic_canonical_value(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        return _canonicalize_whitespace(value).casefold()
+
+    if isinstance(value, (int, float)):
+        return str(value)
+
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            canonical_part = _basic_canonical_value(item)
+            if canonical_part:
+                parts.append(canonical_part)
+        return "|".join(parts) if parts else None
+
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, sort_keys=True)
+        except Exception:
+            return str(value)
+
+    return str(value)
+
+
 def _get_registered_canonicalizer(
     entity_type: str, prop_name: str
 ) -> Optional[Canonicalizer]:
@@ -87,6 +114,9 @@ def _canonicalize_value(
         return None
 
     prop_def = prop_def or {}
+
+    if not settings.ENTITY_CANONICALIZATION_ENABLED:
+        return _basic_canonical_value(value)
 
     # Custom canonicalizer takes precedence
     custom = _get_registered_canonicalizer(entity_type, prop_name)
