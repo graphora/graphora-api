@@ -294,6 +294,14 @@ class QualityService:
         eligible = True
         reasons = []
 
+        gate_status = getattr(quality_results, "quality_gate_status", "pass")
+        if gate_status == "fail":
+            eligible = False
+            reasons.append("Quality gate status is fail")
+        elif gate_status == "warn":
+            eligible = False
+            reasons.append("Quality gate reported warnings")
+
         # Check score threshold
         threshold = auto_approval_config.get("auto_approve_threshold", 95.0)
         if quality_results.overall_score < threshold:

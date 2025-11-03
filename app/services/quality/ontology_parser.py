@@ -1,6 +1,6 @@
 """Parser for extracting quality rules from ontology YAML."""
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import logging
 
 from .models import QualityRuleConfig, QualityRuleType, QualitySeverity
@@ -14,6 +14,49 @@ class OntologyQualityParser:
 
     def __init__(self, ontology: Dict[str, Any]):
         self.ontology = ontology
+        self._default_gating_config = {
+            "pass_score": 90.0,
+            "warn_score": 80.0,
+            "hard_fail_score": 70.0,
+            "max_errors": 0,
+            "max_warnings": 10,
+            "min_property_completeness": 0.5,
+            "entity_property_thresholds": {},
+        }
+
+    def get_gating_config(self) -> Dict[str, Any]:
+        """Return gating configuration with sensible defaults."""
+        gating = (
+            self.ontology.get("dataQualityConfig", {}).get("gating", {})
+            if isinstance(self.ontology.get("dataQualityConfig"), dict)
+            else {}
+        )
+
+        config = self._default_gating_config.copy()
+        config.update(
+            {
+                "pass_score": float(gating.get("passScore", gating.get("warnScore", config["pass_score"]))),
+                "warn_score": float(gating.get("warnScore", config["warn_score"])),
+                "hard_fail_score": float(gating.get("hardFailScore", config["hard_fail_score"])),
+                "max_errors": int(gating.get("maxErrors", config["max_errors"])),
+                "max_warnings": int(gating.get("maxWarnings", config["max_warnings"])),
+                "min_property_completeness": float(
+                    gating.get(
+                        "minPropertyCompleteness",
+                        config["min_property_completeness"],
+                    )
+                ),
+            }
+        )
+
+        entity_thresholds = gating.get("entityPropertyCompleteness", {})
+        if isinstance(entity_thresholds, dict):
+            config["entity_property_thresholds"] = {
+                entity: float(threshold)
+                for entity, threshold in entity_thresholds.items()
+            }
+
+        return config
 
     def parse_property_quality_rules(
         self, entity_type: str, property_name: str, quality_config: Dict[str, Any]
@@ -72,7 +115,7 @@ class OntologyQualityParser:
         return rules
 
     def parse_relationship_quality_rules(
-        self, relationship_name: str, quality_config: Dict[str, Any]
+        self, entity_type: str, relationship_name: str, quality_config: Dict[str, Any]
     ) -> List[QualityRule]:
         """Parse quality rules for relationships."""
         rules = []
@@ -83,7 +126,7 @@ class OntologyQualityParser:
             if relationship_level:
                 rules.extend(
                     self._parse_relationship_level_rules(
-                        relationship_name, relationship_level
+                        entity_type, relationship_name, relationship_level
                     )
                 )
 
@@ -270,59 +313,159 @@ class OntologyQualityParser:
         return rules
 
     def _parse_validation_rules(
-        self, _entity_type: str, _property_name: str, _validation_config: Dict[str, Any]
+        self, entity_type: str, property_name: str, validation_config: Dict[str, Any]
     ) -> List[QualityRule]:
         """Parse validation-specific quality rules."""
         rules = []
 
-        # Uniqueness check - this would be implemented as a global rule
-        # For now, we'll skip complex validation rules that require cross-entity analysis
+        # Date range validations
+        date_window = validation_config.get("dateWindow")
+        if date_window:
+            rule_config = QualityRuleConfig(
+                rule_id=f"{entity_type}.{property_name}.date_window",
+                rule_type=QualityRuleType.BUSINESS,
+                severity=self._parse_severity(
+                    date_window.get("severity"), default=QualitySeverity.WARNING
+                ),
+                name=f"Date window validation for {property_name}",
+                description="Date must fall within configured window",
+                parameters={
+                    "rule_class": "date_window",
+                    "earliest": date_window.get("earliest"),
+                    "latest": date_window.get("latest"),
+                    "allow_future": date_window.get("allowFuture", False),
+                },
+            )
+            rules.append(QualityRuleFactory.create_rule(rule_config))
 
         return rules
 
     def _parse_entity_level_rules(
-        self, _entity_type: str, _entity_config: Dict[str, Any]
+        self, entity_type: str, entity_config: Dict[str, Any]
     ) -> List[QualityRule]:
         """Parse entity-level quality rules."""
         rules = []
 
-        # For now, we'll implement basic entity-level rules
-        # More complex rules like completeness ratios would be added here
+        completeness = entity_config.get("completeness")
+        if completeness:
+            min_ratio = completeness.get("minPropertyFillRate")
+            if min_ratio is not None:
+                rule_config = QualityRuleConfig(
+                    rule_id=f"{entity_type}.completeness.min_fill_rate",
+                    rule_type=QualityRuleType.CONSISTENCY,
+                    severity=self._parse_severity(
+                        completeness.get("severity"),
+                        default=QualitySeverity.WARNING,
+                    ),
+                    name=f"{entity_type} minimum property fill rate",
+                    description=f"Entities must meet minimum property fill rate of {min_ratio}",
+                    parameters={
+                        "rule_class": "entity_completeness",
+                        "entity_type": entity_type,
+                        "min_ratio": float(min_ratio),
+                    },
+                )
+                rules.append(QualityRuleFactory.create_rule(rule_config))
 
         return rules
 
     def _parse_relationship_level_rules(
-        self, _relationship_name: str, _relationship_config: Dict[str, Any]
+        self,
+        entity_type: str,
+        relationship_name: str,
+        relationship_config: Dict[str, Any],
     ) -> List[QualityRule]:
         """Parse relationship-level quality rules."""
         rules = []
 
-        # Cardinality rules, confidence thresholds, etc.
-        # These would be implemented as custom relationship rules
+        cardinality = relationship_config.get("cardinality")
+        if cardinality:
+            min_count = cardinality.get("minPerEntity")
+            if min_count is not None:
+                rule_config = QualityRuleConfig(
+                    rule_id=f"relationship.{relationship_name}.cardinality",
+                    rule_type=QualityRuleType.CONSISTENCY,
+                    severity=self._parse_severity(
+                        cardinality.get("severity"), default=QualitySeverity.WARNING
+                    ),
+                    name=f"Relationship cardinality for {relationship_name}",
+                    description="Ensure minimum relationship count per entity",
+                    parameters={
+                        "rule_class": "relationship_presence",
+                        "entity_type": cardinality.get("entityType", entity_type),
+                        "relationship_type": relationship_name,
+                        "direction": cardinality.get("direction", "outbound"),
+                        "min_count": int(min_count),
+                    },
+                )
+                rules.append(QualityRuleFactory.create_rule(rule_config))
 
         return rules
 
     def _parse_distribution_rules(
-        self, _distribution_config: Dict[str, Any]
+        self, distribution_config: Dict[str, Any]
     ) -> List[QualityRule]:
         """Parse distribution/statistical quality rules."""
         rules = []
 
-        # Entity balance rules, expected counts, etc.
-        # These would be implemented as custom global rules
+        relationship_requirements = distribution_config.get("relationshipRequirements", [])
+        for idx, requirement in enumerate(relationship_requirements):
+            rule_config = QualityRuleConfig(
+                rule_id=f"global.relationship_requirement.{idx}",
+                rule_type=QualityRuleType.CROSS_ENTITY,
+                severity=self._parse_severity(
+                    requirement.get("severity"), default=QualitySeverity.WARNING
+                ),
+                name="Relationship presence requirement",
+                description="Ensure entities satisfy minimum relationship counts",
+                parameters={
+                    "rule_class": "relationship_presence",
+                    "entity_type": requirement.get("entityType"),
+                    "relationship_type": requirement.get("relationshipType"),
+                    "direction": requirement.get("direction", "outbound"),
+                    "min_count": int(requirement.get("minCount", 1)),
+                },
+            )
+            rules.append(QualityRuleFactory.create_rule(rule_config))
 
         return rules
 
     def _parse_cross_validation_rules(
-        self, _cross_validation_config: List[Dict[str, Any]]
+        self, cross_validation_config: List[Dict[str, Any]]
     ) -> List[QualityRule]:
         """Parse cross-entity validation rules."""
         rules = []
 
-        # Consistency rules, hierarchical validation, etc.
-        # These would be implemented as custom cross-entity rules
+        for idx, rule_def in enumerate(cross_validation_config):
+            rule_type = rule_def.get("ruleType")
+            if rule_type == "symmetric_relationship":
+                rule_config = QualityRuleConfig(
+                    rule_id=f"global.symmetric_relationship.{idx}",
+                    rule_type=QualityRuleType.CROSS_ENTITY,
+                    severity=self._parse_severity(
+                        rule_def.get("severity"), default=QualitySeverity.WARNING
+                    ),
+                    name=f"Symmetric relationship check for {rule_def.get('relationshipType')}",
+                    description="Ensure relationships are symmetric",
+                    parameters={
+                        "rule_class": "symmetric_relationship",
+                        "relationship_type": rule_def.get("relationshipType"),
+                        "inverse_type": rule_def.get("inverseType"),
+                    },
+                )
+                rules.append(QualityRuleFactory.create_rule(rule_config))
 
         return rules
+
+    def _parse_severity(
+        self, severity_value: Optional[str], *, default: QualitySeverity
+    ) -> QualitySeverity:
+        if not severity_value:
+            return default
+        try:
+            return QualitySeverity(severity_value.lower())
+        except ValueError:
+            return default
 
     def get_llm_prompt_instructions(self) -> List[str]:
         """Generate LLM prompt instructions based on all quality rules."""

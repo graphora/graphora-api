@@ -112,6 +112,10 @@ class QualityMetrics(BaseModel):
     entity_type_coverage: Dict[str, int] = Field(
         default_factory=dict, description="Count of entities by type"
     )
+    property_fill_rates_by_entity: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-entity type property completeness percentages",
+    )
 
 
 class QualityResults(BaseModel):
@@ -144,6 +148,15 @@ class QualityResults(BaseModel):
     # Entity-level summary: {entity_type: {severity: count}}
     entity_quality_summary: Dict[str, Dict[str, int]] = Field(
         default_factory=dict, description="Quality summary by entity type"
+    )
+
+    quality_gate_status: str = Field(
+        default="pass",
+        description="Quality gate evaluation outcome (pass/warn/fail)",
+    )
+    quality_gate_reasons: List[str] = Field(
+        default_factory=list,
+        description="Reasons contributing to the gate decision",
     )
 
     # Validation metadata
