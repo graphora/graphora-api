@@ -227,8 +227,17 @@ class LLMClient:
             output_perc = (
                 response.usage_metadata.candidates_token_count * 100
             ) / response.usage_metadata.total_token_count
-        if response.parsed is None or output_perc < 4:
+        if response.parsed is None:
             raise ValueError("Incorrect response parsed")
+        if output_perc < 4:
+            logger.warning(
+                "Gemini PDF relationship response very small compared to prompt",
+                extra={
+                    "transform_id": transform_id,
+                    "file": filepath.name,
+                    "output_percentage": output_perc,
+                },
+            )
         result_model = response.parsed
         await _PDF_NODE_CACHE.set(cache_key, result_model.model_dump(mode="json"))
         logger.debug(
