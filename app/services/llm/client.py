@@ -4,6 +4,7 @@ from pathlib import Path
 from collections import OrderedDict
 import asyncio
 from copy import deepcopy
+import json
 
 from app.baml_client.type_builder import TypeBuilder
 from pydantic import BaseModel
@@ -64,11 +65,69 @@ class _AsyncLRUCache:
                 self._data.popitem(last=False)
 
 
-_CACHE_SIZE = getattr(settings, "LLM_CACHE_MAX_ENTRIES", 128)
-_PDF_NODE_CACHE = _AsyncLRUCache(max_size=_CACHE_SIZE)
-_PDF_REL_CACHE = _AsyncLRUCache(max_size=_CACHE_SIZE)
-_CHUNK_NODE_CACHE = _AsyncLRUCache(max_size=_CACHE_SIZE)
-_CHUNK_REL_CACHE = _AsyncLRUCache(max_size=_CACHE_SIZE)
+class _RedisCache:
+    """Async Redis-backed cache with JSON serialisation."""
+
+    def __init__(self, url: str, namespace: str, ttl_seconds: Optional[int]):
+        try:  # pragma: no cover - optional dependency
+            from redis.asyncio import Redis  # type: ignore
+        except Exception as exc:  # pragma: no cover - handled via fallback
+            raise RuntimeError("redis.asyncio is required for Redis LLM cache") from exc
+
+        self._client = Redis.from_url(url, encoding="utf-8", decode_responses=True)
+        self._namespace = namespace
+        self._ttl = ttl_seconds
+
+    def _namespaced(self, key: str) -> str:
+        return f"{self._namespace}:{key}"
+
+    async def get(self, key: str) -> Optional[Any]:
+        raw = await self._client.get(self._namespaced(key))
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:  # pragma: no cover - defensive cleanup
+            await self._client.delete(self._namespaced(key))
+            logger.warning(
+                "Failed to decode cached payload; purging entry",
+                extra={"cache_key": key, "namespace": self._namespace},
+            )
+            return None
+
+    async def set(self, key: str, value: Any) -> None:
+        payload = json.dumps(value)
+        await self._client.set(
+            self._namespaced(key),
+            payload,
+            ex=self._ttl if self._ttl and self._ttl > 0 else None,
+        )
+
+
+def _create_cache(namespace: str):
+    max_entries = getattr(settings, "LLM_CACHE_MAX_ENTRIES", 128)
+    cache_url = getattr(settings, "LLM_CACHE_URL", None)
+    if cache_url:
+        ttl_seconds = max(getattr(settings, "CACHE_TTL_HOURS", 24), 0) * 3600
+        try:
+            logger.debug(
+                "Initialising Redis-backed LLM cache",
+                extra={"namespace": namespace, "cache_url": cache_url},
+            )
+            return _RedisCache(cache_url, namespace, ttl_seconds)
+        except Exception as exc:  # pragma: no cover - fallback when Redis unavailable
+            logger.warning(
+                "Redis cache unavailable for namespace %s: %s. Falling back to in-memory cache.",
+                namespace,
+                exc,
+            )
+    return _AsyncLRUCache(max_size=max_entries)
+
+
+_PDF_NODE_CACHE = _create_cache("pdf-nodes")
+_PDF_REL_CACHE = _create_cache("pdf-relationships")
+_CHUNK_NODE_CACHE = _create_cache("chunk-nodes")
+_CHUNK_REL_CACHE = _create_cache("chunk-relationships")
 
 
 def _cache_key(*parts: str) -> str:

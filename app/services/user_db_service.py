@@ -1,8 +1,10 @@
-from typing import Literal
+from typing import Literal, TYPE_CHECKING
 from app.services.config_service import config_service
-from app.services.graph_service import GraphService
 from app.schemas.config import UserConfig, DatabaseConfig
 from app.utils.logger import logger
+
+if TYPE_CHECKING:  # pragma: no cover - import only for typing
+    from app.services.graph_service import GraphService
 
 DatabaseEnvironment = Literal["staging", "production"]
 
@@ -60,7 +62,7 @@ class UserDatabaseService:
     @staticmethod
     async def get_graph_service(
         user_id: str, environment: DatabaseEnvironment
-    ) -> GraphService:
+    ) -> "GraphService":
         """
         Get GraphService instance for user's specific database
 
@@ -77,17 +79,19 @@ class UserDatabaseService:
             f"Creating graph service for user {user_id} on {environment} database: {db_config.uri}"
         )
 
+        from app.services.graph_service import GraphService
+
         return GraphService(
             uri=db_config.uri, user=db_config.username, password=db_config.password
         )
 
     @staticmethod
-    async def get_staging_graph_service(user_id: str) -> GraphService:
+    async def get_staging_graph_service(user_id: str) -> "GraphService":
         """Get staging database GraphService for user"""
         return await UserDatabaseService.get_graph_service(user_id, "staging")
 
     @staticmethod
-    async def get_production_graph_service(user_id: str) -> GraphService:
+    async def get_production_graph_service(user_id: str) -> "GraphService":
         """Get production database GraphService for user"""
         return await UserDatabaseService.get_graph_service(user_id, "production")
 

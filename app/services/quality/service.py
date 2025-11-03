@@ -1,18 +1,27 @@
 """Quality service for managing quality validation results."""
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from datetime import datetime, timezone
+import hashlib
+import json
 
-from app.services.storage.neo4j import Neo4jStorage
 from app.utils.logger import logger
 
-from .models import QualityResults, QualityViolation, QualitySeverity
+from .models import (
+    QualityResults,
+    QualityViolation,
+    QualitySeverity,
+    QualityRuleType,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - import only for typing to avoid heavy deps at runtime
+    from app.services.storage.neo4j import Neo4jStorage
 
 
 class QualityService:
     """Service for managing quality validation results and user interactions."""
 
-    def __init__(self, neo4j_storage: Neo4jStorage):
+    def __init__(self, neo4j_storage: "Neo4jStorage"):
         self.neo4j = neo4j_storage
 
     async def store_quality_results(
@@ -49,6 +58,12 @@ class QualityService:
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
+            )
+
+            await self._store_quality_violations(
+                transform_id=transform_id,
+                user_id=user_id,
+                violations=quality_results.violations,
             )
 
             logger.info(
@@ -171,36 +186,167 @@ class QualityService:
         self,
         transform_id: str,
         user_id: str,
-        violation_type: Optional[str] = None,
-        severity: Optional[str] = None,
+        violation_type: Optional[QualityRuleType | str] = None,
+        severity: Optional[QualitySeverity | str] = None,
         entity_type: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
+        quality_results: Optional[QualityResults] = None,
     ) -> List[QualityViolation]:
         """Get filtered list of quality violations."""
         try:
-            quality_results = await self.get_quality_results(transform_id, user_id)
+            if limit <= 0:
+                return []
+
+            if offset < 0:
+                offset = 0
+
+            if quality_results is None:
+                quality_results = await self.get_quality_results(transform_id, user_id)
+
             if not quality_results:
                 return []
 
             violations = quality_results.violations
 
-            # Apply filters
             if violation_type:
-                violations = [v for v in violations if v.rule_type == violation_type]
+                violation_type_value = (
+                    violation_type.value
+                    if isinstance(violation_type, QualityRuleType)
+                    else str(violation_type)
+                )
+                violations = [
+                    v
+                    for v in violations
+                    if getattr(v.rule_type, "value", v.rule_type) == violation_type_value
+                ]
 
             if severity:
-                violations = [v for v in violations if v.severity == severity]
+                severity_value = (
+                    severity.value
+                    if isinstance(severity, QualitySeverity)
+                    else str(severity)
+                )
+                violations = [
+                    v
+                    for v in violations
+                    if getattr(v.severity, "value", v.severity) == severity_value
+                ]
 
             if entity_type:
-                violations = [v for v in violations if v.entity_type == entity_type]
+                violations = [
+                    v for v in violations if v.entity_type == entity_type
+                ]
 
-            # Apply pagination
             return violations[offset : offset + limit]
-
         except Exception as e:
             logger.error(f"Failed to get violations for transform {transform_id}: {e}")
             return []
+
+    async def _store_quality_violations(
+        self,
+        *,
+        transform_id: str,
+        user_id: str,
+        violations: List[QualityViolation],
+    ) -> None:
+        """Persist individual quality violations for analytics and UI triage."""
+
+        delete_query = """
+        MATCH (qr:QualityResults {transform_id: $transform_id, user_id: $user_id})-[:HAS_VIOLATION]->(v:QualityViolation)
+        DETACH DELETE v
+        """
+
+        params = {"transform_id": transform_id, "user_id": user_id}
+
+        try:
+            await self.neo4j.execute_query(delete_query, params)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error(
+                "Failed to clear existing quality violations for transform %s: %s",
+                transform_id,
+                exc,
+            )
+            return
+
+        if not violations:
+            logger.debug(
+                "No quality violations to persist for transform %s", transform_id
+            )
+            return
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+        violations_payload: List[Dict[str, Any]] = []
+
+        for index, violation in enumerate(violations):
+            violation_dict = violation.model_dump(mode="json")
+            identifier_source = json.dumps(
+                {
+                    "rule_id": violation_dict.get("rule_id"),
+                    "entity_id": violation_dict.get("entity_id"),
+                    "property_name": violation_dict.get("property_name"),
+                    "relationship_type": violation_dict.get("relationship_type"),
+                    "index": index,
+                },
+                sort_keys=True,
+            )
+            violation_id = hashlib.sha1(
+                f"{transform_id}:{identifier_source}".encode("utf-8")
+            ).hexdigest()
+
+            violations_payload.append(
+                {
+                    **violation_dict,
+                    "violation_id": violation_id,
+                    "violation_index": index,
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                }
+            )
+
+        create_query = """
+        MATCH (qr:QualityResults {transform_id: $transform_id, user_id: $user_id})
+        WITH qr, $violations AS violations
+        UNWIND violations AS violation
+        CREATE (qr)-[:HAS_VIOLATION]->(v:QualityViolation {violation_id: violation.violation_id})
+        SET v.rule_id = violation.rule_id,
+            v.rule_type = violation.rule_type,
+            v.severity = violation.severity,
+            v.entity_type = violation.entity_type,
+            v.entity_id = violation.entity_id,
+            v.property_name = violation.property_name,
+            v.relationship_type = violation.relationship_type,
+            v.message = violation.message,
+            v.expected = violation.expected,
+            v.actual = violation.actual,
+            v.confidence = violation.confidence,
+            v.suggestion = violation.suggestion,
+            v.context = violation.context,
+            v.violation_index = violation.violation_index,
+            v.created_at = violation.created_at,
+            v.updated_at = violation.updated_at
+        """
+
+        try:
+            await self.neo4j.execute_query(
+                create_query,
+                {
+                    "transform_id": transform_id,
+                    "user_id": user_id,
+                    "violations": violations_payload,
+                },
+            )
+            logger.debug(
+                "Stored %s quality violations for transform %s",
+                len(violations_payload),
+                transform_id,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error(
+                "Failed to persist quality violations for transform %s: %s",
+                transform_id,
+                exc,
+            )
 
     async def get_quality_summary(
         self, user_id: str, limit: int = 10

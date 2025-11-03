@@ -1,8 +1,7 @@
 import re
 import traceback
-from typing import Any, Dict
+from typing import Any, Dict, TYPE_CHECKING
 import ast
-from neo4j import GraphDatabase
 from app.schemas.graph import Node, Edge, GraphResponse
 from app.schemas.graph_changes import (
     NodeCreation,
@@ -17,13 +16,23 @@ from app.utils.logger import logger
 from uuid import uuid4
 from app.utils.constants import TRANSFORM_ID
 
+if TYPE_CHECKING:  # pragma: no cover - typing aid only
+    from neo4j import Driver
+
 LABEL_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class GraphService:
     def __init__(self, uri: str, user: str, password: str):
         """Initialize Neo4j connection"""
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        try:
+            from neo4j import GraphDatabase  # Local import to avoid heavy dependency at module load
+        except Exception as exc:  # pragma: no cover - runtime environment without driver
+            raise RuntimeError(
+                "Neo4j driver is unavailable. Install neo4j python driver to use GraphService."
+            ) from exc
+
+        self.driver: "Driver" = GraphDatabase.driver(uri, auth=(user, password))
 
     @staticmethod
     def _ensure_safe_label(label: str) -> str:
@@ -41,8 +50,9 @@ class GraphService:
 
     def close(self):
         """Close Neo4j connection"""
-        if self.driver:
-            self.driver.close()
+        driver = getattr(self, "driver", None)
+        if driver:
+            driver.close()
 
     def get_graph_by_transform_id(
         self, transform_id: str, limit: int = 1000, skip: int = 0

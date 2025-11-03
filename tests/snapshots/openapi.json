@@ -2115,6 +2115,80 @@
         "title": "QualitySeverity",
         "type": "string"
       },
+      "QualitySummaryItem": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "grade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grade"
+          },
+          "overall_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall Score"
+          },
+          "requires_review": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Review"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total_violations": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Violations"
+          },
+          "transform_id": {
+            "title": "Transform Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transform_id",
+          "status"
+        ],
+        "title": "QualitySummaryItem",
+        "type": "object"
+      },
       "QualityViolation": {
         "description": "Represents a single quality rule violation.",
         "properties": {
@@ -6090,18 +6164,16 @@
     },
     "/api/v1/quality/summary": {
       "get": {
-        "description": "Get summary of recent quality results for a user.",
-        "operationId": "get_quality_summary_api_v1_quality_summary_get",
+        "description": "Return recent quality summaries for the authenticated user.",
+        "operationId": "get_quality_summary_endpoint_api_v1_quality_summary_get",
         "parameters": [
           {
-            "description": "Number of recent results to return",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 10,
-              "description": "Number of recent results to return",
-              "maximum": 50,
+              "maximum": 100,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
@@ -6112,7 +6184,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QualitySummaryItem"
+                  },
+                  "title": "Response Get Quality Summary Endpoint Api V1 Quality Summary Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -6133,7 +6211,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Quality Summary",
+        "summary": "Get Quality Summary Endpoint",
         "tags": [
           "quality"
         ]
@@ -6141,8 +6219,8 @@
     },
     "/api/v1/quality/violations/{transform_id}": {
       "get": {
-        "description": "Get filtered list of quality violations.",
-        "operationId": "get_detailed_violations_api_v1_quality_violations__transform_id__get",
+        "description": "List persisted quality violations for a transform with optional filtering.",
+        "operationId": "list_quality_violations_api_v1_quality_violations__transform_id__get",
         "parameters": [
           {
             "in": "path",
@@ -6154,7 +6232,7 @@
             }
           },
           {
-            "description": "Filter by violation type",
+            "description": "Filter by quality rule type",
             "in": "query",
             "name": "violation_type",
             "required": false,
@@ -6167,12 +6245,12 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter by violation type",
+              "description": "Filter by quality rule type",
               "title": "Violation Type"
             }
           },
           {
-            "description": "Filter by severity",
+            "description": "Filter by violation severity",
             "in": "query",
             "name": "severity",
             "required": false,
@@ -6185,7 +6263,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter by severity",
+              "description": "Filter by violation severity",
               "title": "Severity"
             }
           },
@@ -6208,27 +6286,23 @@
             }
           },
           {
-            "description": "Number of violations to return",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 100,
-              "description": "Number of violations to return",
-              "maximum": 1000,
+              "maximum": 500,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
             }
           },
           {
-            "description": "Number of violations to skip",
             "in": "query",
             "name": "offset",
             "required": false,
             "schema": {
               "default": 0,
-              "description": "Number of violations to skip",
               "minimum": 0,
               "title": "Offset",
               "type": "integer"
@@ -6239,7 +6313,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QualityViolation"
+                  },
+                  "title": "Response List Quality Violations Api V1 Quality Violations  Transform Id  Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -6260,7 +6340,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Detailed Violations",
+        "summary": "List Quality Violations",
         "tags": [
           "quality"
         ]

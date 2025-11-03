@@ -104,6 +104,10 @@ class Settings(BaseSettings):
         default=128,
         description="Maximum number of LLM responses cached per process",
     )
+    LLM_CACHE_URL: Optional[str] = Field(
+        default=None,
+        description="Optional Redis connection URL for sharing LLM response cache across workers",
+    )
 
     # Deterministic processing
     DETERMINISTIC_MODE: bool = Field(

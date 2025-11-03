@@ -2,7 +2,7 @@
 
 import traceback
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, timezone
 import logging
@@ -11,11 +11,11 @@ import logging
 try:
     from app.services.quality.models import (
         QualityResults,
+        QualityViolation,
         QualityRuleType,
         QualitySeverity,
     )
     from app.services.quality.service import QualityService
-    from app.services.storage.neo4j import Neo4jStorage
     from app.services.user_db_service import UserDatabaseService
     from app.services.feedback_service import feedback_service, FeedbackType
     from app.auth import get_current_user_id
@@ -40,23 +40,47 @@ logger = logging.getLogger(__name__)
 if QUALITY_API_AVAILABLE:
     router = APIRouter(prefix="/api/v1/quality", tags=["quality"])
 
+    class QualitySummaryItem(BaseModel):
+        transform_id: str
+        overall_score: Optional[float] = None
+        grade: Optional[str] = None
+        requires_review: Optional[bool] = None
+        total_violations: Optional[int] = None
+        created_at: Optional[datetime] = None
+        status: str
+
+
+    async def _get_quality_service(user_id: str) -> QualityService:
+        user_config = await UserDatabaseService.get_user_config(user_id)
+
+        try:
+            from app.services.storage.neo4j import Neo4jStorage
+        except Exception as storage_error:  # pragma: no cover - import failure handled at runtime
+            logger.error(
+                "Neo4j storage backend unavailable for quality operations: %s",
+                storage_error,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Graph storage backend unavailable",
+            ) from storage_error
+
+        neo4j_storage = Neo4jStorage(
+            uri=user_config.stagingDb.uri,
+            username=user_config.stagingDb.username,
+            password=user_config.stagingDb.password,
+            database="neo4j",
+        )
+
+        return QualityService(neo4j_storage)
+
     @router.get("/results/{transform_id}", response_model=QualityResults)
     async def get_quality_results(
         transform_id: str, user_id: str = Depends(get_current_user_id)
     ):
         """Get quality validation results for a transform."""
         try:
-            # Get user's database configuration
-            user_config = await UserDatabaseService.get_user_config(user_id)
-
-            # Create Neo4j storage with user's staging database configuration
-            neo4j_storage = Neo4jStorage(
-                uri=user_config.stagingDb.uri,
-                username=user_config.stagingDb.username,
-                password=user_config.stagingDb.password,
-                database="neo4j",  # Default database name
-            )
-            quality_service = QualityService(neo4j_storage)
+            quality_service = await _get_quality_service(user_id)
 
             logger.info(
                 f"Retrieving quality results for transform {transform_id}, user {user_id}"
@@ -92,17 +116,7 @@ if QUALITY_API_AVAILABLE:
     ):
         """User approves quality results and proceeds to merge."""
         try:
-            # Get user's database configuration
-            user_config = await UserDatabaseService.get_user_config(user_id)
-
-            # Create Neo4j storage with user's staging database configuration
-            neo4j_storage = Neo4jStorage(
-                uri=user_config.stagingDb.uri,
-                username=user_config.stagingDb.username,
-                password=user_config.stagingDb.password,
-                database="neo4j",  # Default database name
-            )
-            quality_service = QualityService(neo4j_storage)
+            quality_service = await _get_quality_service(user_id)
 
             await quality_service.approve_quality_results(
                 transform_id, user_id, request.approval_comment
@@ -153,17 +167,7 @@ if QUALITY_API_AVAILABLE:
     ):
         """User rejects quality results - stops the process."""
         try:
-            # Get user's database configuration
-            user_config = await UserDatabaseService.get_user_config(user_id)
-
-            # Create Neo4j storage with user's staging database configuration
-            neo4j_storage = Neo4jStorage(
-                uri=user_config.stagingDb.uri,
-                username=user_config.stagingDb.username,
-                password=user_config.stagingDb.password,
-                database="neo4j",  # Default database name
-            )
-            quality_service = QualityService(neo4j_storage)
+            quality_service = await _get_quality_service(user_id)
 
             await quality_service.reject_quality_results(
                 transform_id, request.rejection_reason, user_id
@@ -205,35 +209,37 @@ if QUALITY_API_AVAILABLE:
                 status_code=500, detail="Failed to reject quality results"
             )
 
-    @router.get("/violations/{transform_id}")
-    async def get_detailed_violations(
+    @router.get(
+        "/violations/{transform_id}", response_model=List[QualityViolation]
+    )
+    async def list_quality_violations(
         transform_id: str,
-        user_id: str = Depends(get_current_user_id),
         violation_type: Optional[QualityRuleType] = Query(
-            None, description="Filter by violation type"
+            default=None, description="Filter by quality rule type"
         ),
         severity: Optional[QualitySeverity] = Query(
-            None, description="Filter by severity"
+            default=None, description="Filter by violation severity"
         ),
-        entity_type: Optional[str] = Query(None, description="Filter by entity type"),
-        limit: int = Query(
-            100, ge=1, le=1000, description="Number of violations to return"
+        entity_type: Optional[str] = Query(
+            default=None, description="Filter by entity type"
         ),
-        offset: int = Query(0, ge=0, description="Number of violations to skip"),
+        limit: int = Query(100, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+        user_id: str = Depends(get_current_user_id),
     ):
-        """Get filtered list of quality violations."""
-        try:
-            # Get user's database configuration
-            user_config = await UserDatabaseService.get_user_config(user_id)
+        """List persisted quality violations for a transform with optional filtering."""
 
-            # Create Neo4j storage with user's staging database configuration
-            neo4j_storage = Neo4jStorage(
-                uri=user_config.stagingDb.uri,
-                username=user_config.stagingDb.username,
-                password=user_config.stagingDb.password,
-                database="neo4j",  # Default database name
+        try:
+            quality_service = await _get_quality_service(user_id)
+            quality_results = await quality_service.get_quality_results(
+                transform_id, user_id
             )
-            quality_service = QualityService(neo4j_storage)
+
+            if not quality_results:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Quality results not found for transform {transform_id}",
+                )
 
             violations = await quality_service.get_violations(
                 transform_id=transform_id,
@@ -243,53 +249,79 @@ if QUALITY_API_AVAILABLE:
                 entity_type=entity_type,
                 limit=limit,
                 offset=offset,
+                quality_results=quality_results,
             )
 
-            return {
-                "transform_id": transform_id,
-                "violations": violations,
-                "total_returned": len(violations),
-                "filters_applied": {
-                    "violation_type": violation_type,
-                    "severity": severity,
-                    "entity_type": entity_type,
-                },
-            }
-        except Exception as e:
-            logger.error(f"Failed to get violations for {transform_id}: {e}")
-            raise HTTPException(status_code=500, detail="Failed to retrieve violations")
+            logger.info(
+                "Retrieved %s quality violations for transform %s (offset=%s, limit=%s)",
+                len(violations),
+                transform_id,
+                offset,
+                limit,
+            )
 
-    @router.get("/summary")
-    async def get_quality_summary(
+            return violations
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Failed to list quality violations for transform %s: %s",
+                transform_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=500, detail="Failed to retrieve quality violations"
+            ) from exc
+
+    @router.get("/summary", response_model=List[QualitySummaryItem])
+    async def get_quality_summary_endpoint(
+        limit: int = Query(10, ge=1, le=100),
         user_id: str = Depends(get_current_user_id),
-        limit: int = Query(
-            10, ge=1, le=50, description="Number of recent results to return"
-        ),
     ):
-        """Get summary of recent quality results for a user."""
+        """Return recent quality summaries for the authenticated user."""
+
         try:
-            user_config = await UserDatabaseService.get_user_config(user_id)
+            quality_service = await _get_quality_service(user_id)
+            summary_rows = await quality_service.get_quality_summary(user_id, limit)
 
-            neo4j_storage = Neo4jStorage(
-                uri=user_config.stagingDb.uri,
-                username=user_config.stagingDb.username,
-                password=user_config.stagingDb.password,
-                database="neo4j",
+            summaries: List[QualitySummaryItem] = []
+            for row in summary_rows:
+                created_at_raw = row.get("created_at")
+                created_at_value: Optional[datetime] = None
+                if isinstance(created_at_raw, datetime):
+                    created_at_value = created_at_raw
+                elif isinstance(created_at_raw, str):
+                    try:
+                        created_at_value = datetime.fromisoformat(created_at_raw)
+                    except ValueError:
+                        created_at_value = None
+
+                summaries.append(
+                    QualitySummaryItem(
+                        transform_id=row.get("transform_id"),
+                        overall_score=row.get("overall_score"),
+                        grade=row.get("grade"),
+                        requires_review=row.get("requires_review"),
+                        total_violations=row.get("total_violations"),
+                        created_at=created_at_value,
+                        status=row.get("status", "pending"),
+                    )
+                )
+
+            logger.info(
+                "Retrieved %s quality summaries for user %s",
+                len(summaries),
+                user_id,
             )
-            quality_service = QualityService(neo4j_storage)
 
-            summaries = await quality_service.get_quality_summary(user_id, limit)
-
-            return {
-                "user_id": user_id,
-                "recent_quality_results": summaries,
-                "total_returned": len(summaries),
-            }
-        except Exception as e:
-            logger.error(f"Failed to get quality summary for user {user_id}: {e}")
+            return summaries
+        except Exception as exc:
+            logger.error(
+                "Failed to retrieve quality summary for user %s: %s", user_id, exc
+            )
             raise HTTPException(
                 status_code=500, detail="Failed to retrieve quality summary"
-            )
+            ) from exc
 
     @router.delete("/results/{transform_id}")
     async def delete_quality_results(
@@ -298,15 +330,7 @@ if QUALITY_API_AVAILABLE:
     ):
         """Delete quality results for a transform."""
         try:
-            user_config = await UserDatabaseService.get_user_config(user_id)
-
-            neo4j_storage = Neo4jStorage(
-                uri=user_config.stagingDb.uri,
-                username=user_config.stagingDb.username,
-                password=user_config.stagingDb.password,
-                database="neo4j",
-            )
-            quality_service = QualityService(neo4j_storage)
+            quality_service = await _get_quality_service(user_id)
 
             deleted = await quality_service.delete_quality_results(
                 transform_id, user_id
