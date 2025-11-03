@@ -107,17 +107,117 @@ def stub_dependencies() -> None:
     redis_stub = types.ModuleType("redis")
 
     class _RedisClient:
-        def set(self, *args, **kwargs):  # pragma: no cover - simple stub
-            return None
+        def __init__(self):  # pragma: no cover
+            self._store = {}
 
-        def get(self, *args, **kwargs):  # pragma: no cover - simple stub
-            return None
+        @classmethod
+        def from_url(cls, *args, **kwargs):  # pragma: no cover
+            return cls()
 
-        def delete(self, *args, **kwargs):  # pragma: no cover - simple stub
-            return None
+        async def set(self, *args, **kwargs):  # pragma: no cover
+            key, value = args[0], args[1]
+            self._store[key] = value
+            return True
 
-    redis_stub.from_url = lambda *args, **kwargs: _RedisClient()
+        async def get(self, key):  # pragma: no cover
+            return self._store.get(key)
+
+        async def delete(self, key):  # pragma: no cover
+            self._store.pop(key, None)
+            return True
+
+    redis_asyncio_stub = types.ModuleType("redis.asyncio")
+    redis_asyncio_stub.Redis = _RedisClient
+
+    redis_stub.from_url = _RedisClient.from_url  # Backwards compatibility
+    redis_stub.asyncio = redis_asyncio_stub
     sys.modules["redis"] = redis_stub
+    sys.modules["redis.asyncio"] = redis_asyncio_stub
+
+    # LangChain semantic chunking stubs
+    langchain_experimental_stub = types.ModuleType("langchain_experimental")
+    text_splitter_stub = types.ModuleType("langchain_experimental.text_splitter")
+
+    class SemanticChunker:
+        """Lightweight stub mimicking LangChain's SemanticChunker"""
+
+        def __init__(self, *args, **kwargs):  # pragma: no cover - initialization is trivial
+            self._config = kwargs
+
+        def create_documents(self, texts):  # pragma: no cover - simple passthrough
+            return [types.SimpleNamespace(page_content=text) for text in texts]
+
+    text_splitter_stub.SemanticChunker = SemanticChunker
+    langchain_experimental_stub.text_splitter = text_splitter_stub
+    sys.modules["langchain_experimental"] = langchain_experimental_stub
+    sys.modules["langchain_experimental.text_splitter"] = text_splitter_stub
+
+    # LangChain HuggingFace embeddings stub
+    langchain_hf_stub = types.ModuleType("langchain_huggingface")
+    hf_embeddings_stub = types.ModuleType("langchain_huggingface.embeddings")
+
+    class HuggingFaceEmbeddings:
+        """Stub for HuggingFaceEmbeddings used during schema generation."""
+
+        def __init__(self, *args, **kwargs):  # pragma: no cover - initialization is trivial
+            self._config = kwargs
+
+        def embed_documents(self, texts):  # pragma: no cover - deterministic stub
+            return [0.0 for _ in texts]
+
+    hf_embeddings_stub.HuggingFaceEmbeddings = HuggingFaceEmbeddings
+    langchain_hf_stub.embeddings = hf_embeddings_stub
+    sys.modules["langchain_huggingface"] = langchain_hf_stub
+    sys.modules["langchain_huggingface.embeddings"] = hf_embeddings_stub
+
+    # LangChain recursive text splitter stub
+    text_splitters_stub = types.ModuleType("langchain_text_splitters")
+
+    class RecursiveCharacterTextSplitter:
+        """Stub matching the interface used in hybrid chunker."""
+
+        def __init__(self, *args, **kwargs):  # pragma: no cover - no-op setup
+            self._config = kwargs
+
+        def create_documents(self, texts):  # pragma: no cover - deterministic stub
+            return [types.SimpleNamespace(page_content=text) for text in texts]
+
+    text_splitters_stub.RecursiveCharacterTextSplitter = RecursiveCharacterTextSplitter
+    sys.modules["langchain_text_splitters"] = text_splitters_stub
+
+    # Splink stubs to avoid heavy data science dependencies
+    splink_stub = types.ModuleType("splink")
+
+    def _noop(*args, **kwargs):  # pragma: no cover - simple placeholder
+        return None
+
+    class _SplinkPlaceholder:
+        def __init__(self, *args, **kwargs):  # pragma: no cover - placeholder init
+            self._config = kwargs
+
+        def __call__(self, *args, **kwargs):  # pragma: no cover
+            return None
+
+    splink_stub.block_on = _noop
+    splink_stub.DuckDBAPI = _SplinkPlaceholder
+    splink_stub.Linker = _SplinkPlaceholder
+    splink_stub.SettingsCreator = _SplinkPlaceholder
+
+    comparison_library_stub = types.ModuleType("splink.comparison_library")
+    sys.modules["splink"] = splink_stub
+    sys.modules["splink.comparison_library"] = comparison_library_stub
+
+    # Pandas stub to prevent NumPy initialization in sandbox
+    pandas_stub = types.ModuleType("pandas")
+
+    class _PandasDataFrame:  # pragma: no cover - placeholder for type hints
+        def __init__(self, *args, **kwargs):
+            self._data = kwargs
+
+    pandas_stub.DataFrame = _PandasDataFrame
+    pandas_stub.Series = _PandasDataFrame
+    pandas_stub.concat = _noop
+    sys.modules["pandas"] = pandas_stub
 
 
 def write_openapi_snapshot(output_path: Path) -> None:
