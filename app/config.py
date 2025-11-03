@@ -111,6 +111,11 @@ class Settings(BaseSettings):
         description="Enable stable IDs and deterministic contexts during transforms",
     )
 
+    ENTITY_CANONICALIZATION_ENABLED: bool = Field(
+        default=True,
+        description="Enable ontology-driven canonicalization for entity properties",
+    )
+
     # Timing Settings
     TIMING_WINDOW_HOURS: int = Field(
         default=24, description="Hours of timing data to keep for estimation"

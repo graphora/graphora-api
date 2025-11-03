@@ -11,6 +11,7 @@ from app.services.transform.helpers import (
     transform_as_relationships,
 )
 from app.utils.constants import SYSTEM_PROPERTIES
+from app.config import settings
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +80,31 @@ def test_default_canonicalization_lowercases_without_suffix_rules():
 
     assert canonical["first_name"] == "alice"
     assert canonical["age"] == "42"
+
+
+def test_canonicalization_respects_setting(monkeypatch):
+    ontology = {
+        "entities": {
+            "Company": {
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "canonicalization": {
+                            "strip_suffixes": ["Inc", "LLC"],
+                            "strip_punctuation": True,
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+    raw = {"name": "Acme, Inc."}
+
+    monkeypatch.setattr(settings, "ENTITY_CANONICALIZATION_ENABLED", False)
+    canonical = _build_canonical_properties(ontology, "Company", raw, raw)
+
+    assert canonical["name"] == "acme, inc."
 
 
 def test_splink_uses_canonical_and_unique_first():
