@@ -6,10 +6,11 @@ from app.services.transform.models import (
     DocumentKnowledgeGraph,
 )
 from pydantic import BaseModel
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Callable
 import json
 import uuid
 import hashlib
+import re
 from datetime import datetime, timezone
 from app.utils.logger import logger
 from app.services.llm.client import LLMClient
@@ -22,6 +23,165 @@ from splink import DuckDBAPI, Linker, SettingsCreator
 import logging
 import copy
 import traceback
+
+
+Canonicalizer = Callable[[Any, Dict[str, Any]], Optional[str]]
+_CANONICALIZER_REGISTRY: Dict[str, Canonicalizer] = {}
+
+
+def register_canonicalizer(property_key: str, canonicalizer: Canonicalizer) -> None:
+    """Register a custom canonicalizer. Keys can be 'property' or 'Entity.property'."""
+
+    _CANONICALIZER_REGISTRY[property_key.lower()] = canonicalizer
+
+
+COMPANY_SUFFIXES = (
+    "inc",
+    "incorporated",
+    "corp",
+    "corporation",
+    "co",
+    "company",
+    "ltd",
+    "limited",
+    "llc",
+    "plc",
+    "gmbh",
+)
+
+
+def _canonicalize_whitespace(value: str) -> str:
+    value = value.strip()
+    return re.sub(r"\s+", " ", value)
+
+
+def _canonicalize_company_name(value: str) -> str:
+    cleaned = re.sub(r"[^0-9a-zA-Z]+", " ", value.lower())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    words = cleaned.split()
+    while words and words[-1] in COMPANY_SUFFIXES:
+        words.pop()
+    return " ".join(words)
+
+
+def _get_registered_canonicalizer(
+    entity_type: str, prop_name: str
+) -> Optional[Canonicalizer]:
+    key_exact = f"{entity_type}.{prop_name}".lower()
+    key_generic = prop_name.lower()
+    return _CANONICALIZER_REGISTRY.get(key_exact) or _CANONICALIZER_REGISTRY.get(
+        key_generic
+    )
+
+
+def _canonicalize_value(
+    entity_type: str,
+    prop_name: str,
+    value: Any,
+    prop_def: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    if value is None:
+        return None
+
+    prop_def = prop_def or {}
+
+    # Custom canonicalizer takes precedence
+    custom = _get_registered_canonicalizer(entity_type, prop_name)
+    if custom:
+        try:
+            return custom(value, prop_def)
+        except Exception as exc:  # pragma: no cover - defensive log
+            logging.warning(
+                "Custom canonicalizer failed for %s.%s: %s",
+                entity_type,
+                prop_name,
+                exc,
+            )
+
+    canonicalization_cfg = prop_def.get("canonicalization", {})
+
+    if isinstance(value, str):
+        string_value = _canonicalize_whitespace(value)
+        preserve_case = canonicalization_cfg.get("preserve_case", False)
+        working_value = string_value if preserve_case else string_value.casefold()
+
+        if canonicalization_cfg.get("strip_punctuation"):
+            working_value = re.sub(r"[^\w\s]", " ", working_value)
+            working_value = re.sub(r"\s+", " ", working_value).strip()
+
+        if canonicalization_cfg.get("remove_non_alnum"):
+            working_value = re.sub(r"[^0-9a-zA-Z]+", " ", working_value).strip()
+
+        suffixes = canonicalization_cfg.get("strip_suffixes") or []
+        suffixes = [str(s).casefold() for s in suffixes]
+        if canonicalization_cfg.get("strip_company_suffixes"):
+            suffixes = suffixes or list(COMPANY_SUFFIXES)
+
+        if suffixes:
+            words = working_value.split()
+            while words and words[-1] in suffixes:
+                words.pop()
+            working_value = " ".join(words)
+
+        if _is_prop_type_datetime(prop_def.get("type", "")):
+            return working_value
+
+        return re.sub(r"\s+", " ", working_value).strip()
+
+    if isinstance(value, (int, float)):
+        return str(value)
+
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            canonical_part = _canonicalize_value(entity_type, prop_name, item, prop_def)
+            if canonical_part:
+                parts.append(canonical_part)
+        return "|".join(parts) if parts else None
+
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, sort_keys=True)
+        except Exception:
+            return str(value)
+
+    return str(value)
+
+
+def _build_canonical_properties(
+    parsed_ontology: Dict[str, Any],
+    entity_type: str,
+    properties: Dict[str, Any],
+    raw_properties: Dict[str, Any],
+) -> Dict[str, Any]:
+    entity_def = parsed_ontology.get("entities", {}).get(entity_type, {})
+    property_defs = entity_def.get("properties", {})
+    canonical: Dict[str, Any] = {}
+
+    for prop_name, display_value in properties.items():
+        prop_def = property_defs.get(prop_name, {})
+        raw_value = raw_properties.get(prop_name, display_value)
+        canonical_value = _canonicalize_value(
+            entity_type, prop_name, raw_value, prop_def
+        )
+        if canonical_value is None:
+            canonical_value = _canonicalize_value(
+                entity_type, prop_name, display_value, prop_def
+            )
+        canonical[prop_name] = canonical_value
+
+    for prop_name, prop_def in property_defs.items():
+        if prop_name in canonical:
+            continue
+        if prop_def.get("unique"):
+            raw_value = raw_properties.get(prop_name)
+            canonical_value = _canonicalize_value(
+                entity_type, prop_name, raw_value, prop_def
+            )
+            if canonical_value:
+                canonical[prop_name] = canonical_value
+
+    return canonical
 
 
 def transform_as_nodes(
@@ -56,13 +216,21 @@ def transform_as_nodes(
                 )
                 continue
             fallback_hint = f"{entity_type}:{item_index}"
+            canonical_properties = _build_canonical_properties(
+                ontology,
+                entity_type,
+                properties,
+                raw_properties,
+            )
             node_key = _generate_node_key(
                 ontology,
                 entity_type,
                 properties,
+                canonical_properties=canonical_properties,
                 raw_properties=raw_properties,
                 fallback_hint=fallback_hint,
             )
+            canonical_id = _make_canonical_node_id(node_key)
             node_id = (
                 _make_deterministic_node_id(transform_id, entity_type, node_key)
                 if use_deterministic_ids
@@ -72,6 +240,9 @@ def transform_as_nodes(
                 id=node_id,
                 type=entity_type,
                 properties=properties,
+                canonical_properties=canonical_properties,
+                canonical_key=node_key,
+                canonical_id=canonical_id,
                 provenance=NodeProvenance(
                     chunk_ids=[node_id],
                     extraction_timestamp=datetime.now(timezone.utc).isoformat(),
@@ -704,18 +875,20 @@ def _generate_node_key(
     parsed_ontology,
     entity_type: str,
     properties: Dict[str, Any],
+    canonical_properties: Optional[Dict[str, Any]] = None,
     raw_properties: Optional[Dict[str, Any]] = None,
     fallback_hint: Optional[str] = None,
 ) -> str:
     entity_def = parsed_ontology.get("entities", {}).get(entity_type, {})
+    candidate_props = canonical_properties or properties
     unique_props = []
     for prop_name, prop_def in entity_def.get("properties", {}).items():
         if (
             prop_def.get("unique", False)
-            and prop_name in properties
-            and properties[prop_name] is not None
+            and prop_name in candidate_props
+            and candidate_props[prop_name] is not None
         ):
-            value = properties[prop_name]
+            value = candidate_props[prop_name]
             if isinstance(value, str):
                 value = value.lower().strip()
             unique_props.append((prop_name, value))
@@ -724,7 +897,7 @@ def _generate_node_key(
         return f"{entity_type}:" + ":".join(f"{k}={v}" for k, v in sorted_props)
     else:
         non_empty_props = []
-        for k, v in properties.items():
+        for k, v in candidate_props.items():
             if v is not None:
                 if isinstance(v, str):
                     v = v.lower().strip()
@@ -754,6 +927,15 @@ def _make_deterministic_node_id(
 
     namespace_input = f"{transform_id}:{entity_type}:{node_key}"
     return str(uuid.uuid5(uuid.NAMESPACE_URL, namespace_input))
+
+
+_CANONICAL_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "graphora:canonical-node")
+
+
+def _make_canonical_node_id(node_key: str) -> str:
+    """Create a transform-agnostic identifier for ledger lookups."""
+
+    return str(uuid.uuid5(_CANONICAL_NAMESPACE, node_key))
 
 
 def _extract_properties(item: BaseModel) -> Dict[str, Any]:
@@ -1106,10 +1288,15 @@ def _create_splink_dataframe(entities_data, system_properties):
     # Get property columns for comparison (focus on properties dictionary)
     properties_columns = []
     for entity in entities_data:
-        if "properties" in entity and isinstance(entity["properties"], dict):
-            for prop in entity["properties"].keys():
-                if prop not in system_properties:
-                    properties_columns.append(prop)
+        props = entity.get("properties") if isinstance(entity.get("properties"), dict) else {}
+        canonical_props = (
+            entity.get("canonical_properties")
+            if isinstance(entity.get("canonical_properties"), dict)
+            else {}
+        )
+        for prop in set(list(props.keys()) + list(canonical_props.keys())):
+            if prop not in system_properties:
+                properties_columns.append(prop)
 
     # Get unique property columns
     properties_columns = list(set(properties_columns))
@@ -1121,21 +1308,25 @@ def _create_splink_dataframe(entities_data, system_properties):
 
     # Flatten properties for comparison, excluding system properties
     for i, entity in enumerate(entities_data):
-        if "properties" in entity and isinstance(entity["properties"], dict):
-            for prop, value in entity["properties"].items():
-                if prop not in system_properties and prop in properties_columns:
-                    # Handle potentially problematic values (lists, dicts, etc.)
-                    if isinstance(value, (list, dict, tuple)):
-                        try:
-                            # Convert complex values to strings
-                            df.at[i, prop] = str(value)
-                        except Exception as e:
-                            logging.warning(
-                                f"Could not set property {prop} with value {value}: {str(e)}"
-                            )
-                    else:
-                        # For simple values, set directly but ensure they're strings for comparison
-                        df.at[i, prop] = str(value) if value is not None else None
+        props = entity.get("properties") if isinstance(entity.get("properties"), dict) else {}
+        canonical_props = (
+            entity.get("canonical_properties")
+            if isinstance(entity.get("canonical_properties"), dict)
+            else {}
+        )
+        combined_props = {**props, **{k: v for k, v in canonical_props.items() if v is not None}}
+
+        for prop, value in combined_props.items():
+            if prop not in system_properties and prop in properties_columns:
+                if isinstance(value, (list, dict, tuple)):
+                    try:
+                        df.at[i, prop] = str(value)
+                    except Exception as e:
+                        logging.warning(
+                            f"Could not set property {prop} with value {value}: {str(e)}"
+                        )
+                else:
+                    df.at[i, prop] = str(value) if value is not None else None
 
     return df, properties_columns
 
@@ -1158,9 +1349,10 @@ def _create_splink_comparisons(
 
     # Focus on the most important properties for comparison
     # Prioritize name, type, and description properties
-    key_properties = []
-    neighbour_properties = []
-    other_properties = []
+    unique_properties: List[str] = []
+    key_properties: List[str] = []
+    neighbour_properties: List[str] = []
+    other_properties: List[str] = []
 
     # Use ontology information to determine property types and importance
     property_types = {}
@@ -1179,6 +1371,15 @@ def _create_splink_comparisons(
             )
             if prop_type:
                 property_types[col] = prop_type
+
+                prop_def = (
+                    parsed_ontology.get("entities", {})
+                    .get(entity_type, {})
+                    .get("properties", {})
+                    .get(col, {})
+                )
+                if prop_def.get("unique") and col not in unique_properties:
+                    unique_properties.append(col)
 
                 # Categorize by importance based on ontology type
                 if _is_prop_type_string(prop_type) or any(
@@ -1215,8 +1416,17 @@ def _create_splink_comparisons(
     # Create comparisons, limiting the total number
     comparisons = []
 
+    for col in unique_properties:
+        if col not in properties_columns or col not in df.columns:
+            continue
+        if df[col].notna().sum() == 0:
+            continue
+        comparisons.append(cl.ExactMatch(col))
+
     # Add key properties with appropriate comparisons based on ontology types
     for col in key_properties[:3]:  # Limit to 3 key properties
+        if col in unique_properties:
+            continue
         if col == "type":
             comparisons.append(cl.ExactMatch(col))
         elif col in property_types:
@@ -1236,6 +1446,8 @@ def _create_splink_comparisons(
 
     # Add other properties with appropriate comparisons
     for col in other_properties[:2]:  # Limit to 2 other properties
+        if col in unique_properties:
+            continue
         if col in property_types:
             prop_type = property_types[col]
             if _is_prop_type_string(prop_type):
@@ -1254,6 +1466,8 @@ def _create_splink_comparisons(
     # Add a few neighbour properties if we don't have enough comparisons yet
     if len(comparisons) < 3 and neighbour_properties:
         for col in neighbour_properties[:2]:  # Limit to 2 neighbour properties
+            if col in unique_properties:
+                continue
             if col in property_types:
                 prop_type = property_types[col]
                 if _is_prop_type_string(prop_type):
@@ -1316,6 +1530,17 @@ def _create_blocking_rules(
         if col.endswith("_id") and col != "id"  # Skip primary key
     ]
 
+    unique_columns: List[str] = []
+    if parsed_ontology and entity_type:
+        prop_defs = (
+            parsed_ontology.get("entities", {})
+            .get(entity_type, {})
+            .get("properties", {})
+        )
+        for col, prop_def in prop_defs.items():
+            if prop_def.get("unique") and col in properties_columns:
+                unique_columns.append(col)
+
     # Use ontology information to determine property types for blocking
     key_columns = []
     if parsed_ontology and entity_type:
@@ -1347,6 +1572,10 @@ def _create_blocking_rules(
     if type_columns:
         blocking_rules.append(block_on(type_columns[0]))
 
+    for col in unique_columns:
+        if df.get(col) is not None and df[col].notna().sum() > 0:
+            blocking_rules.append(block_on(col))
+
     # Add name blocking rules
     for col in name_columns[:1]:  # Limit to 1 name column
         blocking_rules.append(block_on(col))
@@ -1368,8 +1597,18 @@ def _create_blocking_rules(
                 blocking_rules.append(block_on(col))
                 break
 
-    logging.info(f"Created {len(blocking_rules)} blocking rules for Splink")
-    return blocking_rules
+    # Deduplicate while preserving order
+    deduped_rules = []
+    seen_rules = set()
+    for rule in blocking_rules:
+        rule_sql = getattr(rule, "blocking_rule_sql", None)
+        if rule_sql is None or rule_sql not in seen_rules:
+            deduped_rules.append(rule)
+            if rule_sql is not None:
+                seen_rules.add(rule_sql)
+
+    logging.info(f"Created {len(deduped_rules)} blocking rules for Splink")
+    return deduped_rules
 
 
 def _run_splink_deduplication(df, comparisons, blocking_rules, threshold):

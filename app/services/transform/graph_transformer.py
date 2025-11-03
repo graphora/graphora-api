@@ -12,6 +12,7 @@ from app.services.transform.helpers import (
 )
 from app.services.llm.client import LLMClient
 from app.services.transform.models import BaseNode, RelationshipInstance
+from app.services.entity_ledger_service import entity_ledger_service
 from app.utils.logger import logger
 import os
 import json
@@ -98,6 +99,9 @@ async def _build_graph_from(
                 nodes.append(new_node)
         context = await _build_nodes_context(nodes)
 
+    if user_id:
+        await entity_ledger_service.hydrate_nodes(user_id, nodes)
+
     # Step 2: Compare & Merge entities if they are the same.
     nodes = await _compare_and_merge_nodes(
         nodes,
@@ -144,6 +148,9 @@ async def _build_graph_from(
         relationships=relationships,
         parsed_ontology=ontology_parser.parsed_ontology,
     )
+
+    if user_id:
+        await entity_ledger_service.record_nodes(user_id, nodes)
 
     # Step 6: Build graph from nodes and relationships.
     kg = DocumentKnowledgeGraph(nodes=nodes, relationships=relationships)

@@ -77,6 +77,9 @@ class BaseNode(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     type: str
     properties: Dict[str, Any] = Field(default_factory=dict)
+    canonical_properties: Dict[str, Any] = Field(default_factory=dict)
+    canonical_key: Optional[str] = None
+    canonical_id: Optional[str] = None
     provenance: Optional[NodeProvenance] = None
     confidence_score: Optional[float] = None
 
