@@ -55,6 +55,7 @@ A sophisticated document processing backend that leverages AI-powered intelligen
 - `make test-unit`, `make test-integration` – run just unit or integration slices as needed
 - `make test` now emits coverage stats to the terminal and writes `coverage.xml` for CI tooling
 - `make deadcode` – run Vulture against the codebase to surface unused definitions
+- `make openapi-snapshot` – regenerate `tests/snapshots/openapi.json` after intentional API changes so contract tests stay green
 
 
 
