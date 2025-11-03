@@ -141,12 +141,14 @@ def test_generate_node_key_fallback_to_raw_hash():
         parsed,
         "Item",
         properties={},
+        canonical_properties={},
         raw_properties={"raw_text": "First"},
     )
     key_b = _generate_node_key(
         parsed,
         "Item",
         properties={},
+        canonical_properties={},
         raw_properties={"raw_text": "Second"},
     )
 

@@ -151,6 +151,19 @@ create table if not exists usage_aggregates (
     updated_at timestamptz not null default now()
 );
 
+create table if not exists entity_ledger (
+    id uuid primary key default gen_random_uuid(),
+    user_id text not null,
+    entity_type text not null,
+    canonical_key text not null,
+    canonical_id text not null,
+    features jsonb default '{}'::jsonb,
+    confidence numeric,
+    first_seen_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (user_id, entity_type, canonical_key)
+);
+
 create table if not exists pricing_tiers (
     id uuid primary key default gen_random_uuid(),
     tier_name text not null unique,
