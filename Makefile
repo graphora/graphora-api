@@ -36,3 +36,6 @@ format:
 
 deadcode:
 	uv run python scripts/find_dead_code.py
+
+openapi-snapshot:
+	uv run python scripts/openapi_snapshot.py
