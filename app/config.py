@@ -105,6 +105,12 @@ class Settings(BaseSettings):
         description="Maximum number of LLM responses cached per process",
     )
 
+    # Deterministic processing
+    DETERMINISTIC_MODE: bool = Field(
+        default=True,
+        description="Enable stable IDs and deterministic contexts during transforms",
+    )
+
     # Timing Settings
     TIMING_WINDOW_HOURS: int = Field(
         default=24, description="Hours of timing data to keep for estimation"
