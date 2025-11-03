@@ -1,4 +1,4 @@
-from typing import List, Callable, Optional
+from typing import List, Callable, Optional, Dict, Any, Tuple
 from pydantic import BaseModel
 from app.services.transform.models import DocumentKnowledgeGraph
 from app.services.transform.ontology_helper import OntologyParser
@@ -14,6 +14,7 @@ from app.services.llm.client import LLMClient
 from app.services.transform.models import BaseNode, RelationshipInstance
 from app.utils.logger import logger
 import os
+import json
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
@@ -84,7 +85,11 @@ async def _build_graph_from(
             transform_id=transform_id,
             document_usage_id=document_usage_id,
         )
-        base_nodes = transform_as_nodes(ontology_parser.parsed_ontology, nodes_only_kg)
+        base_nodes = transform_as_nodes(
+            ontology_parser.parsed_ontology,
+            nodes_only_kg,
+            transform_id=transform_id,
+        )
         for new_node in base_nodes:
             is_duplicate = any(
                 _is_duplicate_node(existing_node, new_node) for existing_node in nodes
@@ -149,38 +154,88 @@ async def _build_graph_from(
 async def _build_nodes_context(
     nodes: List[BaseNode],
 ) -> str:
-    context = ""
-    for node in nodes:
-        context += (
-            f"Node Type: {node.type}, Id: {node.id}, Properties: {node.properties}\n"
+    if not nodes:
+        return ""
+
+    sorted_nodes = sorted(nodes, key=_node_context_sort_key)
+    lines = []
+    for node in sorted_nodes:
+        properties_repr = _format_properties(node.properties)
+        lines.append(
+            f"Node Type: {node.type}, Id: {node.id}, Properties: {properties_repr}"
         )
-    return context
+    return "\n".join(lines) + "\n"
 
 
 async def _build_relationships_context(
     nodes: List[BaseNode],
     relationships: List[RelationshipInstance],
 ) -> str:
-    context = ""
+    if not relationships and not nodes:
+        return ""
+
     node_map = {node.id: node for node in nodes}
+    lines = []
+
+    sorted_relationships = sorted(relationships, key=_relationship_context_sort_key)
+    for relationship in sorted_relationships:
+        source_node = node_map.get(relationship.source_id)
+        target_node = node_map.get(relationship.target_id)
+        if not source_node or not target_node:
+            continue
+
+        source_repr = _format_properties(source_node.properties)
+        target_repr = _format_properties(target_node.properties)
+        rel_props = _format_properties(relationship.properties)
+        lines.append(
+            f"({source_node.type}:{{'id': '{source_node.id}', 'properties': {source_repr}}})"
+            f"-[:{relationship.type}{{'properties': {rel_props}}}]->"
+            f"({target_node.type}:{{'id': '{target_node.id}', 'properties': {target_repr}}})"
+        )
+
+    nodes_in_relationships = {rel.source_id for rel in relationships} | {
+        rel.target_id for rel in relationships
+    }
     nodes_not_in_relationships = [
-        node
-        for node in nodes
-        if node.id not in [relationship.source_id for relationship in relationships]
-        and node.id not in [relationship.target_id for relationship in relationships]
+        node for node in nodes if node.id not in nodes_in_relationships
     ]
 
-    for relationship in relationships:
-        src = f"({node_map[relationship.source_id].type}:{{'id': '{node_map[relationship.source_id].id}', 'properties': {node_map[relationship.source_id].properties}}})"
-        tgt = f"({node_map[relationship.target_id].type}:{{'id': '{node_map[relationship.target_id].id}', 'properties': {node_map[relationship.target_id].properties}}})"
-        context += f"{src}-[:{relationship.type}{{'properties': {relationship.properties}}}]->{tgt}\n"
     if nodes_not_in_relationships:
-        context += "These Nodes without any relationships:\n"
-    for node in nodes_not_in_relationships:
-        context += (
-            f"({node.type}:{{'id': '{node.id}', 'properties': {node.properties}}})\n"
-        )
-    return context
+        lines.append("These Nodes without any relationships:")
+        for node in sorted(nodes_not_in_relationships, key=_node_context_sort_key):
+            node_repr = _format_properties(node.properties)
+            lines.append(
+                f"({node.type}:{{'id': '{node.id}', 'properties': {node_repr}}})"
+            )
+
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _format_properties(properties: Optional[Dict[str, Any]]) -> str:
+    if not properties:
+        return "{}"
+    return json.dumps(properties, sort_keys=True, default=str)
+
+
+def _node_context_sort_key(node: BaseNode) -> Tuple[str, str, str]:
+    return (
+        node.type or "",
+        _format_properties(node.properties),
+        node.id or "",
+    )
+
+
+def _relationship_context_sort_key(
+    relationship: RelationshipInstance,
+) -> Tuple[str, str, str, str, str, str]:
+    return (
+        relationship.source_type or "",
+        relationship.type or "",
+        relationship.target_type or "",
+        relationship.source_id or "",
+        relationship.target_id or "",
+        _format_properties(relationship.properties),
+    )
 
 
 async def _compare_and_merge_nodes(

@@ -9,10 +9,12 @@ from pydantic import BaseModel
 from typing import Dict, Any, List, Tuple, Optional
 import json
 import uuid
+import hashlib
 from datetime import datetime, timezone
 from app.utils.logger import logger
 from app.services.llm.client import LLMClient
 from app.utils.constants import SYSTEM_PROPERTIES
+from app.config import settings
 from splink import block_on
 import splink.comparison_library as cl
 import pandas as pd
@@ -23,10 +25,13 @@ import traceback
 
 
 def transform_as_nodes(
-    ontology: Dict[str, Any], entity_result: BaseModel
+    ontology: Dict[str, Any],
+    entity_result: BaseModel,
+    transform_id: Optional[str] = None,
 ) -> List[BaseNode]:
     nodes = []
     chunk_node_registry = {}
+    use_deterministic_ids = settings.DETERMINISTIC_MODE and bool(transform_id)
 
     # Process entities
     for field_name in dir(entity_result):
@@ -37,7 +42,7 @@ def transform_as_nodes(
             continue
         entity_type = field_name[:-5]
         chunk_node_registry[entity_type] = {}
-        for item in entity_list:
+        for item_index, item in enumerate(entity_list):
             if not item:
                 continue
             raw_properties = _extract_properties(item)
@@ -50,8 +55,19 @@ def transform_as_nodes(
                     entity_type,
                 )
                 continue
-            node_key = _generate_node_key(ontology, entity_type, properties)
-            node_id = str(uuid.uuid4())
+            fallback_hint = f"{entity_type}:{item_index}"
+            node_key = _generate_node_key(
+                ontology,
+                entity_type,
+                properties,
+                raw_properties=raw_properties,
+                fallback_hint=fallback_hint,
+            )
+            node_id = (
+                _make_deterministic_node_id(transform_id, entity_type, node_key)
+                if use_deterministic_ids
+                else str(uuid.uuid4())
+            )
             node = BaseNode(
                 id=node_id,
                 type=entity_type,
@@ -685,7 +701,11 @@ def _get_possible_relationships_for_type(
 
 
 def _generate_node_key(
-    parsed_ontology, entity_type: str, properties: Dict[str, Any]
+    parsed_ontology,
+    entity_type: str,
+    properties: Dict[str, Any],
+    raw_properties: Optional[Dict[str, Any]] = None,
+    fallback_hint: Optional[str] = None,
 ) -> str:
     entity_def = parsed_ontology.get("entities", {}).get(entity_type, {})
     unique_props = []
@@ -712,8 +732,28 @@ def _generate_node_key(
         if non_empty_props:
             sorted_props = sorted(non_empty_props)
             return f"{entity_type}:" + ":".join(f"{k}={v}" for k, v in sorted_props)
-        else:
-            return f"{entity_type}:uuid={uuid.uuid4()}"
+
+        if raw_properties:
+            raw_repr = json.dumps(raw_properties, sort_keys=True, default=str)
+            raw_digest = hashlib.sha1(raw_repr.encode("utf-8")).hexdigest()
+            return f"{entity_type}:raw={raw_digest}"
+
+        if fallback_hint:
+            return f"{entity_type}:fallback={fallback_hint}"
+
+        return f"{entity_type}:uuid={uuid.uuid4()}"
+
+
+def _make_deterministic_node_id(
+    transform_id: Optional[str], entity_type: str, node_key: str
+) -> str:
+    """Build a stable node identifier scoped to a transform when enabled."""
+
+    if not transform_id:
+        return str(uuid.uuid4())
+
+    namespace_input = f"{transform_id}:{entity_type}:{node_key}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, namespace_input))
 
 
 def _extract_properties(item: BaseModel) -> Dict[str, Any]:

@@ -22,7 +22,7 @@ from app.services.marker.tasks import convert_pdf_to_markdown
 from app.services.chunking.tasks import chunk_document
 from app.services.chunking.config import ChunkingStrategy
 from app.services.chunking.models import ChunkingResult, ChunkMetadata
-from app.services.transform.tasks import construct_knowledge_graph
+from app.services.transform.tasks import construct_knowledge_graph, ExtractionError
 from app.services.storage.tasks import store_knowledge_graph
 from app.services.transform.progress_tracker import ProgressTracker
 from app.services.quality.models import QualityResults
@@ -717,6 +717,14 @@ async def document_transformation_flow(
             failure_code = e.code
             failure_details = e.details
             is_recoverable = False
+        elif isinstance(e, ExtractionError):
+            failure_code = "extraction_failed"
+
+        recovery_instructions = None
+        if not is_recoverable:
+            recovery_instructions = "Check API key configuration"
+        elif isinstance(e, ExtractionError):
+            recovery_instructions = "Retry the transform after a short wait"
 
         # Record error
         error = ErrorSummary(
@@ -728,9 +736,7 @@ async def document_transformation_flow(
             affected_components=[],
             retry_count=0,  # We can't get retry count from context reliably
             is_recoverable=is_recoverable,
-            recovery_instructions=(
-                "Check API key configuration" if not is_recoverable else None
-            ),
+            recovery_instructions=recovery_instructions,
             failure_code=failure_code,
             details=failure_details,
         )
