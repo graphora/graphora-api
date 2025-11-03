@@ -2,10 +2,16 @@
 
 import re
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Pattern
 import logging
 
-from .models import QualityViolation, ValidationResult, QualityRuleConfig
+from .models import (
+    QualityViolation,
+    ValidationResult,
+    QualityRuleConfig,
+    QualitySeverity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +225,99 @@ class CaseFormatRule(QualityRule):
         )
 
 
+class DateWindowRule(QualityRule):
+    """Validates that a date falls within a configured window."""
+
+    def __init__(self, config: QualityRuleConfig):
+        super().__init__(config)
+        earliest = self.parameters.get("earliest")
+        latest = self.parameters.get("latest")
+        self.allow_future = bool(self.parameters.get("allow_future", False))
+        self.earliest: Optional[datetime] = self._parse_date(earliest)
+        self.latest: Optional[datetime] = self._parse_date(latest)
+
+    def _parse_date(self, value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            raise ValueError(
+                f"DateWindowRule {self.rule_id} has invalid date value '{value}'"
+            )
+
+    def _coerce_value(self, value: Any) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        str_value = str(value).strip()
+        if not str_value:
+            return None
+        try:
+            return datetime.fromisoformat(str_value)
+        except ValueError:
+            return None
+
+    def validate(self, value: Any, context: Dict[str, Any]) -> ValidationResult:
+        candidate = self._coerce_value(value)
+        if candidate is None:
+            violation = self._create_violation(
+                message="Date value missing or invalid",
+                expected="ISO formatted date",
+                actual=str(value),
+                context=context,
+                suggestion="Provide a valid date value",
+            )
+            return ValidationResult(
+                is_valid=False, message=violation.message, violations=[violation]
+            )
+
+        violations: List[QualityViolation] = []
+
+        if self.earliest and candidate < self.earliest:
+            violations.append(
+                self._create_violation(
+                    message="Date precedes allowed minimum",
+                    expected=f"On or after {self.earliest.isoformat()}",
+                    actual=candidate.isoformat(),
+                    context=context,
+                )
+            )
+
+        if self.latest and candidate > self.latest:
+            violations.append(
+                self._create_violation(
+                    message="Date exceeds allowed maximum",
+                    expected=f"On or before {self.latest.isoformat()}",
+                    actual=candidate.isoformat(),
+                    context=context,
+                )
+            )
+
+        now = datetime.utcnow()
+        if not self.allow_future and candidate > now:
+            violations.append(
+                self._create_violation(
+                    message="Date cannot be in the future",
+                    expected="Historical date",
+                    actual=candidate.isoformat(),
+                    context=context,
+                )
+            )
+
+        if violations:
+            return ValidationResult(
+                is_valid=False,
+                message="Date window validation failed",
+                violations=violations,
+            )
+
+        return ValidationResult(
+            is_valid=True, message="Date falls within configured window"
+        )
+
+
 # ============================================================================
 # BUSINESS RULES
 # ============================================================================
@@ -385,6 +484,175 @@ class RequiredPropertyRule(QualityRule):
         )
 
 
+class EntityCompletenessRule(QualityRule):
+    """Validates that an entity meets a minimum property fill ratio."""
+
+    def validate(self, value: Any, context: Dict[str, Any]) -> ValidationResult:
+        entity = context.get("entity")
+        expected_props = context.get("expected_properties", {})
+        if not entity or not expected_props:
+            return ValidationResult(
+                is_valid=True, message="No expected properties provided"
+            )
+
+        candidate_props = [
+            name
+            for name in expected_props.keys()
+            if name not in context.get("system_properties", set())
+        ]
+
+        if not candidate_props:
+            return ValidationResult(
+                is_valid=True, message="No candidate properties for completeness"
+            )
+
+        filled = 0
+        for prop in candidate_props:
+            val = entity.properties.get(prop)
+            if val is not None and str(val).strip() != "":
+                filled += 1
+
+        ratio = filled / len(candidate_props)
+        min_ratio = float(self.parameters.get("min_ratio", 0.0))
+
+        if ratio >= min_ratio:
+            return ValidationResult(
+                is_valid=True,
+                message=f"Completeness {ratio:.2f} meets minimum {min_ratio:.2f}",
+            )
+
+        violation = self._create_violation(
+            message="Entity property completeness below minimum threshold",
+            expected=f"At least {min_ratio:.2f} of properties populated",
+            actual=f"{ratio:.2f}",
+            context=context,
+            suggestion="Populate additional core properties",
+        )
+        return ValidationResult(
+            is_valid=False, message=violation.message, violations=[violation]
+        )
+
+
+class RelationshipPresenceRule(QualityRule):
+    """Ensure entities maintain minimum relationship counts."""
+
+    def validate(self, value: Any, context: Dict[str, Any]) -> ValidationResult:
+        relationships = context.get("relationships") or []
+        entities = context.get("entities") or []
+
+        if not entities:
+            return ValidationResult(is_valid=True, message="No entities supplied")
+
+        entity_type = self.parameters.get("entity_type")
+        relationship_type = self.parameters.get("relationship_type")
+        direction = self.parameters.get("direction", "outbound")
+        min_count = int(self.parameters.get("min_count", 1))
+
+        if not relationship_type:
+            return ValidationResult(
+                is_valid=True, message="No relationship type configured"
+            )
+
+        candidates = (
+            [entity for entity in entities if entity.type == entity_type]
+            if entity_type
+            else list(entities)
+        )
+
+        if not candidates:
+            return ValidationResult(
+                is_valid=True, message="No entities matching requirement"
+            )
+
+        violation_list: List[QualityViolation] = []
+
+        for entity in candidates:
+            count = 0
+            for rel in relationships:
+                if rel.type != relationship_type:
+                    continue
+                if direction == "inbound" and rel.target_id == entity.id:
+                    count += 1
+                elif direction == "outbound" and rel.source_id == entity.id:
+                    count += 1
+                elif direction == "either" and (
+                    rel.source_id == entity.id or rel.target_id == entity.id
+                ):
+                    count += 1
+
+            if count < min_count:
+                violation_list.append(
+                    self._create_violation(
+                        message=f"Entity missing required '{relationship_type}' relationships",
+                        expected=f"At least {min_count} relationships",
+                        actual=f"{count}",
+                        context={
+                            "entity_type": entity.type,
+                            "entity_id": entity.id,
+                            "expected_relationship": relationship_type,
+                        },
+                        suggestion="Review extraction for missing connections",
+                    )
+                )
+
+        if violation_list:
+            return ValidationResult(
+                is_valid=False,
+                message="Relationship presence validation failed",
+                violations=violation_list,
+            )
+
+        return ValidationResult(
+            is_valid=True, message="Relationship presence requirements satisfied"
+        )
+
+
+class SymmetricRelationshipRule(QualityRule):
+    """Ensure relationships are mirrored from source to target."""
+
+    def validate(self, value: Any, context: Dict[str, Any]) -> ValidationResult:
+        relationships = context.get("relationships")
+        if not relationships:
+            return ValidationResult(is_valid=True, message="No relationships provided")
+
+        relationship_type = self.parameters.get("relationship_type")
+        inverse_type = self.parameters.get("inverse_type") or relationship_type
+
+        relevant = [rel for rel in relationships if rel.type == relationship_type]
+        inverse = [rel for rel in relationships if rel.type == inverse_type]
+
+        inverse_lookup = {(rel.source_id, rel.target_id) for rel in inverse}
+
+        violations: List[QualityViolation] = []
+        for rel in relevant:
+            counterpart = (rel.target_id, rel.source_id)
+            if counterpart not in inverse_lookup:
+                violations.append(
+                    self._create_violation(
+                        message="Symmetric relationship missing",
+                        expected=f"{inverse_type} from {rel.target_id} to {rel.source_id}",
+                        actual=f"Missing inverse for {rel.source_id}->{rel.target_id}",
+                        context={
+                            "relationship_type": relationship_type,
+                            "source_id": rel.source_id,
+                            "target_id": rel.target_id,
+                        },
+                        suggestion="Ensure reciprocal relationships are extracted",
+                    )
+                )
+
+        if violations:
+            return ValidationResult(
+                is_valid=False,
+                message="Symmetric relationship validation failed",
+                violations=violations,
+            )
+
+        return ValidationResult(
+            is_valid=True, message="Symmetric relationship validation passed"
+        )
+
+
 # ============================================================================
 # RULE FACTORY
 # ============================================================================
@@ -397,10 +665,14 @@ class QualityRuleFactory:
         "pattern": PatternRule,
         "length": LengthRule,
         "case_format": CaseFormatRule,
+        "date_window": DateWindowRule,
         "allowed_values": AllowedValuesRule,
         "forbidden_values": ForbiddenValuesRule,
         "range": RangeRule,
         "required": RequiredPropertyRule,
+        "entity_completeness": EntityCompletenessRule,
+        "relationship_presence": RelationshipPresenceRule,
+        "symmetric_relationship": SymmetricRelationshipRule,
     }
 
     @classmethod

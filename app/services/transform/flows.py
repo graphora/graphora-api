@@ -530,25 +530,61 @@ async def document_transformation_flow(
                                 quality_results=quality_results.model_dump(),
                             )
 
-                        if quality_results.overall_score >= settings.QUALITY_MIN_SCORE:
+                        gating_status = getattr(
+                            quality_results, "quality_gate_status", "pass"
+                        )
+                        gating_reasons = getattr(
+                            quality_results, "quality_gate_reasons", []
+                        )
+
+                        if gating_status == "fail":
+                            gating_config = (
+                                quality_results.validation_config.get("gating", {})
+                                if quality_results.validation_config
+                                else {}
+                            )
+                            threshold = gating_config.get(
+                                "hard_fail_score", settings.QUALITY_MIN_SCORE
+                            )
+                            await _persist_quality_violations(
+                                transform_id,
+                                user_id,
+                                quality_results,
+                            )
+                            raise QualityThresholdNotMetError(
+                                "Quality validation failed hard gate",
+                                score=quality_results.overall_score,
+                                threshold=threshold,
+                                violations=[
+                                    violation.model_dump()
+                                    for violation in quality_results.violations
+                                ],
+                                quality_results=quality_results.model_dump(),
+                            )
+
+                        if quality_results.requires_review:
                             logger.info(
-                                f"Transform {transform_id} meets auto-approval threshold"
+                                "Quality results flagged for review; evaluating gating configuration"
+                            )
+
+                        if gating_status == "warn":
+                            logger.warning(
+                                "Quality validation produced warnings: %s",
+                                gating_reasons,
+                            )
+                            await _persist_quality_violations(
+                                transform_id,
+                                user_id,
+                                quality_results,
                             )
                         else:
                             logger.info(
-                                f"Transform {transform_id} requires manual review; score %.1f below auto-approve %.1f",
-                                quality_results.overall_score,
-                                settings.QUALITY_MIN_SCORE,
-                            )
-                            await _persist_quality_violations(
+                                "Transform %s passed quality gate",
                                 transform_id,
-                                user_id,
-                                quality_results,
-                            )
-                            await _persist_quality_violations(
-                                transform_id,
-                                user_id,
-                                quality_results,
+                                extra={
+                                    "transform_id": transform_id,
+                                    "quality_score": quality_results.overall_score,
+                                },
                             )
 
                     else:
@@ -774,9 +810,12 @@ async def _persist_quality_violations(
     violations_summary = [
         {
             "rule": violation.rule_type,
+            "rule_id": violation.rule_id,
             "severity": violation.severity,
             "entity": violation.entity_type,
+            "entity_id": violation.entity_id,
             "message": violation.message,
+            "suggestion": violation.suggestion,
         }
         for violation in quality_results.violations
     ]
