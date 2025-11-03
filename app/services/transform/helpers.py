@@ -6,12 +6,13 @@ from app.services.transform.models import (
     DocumentKnowledgeGraph,
 )
 from pydantic import BaseModel
-from typing import Dict, Any, List, Tuple, Optional, Callable
+from typing import Dict, Any, List, Tuple, Optional, Callable, Set
 import json
 import uuid
 import hashlib
 import re
 from datetime import datetime, timezone
+from collections import defaultdict
 from app.utils.logger import logger
 from app.services.llm.client import LLMClient
 from app.utils.constants import SYSTEM_PROPERTIES
@@ -24,6 +25,8 @@ import logging
 import copy
 import traceback
 
+
+CANONICAL_COLUMN_PREFIX = "canonical__"
 
 Canonicalizer = Callable[[Any, Dict[str, Any]], Optional[str]]
 _CANONICALIZER_REGISTRY: Dict[str, Canonicalizer] = {}
@@ -262,6 +265,13 @@ def transform_as_relationships(
     logger.debug("nodes: %s", nodes)
     logger.debug("%s", "#" * 30)
     relationships = []
+    node_by_id = {node.id: node for node in nodes}
+    node_by_canonical_id = {
+        node.canonical_id: node for node in nodes if node.canonical_id
+    }
+    node_by_canonical_key = {
+        node.canonical_key: node for node in nodes if node.canonical_key
+    }
     for field_name in dir(relationship_result):
         if (
             field_name.endswith("_list")
@@ -311,26 +321,30 @@ def transform_as_relationships(
         for rel_item in rel_list:
             if not rel_item:
                 continue
-            source_id = getattr(rel_item, "source_id", None)
-            target_id = getattr(rel_item, "target_id", None)
+            raw_source_id = getattr(rel_item, "source_id", None)
+            raw_target_id = getattr(rel_item, "target_id", None)
 
-            if not source_id or not target_id:
+            if not raw_source_id or not raw_target_id:
                 logger.warning(
                     f"Skipping relationship {rel_type}: Missing source_id or target_id"
                 )
                 continue
 
-            source_node = next(
-                (n for n in nodes if n.id == source_id and n.type == source_type), None
-            )
-            target_node = next(
-                (n for n in nodes if n.id == target_id and n.type == target_type), None
-            )
+            source_node = node_by_id.get(raw_source_id)
+            if not source_node:
+                source_node = node_by_canonical_id.get(raw_source_id) or node_by_canonical_key.get(raw_source_id)
+            target_node = node_by_id.get(raw_target_id)
+            if not target_node:
+                target_node = node_by_canonical_id.get(raw_target_id) or node_by_canonical_key.get(raw_target_id)
+
             if not source_node or not target_node:
                 logger.warning(
-                    f"Skipping relationship {rel_type}: Invalid source_id {source_id} or target_id {target_id}"
+                    f"Skipping relationship {rel_type}: Invalid source_id {raw_source_id} or target_id {raw_target_id}"
                 )
                 continue
+
+            source_id = source_node.id
+            target_id = target_node.id
 
             raw_properties = _extract_properties(getattr(rel_item, "properties", {}))
             rel_properties = _normalize_relationship_properties(
@@ -1286,20 +1300,29 @@ def _create_splink_dataframe(entities_data, system_properties):
     df = pd.DataFrame(entities_data)
 
     # Get property columns for comparison (focus on properties dictionary)
-    properties_columns = []
+    properties_columns: Set[str] = set()
     for entity in entities_data:
-        props = entity.get("properties") if isinstance(entity.get("properties"), dict) else {}
+        props = (
+            entity.get("properties")
+            if isinstance(entity.get("properties"), dict)
+            else {}
+        )
         canonical_props = (
             entity.get("canonical_properties")
             if isinstance(entity.get("canonical_properties"), dict)
             else {}
         )
-        for prop in set(list(props.keys()) + list(canonical_props.keys())):
+        for prop in props.keys():
             if prop not in system_properties:
-                properties_columns.append(prop)
+                properties_columns.add(prop)
+        for prop in canonical_props.keys():
+            if prop in system_properties:
+                continue
+            properties_columns.add(prop)
+            properties_columns.add(f"{CANONICAL_COLUMN_PREFIX}{prop}")
 
     # Get unique property columns
-    properties_columns = list(set(properties_columns))
+    properties_columns = sorted(properties_columns)
 
     # Pre-initialize all property columns with None to avoid setting with iterables
     for col in properties_columns:
@@ -1308,13 +1331,20 @@ def _create_splink_dataframe(entities_data, system_properties):
 
     # Flatten properties for comparison, excluding system properties
     for i, entity in enumerate(entities_data):
-        props = entity.get("properties") if isinstance(entity.get("properties"), dict) else {}
+        props = (
+            entity.get("properties")
+            if isinstance(entity.get("properties"), dict)
+            else {}
+        )
         canonical_props = (
             entity.get("canonical_properties")
             if isinstance(entity.get("canonical_properties"), dict)
             else {}
         )
-        combined_props = {**props, **{k: v for k, v in canonical_props.items() if v is not None}}
+        combined_props = {
+            **props,
+            **{k: v for k, v in canonical_props.items() if v is not None},
+        }
 
         for prop, value in combined_props.items():
             if prop not in system_properties and prop in properties_columns:
@@ -1328,7 +1358,29 @@ def _create_splink_dataframe(entities_data, system_properties):
                 else:
                     df.at[i, prop] = str(value) if value is not None else None
 
+        # Persist canonical values in dedicated columns to favour
+        # deterministic comparisons without losing raw values.
+        for prop, value in canonical_props.items():
+            if prop in system_properties or value is None:
+                continue
+            canonical_column = f"{CANONICAL_COLUMN_PREFIX}{prop}"
+            if canonical_column not in df.columns:
+                df[canonical_column] = None
+            df.at[i, canonical_column] = str(value)
+
     return df, properties_columns
+
+
+def _is_canonical_column(column_name: str) -> bool:
+    return column_name.startswith(CANONICAL_COLUMN_PREFIX)
+
+
+def _base_property_from_column(column_name: str) -> str:
+    return (
+        column_name[len(CANONICAL_COLUMN_PREFIX) :]
+        if _is_canonical_column(column_name)
+        else column_name
+    )
 
 
 def _create_splink_comparisons(
@@ -1348,65 +1400,132 @@ def _create_splink_comparisons(
     """
 
     # Focus on the most important properties for comparison
-    # Prioritize name, type, and description properties
     unique_properties: List[str] = []
     key_properties: List[str] = []
     neighbour_properties: List[str] = []
     other_properties: List[str] = []
 
-    # Use ontology information to determine property types and importance
-    property_types = {}
-    if parsed_ontology:
-        for col in properties_columns:
-            if col not in df.columns:
-                continue
+    entity_prop_defs = (
+        (parsed_ontology or {})
+        .get("entities", {})
+        .get(entity_type, {})
+        .get("properties", {})
+    )
 
-            # Get property type from ontology
-            prop_type = (
-                parsed_ontology.get("entities", {})
-                .get(entity_type, {})
-                .get("properties", {})
-                .get(col, {})
-                .get("type")
-            )
+    property_types: Dict[str, str] = {}
+
+    column_variants: Dict[str, Dict[str, str]] = defaultdict(dict)
+    for col in properties_columns:
+        if col not in df.columns:
+            continue
+        base_prop = _base_property_from_column(col)
+        variant_key = "canonical" if _is_canonical_column(col) else "raw"
+        column_variants[base_prop][variant_key] = col
+
+    def _column_has_data(column: Optional[str]) -> bool:
+        return bool(column) and column in df.columns and df[column].notna().sum() > 0
+
+    def _pick_column(variants: Dict[str, str], prefer_canonical: bool = True) -> Optional[str]:
+        order = ["canonical", "raw"] if prefer_canonical else ["raw", "canonical"]
+        for variant in order:
+            column = variants.get(variant)
+            if _column_has_data(column):
+                return column
+        return None
+
+    def _add_once(bucket: List[str], column: Optional[str]) -> None:
+        if column and column not in bucket:
+            bucket.append(column)
+
+    processed_columns: Set[str] = set()
+
+    for base_prop, variants in column_variants.items():
+        canonical_col = variants.get("canonical")
+        raw_col = variants.get("raw")
+        preferred_col = _pick_column(variants)
+
+        if base_prop == "type" and _column_has_data(raw_col):
+            _add_once(key_properties, raw_col)
+            property_types[raw_col] = "string"
+            processed_columns.add(raw_col)
+            continue
+
+        prop_def = entity_prop_defs.get(base_prop)
+        prop_type = prop_def.get("type") if prop_def else None
+
+        if prop_def:
             if prop_type:
-                property_types[col] = prop_type
+                for col_option in (canonical_col, raw_col):
+                    if _column_has_data(col_option):
+                        property_types[col_option] = prop_type
 
-                prop_def = (
-                    parsed_ontology.get("entities", {})
-                    .get(entity_type, {})
-                    .get("properties", {})
-                    .get(col, {})
+            if prop_def.get("unique"):
+                unique_col = preferred_col or _pick_column(variants, prefer_canonical=False)
+                if _column_has_data(unique_col):
+                    _add_once(unique_properties, unique_col)
+                    processed_columns.add(unique_col)
+
+            if prop_type and _is_prop_type_string(prop_type):
+                name_like = any(
+                    token in base_prop.lower() for token in ["name", "title", "identifier"]
                 )
-                if prop_def.get("unique") and col not in unique_properties:
-                    unique_properties.append(col)
+                target_col = preferred_col or raw_col
+                if _column_has_data(target_col):
+                    _add_once(key_properties if name_like else other_properties, target_col)
+                    processed_columns.add(target_col)
 
-                # Categorize by importance based on ontology type
-                if _is_prop_type_string(prop_type) or any(
-                    name_part in col.lower() for name_part in ["name", "title"]
-                ):
-                    key_properties.append(col)
-                elif _is_prop_type_number(prop_type) and not col.startswith(
-                    "neighbor_"
-                ):
-                    other_properties.append(col)
-                elif not col.startswith("neighbor_"):
-                    neighbour_properties.append(col)
-    else:
-        # Fallback to the original categorization if ontology info not available
-        for col in properties_columns:
-            if col not in df.columns:
-                continue
+                # Retain raw column for additional fuzzy matching when canonical exists
+                if canonical_col and raw_col and raw_col != canonical_col and _column_has_data(raw_col):
+                    _add_once(other_properties, raw_col)
+                    processed_columns.add(raw_col)
 
-            # Categorize properties by importance
-            if col in ["type", "id"]:
-                key_properties.append(col)
-            elif not col.startswith(
-                "neighbor_"
-            ):  # Exclude neighbor properties to simplify
-                neighbour_properties.append(col)
-            else:
-                other_properties.append(col)
+            elif prop_type and _is_prop_type_number(prop_type):
+                number_col = preferred_col or raw_col
+                if _column_has_data(number_col):
+                    _add_once(other_properties, number_col)
+                    processed_columns.add(number_col)
+
+            elif base_prop.startswith("neighbor_") and _column_has_data(preferred_col):
+                _add_once(neighbour_properties, preferred_col)
+                processed_columns.add(preferred_col)
+
+            continue
+
+        # Fallback heuristics when ontology metadata is unavailable
+        fallback_col = preferred_col or raw_col
+        if not _column_has_data(fallback_col):
+            continue
+
+        lower_name = base_prop.lower()
+        if lower_name in {"id"} or lower_name.endswith("_id"):
+            _add_once(unique_properties, fallback_col)
+            processed_columns.add(fallback_col)
+        elif any(token in lower_name for token in ["name", "title"]):
+            _add_once(key_properties, fallback_col)
+            processed_columns.add(fallback_col)
+        elif lower_name.startswith("neighbor_"):
+            _add_once(neighbour_properties, fallback_col)
+            processed_columns.add(fallback_col)
+        else:
+            _add_once(other_properties, fallback_col)
+            processed_columns.add(fallback_col)
+
+    # Consider remaining columns that were not associated with ontology metadata
+    for col in properties_columns:
+        if col in processed_columns or col not in df.columns:
+            continue
+        if not _column_has_data(col):
+            continue
+
+        base_prop = _base_property_from_column(col)
+        if base_prop.lower().startswith("neighbor_"):
+            _add_once(neighbour_properties, col)
+        elif any(token in base_prop.lower() for token in ["name", "title"]):
+            _add_once(key_properties, col)
+        elif base_prop.lower() in {"id"} or base_prop.lower().endswith("_id"):
+            _add_once(unique_properties, col)
+        else:
+            _add_once(other_properties, col)
 
     # Log the property categorization
     logging.info(f"Key properties for comparison: {key_properties}")
@@ -1515,55 +1634,116 @@ def _create_blocking_rules(
         List: List of Splink blocking rules
     """
 
-    # Prioritize certain columns for blocking
-    name_columns = [
-        col
-        for col in properties_columns
-        if any(name_part in col.lower() for name_part in ["name", "title"])
-    ]
-
-    type_columns = [col for col in properties_columns if col == "type"]
-
-    id_columns = [
-        col
-        for col in properties_columns
-        if col.endswith("_id") and col != "id"  # Skip primary key
-    ]
-
+    # Prioritise canonicalised columns where available
+    name_columns: List[str] = []
+    type_columns: List[str] = []
+    id_columns: List[str] = []
     unique_columns: List[str] = []
-    if parsed_ontology and entity_type:
-        prop_defs = (
-            parsed_ontology.get("entities", {})
-            .get(entity_type, {})
-            .get("properties", {})
-        )
-        for col, prop_def in prop_defs.items():
-            if prop_def.get("unique") and col in properties_columns:
-                unique_columns.append(col)
+    key_columns: List[str] = []
 
-    # Use ontology information to determine property types for blocking
-    key_columns = []
-    if parsed_ontology and entity_type:
-        for col in properties_columns:
-            prop_type = (
-                parsed_ontology.get("entities", {})
-                .get(entity_type, {})
-                .get("properties", {})
-                .get(col, {})
-                .get("type")
-            )
-            if prop_type:
-                # Use string properties for blocking
-                if prop_type == "string" and any(
-                    name_part in col.lower()
-                    for name_part in ["name", "title", "identifier"]
-                ):
-                    key_columns.append(col)
-                # Use exact-match integer properties for blocking
-                elif prop_type in ["integer", "number"] and any(
-                    id_part in col.lower() for id_part in ["id", "code"]
-                ):
-                    key_columns.append(col)
+    entity_prop_defs = (
+        (parsed_ontology or {})
+        .get("entities", {})
+        .get(entity_type, {})
+        .get("properties", {})
+        if entity_type
+        else {}
+    )
+
+    column_variants: Dict[str, Dict[str, str]] = defaultdict(dict)
+    for col in properties_columns:
+        if col not in df.columns:
+            continue
+        base_prop = _base_property_from_column(col)
+        variant_key = "canonical" if _is_canonical_column(col) else "raw"
+        column_variants[base_prop][variant_key] = col
+
+    def _column_has_data(column: Optional[str]) -> bool:
+        return bool(column) and column in df.columns and df[column].notna().sum() > 0
+
+    def _pick_column(variants: Dict[str, str], prefer_canonical: bool = True) -> Optional[str]:
+        order = ["canonical", "raw"] if prefer_canonical else ["raw", "canonical"]
+        for variant in order:
+            column = variants.get(variant)
+            if _column_has_data(column):
+                return column
+        return None
+
+    def _add_once(bucket: List[str], column: Optional[str]) -> None:
+        if column and column not in bucket:
+            bucket.append(column)
+
+    processed_columns: Set[str] = set()
+
+    for base_prop, variants in column_variants.items():
+        canonical_col = variants.get("canonical")
+        raw_col = variants.get("raw")
+        preferred_col = _pick_column(variants)
+        base_lower = base_prop.lower()
+
+        if base_prop == "type" and _column_has_data(raw_col):
+            _add_once(type_columns, raw_col)
+            processed_columns.add(raw_col)
+            continue
+
+        prop_def = entity_prop_defs.get(base_prop)
+        prop_type = prop_def.get("type") if prop_def else None
+
+        if prop_def and prop_def.get("unique"):
+            unique_col = preferred_col or _pick_column(variants, prefer_canonical=False)
+            if _column_has_data(unique_col):
+                _add_once(unique_columns, unique_col)
+                processed_columns.add(unique_col)
+
+        if prop_type and _is_prop_type_string(prop_type):
+            name_like = any(token in base_lower for token in ["name", "title"])
+            identifier_like = any(token in base_lower for token in ["identifier", "code"])
+            string_col = preferred_col or raw_col
+            if _column_has_data(string_col):
+                if name_like:
+                    _add_once(name_columns, string_col)
+                elif identifier_like or (prop_def and prop_def.get("unique")):
+                    _add_once(key_columns, string_col)
+                processed_columns.add(string_col)
+        elif prop_type and _is_prop_type_number(prop_type):
+            number_col = preferred_col or raw_col
+            if _column_has_data(number_col):
+                _add_once(id_columns, number_col)
+                _add_once(key_columns, number_col)
+                processed_columns.add(number_col)
+        else:
+            # Fallback heuristics for neighbour style columns
+            if base_lower.startswith("neighbor_"):
+                marker = preferred_col or raw_col
+                if marker:
+                    processed_columns.add(marker)
+
+        if not prop_def:
+            fallback_col = preferred_col or raw_col
+            if not _column_has_data(fallback_col):
+                continue
+            if base_lower in {"id"} or base_lower.endswith("_id"):
+                _add_once(unique_columns, fallback_col)
+                _add_once(id_columns, fallback_col)
+            elif any(token in base_lower for token in ["name", "title"]):
+                _add_once(name_columns, fallback_col)
+            elif any(token in base_lower for token in ["identifier", "code"]):
+                _add_once(key_columns, fallback_col)
+            processed_columns.add(fallback_col)
+
+    for col in properties_columns:
+        if col not in df.columns or col in processed_columns:
+            continue
+        if not _column_has_data(col):
+            continue
+        lower_name = _base_property_from_column(col).lower()
+        if any(token in lower_name for token in ["name", "title"]):
+            _add_once(name_columns, col)
+        elif lower_name.endswith("_id") and lower_name != "id":
+            _add_once(id_columns, col)
+            _add_once(unique_columns, col)
+        elif any(token in lower_name for token in ["identifier", "code"]):
+            _add_once(key_columns, col)
 
     # Create blocking rules
     blocking_rules = []
