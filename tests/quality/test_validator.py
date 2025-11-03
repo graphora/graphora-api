@@ -2,7 +2,11 @@ import pytest
 
 from app.services.quality.models import QualityRuleType, QualitySeverity
 from app.services.quality.validator import QualityValidator
-from app.services.transform.models import BaseNode, DocumentKnowledgeGraph
+from app.services.transform.models import (
+    BaseNode,
+    DocumentKnowledgeGraph,
+    RelationshipInstance,
+)
 
 
 @pytest.mark.asyncio
@@ -169,6 +173,159 @@ async def test_relationship_presence_rule_creates_violation():
     )
     assert results.quality_gate_status == "fail"
     assert results.requires_review is True
+
+
+@pytest.mark.asyncio
+async def test_quality_validator_pass_gate():
+    ontology = {
+        "version": "1.0.0",
+        "dataQualityConfig": {
+            "gating": {
+                "passScore": 90,
+                "warnScore": 80,
+                "hardFailScore": 70,
+                "maxWarnings": 1,
+            }
+        },
+        "entities": {
+            "Company": {
+                "properties": {
+                    "name": {"required": True},
+                }
+            }
+        },
+    }
+
+    validator = QualityValidator(ontology)
+
+    company = BaseNode(
+        id="company-1",
+        type="Company",
+        properties={"name": "Acme"},
+        confidence_score=0.99,
+    )
+
+    graph = DocumentKnowledgeGraph(nodes=[company])
+    results = await validator.validate_extraction(graph, "transform-pass")
+
+    assert results.quality_gate_status == "pass"
+    assert results.requires_review is False
+    assert not results.violations
+
+
+@pytest.mark.asyncio
+async def test_entity_completeness_rule_detects_low_fill_rate():
+    ontology = {
+        "version": "1.0.0",
+        "dataQualityConfig": {
+            "gating": {
+                "hardFailScore": 85,
+                "warnScore": 90,
+                "maxWarnings": 5,
+            }
+        },
+        "entities": {
+            "Company": {
+                "properties": {
+                    "name": {"required": True},
+                    "ticker": {"type": "string"},
+                },
+                "quality": {
+                    "entityLevel": {
+                        "completeness": {
+                            "minPropertyFillRate": 0.75,
+                            "severity": "error",
+                        }
+                    }
+                },
+            }
+        },
+    }
+
+    validator = QualityValidator(ontology)
+
+    company = BaseNode(
+        id="company-1",
+        type="Company",
+        properties={"name": "Acme"},
+        confidence_score=0.6,
+    )
+
+    graph = DocumentKnowledgeGraph(nodes=[company])
+    results = await validator.validate_extraction(graph, "transform-completeness")
+
+    assert any(
+        violation.rule_id == "Company.completeness.min_fill_rate"
+        for violation in results.violations
+    )
+    assert results.quality_gate_status == "fail"
+
+
+@pytest.mark.asyncio
+async def test_symmetric_relationship_rule_detects_missing_inverse():
+    ontology = {
+        "version": "1.0.0",
+        "dataQualityConfig": {
+            "global": {},
+            "gating": {
+                "passScore": 95,
+                "warnScore": 85,
+                "hardFailScore": 75,
+            },
+            "crossValidationRules": [
+                {
+                    "name": "company_industry_symmetry",
+                    "ruleType": "symmetric_relationship",
+                    "relationshipType": "ASSOCIATED_WITH",
+                    "severity": "warning",
+                }
+            ],
+        },
+        "entities": {
+            "Company": {
+                "properties": {"name": {"required": True}},
+                "relationships": {
+                    "ASSOCIATED_WITH": {"target": "Industry"}
+                },
+            },
+            "Industry": {"properties": {"name": {"required": True}}},
+        },
+    }
+
+    validator = QualityValidator(ontology)
+
+    company = BaseNode(
+        id="company-1",
+        type="Company",
+        properties={"name": "Acme"},
+        confidence_score=0.8,
+    )
+    industry = BaseNode(
+        id="industry-1",
+        type="Industry",
+        properties={"name": "Tech"},
+        confidence_score=0.8,
+    )
+
+    relationships = []
+    relationships.append(
+        RelationshipInstance(
+            id="rel-1",
+            type="ASSOCIATED_WITH",
+            source_id=company.id,
+            target_id=industry.id,
+            source_type="Company",
+            target_type="Industry",
+        )
+    )
+
+    graph = DocumentKnowledgeGraph(nodes=[company, industry], relationships=relationships)
+    results = await validator.validate_extraction(graph, "transform-symmetric")
+
+    assert any(
+        violation.rule_id.startswith("global.symmetric_relationship")
+        for violation in results.violations
+    )
 
 
 @pytest.mark.asyncio
