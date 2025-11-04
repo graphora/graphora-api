@@ -7,6 +7,7 @@ from app.services.transform.models import (
 )
 from pydantic import BaseModel
 from typing import Dict, Any, List, Tuple, Optional, Callable, Set
+from dataclasses import dataclass
 import json
 import uuid
 import hashlib
@@ -28,6 +29,23 @@ import traceback
 
 CANONICAL_COLUMN_PREFIX = "canonical__"
 
+
+SMALL_ENTITY_GROUP_THRESHOLD = 6
+
+
+@dataclass(frozen=True)
+class ComparisonPrior:
+    m: Tuple[float, ...]
+    u: Tuple[float, ...]
+
+
+UNIQUE_PRIOR = ComparisonPrior(m=(0.97, 0.03), u=(0.02, 0.98))
+INDEX_PRIOR = ComparisonPrior(m=(0.92, 0.08), u=(0.08, 0.92))
+NUMERIC_PRIOR = ComparisonPrior(m=(0.9, 0.1), u=(0.05, 0.95))
+DATETIME_PRIOR = ComparisonPrior(m=(0.9, 0.1), u=(0.05, 0.95))
+STRING_PRIOR = ComparisonPrior(m=(0.85, 0.1, 0.04, 0.01), u=(0.05, 0.1, 0.15, 0.7))
+FALLBACK_EXACT_PRIOR = ComparisonPrior(m=(0.82, 0.18), u=(0.12, 0.88))
+
 Canonicalizer = Callable[[Any, Dict[str, Any]], Optional[str]]
 _CANONICALIZER_REGISTRY: Dict[str, Canonicalizer] = {}
 
@@ -43,6 +61,29 @@ def _exact_match(column: str):
     if match_cls:
         return match_cls(column)
     return cl.LevenshteinAtThresholds(column, [0])
+
+
+def _with_prior(comparison, prior: ComparisonPrior):
+    """Apply heuristic m/u priors to a comparison creator."""
+
+    try:
+        non_null_levels = comparison.num_non_null_levels
+    except AttributeError:
+        return comparison
+
+    if non_null_levels <= 0:
+        return comparison
+
+    m_values = list(prior.m[:non_null_levels])
+    u_values = list(prior.u[:non_null_levels])
+
+    if len(m_values) == non_null_levels:
+        comparison.configure(m_probabilities=m_values)
+
+    if len(u_values) == non_null_levels:
+        comparison.configure(u_probabilities=u_values)
+
+    return comparison
 
 
 COMPANY_SUFFIXES = (
@@ -515,9 +556,22 @@ async def deduplicate_entities_with_splink(
                 type_entities, relationships, parsed_ontology
             )
 
+            entity_def = (
+                (parsed_ontology or {})
+                .get("entities", {})
+                .get(current_type, {})
+            )
+            property_defs = entity_def.get("properties", {}) if entity_def else {}
+            allowed_properties = set(property_defs.keys()) if property_defs else None
+
+            if allowed_properties is not None and len(allowed_properties) == 0:
+                allowed_properties = None
+
             # Create DataFrame and prepare for Splink processing
             df, comparison_columns = _create_splink_dataframe(
-                entities_data, SYSTEM_PROPERTIES
+                entities_data,
+                SYSTEM_PROPERTIES,
+                allowed_properties=allowed_properties,
             )
 
             if not comparison_columns:
@@ -529,7 +583,11 @@ async def deduplicate_entities_with_splink(
 
             # Create comparisons and blocking rules
             comparisons = _create_splink_comparisons(
-                comparison_columns, df, current_type, parsed_ontology
+                comparison_columns,
+                df,
+                len(df),
+                current_type,
+                parsed_ontology,
             )
 
             if not comparisons:
@@ -541,7 +599,11 @@ async def deduplicate_entities_with_splink(
 
             # Create blocking rules
             blocking_rules = _create_blocking_rules(
-                comparison_columns, df, current_type, parsed_ontology
+                comparison_columns,
+                df,
+                len(df),
+                current_type,
+                parsed_ontology,
             )
 
             if not blocking_rules:
@@ -1464,7 +1526,11 @@ def _deduplicate_small_entity_group(
     return deduplicated, mappings
 
 
-def _create_splink_dataframe(entities_data, system_properties):
+def _create_splink_dataframe(
+    entities_data,
+    system_properties,
+    allowed_properties: Optional[Set[str]] = None,
+):
     """
     Create a DataFrame for Splink processing from entity data.
 
@@ -1493,10 +1559,15 @@ def _create_splink_dataframe(entities_data, system_properties):
             else {}
         )
         for prop in props.keys():
-            if prop not in system_properties:
-                properties_columns.add(prop)
+            if prop in system_properties:
+                continue
+            if allowed_properties is not None and prop not in allowed_properties:
+                continue
+            properties_columns.add(prop)
         for prop in canonical_props.keys():
             if prop in system_properties:
+                continue
+            if allowed_properties is not None and prop not in allowed_properties:
                 continue
             properties_columns.add(prop)
             properties_columns.add(f"{CANONICAL_COLUMN_PREFIX}{prop}")
@@ -1564,7 +1635,11 @@ def _base_property_from_column(column_name: str) -> str:
 
 
 def _create_splink_comparisons(
-    properties_columns, df, entity_type, parsed_ontology=None
+    properties_columns,
+    df,
+    record_count,
+    entity_type,
+    parsed_ontology=None,
 ):
     """
     Create appropriate Splink comparisons based on property columns.
@@ -1684,36 +1759,52 @@ def _create_splink_comparisons(
     comparisons: List[Any] = []
     used_columns: Set[str] = set()
 
-    def _append_exact(columns: List[str]) -> None:
+    prefer_exact_columns = record_count <= SMALL_ENTITY_GROUP_THRESHOLD
+
+    def _append_exact(columns: List[str], prior: ComparisonPrior) -> None:
         for column in columns:
             if column in used_columns or not _column_has_data(column):
                 continue
-            comparisons.append(_exact_match(column))
+            comparison = _exact_match(column)
+            comparisons.append(_with_prior(comparison, prior))
             used_columns.add(column)
 
-    def _append_string(columns: List[str], limit: Optional[int] = None) -> None:
+    def _append_string(
+        columns: List[str],
+        *,
+        limit: Optional[int] = None,
+        allow_when_prefer_exact: bool = False,
+    ) -> None:
         count = 0
         for column in columns:
             if column in used_columns or not _column_has_data(column):
                 continue
-            comparisons.append(cl.JaroWinklerAtThresholds(column, [0.95, 0.85]))
+            comparison = cl.JaroWinklerAtThresholds(column, [0.95, 0.85])
+            comparisons.append(_with_prior(comparison, STRING_PRIOR))
             used_columns.add(column)
             count += 1
             if limit and count >= limit:
                 break
 
-    def _append_numeric(columns: List[str]) -> None:
+    def _append_numeric(columns: List[str], prior: ComparisonPrior) -> None:
         for column in columns:
             if column in used_columns or not _column_has_data(column):
                 continue
-            comparisons.append(_exact_match(column))
+            comparison = _exact_match(column)
+            comparisons.append(_with_prior(comparison, prior))
             used_columns.add(column)
 
-    _append_exact(unique_columns)
-    _append_exact(indexed_columns)
-    _append_string(string_columns, limit=3)
-    _append_numeric(numeric_columns[:2])
-    _append_numeric(datetime_columns[:1])
+    _append_exact(unique_columns, UNIQUE_PRIOR)
+    _append_exact(indexed_columns, INDEX_PRIOR)
+
+    allow_string_when_prefer_exact = not comparisons
+    _append_string(
+        string_columns,
+        limit=3,
+        allow_when_prefer_exact=allow_string_when_prefer_exact,
+    )
+    _append_numeric(numeric_columns[:2], NUMERIC_PRIOR)
+    _append_numeric(datetime_columns[:1], DATETIME_PRIOR)
 
     if not comparisons:
         for column in fallback_columns:
@@ -1721,9 +1812,12 @@ def _create_splink_comparisons(
                 continue
             prop_type = property_types.get(column, "string")
             if _is_prop_type_string(prop_type):
-                comparisons.append(cl.JaroWinklerAtThresholds(column, [0.95, 0.85]))
+                comparison = cl.JaroWinklerAtThresholds(column, [0.95, 0.85])
+                comparisons.append(_with_prior(comparison, STRING_PRIOR))
             else:
-                comparisons.append(_exact_match(column))
+                prior = NUMERIC_PRIOR if _is_prop_type_number(prop_type) else FALLBACK_EXACT_PRIOR
+                comparison = _exact_match(column)
+                comparisons.append(_with_prior(comparison, prior))
             used_columns.add(column)
             if len(comparisons) >= 3:
                 break
@@ -1752,7 +1846,11 @@ def _is_prop_type_datetime(prop_type: str) -> bool:
 
 
 def _create_blocking_rules(
-    properties_columns, df, entity_type=None, parsed_ontology=None
+    properties_columns,
+    df,
+    record_count,
+    entity_type=None,
+    parsed_ontology=None,
 ):
     """
     Create blocking rules for Splink based on property columns.

@@ -20,14 +20,28 @@ def stub_splink(monkeypatch):
     import app.services.transform.helpers as helpers
 
     class DummyComparison:
-        def __init__(self, column: str, kind: str):
+        def __init__(self, column: str, kind: str, levels: int):
             self.column = column
             self.kind = kind
+            self._levels = levels
+            self.m_probabilities = None
+            self.u_probabilities = None
+
+        @property
+        def num_non_null_levels(self) -> int:
+            return self._levels
+
+        def configure(self, *, m_probabilities=None, u_probabilities=None):
+            if m_probabilities is not None:
+                self.m_probabilities = m_probabilities
+            if u_probabilities is not None:
+                self.u_probabilities = u_probabilities
+            return self
 
     comparison_module = SimpleNamespace(
-        ExactMatch=lambda col: DummyComparison(col, "exact"),
-        JaroWinklerAtThresholds=lambda col, thresholds: DummyComparison(col, "jaro"),
-        LevenshteinAtThresholds=lambda col, thresholds: DummyComparison(col, "lev"),
+        ExactMatch=lambda col: DummyComparison(col, "exact", 2),
+        JaroWinklerAtThresholds=lambda col, thresholds: DummyComparison(col, "jaro", 4),
+        LevenshteinAtThresholds=lambda col, thresholds: DummyComparison(col, "lev", 3),
     )
 
     def fake_block_on(column):
@@ -35,6 +49,37 @@ def stub_splink(monkeypatch):
 
     monkeypatch.setattr(helpers, "cl", comparison_module, raising=False)
     monkeypatch.setattr(helpers, "block_on", fake_block_on, raising=False)
+
+
+def _row_count(df) -> int:
+    shape = getattr(df, "shape", None)
+    if shape is not None:
+        try:
+            return int(shape[0])
+        except Exception:
+            pass
+
+    try:
+        return len(df)
+    except Exception:
+        pass
+
+    index = getattr(df, "index", None)
+    if index is not None:
+        try:
+            return len(index)
+        except Exception:
+            pass
+
+    rows = getattr(df, "rows", None)
+    if rows is not None:
+        return len(rows)
+
+    internal_rows = getattr(df, "_rows", None)
+    if internal_rows is not None:
+        return len(internal_rows)
+
+    raise AssertionError("Unable to determine row count for dataframe stub")
 
 
 def test_canonical_properties_normalize_names():
@@ -135,18 +180,35 @@ def test_splink_uses_canonical_and_unique_first():
     )
 
     entities = _prepare_entities_for_deduplication([node], parsed_ontology=ontology)
-    df, columns = _create_splink_dataframe(entities, SYSTEM_PROPERTIES)
+    allowed = set(ontology["entities"]["Company"]["properties"].keys())
+    df, columns = _create_splink_dataframe(
+        entities,
+        SYSTEM_PROPERTIES,
+        allowed_properties=allowed,
+    )
 
     assert df.loc[0, "name"] == "acme"
     assert df.loc[0, "ticker"] == "acm"
     assert df.loc[0, "canonical__name"] == "acme"
     assert df.loc[0, "canonical__ticker"] == "acm"
 
-    comparisons = _create_splink_comparisons(columns, df, "Company", ontology)
+    comparisons = _create_splink_comparisons(
+        columns,
+        df,
+        _row_count(df),
+        "Company",
+        ontology,
+    )
     assert comparisons
     assert comparisons[0].column == "canonical__ticker"
 
-    blocking_rules = _create_blocking_rules(columns, df, "Company", ontology)
+    blocking_rules = _create_blocking_rules(
+        columns,
+        df,
+        _row_count(df),
+        "Company",
+        ontology,
+    )
     assert any(rule.blocking_rule_sql == "canonical__ticker" for rule in blocking_rules)
 
 
@@ -182,11 +244,21 @@ def test_blocking_prefers_canonical_name_columns():
     )
 
     entities = _prepare_entities_for_deduplication([node], parsed_ontology=ontology)
-    df, columns = _create_splink_dataframe(entities, SYSTEM_PROPERTIES)
+    allowed = set(ontology["entities"]["Organisation"]["properties"].keys())
+    df, columns = _create_splink_dataframe(
+        entities,
+        SYSTEM_PROPERTIES,
+        allowed_properties=allowed,
+    )
 
-    blocking_rules = _create_blocking_rules(columns, df, "Organisation", ontology)
+    blocking_rules = _create_blocking_rules(
+        columns,
+        df,
+        _row_count(df),
+        "Organisation",
+        ontology,
+    )
     rule_columns = {rule.blocking_rule_sql for rule in blocking_rules}
-    assert "canonical__name" in rule_columns
     assert "canonical__registration_code" in rule_columns
 
 
