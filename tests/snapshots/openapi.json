@@ -734,6 +734,16 @@
             "title": "Failure Details",
             "type": "object"
           },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransformFailureReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "overall_status": {
             "$ref": "#/components/schemas/app__services__transform__status_models__TransformStatus"
           },
@@ -1071,6 +1081,16 @@
               }
             ],
             "title": "Failure Code"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransformFailureReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "is_recoverable": {
             "default": true,
@@ -3309,6 +3329,21 @@
         ],
         "title": "StoredSchema",
         "type": "object"
+      },
+      "TransformFailureReason": {
+        "description": "Normalized reasons for transform failure presented to clients.",
+        "enum": [
+          "quality_gate_failed",
+          "no_graph_generated",
+          "llm_unavailable",
+          "parse_failed",
+          "chunking_failed",
+          "transform_execution_failed",
+          "storage_failed",
+          "unknown_error"
+        ],
+        "title": "TransformFailureReason",
+        "type": "string"
       },
       "TransformInitResponse": {
         "properties": {

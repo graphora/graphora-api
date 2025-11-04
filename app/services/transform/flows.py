@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from prefect import flow, task
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -27,7 +29,11 @@ from app.services.storage.tasks import store_knowledge_graph
 from app.services.transform.progress_tracker import ProgressTracker
 from app.services.quality.models import QualityResults
 
-from app.services.transform.status_models import TransformationStage, ErrorSummary
+from app.services.transform.status_models import (
+    TransformationStage,
+    ErrorSummary,
+    TransformFailureReason,
+)
 from app.services.usage_tracking import usage_tracking_service
 from app.schemas.usage import DocumentUsageRequest, ProcessingStatus
 from PyPDF2 import PdfReader, PdfWriter
@@ -724,43 +730,18 @@ async def document_transformation_flow(
         ):
             current_stage = TransformationStage.LOAD
 
-        # Determine if error is recoverable (should not retry)
-        is_recoverable = True
         error_message_str = str(e)
 
-        # Non-recoverable errors that should fail immediately
-        non_recoverable_patterns = [
-            "api key not valid",
-            "invalid api key",
-            "authentication failed",
-            "unauthorized",
-            "invalid_argument",
-            "permission denied",
-            "quota exceeded",
-            "billing",
-            "api_key_invalid",
-            "quality validation failed",
-        ]
+        classification = _classify_transform_failure(
+            e,
+            current_stage,
+            documents_processed=len(document_usage_records),
+        )
 
-        for pattern in non_recoverable_patterns:
-            if pattern in error_message.lower():
-                is_recoverable = False
-                break
-
-        failure_code = None
-        failure_details = {}
-        if isinstance(e, QualityValidationError):
-            failure_code = e.code
-            failure_details = e.details
-            is_recoverable = False
-        elif isinstance(e, ExtractionError):
-            failure_code = "extraction_failed"
-
-        recovery_instructions = None
-        if not is_recoverable:
-            recovery_instructions = "Check API key configuration"
-        elif isinstance(e, ExtractionError):
-            recovery_instructions = "Retry the transform after a short wait"
+        failure_code = classification.code
+        failure_details = classification.details
+        is_recoverable = classification.is_recoverable
+        recovery_instructions = classification.recovery_instructions
 
         # Record error
         error = ErrorSummary(
@@ -775,6 +756,7 @@ async def document_transformation_flow(
             recovery_instructions=recovery_instructions,
             failure_code=failure_code,
             details=failure_details,
+            failure_reason=classification.reason,
         )
 
         await progress_tracker.fail_stage(transform_id, current_stage, error)
@@ -795,6 +777,168 @@ async def document_transformation_flow(
                 )
 
         raise
+
+
+@dataclass
+class FailureClassification:
+    reason: TransformFailureReason
+    code: str
+    details: Dict[str, Any]
+    is_recoverable: bool
+    recovery_instructions: Optional[str]
+
+
+def _extract_original_exception(exc: Exception) -> Optional[Exception]:
+    original = getattr(exc, "original", None)
+    return original or None
+
+
+def _is_llm_unavailable_error(exc: Optional[Exception]) -> bool:
+    if exc is None:
+        return False
+
+    text = str(exc).lower()
+    transient_markers = [
+        "model is overloaded",
+        "temporarily unavailable",
+        "unavailable",
+        "service unavailable",
+        "try again later",
+        "rate limit",
+        "overloaded",
+    ]
+
+    if any(marker in text for marker in transient_markers):
+        return True
+
+    for attr in ("status", "status_code", "code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int) and value == 503:
+            return True
+        if isinstance(value, str) and value.strip().lower() in {"503", "service_unavailable", "unavailable"}:
+            return True
+
+    return False
+
+
+def _classify_transform_failure(
+    exc: Exception,
+    stage: TransformationStage,
+    *,
+    documents_processed: Optional[int] = None,
+) -> FailureClassification:
+    """Derive a normalized failure classification for frontend consumption."""
+
+    details: Dict[str, Any] = {}
+    reason = TransformFailureReason.UNKNOWN_ERROR
+    is_recoverable = False
+    recovery_instructions: Optional[str] = None
+    code: Optional[str] = None
+
+    if isinstance(exc, QualityValidationError):
+        details = dict(exc.details or {})
+        reason_key = details.get("reason")
+        if reason_key == "no_graphs_generated":
+            reason = TransformFailureReason.NO_GRAPH_GENERATED
+            recovery_instructions = (
+                "Ensure the source documents contain extractable entities or relationships."
+            )
+        else:
+            reason = TransformFailureReason.QUALITY_GATE_FAILED
+            recovery_instructions = (
+                "Review the quality violations and adjust the ontology or source data."
+            )
+        code = exc.code
+        is_recoverable = exc.retry_allowed
+
+    elif isinstance(exc, ExtractionError):
+        underlying = _extract_original_exception(exc)
+        if _is_llm_unavailable_error(underlying):
+            reason = TransformFailureReason.LLM_UNAVAILABLE
+            code = "llm_unavailable"
+            is_recoverable = True
+            recovery_instructions = (
+                "Retry shortly; the upstream language model reported temporary unavailability."
+            )
+        else:
+            reason = TransformFailureReason.TRANSFORM_EXECUTION_FAILED
+            code = "extraction_failed"
+            is_recoverable = True
+            recovery_instructions = "Retry the transform; if the issue persists, contact support."
+        if underlying is not None:
+            details["underlying_exception"] = type(underlying).__name__
+            details["underlying_message"] = str(underlying)
+
+    elif isinstance(exc, ValueError) and "no graphs were successfully processed" in str(exc).lower():
+        reason = TransformFailureReason.NO_GRAPH_GENERATED
+        code = "no_graph_generated"
+        recovery_instructions = (
+            "Validate that the extraction produced entities and relationships before storage."
+        )
+
+    if code is None:
+        if stage == TransformationStage.PARSE:
+            reason = TransformFailureReason.PARSE_FAILED
+            code = "parse_failed"
+            recovery_instructions = (
+                "Verify the document format is supported and not corrupt."
+            )
+        elif stage == TransformationStage.CHUNK:
+            reason = TransformFailureReason.CHUNKING_FAILED
+            code = "chunking_failed"
+            recovery_instructions = (
+                "Review chunking configuration or document structure."
+            )
+        elif stage == TransformationStage.LOAD:
+            reason = TransformFailureReason.STORAGE_FAILED
+            code = "storage_failed"
+            recovery_instructions = (
+                "Check graph storage connectivity and credentials."
+            )
+        elif stage == TransformationStage.TRANSFORM:
+            if reason == TransformFailureReason.UNKNOWN_ERROR:
+                reason = TransformFailureReason.TRANSFORM_EXECUTION_FAILED
+            code = code or "transform_failed"
+        else:
+            code = code or reason.value
+
+    # Inspect for non-recoverable configuration patterns unless already classified
+    original = _extract_original_exception(exc) or exc
+    error_text = str(original).lower()
+    non_recoverable_patterns = [
+        "api key not valid",
+        "invalid api key",
+        "authentication failed",
+        "unauthorized",
+        "invalid_argument",
+        "permission denied",
+        "quota exceeded",
+        "billing",
+        "api_key_invalid",
+    ]
+
+    if any(pattern in error_text for pattern in non_recoverable_patterns):
+        is_recoverable = False
+        if reason == TransformFailureReason.UNKNOWN_ERROR:
+            reason = TransformFailureReason.TRANSFORM_EXECUTION_FAILED
+        recovery_instructions = (
+            "Verify API credentials, quotas, and billing status before retrying."
+        )
+        code = code or "configuration_error"
+
+    details.setdefault("exception_type", type(exc).__name__)
+    details.setdefault("message", str(exc))
+    details.setdefault("stage", stage.value)
+    if documents_processed is not None:
+        details.setdefault("documents_processed", documents_processed)
+
+    return FailureClassification(
+        reason=reason,
+        code=code or reason.value,
+        details=details,
+        is_recoverable=is_recoverable,
+        recovery_instructions=recovery_instructions,
+    )
 
 
 async def _persist_quality_violations(
