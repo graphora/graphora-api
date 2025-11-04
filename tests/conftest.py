@@ -2,6 +2,7 @@ import os
 import sys
 import types
 from pathlib import Path
+import pytest
 
 
 def _install_neo4j_stub() -> None:
@@ -279,6 +280,15 @@ def _install_langchain_and_splink_stubs() -> None:
 
 
 _install_langchain_and_splink_stubs()
+
+
+@pytest.fixture(autouse=True)
+def _reset_merge_learning_service():
+    from app.services.merge.learning import merge_learning_service
+
+    merge_learning_service.reset()
+    yield
+    merge_learning_service.reset()
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:

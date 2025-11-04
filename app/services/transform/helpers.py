@@ -25,6 +25,7 @@ from splink import DuckDBAPI, Linker, SettingsCreator
 import logging
 import copy
 import traceback
+from app.services.merge.learning import merge_learning_service
 
 
 CANONICAL_COLUMN_PREFIX = "canonical__"
@@ -460,6 +461,7 @@ async def deduplicate_entities_with_splink(
     entity_type: str = None,
     threshold: float = 0.95,
     parsed_ontology: Dict[str, Any] = None,
+    user_id: Optional[str] = None,
 ) -> Tuple[List[BaseNode | Node], List[RelationshipInstance | Edge]]:
     """
     Deduplicate entities using the Splink library.
@@ -468,7 +470,8 @@ async def deduplicate_entities_with_splink(
         entities (List[BaseNode]): List of entity nodes to deduplicate
         relationships (List[RelationshipInstance], optional): List of relationships to provide context
         entity_type (str, optional): Type of entity to filter by. If None, all entity types are processed separately.
-        threshold (float, optional): Match probability threshold for clustering. Default is 0.95.
+        threshold (float, optional): Baseline match probability threshold for clustering. Default is 0.95.
+        user_id (str, optional): User identifier to scope adaptive thresholds.
         parsed_ontology (dict, optional): Parsed ontology to get property types
 
     Returns:
@@ -551,6 +554,10 @@ async def deduplicate_entities_with_splink(
                 f"Processing {len(type_entities)} entities of type '{current_type}'"
             )
 
+            effective_threshold = await merge_learning_service.get_threshold(
+                user_id, current_type, threshold
+            )
+
             # Prepare entities data for this type
             entities_data = _prepare_entities_for_deduplication(
                 type_entities, relationships, parsed_ontology
@@ -614,11 +621,24 @@ async def deduplicate_entities_with_splink(
                 continue
 
             # Run Splink deduplication
-            logging.info(f"Running Splink deduplication for type '{current_type}'...")
-            logger.debug(f"Running Splink deduplication for type '{current_type}'...")
-            id_to_representative = _run_splink_deduplication(
-                df, comparisons, blocking_rules, threshold
+            logging.info(
+                "Running Splink deduplication for type '%s' with threshold %.3f...",
+                current_type,
+                effective_threshold,
             )
+            logger.debug(
+                "Running Splink deduplication for type '%s' with adaptive threshold %.3f",
+                current_type,
+                effective_threshold,
+            )
+            id_to_representative, match_scores = _run_splink_deduplication(
+                df, comparisons, blocking_rules, effective_threshold
+            )
+
+            if match_scores:
+                await merge_learning_service.record_outcome(
+                    user_id, current_type, match_scores
+                )
 
             if not id_to_representative:
                 logging.info(f"No duplicates found for type '{current_type}'")
@@ -1998,7 +2018,7 @@ def _run_splink_deduplication(df, comparisons, blocking_rules, threshold):
     # Ensure 'id' column exists
     if "id" not in df.columns:
         logging.error("DataFrame must have an 'id' column for deduplication")
-        return {}
+        return {}, []
 
     record_count = len(df)
 
@@ -2010,7 +2030,7 @@ def _run_splink_deduplication(df, comparisons, blocking_rules, threshold):
             len(comparisons),
             len(blocking_rules),
         )
-        return {}
+        return {}, []
 
     # Initialize DuckDB API
     db_api = DuckDBAPI()
@@ -2071,7 +2091,7 @@ def _run_splink_deduplication(df, comparisons, blocking_rules, threshold):
         # Check if we got any clusters
         if df_clusters.empty:
             logging.info("No duplicate clusters found")
-            return {}
+            return {}, []
 
         logging.info(f"Found {len(df_clusters['cluster_id'].unique())} clusters")
 
@@ -2084,7 +2104,22 @@ def _run_splink_deduplication(df, comparisons, blocking_rules, threshold):
             logging.warning(
                 f"Missing expected columns in cluster dataframe. Available columns: {df_clusters.columns.tolist()}"
             )
-            return {}
+            return {}, []
+
+        match_scores: List[float] = []
+        try:
+            predictions_df = pairwise_predictions.as_pandas_dataframe()
+            if not predictions_df.empty and "match_probability" in predictions_df.columns:
+                probability_series = predictions_df["match_probability"].dropna()
+                if not probability_series.empty:
+                    match_scores = (
+                        probability_series[probability_series >= threshold]
+                        .astype(float)
+                        .clip(lower=0.0, upper=1.0)
+                        .tolist()
+                    )
+        except Exception:  # pragma: no cover - telemetry only
+            logger.debug("Unable to extract match probability metrics from Splink output")
 
         # Create a mapping of cluster IDs to representative entity IDs
         cluster_to_representative = {}
@@ -2111,12 +2146,12 @@ def _run_splink_deduplication(df, comparisons, blocking_rules, threshold):
             if cluster_id in cluster_to_representative:
                 id_to_representative[entity_id] = cluster_to_representative[cluster_id]
 
-        return id_to_representative
+        return id_to_representative, match_scores
 
     except Exception as e:
         logging.error(f"Error in Splink deduplication: {str(e)}")
         logging.debug(f"Deduplication error details: {traceback.format_exc()}")
-        return {}
+        return {}, []
 
 
 def _create_deduplicated_entities(entities, id_to_representative):

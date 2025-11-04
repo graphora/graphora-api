@@ -260,7 +260,10 @@ async def _build_graph_from(
         document_usage_id=document_usage_id,
     )
     nodes, _ = await deduplicate_entities_with_splink(
-        nodes, None, parsed_ontology=ontology_parser.parsed_ontology
+        nodes,
+        None,
+        parsed_ontology=ontology_parser.parsed_ontology,
+        user_id=user_id,
     )
     logger.info(f"Nodes after comparison: {nodes}")
 
@@ -331,6 +334,7 @@ async def _build_graph_from(
         entities=nodes,
         relationships=relationships,
         parsed_ontology=ontology_parser.parsed_ontology,
+        user_id=user_id,
     )
 
     if user_id:
