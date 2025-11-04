@@ -339,7 +339,7 @@
         "description": "Configuration for document chunking",
         "properties": {
           "chunk_overlap": {
-            "default": 200,
+            "default": 150,
             "description": "Character overlap between chunks",
             "maximum": 500.0,
             "minimum": 0.0,
@@ -359,7 +359,7 @@
             "type": "boolean"
           },
           "max_chunk_size": {
-            "default": 3000,
+            "default": 6000,
             "description": "Maximum chunk size in characters",
             "maximum": 10000.0,
             "minimum": 1000.0,
@@ -399,6 +399,13 @@
             "minimum": 0.1,
             "title": "Quality Threshold",
             "type": "number"
+          },
+          "semantic_min_length": {
+            "default": 2000,
+            "description": "Minimum document length (characters) before semantic chunking engages",
+            "minimum": 0.0,
+            "title": "Semantic Min Length",
+            "type": "integer"
           },
           "semantic_threshold": {
             "default": 0.7,

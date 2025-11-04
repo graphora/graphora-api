@@ -1,5 +1,9 @@
+import asyncio
+from dataclasses import dataclass
+from time import perf_counter
 from typing import List, Callable, Optional, Dict, Any, Tuple
 from pydantic import BaseModel
+from app.config import settings
 from app.services.transform.models import DocumentKnowledgeGraph
 from app.services.transform.ontology_helper import OntologyParser
 from app.services.transform.helpers import (
@@ -18,6 +22,134 @@ import os
 import json
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
+
+
+@dataclass(frozen=True)
+class ContextEnvelope:
+    """Context string plus metadata about truncation."""
+
+    text: str
+    truncated: bool
+    raw_length: int
+
+
+@dataclass
+class ChunkExtractionMetric:
+    """Telemetry captured for each chunk/LLM extraction."""
+
+    stage: str
+    chunk_index: int
+    chunk_chars: int
+    context_chars: int
+    raw_context_chars: int
+    was_context_truncated: bool
+    duration_seconds: float
+
+
+_CONTEXT_TRUNCATION_SENTINEL = "\n...[truncated]...\n"
+
+
+def _make_context_envelope(raw_context: str, *, stage: str) -> ContextEnvelope:
+    """Apply deterministic truncation to context strings and emit metadata."""
+
+    limit = getattr(settings, "MAX_CONTEXT_CHARS", 0) or 0
+    if limit <= 0 or len(raw_context) <= limit:
+        return ContextEnvelope(text=raw_context, truncated=False, raw_length=len(raw_context))
+
+    # Retain head/tail portions with a sentinel to preserve ordering cues.
+    sentinel = _CONTEXT_TRUNCATION_SENTINEL
+    # Ensure we have room for the sentinel plus at least one character from the head and tail.
+    if limit <= len(sentinel) + 2:
+        truncated_text = raw_context[:limit]
+    else:
+        head_len = (limit - len(sentinel)) // 2
+        tail_len = limit - len(sentinel) - head_len
+        head = raw_context[:head_len].rstrip("\n")
+        tail = raw_context[-tail_len:].lstrip("\n") if tail_len > 0 else ""
+        truncated_text = f"{head}\n{sentinel.strip()}\n{tail}" if tail else f"{head}\n{sentinel.strip()}"
+        if len(truncated_text) > limit:
+            truncated_text = truncated_text[:limit]
+
+    truncated = True
+    truncated_text = truncated_text.rstrip() + "\n"
+    truncated_text = truncated_text[:limit]
+    assert len(truncated_text) <= limit
+
+    logger.warning(
+        "Context truncated for %s stage",
+        stage,
+        extra={
+            "raw_length": len(raw_context),
+            "max_chars": limit,
+        },
+    )
+    return ContextEnvelope(text=truncated_text, truncated=truncated, raw_length=len(raw_context))
+
+
+async def _timed_call(func: Callable[..., Any], *args, **kwargs) -> Tuple[Any, float]:
+    """Execute an async callable measuring elapsed time."""
+
+    start = perf_counter()
+    result = await func(*args, **kwargs)
+    duration = perf_counter() - start
+    return result, duration
+
+
+def _chunk_length(chunk: Any) -> int:
+    """Approximate chunk size in characters for telemetry."""
+
+    if isinstance(chunk, str):
+        return len(chunk)
+    try:  # pragma: no cover - defensive for unexpected chunk types
+        return len(chunk)
+    except TypeError:
+        return 0
+
+
+def _log_chunk_metrics(metrics: List[ChunkExtractionMetric]) -> None:
+    """Log summary telemetry for chunk extraction stages."""
+
+    if not metrics:
+        return
+
+    by_stage: Dict[str, List[ChunkExtractionMetric]] = {}
+    for metric in metrics:
+        by_stage.setdefault(metric.stage, []).append(metric)
+
+    for stage, entries in by_stage.items():
+        total_duration = sum(item.duration_seconds for item in entries)
+        avg_duration = total_duration / len(entries)
+        max_duration = max(item.duration_seconds for item in entries)
+        max_context = max(item.context_chars for item in entries)
+        max_raw_context = max(item.raw_context_chars for item in entries)
+        truncated_count = sum(1 for item in entries if item.was_context_truncated)
+
+        logger.info(
+            "Chunk extraction telemetry",
+            extra={
+                "stage": stage,
+                "calls": len(entries),
+                "avg_duration": round(avg_duration, 3),
+                "max_duration": round(max_duration, 3),
+                "max_context_chars": max_context,
+                "max_raw_context_chars": max_raw_context,
+                "truncated_contexts": truncated_count,
+            },
+        )
+
+        for item in entries:
+            logger.debug(
+                "Chunk extraction detail",
+                extra={
+                    "stage": stage,
+                    "chunk_index": item.chunk_index,
+                    "chunk_chars": item.chunk_chars,
+                    "context_chars": item.context_chars,
+                    "raw_context_chars": item.raw_context_chars,
+                    "truncated": item.was_context_truncated,
+                    "duration_seconds": round(item.duration_seconds, 3),
+                },
+            )
 
 
 async def build_graph_from_chunks(
@@ -73,19 +205,24 @@ async def _build_graph_from(
     document_usage_id: Optional[str] = None,
 ) -> DocumentKnowledgeGraph:
     nodes_only_ontology = ontology_parser.build_entities_only_model()
-    context = "None"
-    nodes = []
-    # Step 1: LLM based Entity Extraction for each chunk based on ontology. Pass previous nodes and current chunk to LLM.
-    for _chunk in chunks_or_pdf_paths:
-        nodes_only_kg = await node_extractor(
-            _chunk,
+    nodes: List[BaseNode] = []
+    metrics: List[ChunkExtractionMetric] = []
+    context_envelope = ContextEnvelope(text="None", truncated=False, raw_length=len("None"))
+
+    # Step 1: LLM-based entity extraction per chunk with deterministic context snapshots.
+    for chunk_index, chunk in enumerate(chunks_or_pdf_paths):
+        context_used = context_envelope
+        nodes_only_kg, duration = await _timed_call(
+            node_extractor,
+            chunk,
             response_model=nodes_only_ontology,
-            context=context,
+            context=context_used.text,
             ontology_yaml=ontology_parser.ontology_yaml,
             user_id=user_id,
             transform_id=transform_id,
             document_usage_id=document_usage_id,
         )
+
         base_nodes = transform_as_nodes(
             ontology_parser.parsed_ontology,
             nodes_only_kg,
@@ -97,12 +234,25 @@ async def _build_graph_from(
             )
             if not is_duplicate:
                 nodes.append(new_node)
-        context = await _build_nodes_context(nodes)
+
+        metrics.append(
+            ChunkExtractionMetric(
+                stage="nodes",
+                chunk_index=chunk_index,
+                chunk_chars=_chunk_length(chunk),
+                context_chars=len(context_used.text),
+                raw_context_chars=context_used.raw_length,
+                was_context_truncated=context_used.truncated,
+                duration_seconds=duration,
+            )
+        )
+
+        context_envelope = _build_nodes_context_envelope(nodes)
 
     if user_id:
         await entity_ledger_service.hydrate_nodes(user_id, nodes)
 
-    # Step 2: Compare & Merge entities if they are the same.
+    # Step 2: Compare & merge entities, then deduplicate with Splink hints.
     nodes = await _compare_and_merge_nodes(
         nodes,
         user_id=user_id,
@@ -114,35 +264,69 @@ async def _build_graph_from(
     )
     logger.info(f"Nodes after comparison: {nodes}")
 
-    # Step 3: LLM based Relationship Inference for each chunk. Pass all relevant nodes & relationships, current chunk to LLM.
+    # Step 3: Relationship inference with bounded concurrency and shared context snapshots.
     relationships_only_ontology = ontology_parser.build_relationships_only_model()
-    relationships = []
-    for _chunk in chunks_or_pdf_paths:
-        relationships_only_kg = await relationship_extractor(
-            _chunk,
-            response_model=relationships_only_ontology,
-            context=context,
-            ontology_yaml=ontology_parser.ontology_yaml,
-            user_id=user_id,
-            transform_id=transform_id,
-            document_usage_id=document_usage_id,
-        )
-        base_relationships = transform_as_relationships(
-            ontology_parser.parsed_ontology, nodes, relationships_only_kg
-        )
-        for new_relationship in base_relationships:
-            is_duplicate = any(
-                _is_duplicate_relationship(existing_relationship, new_relationship)
-                for existing_relationship in relationships
-            )
-            if not is_duplicate:
-                relationships.append(new_relationship)
-        context = await _build_relationships_context(nodes, relationships)
+    relationships: List[RelationshipInstance] = []
+    group_size = max(getattr(settings, "TRANSFORM_MAX_CONCURRENCY", 1), 1)
+    total_chunks = len(chunks_or_pdf_paths)
 
-    # Step 4: Compare & Merge relationships if they are the same.
+    for group_start in range(0, total_chunks, group_size):
+        group_indices = list(
+            range(group_start, min(group_start + group_size, total_chunks))
+        )
+        rel_context_envelope = _build_relationships_context_envelope(
+            nodes, relationships
+        )
+        context_text = rel_context_envelope.text
+
+        # Batch requests to respect concurrency limits while keeping prompts
+        # deterministic. Each batch shares the context built from relationships
+        # accepted so far; post-processing deduplicates results across batches.
+        tasks = [
+            asyncio.create_task(
+                _timed_call(
+                    relationship_extractor,
+                    chunks_or_pdf_paths[idx],
+                    response_model=relationships_only_ontology,
+                    context=context_text,
+                    ontology_yaml=ontology_parser.ontology_yaml,
+                    user_id=user_id,
+                    transform_id=transform_id,
+                    document_usage_id=document_usage_id,
+                )
+            )
+            for idx in group_indices
+        ]
+
+        results = await asyncio.gather(*tasks)
+
+        for idx, (relationships_only_kg, duration) in zip(group_indices, results):
+            base_relationships = transform_as_relationships(
+                ontology_parser.parsed_ontology, nodes, relationships_only_kg
+            )
+            for new_relationship in base_relationships:
+                is_duplicate = any(
+                    _is_duplicate_relationship(existing_relationship, new_relationship)
+                    for existing_relationship in relationships
+                )
+                if not is_duplicate:
+                    relationships.append(new_relationship)
+
+            metrics.append(
+                ChunkExtractionMetric(
+                    stage="relationships",
+                    chunk_index=idx,
+                    chunk_chars=_chunk_length(chunks_or_pdf_paths[idx]),
+                    context_chars=len(context_text),
+                    raw_context_chars=rel_context_envelope.raw_length,
+                    was_context_truncated=rel_context_envelope.truncated,
+                    duration_seconds=duration,
+                )
+            )
+
+    # Step 4: Compare & merge relationships, then run Splink dedup.
     relationships = _compare_and_merge_relationships(relationships)
 
-    # Step 5: Splink based Entity deduplication within an entity group using entities & 1 degree related entities
     nodes, relationships = await deduplicate_entities_with_splink(
         entities=nodes,
         relationships=relationships,
@@ -152,17 +336,30 @@ async def _build_graph_from(
     if user_id:
         await entity_ledger_service.record_nodes(user_id, nodes)
 
-    # Step 6: Build graph from nodes and relationships.
+    # Step 5: Build final graph and prune orphans.
     kg = DocumentKnowledgeGraph(nodes=nodes, relationships=relationships)
     prune_orphaned_nodes(ontology_parser.parsed_ontology, kg)
+
+    _log_chunk_metrics(metrics)
     return kg
 
 
 async def _build_nodes_context(
     nodes: List[BaseNode],
 ) -> str:
+    return _build_nodes_context_envelope(nodes).text
+
+
+async def _build_relationships_context(
+    nodes: List[BaseNode],
+    relationships: List[RelationshipInstance],
+) -> str:
+    return _build_relationships_context_envelope(nodes, relationships).text
+
+
+def _build_nodes_context_envelope(nodes: List[BaseNode]) -> ContextEnvelope:
     if not nodes:
-        return ""
+        return ContextEnvelope(text="", truncated=False, raw_length=0)
 
     sorted_nodes = sorted(nodes, key=_node_context_sort_key)
     lines = []
@@ -171,15 +368,16 @@ async def _build_nodes_context(
         lines.append(
             f"Node Type: {node.type}, Id: {node.id}, Properties: {properties_repr}"
         )
-    return "\n".join(lines) + "\n"
+    raw_context = "\n".join(lines) + "\n"
+    return _make_context_envelope(raw_context, stage="nodes")
 
 
-async def _build_relationships_context(
+def _build_relationships_context_envelope(
     nodes: List[BaseNode],
     relationships: List[RelationshipInstance],
-) -> str:
+) -> ContextEnvelope:
     if not relationships and not nodes:
-        return ""
+        return ContextEnvelope(text="", truncated=False, raw_length=0)
 
     node_map = {node.id: node for node in nodes}
     lines = []
@@ -215,7 +413,10 @@ async def _build_relationships_context(
                 f"({node.type}:{{'id': '{node.id}', 'properties': {node_repr}}})"
             )
 
-    return "\n".join(lines) + ("\n" if lines else "")
+    raw_context = "\n".join(lines)
+    if lines:
+        raw_context += "\n"
+    return _make_context_envelope(raw_context, stage="relationships")
 
 
 def _format_properties(properties: Optional[Dict[str, Any]]) -> str:
