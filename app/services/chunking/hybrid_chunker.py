@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import List, Tuple, Optional
 from enum import Enum
 import traceback
+import math
 
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -454,6 +455,12 @@ class HybridDocumentChunker:
         """Apply hybrid chunking strategy based on document type"""
 
         logger.info(f"Hybrid chunking decision for document type: {doc_type}")
+        document_length = len(text)
+        semantic_min_length = (
+            self.config.semantic_min_length
+            if hasattr(self.config, "semantic_min_length") and self.config.semantic_min_length
+            else settings.SEMANTIC_MIN_DOC_LENGTH
+        )
 
         if doc_type == DocumentType.STRUCTURED:
             # Use structural chunking for structured documents
@@ -462,10 +469,14 @@ class HybridDocumentChunker:
             )
             return self.structural_chunker.chunk_text(text)
 
-        elif doc_type == DocumentType.NARRATIVE and self.semantic_chunker:
+        elif (
+            doc_type == DocumentType.NARRATIVE
+            and self.semantic_chunker
+            and document_length >= semantic_min_length
+        ):
             # Use semantic chunking for narrative documents
             logger.info("→ Selected: Semantic chunking (context-aware for narrative)")
-            if len(text) <= getattr(settings, "MIN_CHUNK_SIZE", 500):
+            if document_length <= getattr(settings, "MIN_CHUNK_SIZE", 500):
                 logger.info(
                     "→ Document too small for chunking, returning as single chunk"
                 )
@@ -475,10 +486,16 @@ class HybridDocumentChunker:
             logger.info(f"→ Semantic chunking produced {len(chunks)} chunks")
             return chunks
 
-        elif doc_type == DocumentType.NARRATIVE and not self.semantic_chunker:
-            # Fallback for narrative when semantic chunker not available
+        elif doc_type == DocumentType.NARRATIVE:
+            # Fallback for narrative when semantic chunking is unavailable or text is too short
+            reason = (
+                "semantic chunker not available"
+                if not self.semantic_chunker
+                else f"document length {document_length} < semantic_min_length {semantic_min_length}"
+            )
             logger.info(
-                "→ Selected: Recursive chunking (semantic chunker not available for narrative)"
+                "→ Selected: Recursive chunking for narrative (%s)",
+                reason,
             )
             documents = self.recursive_chunker.create_documents([text])
             return [doc.page_content for doc in documents]
@@ -514,7 +531,49 @@ class HybridDocumentChunker:
                 bounded.append(chunk)
                 continue
             bounded.extend(self._split_chunk_to_size(chunk, max_size))
+
+        max_txt_chunks = getattr(settings, "MAX_TXT_CHUNKS", 0) or 0
+        if max_txt_chunks > 0 and len(bounded) > max_txt_chunks:
+            logger.info(
+                "Reducing chunk count from %s to <= %s",
+                len(bounded),
+                max_txt_chunks,
+            )
+            bounded = self._coalesce_chunk_count(bounded, max_txt_chunks, max_size)
+
         return bounded
+
+    def _coalesce_chunk_count(
+        self, chunks: List[str], max_chunks: int, max_size: int
+    ) -> List[str]:
+        """Merge contiguous chunks until count is within limit."""
+
+        current = list(chunks)
+        iteration = 0
+        while len(current) > max_chunks:
+            iteration += 1
+            group_size = math.ceil(len(current) / max_chunks)
+            merged: List[str] = []
+            for i in range(0, len(current), group_size):
+                group = "\n\n".join(current[i : i + group_size])
+                merged.extend(self._split_chunk_to_size(group, max_size))
+
+            if len(merged) >= len(current):
+                logger.warning(
+                    "Chunk coalescing did not reduce count (iteration %s). Keeping %s chunks.",
+                    iteration,
+                    len(current),
+                )
+                break
+
+            logger.debug(
+                "Chunk coalescing iteration %s reduced count to %s",
+                iteration,
+                len(merged),
+            )
+            current = merged
+
+        return current
 
     def _split_chunk_to_size(self, chunk: str, max_size: int) -> List[str]:
         """Split an oversized chunk into deterministic sections no larger than max_size."""
