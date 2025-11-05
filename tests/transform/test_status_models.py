@@ -87,3 +87,4 @@ def test_detailed_transform_status_percentage_and_failure():
         == "Failed to parse"
     )
     assert status.duration_ms >= 0.0
+    assert status.failure_reason is None

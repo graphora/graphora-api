@@ -40,6 +40,12 @@ entities:
             requiredWords: []
           validation:
             uniquenessCheck: true
+      classificationStandard:
+        type: string
+        description: Classification standard used for cross-entity alignment
+        quality:
+          business:
+            allowedValues: ["GICS", "NAICS", "ISIC", "Internal"]
     
     quality:
       entityLevel:
@@ -65,13 +71,13 @@ entities:
             quality:
               business:
                 allowedValues: ["GICS", "NAICS", "ISIC", "Internal", "Manual"]
-          confidenceScore:
-            type: number
-            description: A score from 0.0 to 1.0 indicating confidence in this classification.
-            quality:
-              business:
-                minValue: 0.0
-                maxValue: 1.0
+      confidenceScore:
+        type: number
+        description: A score from 0.0 to 1.0 indicating confidence in this classification.
+        quality:
+          business:
+            minValue: 0.0
+            maxValue: 1.0
      
   Industry:
     properties:
@@ -111,6 +117,15 @@ entities:
         quality:
           business:
             allowedValues: ["GICS", "ICB", "NAICS", "ISIC"]
+      effectiveDate:
+        type: string
+        description: Date this classification became effective.
+        quality:
+          validation:
+            dateWindow:
+              earliest: "2018-01-01"
+              latest: "2024-12-31"
+              allowFuture: false
     
     relationships:
       PART_OF:
@@ -152,3 +167,23 @@ dataQualityConfig:
       ruleType: "cross_chunk_consistency"
       entities: ["Company", "Industry"]
       relationships: ["CLASSIFIED_AS"]
+    - name: "classification_alignment"
+      description: "Company classification standards should align with industry classification"
+      ruleType: "property_alignment"
+      relationshipType: "CLASSIFIED_AS"
+      sourceProperty: "classificationStandard"
+      targetProperty: "classification"
+      caseInsensitive: true
+      severity: "error"
+  coverageRules:
+    - entityType: "Company"
+      property: "description"
+      minCoverage: 0.75
+      severity: "warning"
+  temporalRules:
+    - entityType: "Industry"
+      property: "effectiveDate"
+      earliest: "2019-01-01"
+      latest: "2024-12-31"
+      allowFuture: false
+      allowMissing: false

@@ -36,6 +36,7 @@ class QualityValidator:
         self.entity_rules = self._build_entity_rules()
         self.relationship_rules = self._build_relationship_rules()
         self.global_rules = self._build_global_rules()
+        self.gating_config = self.parser.get_gating_config()
 
         logger.info(
             f"Quality validator initialized with {len(self.entity_rules)} entity rule sets, "
@@ -90,7 +91,7 @@ class QualityValidator:
                 quality_config = rel_def.get("quality", {})
                 if quality_config:
                     rules = self.parser.parse_relationship_quality_rules(
-                        rel_name, quality_config
+                        entity_type, rel_name, quality_config
                     )
                     relationship_rules[rel_name].extend(rules)
 
@@ -153,8 +154,15 @@ class QualityValidator:
             overall_score = self._calculate_overall_score(metrics, all_violations)
             grade = self._calculate_grade(overall_score)
 
+            gate_evaluation = self._evaluate_quality_gate(
+                overall_score, metrics, all_violations
+            )
+
             # Determine if human review is required
-            requires_review = self._requires_human_review(all_violations, overall_score)
+            requires_review = (
+                gate_evaluation["status"] == "fail"
+                or self._requires_human_review(all_violations, overall_score)
+            )
 
             # Build summary statistics
             violations_by_type = self._group_violations_by_type(all_violations)
@@ -181,8 +189,11 @@ class QualityValidator:
                 validation_duration_ms=duration_ms,
                 rules_applied=len(self._get_all_rules()),
                 validation_config={
-                    "ontology_version": self.ontology.get("version", "unknown")
+                    "ontology_version": self.ontology.get("version", "unknown"),
+                    "gating": self.gating_config,
                 },
+                quality_gate_status=gate_evaluation["status"],
+                quality_gate_reasons=gate_evaluation["reasons"],
             )
 
             logger.info(
@@ -210,6 +221,16 @@ class QualityValidator:
             if entity_type not in self.entity_rules:
                 continue
 
+            entity_def = self.ontology.get("entities", {}).get(entity_type, {})
+            expected_properties = entity_def.get("properties", {})
+            base_context = {
+                "entity_type": entity_type,
+                "entity_id": entity.id,
+                "entity": entity,
+                "expected_properties": expected_properties,
+                "system_properties": set(SYSTEM_PROPERTIES),
+            }
+
             # Validate each property
             for prop_name, prop_value in entity.properties.items():
                 # Skip system properties
@@ -224,10 +245,8 @@ class QualityValidator:
                         continue
 
                     context = {
-                        "entity_type": entity_type,
-                        "entity_id": entity.id,
+                        **base_context,
                         "property_name": prop_name,
-                        "entity": entity,
                     }
 
                     try:
@@ -258,11 +277,7 @@ class QualityValidator:
                 if not rule.is_enabled():
                     continue
 
-                context = {
-                    "entity_type": entity_type,
-                    "entity_id": entity.id,
-                    "entity": entity,
-                }
+                context = dict(base_context)
 
                 try:
                     result = rule.validate(entity, context)
@@ -393,9 +408,14 @@ class QualityValidator:
         total_expected_properties = 0
         total_filled_properties = 0
 
+        entity_property_fill_rates: Dict[str, float] = {}
+
         for entity_type, entity_def in self.ontology.get("entities", {}).items():
             entities_of_type = [e for e in kg.nodes if e.type == entity_type]
             entity_count = len(entities_of_type)
+
+            if entity_count == 0:
+                continue
 
             for prop_name, prop_def in entity_def.get("properties", {}).items():
                 if prop_name in SYSTEM_PROPERTIES:
@@ -421,6 +441,30 @@ class QualityValidator:
                     logger.debug(
                         f"Required property: {entity_type}.{prop_name} - "
                         f"entities: {entity_count}, filled: {filled_count}"
+                    )
+
+            # Compute per-entity property completeness ratio
+            non_system_props = [
+                name
+                for name in entity_def.get("properties", {})
+                if name not in SYSTEM_PROPERTIES
+            ]
+            if non_system_props:
+                per_entity_expected = len(non_system_props) * entity_count
+                if per_entity_expected > 0:
+                    filled_total = 0
+                    for prop_name in non_system_props:
+                        filled_total += len(
+                            [
+                                e
+                                for e in entities_of_type
+                                if prop_name in e.properties
+                                and e.properties[prop_name] is not None
+                                and str(e.properties[prop_name]).strip() != ""
+                            ]
+                        )
+                    entity_property_fill_rates[entity_type] = (
+                        filled_total / per_entity_expected
                     )
 
         # Use required properties if available, otherwise use all properties
@@ -466,6 +510,7 @@ class QualityValidator:
             confidence_scores_by_type=dict(confidence_scores_by_type),
             property_completeness_rate=property_completeness_rate,
             entity_type_coverage=dict(entity_type_coverage),
+            property_fill_rates_by_entity=entity_property_fill_rates,
         )
 
     def _calculate_overall_score(
@@ -525,17 +570,72 @@ class QualityValidator:
             return True
 
         # Require review if score is below threshold
-        if score < 80.0:
-            return True
-
-        # Require review if there are too many warnings
-        warning_count = len(
-            [v for v in violations if v.severity == QualitySeverity.WARNING]
-        )
-        if warning_count > 10:
+        if score < self.gating_config.get("hard_fail_score", 70.0):
             return True
 
         return False
+
+    def _evaluate_quality_gate(
+        self,
+        score: float,
+        metrics: QualityMetrics,
+        violations: List[QualityViolation],
+    ) -> Dict[str, Any]:
+        errors = len([v for v in violations if v.severity == QualitySeverity.ERROR])
+        warnings = len([v for v in violations if v.severity == QualitySeverity.WARNING])
+
+        reasons: List[str] = []
+        status = "pass"
+
+        hard_fail_score = self.gating_config.get("hard_fail_score", 70.0)
+        warn_score = self.gating_config.get("warn_score", 80.0)
+        max_errors = self.gating_config.get("max_errors", 0)
+        max_warnings = self.gating_config.get("max_warnings", 10)
+        min_completeness = self.gating_config.get("min_property_completeness", 0.5)
+        entity_thresholds = self.gating_config.get("entity_property_thresholds", {})
+
+        if score < hard_fail_score:
+            status = "fail"
+            reasons.append(
+                f"Overall score {score:.1f} below hard fail threshold {hard_fail_score:.1f}"
+            )
+
+        if errors > max_errors:
+            status = "fail"
+            reasons.append(f"{errors} errors exceed limit of {max_errors}")
+
+        if status != "fail":
+            if score < warn_score:
+                status = "warn"
+                reasons.append(
+                    f"Overall score {score:.1f} below warn threshold {warn_score:.1f}"
+                )
+            if warnings > max_warnings:
+                status = "warn"
+                reasons.append(
+                    f"{warnings} warnings exceed limit of {max_warnings}"
+                )
+
+        if metrics.property_completeness_rate < (min_completeness * 100):
+            status = "fail"
+            reasons.append(
+                f"Global property completeness {metrics.property_completeness_rate:.1f}% below minimum {(min_completeness * 100):.1f}%"
+            )
+
+        for entity_type, threshold in entity_thresholds.items():
+            fill_rate = metrics.property_fill_rates_by_entity.get(entity_type)
+            if fill_rate is None:
+                continue
+            if fill_rate < threshold:
+                status = "warn" if status != "fail" else status
+                reasons.append(
+                    f"{entity_type} property fill rate {fill_rate:.2f} below {threshold:.2f}"
+                )
+
+        if not reasons and status == "pass":
+            reasons.append("Quality gate passed")
+
+        return {"status": status, "reasons": reasons, "errors": errors, "warnings": warnings}
 
     def _group_violations_by_type(
         self, violations: List[QualityViolation]

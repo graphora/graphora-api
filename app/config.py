@@ -100,9 +100,42 @@ class Settings(BaseSettings):
     CHUNKING_MAX_CONCURRENCY: int = Field(
         default=4, description="Maximum number of documents chunked in parallel"
     )
+    CHUNKING_RANDOM_SEED: int = Field(
+        default=42, description="Seed used to stabilise chunking heuristics"
+    )
+    SEMANTIC_MIN_DOC_LENGTH: int = Field(
+        default=2000,
+        description="Minimum document length (characters) before semantic chunking is enabled",
+    )
+    MAX_TXT_CHUNKS: int = Field(
+        default=20, description="Maximum number of chunks allowed for text documents"
+    )
+    TRANSFORM_MAX_CONCURRENCY: int = Field(
+        default=4,
+        description="Maximum number of concurrent LLM extractions per transform",
+    )
+    MAX_CONTEXT_CHARS: int = Field(
+        default=12000,
+        description="Maximum number of characters to keep in LLM context prompts",
+    )
     LLM_CACHE_MAX_ENTRIES: int = Field(
         default=128,
         description="Maximum number of LLM responses cached per process",
+    )
+    LLM_CACHE_URL: Optional[str] = Field(
+        default=None,
+        description="Optional Redis connection URL for sharing LLM response cache across workers",
+    )
+
+    # Deterministic processing
+    DETERMINISTIC_MODE: bool = Field(
+        default=True,
+        description="Enable stable IDs and deterministic contexts during transforms",
+    )
+
+    ENTITY_CANONICALIZATION_ENABLED: bool = Field(
+        default=True,
+        description="Enable ontology-driven canonicalization for entity properties",
     )
 
     # Timing Settings

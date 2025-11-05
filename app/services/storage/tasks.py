@@ -3,7 +3,6 @@ from datetime import datetime
 import psutil
 from prefect import task, get_run_logger
 import traceback
-from app.services.storage.neo4j import Neo4jStorage
 from app.services.storage.models import (
     StorageResult,
     StorageStage,
@@ -79,6 +78,8 @@ async def store_knowledge_graph(
     from app.services.user_db_service import UserDatabaseService
 
     user_config = await UserDatabaseService.get_user_config(user_id)
+
+    from app.services.storage.neo4j import Neo4jStorage
 
     storage = Neo4jStorage(
         uri=user_config.stagingDb.uri,

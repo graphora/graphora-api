@@ -34,6 +34,19 @@ class TransformStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class TransformFailureReason(str, Enum):
+    """Normalized reasons for transform failure presented to clients."""
+
+    QUALITY_GATE_FAILED = "quality_gate_failed"
+    NO_GRAPH_GENERATED = "no_graph_generated"
+    LLM_UNAVAILABLE = "llm_unavailable"
+    PARSE_FAILED = "parse_failed"
+    CHUNKING_FAILED = "chunking_failed"
+    TRANSFORM_EXECUTION_FAILED = "transform_execution_failed"
+    STORAGE_FAILED = "storage_failed"
+    UNKNOWN_ERROR = "unknown_error"
+
+
 class ResourceMetrics(BaseModel):
     """Resource usage metrics"""
 
@@ -70,6 +83,7 @@ class ErrorSummary(BaseModel):
     recovery_instructions: Optional[str] = None
     failure_code: Optional[str] = None
     details: Dict[str, Any] = Field(default_factory=dict)
+    failure_reason: Optional[TransformFailureReason] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage"""
@@ -158,6 +172,7 @@ class DetailedTransformStatus(BaseModel):
     resource_metrics: ResourceMetrics
     failure_code: Optional[str] = None
     failure_details: Dict[str, Any] = Field(default_factory=dict)
+    failure_reason: Optional[TransformFailureReason] = None
 
     @property
     def duration_ms(self) -> float:
@@ -208,6 +223,7 @@ class DetailedTransformStatus(BaseModel):
         self.current_stage = TransformationStage.FAILED
         self.failure_code = error.failure_code
         self.failure_details = error.details or {}
+        self.failure_reason = error.failure_reason
 
     def update_resource_metrics(self, metrics: Dict[str, float]):
         """Update resource metrics"""

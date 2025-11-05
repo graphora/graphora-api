@@ -25,7 +25,7 @@ class ChunkingConfig(BaseModel):
     )
 
     max_chunk_size: int = Field(
-        default=3000, ge=1000, le=10000, description="Maximum chunk size in characters"
+        default=6000, ge=1000, le=10000, description="Maximum chunk size in characters"
     )
 
     # Semantic chunking options
@@ -34,6 +34,12 @@ class ChunkingConfig(BaseModel):
         ge=0.1,
         le=1.0,
         description="Semantic similarity threshold for chunking",
+    )
+
+    semantic_min_length: int = Field(
+        default=2000,
+        ge=0,
+        description="Minimum document length (characters) before semantic chunking engages",
     )
 
     embedding_model: str = Field(
@@ -56,7 +62,7 @@ class ChunkingConfig(BaseModel):
 
     # Recursive chunking options
     chunk_overlap: int = Field(
-        default=200, ge=0, le=500, description="Character overlap between chunks"
+        default=150, ge=0, le=500, description="Character overlap between chunks"
     )
 
     # Advanced options
@@ -87,6 +93,7 @@ DEFAULT_CONFIGS = {
         min_chunk_size=1000,
         max_chunk_size=4000,
         semantic_threshold=0.75,
+        semantic_min_length=2500,
         chunk_overlap=150,
     ),
     "technical": ChunkingConfig(
@@ -99,11 +106,12 @@ DEFAULT_CONFIGS = {
     "hybrid": ChunkingConfig(
         strategy=ChunkingStrategy.HYBRID,
         min_chunk_size=500,
-        max_chunk_size=3000,
+        max_chunk_size=6000,
         semantic_threshold=0.7,
+        semantic_min_length=2000,
         preserve_lists=True,
         preserve_headings=True,
         preserve_quotes=True,
-        chunk_overlap=200,
+        chunk_overlap=150,
     ),
 }

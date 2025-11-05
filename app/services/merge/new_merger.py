@@ -1,7 +1,6 @@
 from app.baml_client.types import ResolutionStrategy
 from prefect import flow, task
 from app.services.storage.interface import GraphStorageInterface
-from app.services.storage.neo4j import Neo4jStorage
 from app.config import settings
 from app.schemas.graph import GraphResponse, Node, Edge
 from app.services.transform.models import RelationshipInstance
@@ -72,6 +71,8 @@ async def persist_node_batch_task(
     transform_id: str,
     merge_id: str,
 ) -> StorageBatchResult:
+    from app.services.storage.neo4j import Neo4jStorage
+
     storage = Neo4jStorage(
         uri=uri, username=username, password=password, database="neo4j"
     )
@@ -93,6 +94,8 @@ async def persist_relationship_batch_task(
     transform_id: str,
     merge_id: str,
 ) -> StorageBatchResult:
+    from app.services.storage.neo4j import Neo4jStorage
+
     storage = Neo4jStorage(
         uri=uri, username=username, password=password, database="neo4j"
     )
@@ -634,6 +637,8 @@ async def _extract_staging_graph(transform_id: str, user_id: str) -> GraphRespon
     # Get user's staging database configuration
     user_config = await UserDatabaseService.get_user_config(user_id)
 
+    from app.services.storage.neo4j import Neo4jStorage
+
     storage = Neo4jStorage(
         uri=user_config.stagingDb.uri,
         username=user_config.stagingDb.username,
@@ -711,6 +716,8 @@ async def _map_production_entities(
 
         # Get user's production database configuration
         user_config = await UserDatabaseService.get_user_config(user_id)
+
+        from app.services.storage.neo4j import Neo4jStorage
 
         storage = Neo4jStorage(
             uri=user_config.prodDb.uri,
@@ -1374,6 +1381,8 @@ async def _get_prod_graph(merge_id: str, user_id: str) -> GraphResponse:
     logger.info(
         f"Retrieved user config for production database: {user_config.prodDb.uri}"
     )
+
+    from app.services.storage.neo4j import Neo4jStorage
 
     storage = Neo4jStorage(
         uri=user_config.prodDb.uri,
