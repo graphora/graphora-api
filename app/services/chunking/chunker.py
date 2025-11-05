@@ -1,5 +1,11 @@
 from typing import List, Tuple, Optional
 import traceback
+import random
+
+try:  # Optional dependency; seed when available
+    import numpy as np  # type: ignore
+except Exception:  # pragma: no cover - numpy optional for deterministic seeding
+    np = None
 
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
@@ -16,6 +22,20 @@ from app.config import settings
 # Global embedding model cache - initialized once per process
 _embedding_cache = None
 _text_splitter_cache = None
+
+
+def _seed_random_generators(seed: int) -> None:
+    """Seed random number generators used during chunking."""
+
+    random.seed(seed)
+    if np is not None:
+        np.random.seed(seed)
+    try:  # Optional torch seeding if available
+        import torch  # type: ignore
+
+        torch.manual_seed(seed)
+    except Exception:  # pragma: no cover - torch optional
+        pass
 
 
 def _get_cached_embeddings():
@@ -67,8 +87,16 @@ class DocumentChunker:
     def __init__(self, config: Optional[ChunkingConfig] = None):
         """Initialize chunker with configurable strategy"""
         try:
-            # Use provided config or default hybrid config
-            self.config = config or DEFAULT_CONFIGS["hybrid"]
+            _seed_random_generators(settings.CHUNKING_RANDOM_SEED)
+
+            # Use provided config or default hybrid config (copy to avoid global mutation)
+            if config is not None:
+                self.config = config.model_copy(deep=True)
+            else:
+                self.config = DEFAULT_CONFIGS["hybrid"].model_copy(deep=True)
+
+            if self.config.semantic_min_length < settings.SEMANTIC_MIN_DOC_LENGTH:
+                self.config.semantic_min_length = settings.SEMANTIC_MIN_DOC_LENGTH
 
             # Initialize semantic components if needed
             if self.config.strategy in [

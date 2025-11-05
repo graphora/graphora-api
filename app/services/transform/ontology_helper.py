@@ -7,7 +7,6 @@ from pydantic import BaseModel, create_model, Field
 from pathlib import Path
 from typing import Union
 from app.config import settings
-from app.services.storage.neo4j import Neo4jStorage
 from app.services.user_db_service import UserDatabaseService
 
 logger = logging.getLogger(__name__)
@@ -449,6 +448,8 @@ class OntologyParser:
         user_config = await UserDatabaseService.get_user_config(user_id)
 
         # Create storage instances for user's databases
+        from app.services.storage.neo4j import Neo4jStorage
+
         staging_storage = Neo4jStorage(
             uri=user_config.stagingDb.uri,
             username=user_config.stagingDb.username,

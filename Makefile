@@ -1,4 +1,4 @@
-.PHONY: dev start test test-unit test-integration help lint format deadcode
+.PHONY: dev start test test-unit test-integration help lint format deadcode openapi-snapshot
 
 help:
 	@echo "Available commands:"
@@ -11,6 +11,7 @@ help:
 	@echo "  make lint   - Run Ruff and Black checks"
 	@echo "  make format - Format the codebase with Black"
 	@echo "  make deadcode - Run the dead code scanner"
+	@echo "  make openapi-snapshot - Generate OpenAPI schema snapshot"
 
 dev:
 	LOG_LEVEL=DEBUG uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
@@ -35,4 +36,7 @@ format:
 	uv run black .
 
 deadcode:
-	uv run python scripts/find_dead_code.py
+	PYTHONPATH=. uv run python scripts/find_dead_code.py
+
+openapi-snapshot:
+	PYTHONPATH=. uv run python scripts/openapi_snapshot.py

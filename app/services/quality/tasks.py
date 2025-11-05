@@ -8,7 +8,6 @@ from app.services.transform.models import DocumentKnowledgeGraph
 from app.services.quality.validator import QualityValidator
 from app.services.quality.models import QualityResults
 from app.services.quality.service import QualityService
-from app.services.storage.neo4j import Neo4jStorage
 from app.services.user_db_service import UserDatabaseService
 
 logger = logging.getLogger(__name__)
@@ -51,6 +50,8 @@ async def quality_validation_task(
 
         # Store results for user review
         user_config = await UserDatabaseService.get_user_config(user_id)
+
+        from app.services.storage.neo4j import Neo4jStorage
 
         storage = Neo4jStorage(
             uri=user_config.stagingDb.uri,
@@ -111,6 +112,8 @@ async def auto_approval_check_task(
 
         # Initialize quality service
         user_config = await UserDatabaseService.get_user_config(user_id)
+        from app.services.storage.neo4j import Neo4jStorage
+
         storage = Neo4jStorage(
             uri=user_config.stagingDb.uri,
             username=user_config.stagingDb.username,

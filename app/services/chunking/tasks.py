@@ -118,10 +118,9 @@ async def chunk_documents(
     failures: List[Tuple[str, str]] = []
 
     async def _chunk(path: str):
+        # Allow hybrid/semantic chunking for all file types to reduce chunk counts
+        # and improve performance (especially for .txt files)
         strategy_override: Optional[ChunkingStrategy] = None
-        suffix = Path(path).suffix.lower()
-        if suffix in {".md", ".markdown", ".txt"}:
-            strategy_override = ChunkingStrategy.STRUCTURAL
 
         async with semaphore:
             return (

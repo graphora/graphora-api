@@ -17,6 +17,14 @@ from app.services.transform.graph_transformer import (
 from app.config import settings
 
 
+class ExtractionError(RuntimeError):
+    """Raised when knowledge graph extraction fails irrecoverably."""
+
+    def __init__(self, message: str, original: Optional[Exception] = None):
+        super().__init__(message)
+        self.original = original
+
+
 def log_extraction_metrics(metrics: ExtractionMetrics, transform_id: str) -> None:
     """Log extraction metrics to Prefect"""
     logger = get_run_logger()
@@ -174,4 +182,4 @@ async def construct_knowledge_graph(
     except Exception as e:
         logger.error(f"Knowledge graph extraction failed: {str(e)}")
         traceback.print_exc()
-        return None, None
+        raise ExtractionError(f"Knowledge graph extraction failed: {str(e)}", e)
