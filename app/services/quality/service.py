@@ -4,6 +4,9 @@ from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from datetime import datetime, timezone
 import hashlib
 import json
+import csv
+import io
+from collections import Counter
 
 from app.utils.logger import logger
 
@@ -347,6 +350,142 @@ class QualityService:
                 transform_id,
                 exc,
             )
+
+    async def get_violation_analytics(
+        self, transform_id: str, user_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return aggregated analytics for a transform's quality results."""
+
+        results = await self.get_quality_results(transform_id, user_id)
+        if not results:
+            return None
+
+        def _normalize_enum_dict(data: Dict[Any, int]) -> Dict[str, int]:
+            normalized: Dict[str, int] = {}
+            for key, value in (data or {}).items():
+                if hasattr(key, "value"):
+                    normalized[str(key.value)] = value
+                else:
+                    normalized[str(key)] = value
+            return normalized
+
+        metrics_dict = results.metrics.model_dump()
+        by_severity = _normalize_enum_dict(results.violations_by_severity)
+        by_type = _normalize_enum_dict(results.violations_by_type)
+        by_entity = {
+            str(entity): count
+            for entity, count in (results.violations_by_entity_type or {}).items()
+        }
+
+        rule_counter: Counter[str] = Counter()
+        rule_metadata: Dict[str, Dict[str, Any]] = {}
+        entity_offenders: Counter[str] = Counter()
+
+        for violation in results.violations:
+            rule_counter[violation.rule_id] += 1
+            entity_offenders[violation.entity_type or "unknown"] += 1
+            if violation.rule_id not in rule_metadata:
+                rule_metadata[violation.rule_id] = {
+                    "severity": violation.severity.value
+                    if isinstance(violation.severity, QualitySeverity)
+                    else str(violation.severity),
+                    "rule_type": violation.rule_type.value
+                    if isinstance(violation.rule_type, QualityRuleType)
+                    else str(violation.rule_type),
+                }
+
+        top_rules = [
+            {
+                "rule_id": rule_id,
+                "count": count,
+                **rule_metadata.get(rule_id, {}),
+            }
+            for rule_id, count in rule_counter.most_common(10)
+        ]
+
+        top_entities = [
+            {"entity_type": entity_type, "count": count}
+            for entity_type, count in entity_offenders.most_common(10)
+        ]
+
+        analytics: Dict[str, Any] = {
+            "transform_id": transform_id,
+            "overall_score": results.overall_score,
+            "grade": results.grade,
+            "quality_gate_status": results.quality_gate_status,
+            "requires_review": results.requires_review,
+            "metrics": metrics_dict,
+            "violations": {
+                "total": len(results.violations),
+                "by_severity": by_severity,
+                "by_type": by_type,
+                "by_entity_type": by_entity,
+                "top_rules": top_rules,
+                "top_entities": top_entities,
+            },
+            "property_fill_rates": {
+                str(entity): rate
+                for entity, rate in results.metrics.property_fill_rates_by_entity.items()
+            },
+            "entity_type_coverage": {
+                str(entity): count
+                for entity, count in results.metrics.entity_type_coverage.items()
+            },
+        }
+
+        return analytics
+
+    async def export_violations_csv(
+        self, transform_id: str, user_id: str
+    ) -> Optional[str]:
+        """Export violations for a transform as CSV text."""
+
+        results = await self.get_quality_results(transform_id, user_id)
+        if not results or not results.violations:
+            return None
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(
+            [
+                "rule_id",
+                "rule_type",
+                "severity",
+                "entity_type",
+                "entity_id",
+                "property_name",
+                "relationship_type",
+                "message",
+                "expected",
+                "actual",
+                "confidence",
+                "suggestion",
+            ]
+        )
+
+        for violation in results.violations:
+            writer.writerow(
+                [
+                    violation.rule_id,
+                    violation.rule_type.value
+                    if isinstance(violation.rule_type, QualityRuleType)
+                    else str(violation.rule_type),
+                    violation.severity.value
+                    if isinstance(violation.severity, QualitySeverity)
+                    else str(violation.severity),
+                    violation.entity_type or "",
+                    violation.entity_id or "",
+                    violation.property_name or "",
+                    violation.relationship_type or "",
+                    violation.message,
+                    violation.expected,
+                    violation.actual,
+                    f"{violation.confidence:.2f}",
+                    violation.suggestion or "",
+                ]
+            )
+
+        return buffer.getvalue()
 
     async def get_quality_summary(
         self, user_id: str, limit: int = 10

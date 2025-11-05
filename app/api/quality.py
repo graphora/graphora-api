@@ -2,10 +2,11 @@
 
 import traceback
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel
 from datetime import datetime, timezone
 import logging
+from fastapi.responses import PlainTextResponse
 
 # Import quality models and services
 try:
@@ -14,6 +15,7 @@ try:
         QualityViolation,
         QualityRuleType,
         QualitySeverity,
+        QualityMetrics,
     )
     from app.services.quality.service import QualityService
     from app.services.user_db_service import UserDatabaseService
@@ -48,6 +50,35 @@ if QUALITY_API_AVAILABLE:
         total_violations: Optional[int] = None
         created_at: Optional[datetime] = None
         status: str
+
+    class QualityTopRule(BaseModel):
+        rule_id: str
+        count: int
+        severity: Optional[str] = None
+        rule_type: Optional[str] = None
+
+    class QualityTopEntity(BaseModel):
+        entity_type: str
+        count: int
+
+    class QualityViolationsAnalytics(BaseModel):
+        total: int
+        by_severity: Dict[str, int]
+        by_type: Dict[str, int]
+        by_entity_type: Dict[str, int]
+        top_rules: List[QualityTopRule]
+        top_entities: List[QualityTopEntity]
+
+    class QualityAnalyticsResponse(BaseModel):
+        transform_id: str
+        overall_score: float
+        grade: str
+        quality_gate_status: str
+        requires_review: bool
+        metrics: QualityMetrics
+        violations: QualityViolationsAnalytics
+        property_fill_rates: Dict[str, float]
+        entity_type_coverage: Dict[str, int]
 
 
     async def _get_quality_service(user_id: str) -> QualityService:
@@ -273,6 +304,63 @@ if QUALITY_API_AVAILABLE:
                 status_code=500, detail="Failed to retrieve quality violations"
             ) from exc
 
+    @router.get(
+        "/analytics/{transform_id}", response_model=QualityAnalyticsResponse
+    )
+    async def get_quality_analytics(
+        transform_id: str, user_id: str = Depends(get_current_user_id)
+    ):
+        """Return aggregated analytics for a transform."""
+
+        try:
+            quality_service = await _get_quality_service(user_id)
+            analytics_dict = await quality_service.get_violation_analytics(
+                transform_id, user_id
+            )
+
+            if not analytics_dict:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Quality results not found for transform {transform_id}",
+                )
+
+            metrics_model = QualityMetrics.model_validate(analytics_dict["metrics"])
+            violations_section = analytics_dict["violations"]
+            violations_model = QualityViolationsAnalytics(
+                total=violations_section["total"],
+                by_severity=violations_section["by_severity"],
+                by_type=violations_section["by_type"],
+                by_entity_type=violations_section["by_entity_type"],
+                top_rules=[QualityTopRule(**item) for item in violations_section["top_rules"]],
+                top_entities=[
+                    QualityTopEntity(**item)
+                    for item in violations_section["top_entities"]
+                ],
+            )
+
+            return QualityAnalyticsResponse(
+                transform_id=analytics_dict["transform_id"],
+                overall_score=analytics_dict["overall_score"],
+                grade=analytics_dict["grade"],
+                quality_gate_status=analytics_dict["quality_gate_status"],
+                requires_review=analytics_dict["requires_review"],
+                metrics=metrics_model,
+                violations=violations_model,
+                property_fill_rates=analytics_dict["property_fill_rates"],
+                entity_type_coverage=analytics_dict["entity_type_coverage"],
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Failed to retrieve quality analytics for transform %s: %s",
+                transform_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=500, detail="Failed to retrieve quality analytics"
+            ) from exc
+
     @router.get("/summary", response_model=List[QualitySummaryItem])
     async def get_quality_summary_endpoint(
         limit: int = Query(10, ge=1, le=100),
@@ -321,6 +409,44 @@ if QUALITY_API_AVAILABLE:
             )
             raise HTTPException(
                 status_code=500, detail="Failed to retrieve quality summary"
+            ) from exc
+
+    @router.get("/export/{transform_id}")
+    async def export_quality_violations(
+        transform_id: str, user_id: str = Depends(get_current_user_id)
+    ):
+        """Export violations as CSV for a given transform."""
+
+        try:
+            quality_service = await _get_quality_service(user_id)
+            csv_payload = await quality_service.export_violations_csv(
+                transform_id, user_id
+            )
+
+            if not csv_payload:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Quality results not found for transform {transform_id}",
+                )
+
+            filename = f"quality-violations-{transform_id}.csv"
+            return PlainTextResponse(  # type: ignore[return-value]
+                content=csv_payload,
+                headers={
+                    "Content-Disposition": f"attachment; filename={filename}"
+                },
+                media_type="text/csv",
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Failed to export quality violations for transform %s: %s",
+                transform_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=500, detail="Failed to export quality violations"
             ) from exc
 
     @router.delete("/results/{transform_id}")

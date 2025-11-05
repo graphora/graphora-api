@@ -1,3 +1,5 @@
+from typing import List
+
 import pytest
 
 from app.services.quality.models import QualityRuleType, QualitySeverity
@@ -368,3 +370,383 @@ async def test_date_window_rule_enforces_range():
         violation.rule_id == "Filing.fiscal_year.date_window"
         for violation in results.violations
     )
+
+
+@pytest.mark.asyncio
+async def test_cross_entity_consistency_rule_detects_mismatch():
+    ontology = {
+        "version": "1.0.0",
+        "dataQualityConfig": {
+            "crossValidationRules": [
+                {
+                    "ruleType": "property_alignment",
+                    "relationshipType": "CLASSIFIED_AS",
+                    "sourceProperty": "classificationStandard",
+                    "targetProperty": "classification",
+                    "severity": "error",
+                }
+            ]
+        },
+        "entities": {
+            "Company": {
+                "properties": {
+                    "classificationStandard": {"type": "string"}
+                },
+                "relationships": {
+                    "CLASSIFIED_AS": {"target": "Industry"}
+                },
+            },
+            "Industry": {
+                "properties": {"classification": {"type": "string"}}
+            },
+        },
+    }
+
+    validator = QualityValidator(ontology)
+
+    company = BaseNode(
+        id="company-1",
+        type="Company",
+        properties={"classificationStandard": "GICS"},
+    )
+    industry = BaseNode(
+        id="industry-1",
+        type="Industry",
+        properties={"classification": "NAICS"},
+    )
+    relationship = RelationshipInstance(
+        id="rel-1",
+        type="CLASSIFIED_AS",
+        source_id=company.id,
+        source_type="Company",
+        target_id=industry.id,
+        target_type="Industry",
+        properties={},
+    )
+
+    knowledge_graph = DocumentKnowledgeGraph(
+        nodes=[company, industry], relationships=[relationship]
+    )
+
+    results = await validator.validate_extraction(
+        knowledge_graph, "transform-consistency"
+    )
+
+    assert any(
+        violation.rule_id.startswith("global.property_alignment")
+        for violation in results.violations
+    )
+    assert results.violations_by_severity[QualitySeverity.ERROR] >= 1
+
+
+@pytest.mark.asyncio
+async def test_property_coverage_rule_flags_low_fill_rate():
+    ontology = {
+        "version": "1.0.0",
+        "dataQualityConfig": {
+            "coverageRules": [
+                {
+                    "entityType": "Company",
+                    "property": "description",
+                    "minCoverage": 0.75,
+                    "severity": "warning",
+                }
+            ]
+        },
+        "entities": {
+            "Company": {
+                "properties": {
+                    "description": {"type": "string"},
+                }
+            }
+        },
+    }
+
+    validator = QualityValidator(ontology)
+
+    nodes = [
+        BaseNode(id=f"company-{idx}", type="Company", properties={})
+        for idx in range(3)
+    ]
+    nodes.append(
+        BaseNode(
+            id="company-4",
+            type="Company",
+            properties={"description": "A fully described company."},
+        )
+    )
+
+    knowledge_graph = DocumentKnowledgeGraph(nodes=nodes, relationships=[])
+
+    results = await validator.validate_extraction(
+        knowledge_graph, "transform-coverage"
+    )
+
+    assert any(
+        violation.rule_id.startswith("global.property_coverage")
+        for violation in results.violations
+    )
+
+
+@pytest.mark.asyncio
+async def test_global_date_window_rule_detects_out_of_range():
+    ontology = {
+        "version": "1.0.0",
+        "dataQualityConfig": {
+            "temporalRules": [
+                {
+                    "entityType": "Industry",
+                    "property": "effectiveDate",
+                    "earliest": "2020-01-01",
+                    "latest": "2024-12-31",
+                    "allowFuture": False,
+                    "allowMissing": False,
+                }
+            ]
+        },
+        "entities": {
+            "Industry": {
+                "properties": {
+                    "effectiveDate": {"type": "string"}
+                }
+            }
+        },
+    }
+
+    validator = QualityValidator(ontology)
+
+    industry_ok = BaseNode(
+        id="industry-1",
+        type="Industry",
+        properties={"effectiveDate": "2021-06-30"},
+    )
+    industry_bad = BaseNode(
+        id="industry-2",
+        type="Industry",
+        properties={"effectiveDate": "2010-01-01"},
+    )
+
+    knowledge_graph = DocumentKnowledgeGraph(
+        nodes=[industry_ok, industry_bad], relationships=[]
+    )
+
+    results = await validator.validate_extraction(
+        knowledge_graph, "transform-temporal"
+    )
+
+    assert any(
+        violation.rule_id.startswith("global.temporal")
+        for violation in results.violations
+    )
+
+
+@pytest.mark.asyncio
+async def test_confidence_threshold_rule_flags_low_confidence():
+    ontology = {
+        "version": "1.0.0",
+        "dataQualityConfig": {
+            "extractionStandards": {
+                "confidenceThresholds": {
+                    "entityExtraction": 0.8,
+                    "relationshipExtraction": 0.7,
+                }
+            }
+        },
+        "entities": {
+            "Company": {
+                "properties": {
+                    "name": {"required": True}
+                },
+                "relationships": {
+                    "HAS_SUBSIDIARY": {"target": "Company"}
+                },
+            }
+        },
+    }
+
+    validator = QualityValidator(ontology)
+
+    strong_company = BaseNode(
+        id="company-1",
+        type="Company",
+        properties={"name": "Acme"},
+        confidence_score=0.95,
+    )
+    weak_company = BaseNode(
+        id="company-2",
+        type="Company",
+        properties={"name": "Subsidiary"},
+        confidence_score=0.5,
+    )
+
+    low_conf_relationship = RelationshipInstance(
+        id="rel-1",
+        type="HAS_SUBSIDIARY",
+        source_id=strong_company.id,
+        target_id=weak_company.id,
+        source_type="Company",
+        target_type="Company",
+        confidence_score=0.4,
+    )
+
+    knowledge_graph = DocumentKnowledgeGraph(
+        nodes=[strong_company, weak_company],
+        relationships=[low_conf_relationship],
+    )
+
+    results = await validator.validate_extraction(
+        knowledge_graph, "transform-confidence"
+    )
+
+    confidence_violations = [
+        violation for violation in results.violations if violation.rule_id == "global.confidence_threshold"
+    ]
+
+    assert confidence_violations, "Expected confidence threshold violations"
+    assert QualityRuleType.DISTRIBUTION in results.violations_by_type
+    assert results.violations_by_severity[QualitySeverity.ERROR] >= 1
+
+
+@pytest.mark.asyncio
+async def test_minimum_entities_rule_enforces_threshold():
+    ontology = {
+        "version": "1.0.0",
+        "dataQualityConfig": {
+            "extractionStandards": {
+                "completenessRequirements": {
+                    "minEntitiesPerDocument": 3,
+                    "severity": "error",
+                }
+            }
+        },
+        "entities": {
+            "Company": {
+                "properties": {"name": {"required": True}}
+            }
+        },
+    }
+
+    validator = QualityValidator(ontology)
+
+    company = BaseNode(
+        id="company-1",
+        type="Company",
+        properties={"name": "Acme"},
+        confidence_score=0.9,
+    )
+
+    knowledge_graph = DocumentKnowledgeGraph(nodes=[company], relationships=[])
+
+    results = await validator.validate_extraction(
+        knowledge_graph, "transform-min-entities"
+    )
+
+    assert any(
+        violation.rule_id == "global.completeness.min_entities"
+        for violation in results.violations
+    )
+    assert results.violations_by_type[QualityRuleType.CROSS_ENTITY] >= 1
+
+
+@pytest.mark.asyncio
+async def test_required_entity_types_rule_detects_missing_types():
+    ontology = {
+        "version": "1.0.0",
+        "dataQualityConfig": {
+            "extractionStandards": {
+                "completenessRequirements": {
+                    "requiredEntityTypes": ["Company", "Industry"],
+                    "severity": "error",
+                }
+            }
+        },
+        "entities": {
+            "Company": {
+                "properties": {"name": {"required": True}}
+            },
+            "Industry": {
+                "properties": {"name": {"required": True}}
+            },
+        },
+    }
+
+    validator = QualityValidator(ontology)
+
+    company = BaseNode(
+        id="company-1",
+        type="Company",
+        properties={"name": "Acme"},
+        confidence_score=0.9,
+    )
+
+    knowledge_graph = DocumentKnowledgeGraph(nodes=[company], relationships=[])
+
+    results = await validator.validate_extraction(
+        knowledge_graph, "transform-required-types"
+    )
+
+    assert any(
+        violation.rule_id == "global.completeness.required_entity_types"
+        for violation in results.violations
+    )
+    assert results.requires_review is True
+
+
+@pytest.mark.asyncio
+async def test_entity_balance_rule_enforces_expected_ratios():
+    ontology = {
+        "version": "1.0.0",
+        "dataQualityConfig": {
+            "distributionRules": {
+                "entityBalance": {
+                    "maxSingleTypeRatio": 0.6,
+                    "expectedRatios": {
+                        "Company": {"min": 0.3, "max": 0.6},
+                        "Industry": {"min": 0.2},
+                    },
+                }
+            }
+        },
+        "entities": {
+            "Company": {
+                "properties": {"name": {"required": True}}
+            },
+            "Industry": {
+                "properties": {"name": {"required": True}}
+            },
+        },
+    }
+
+    validator = QualityValidator(ontology)
+
+    nodes: List[BaseNode] = []
+    for idx in range(8):
+        nodes.append(
+            BaseNode(
+                id=f"company-{idx}",
+                type="Company",
+                properties={"name": f"Company {idx}"},
+                confidence_score=0.9,
+            )
+        )
+
+    nodes.append(
+        BaseNode(
+            id="industry-1",
+            type="Industry",
+            properties={"name": "Tech"},
+            confidence_score=0.9,
+        )
+    )
+
+    knowledge_graph = DocumentKnowledgeGraph(nodes=nodes, relationships=[])
+
+    results = await validator.validate_extraction(
+        knowledge_graph, "transform-entity-balance"
+    )
+
+    assert any(
+        violation.rule_id == "global.entity_balance"
+        for violation in results.violations
+    )
+    assert results.violations_by_type[QualityRuleType.DISTRIBUTION] >= 1

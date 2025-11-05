@@ -1889,6 +1889,63 @@
         "title": "ProcessingPriority",
         "type": "string"
       },
+      "QualityAnalyticsResponse": {
+        "properties": {
+          "entity_type_coverage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Entity Type Coverage",
+            "type": "object"
+          },
+          "grade": {
+            "title": "Grade",
+            "type": "string"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/QualityMetrics"
+          },
+          "overall_score": {
+            "title": "Overall Score",
+            "type": "number"
+          },
+          "property_fill_rates": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Property Fill Rates",
+            "type": "object"
+          },
+          "quality_gate_status": {
+            "title": "Quality Gate Status",
+            "type": "string"
+          },
+          "requires_review": {
+            "title": "Requires Review",
+            "type": "boolean"
+          },
+          "transform_id": {
+            "title": "Transform Id",
+            "type": "string"
+          },
+          "violations": {
+            "$ref": "#/components/schemas/QualityViolationsAnalytics"
+          }
+        },
+        "required": [
+          "transform_id",
+          "overall_score",
+          "grade",
+          "quality_gate_status",
+          "requires_review",
+          "metrics",
+          "violations",
+          "property_fill_rates",
+          "entity_type_coverage"
+        ],
+        "title": "QualityAnalyticsResponse",
+        "type": "object"
+      },
       "QualityMetrics": {
         "description": "Overall quality metrics for an extraction.",
         "properties": {
@@ -2216,6 +2273,64 @@
         "title": "QualitySummaryItem",
         "type": "object"
       },
+      "QualityTopEntity": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_type",
+          "count"
+        ],
+        "title": "QualityTopEntity",
+        "type": "object"
+      },
+      "QualityTopRule": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "rule_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Type"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Severity"
+          }
+        },
+        "required": [
+          "rule_id",
+          "count"
+        ],
+        "title": "QualityTopRule",
+        "type": "object"
+      },
       "QualityViolation": {
         "description": "Represents a single quality rule violation.",
         "properties": {
@@ -2330,6 +2445,59 @@
           "actual"
         ],
         "title": "QualityViolation",
+        "type": "object"
+      },
+      "QualityViolationsAnalytics": {
+        "properties": {
+          "by_entity_type": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Entity Type",
+            "type": "object"
+          },
+          "by_severity": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Severity",
+            "type": "object"
+          },
+          "by_type": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Type",
+            "type": "object"
+          },
+          "top_entities": {
+            "items": {
+              "$ref": "#/components/schemas/QualityTopEntity"
+            },
+            "title": "Top Entities",
+            "type": "array"
+          },
+          "top_rules": {
+            "items": {
+              "$ref": "#/components/schemas/QualityTopRule"
+            },
+            "title": "Top Rules",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "by_severity",
+          "by_type",
+          "by_entity_type",
+          "top_rules",
+          "top_entities"
+        ],
+        "title": "QualityViolationsAnalytics",
         "type": "object"
       },
       "Question": {
@@ -5980,6 +6148,54 @@
         ]
       }
     },
+    "/api/v1/quality/analytics/{transform_id}": {
+      "get": {
+        "description": "Return aggregated analytics for a transform.",
+        "operationId": "get_quality_analytics_api_v1_quality_analytics__transform_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transform_id",
+            "required": true,
+            "schema": {
+              "title": "Transform Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QualityAnalyticsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Quality Analytics",
+        "tags": [
+          "quality"
+        ]
+      }
+    },
     "/api/v1/quality/approve/{transform_id}": {
       "post": {
         "description": "User approves quality results and proceeds to merge.",
@@ -6031,6 +6247,52 @@
           }
         ],
         "summary": "Approve Quality Results",
+        "tags": [
+          "quality"
+        ]
+      }
+    },
+    "/api/v1/quality/export/{transform_id}": {
+      "get": {
+        "description": "Export violations as CSV for a given transform.",
+        "operationId": "export_quality_violations_api_v1_quality_export__transform_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transform_id",
+            "required": true,
+            "schema": {
+              "title": "Transform Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Quality Violations",
         "tags": [
           "quality"
         ]

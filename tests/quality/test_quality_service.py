@@ -211,3 +211,87 @@ async def test_get_violations_filters_and_pagination(
 
     assert len(paged) == 1
     assert paged[0].rule_id == "Company.description.short"
+
+
+@pytest.mark.asyncio
+async def test_get_violation_analytics_returns_summary(
+    quality_service, base_quality_results
+):
+    violation = QualityViolation(
+        rule_id="Company.name.required",
+        rule_type=QualityRuleType.BUSINESS,
+        severity=QualitySeverity.ERROR,
+        entity_type="Company",
+        entity_id="company-1",
+        property_name="name",
+        message="Company name missing",
+        expected="Non-empty name",
+        actual="",
+        confidence=0.6,
+    )
+
+    results = base_quality_results.model_copy(
+        update={
+            "violations": [violation],
+            "violations_by_severity": {QualitySeverity.ERROR: 1},
+            "violations_by_type": {QualityRuleType.BUSINESS: 1},
+            "violations_by_entity_type": {"Company": 1},
+            "metrics": base_quality_results.metrics.model_copy(
+                update={"total_violations": 1}
+            ),
+        }
+    )
+
+    async def fake_execute_query(query, params=None):
+        return [{"results_json": results.model_dump_json()}]
+
+    quality_service.neo4j.execute_query = fake_execute_query  # type: ignore[assignment]
+
+    analytics = await quality_service.get_violation_analytics(
+        "transform-analytics", "user-123"
+    )
+
+    assert analytics is not None
+    assert analytics["overall_score"] == results.overall_score
+    assert analytics["violations"]["total"] == 1
+    assert analytics["violations"]["top_rules"][0]["rule_id"] == "Company.name.required"
+
+
+@pytest.mark.asyncio
+async def test_export_violations_csv_returns_text(
+    quality_service, base_quality_results
+):
+    violation = QualityViolation(
+        rule_id="Company.description.short",
+        rule_type=QualityRuleType.FORMAT,
+        severity=QualitySeverity.WARNING,
+        entity_type="Company",
+        entity_id="company-1",
+        property_name="description",
+        message="Description too short",
+        expected="At least 20 characters",
+        actual="Tiny",
+        confidence=0.7,
+    )
+
+    results = base_quality_results.model_copy(
+        update={
+            "violations": [violation],
+            "metrics": base_quality_results.metrics.model_copy(
+                update={"total_violations": 1}
+            ),
+        }
+    )
+
+    async def fake_execute_query(query, params=None):
+        return [{"results_json": results.model_dump_json()}]
+
+    quality_service.neo4j.execute_query = fake_execute_query  # type: ignore[assignment]
+
+    csv_payload = await quality_service.export_violations_csv(
+        "transform-export", "user-123"
+    )
+
+    assert csv_payload is not None
+    assert "rule_id" in csv_payload.splitlines()[0]
+    assert "Company.description.short" in csv_payload

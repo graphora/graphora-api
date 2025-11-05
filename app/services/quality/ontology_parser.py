@@ -144,15 +144,27 @@ class OntologyQualityParser:
         rules = []
 
         try:
+            extraction_standards = global_config.get("extractionStandards", {})
+            if extraction_standards:
+                rules.extend(self._parse_extraction_standards(extraction_standards))
+
             # Parse distribution rules
             distribution_rules = global_config.get("distributionRules", {})
             if distribution_rules:
                 rules.extend(self._parse_distribution_rules(distribution_rules))
 
+            coverage_rules = global_config.get("coverageRules", [])
+            if coverage_rules:
+                rules.extend(self._parse_coverage_rules(coverage_rules))
+
             # Parse cross-validation rules
             cross_validation = global_config.get("crossValidationRules", [])
             if cross_validation:
                 rules.extend(self._parse_cross_validation_rules(cross_validation))
+
+            temporal_rules = global_config.get("temporalRules", [])
+            if temporal_rules:
+                rules.extend(self._parse_temporal_rules(temporal_rules))
 
         except Exception as e:
             logger.error(f"Failed to parse global quality rules: {e}")
@@ -402,6 +414,86 @@ class OntologyQualityParser:
 
         return rules
 
+    def _parse_extraction_standards(
+        self, extraction_config: Dict[str, Any]
+    ) -> List[QualityRule]:
+        """Parse extraction standard rules (confidence, completeness)."""
+        rules: List[QualityRule] = []
+
+        if not isinstance(extraction_config, dict):
+            return rules
+
+        confidence_thresholds = extraction_config.get("confidenceThresholds")
+        if isinstance(confidence_thresholds, dict) and confidence_thresholds:
+            rule_config = QualityRuleConfig(
+                rule_id="global.confidence_threshold",
+                rule_type=QualityRuleType.DISTRIBUTION,
+                severity=self._parse_severity(
+                    confidence_thresholds.get("severity"),
+                    default=QualitySeverity.ERROR,
+                ),
+                name="Minimum extraction confidence",
+                description="Ensure extracted entities and relationships meet minimum confidence thresholds",
+                parameters={
+                    "rule_class": "confidence_threshold",
+                    "entity_threshold": confidence_thresholds.get(
+                        "entityExtraction"
+                    ),
+                    "relationship_threshold": confidence_thresholds.get(
+                        "relationshipExtraction"
+                    ),
+                    "property_threshold": confidence_thresholds.get(
+                        "propertyExtraction"
+                    ),
+                },
+            )
+            rules.append(QualityRuleFactory.create_rule(rule_config))
+
+        completeness_requirements = extraction_config.get("completenessRequirements")
+        if isinstance(completeness_requirements, dict) and completeness_requirements:
+            completeness_severity = self._parse_severity(
+                completeness_requirements.get("severity"),
+                default=QualitySeverity.ERROR,
+            )
+
+            min_entities = completeness_requirements.get("minEntitiesPerDocument")
+            if min_entities is not None:
+                rule_config = QualityRuleConfig(
+                    rule_id="global.completeness.min_entities",
+                    rule_type=QualityRuleType.CROSS_ENTITY,
+                    severity=self._parse_severity(
+                        completeness_requirements.get("minEntitiesSeverity"),
+                        default=completeness_severity,
+                    ),
+                    name="Minimum entities per document",
+                    description="Ensure each document produces the minimum expected entity count",
+                    parameters={
+                        "rule_class": "minimum_entities",
+                        "min_entities": int(min_entities),
+                    },
+                )
+                rules.append(QualityRuleFactory.create_rule(rule_config))
+
+            required_types = completeness_requirements.get("requiredEntityTypes")
+            if required_types:
+                rule_config = QualityRuleConfig(
+                    rule_id="global.completeness.required_entity_types",
+                    rule_type=QualityRuleType.CROSS_ENTITY,
+                    severity=self._parse_severity(
+                        completeness_requirements.get("requiredTypesSeverity"),
+                        default=completeness_severity,
+                    ),
+                    name="Required entity types present",
+                    description="Ensure extraction includes key entity types",
+                    parameters={
+                        "rule_class": "required_entity_types",
+                        "required_types": required_types,
+                    },
+                )
+                rules.append(QualityRuleFactory.create_rule(rule_config))
+
+        return rules
+
     def _parse_distribution_rules(
         self, distribution_config: Dict[str, Any]
     ) -> List[QualityRule]:
@@ -424,6 +516,61 @@ class OntologyQualityParser:
                     "relationship_type": requirement.get("relationshipType"),
                     "direction": requirement.get("direction", "outbound"),
                     "min_count": int(requirement.get("minCount", 1)),
+                },
+            )
+            rules.append(QualityRuleFactory.create_rule(rule_config))
+
+        entity_balance = distribution_config.get("entityBalance")
+        if isinstance(entity_balance, dict):
+            rule_config = QualityRuleConfig(
+                rule_id="global.entity_balance",
+                rule_type=QualityRuleType.DISTRIBUTION,
+                severity=self._parse_severity(
+                    entity_balance.get("severity"), default=QualitySeverity.WARNING
+                ),
+                name="Entity balance expectations",
+                description="Ensure entity type ratios stay within configured bounds",
+                parameters={
+                    "rule_class": "entity_balance",
+                    "max_single_type_ratio": entity_balance.get("maxSingleTypeRatio"),
+                    "expected_ratios": entity_balance.get("expectedRatios", {}),
+                },
+            )
+            rules.append(QualityRuleFactory.create_rule(rule_config))
+
+        return rules
+
+    def _parse_coverage_rules(
+        self, coverage_rules: List[Dict[str, Any]]
+    ) -> List[QualityRule]:
+        rules: List[QualityRule] = []
+
+        for idx, rule_def in enumerate(coverage_rules):
+            entity_type = rule_def.get("entityType")
+            property_name = rule_def.get("property")
+            min_coverage = rule_def.get("minCoverage")
+
+            if entity_type is None or property_name is None or min_coverage is None:
+                logger.warning(
+                    "Skipping property coverage rule %s due to missing required fields",
+                    idx,
+                )
+                continue
+
+            rule_config = QualityRuleConfig(
+                rule_id=f"global.property_coverage.{idx}",
+                rule_type=QualityRuleType.CROSS_ENTITY,
+                severity=self._parse_severity(
+                    rule_def.get("severity"), default=QualitySeverity.WARNING
+                ),
+                name=f"Property coverage for {entity_type}.{property_name}",
+                description="Ensure sufficient property coverage across entities",
+                parameters={
+                    "rule_class": "property_coverage",
+                    "entity_type": entity_type,
+                    "property_name": property_name,
+                    "min_coverage": float(min_coverage),
+                    "allow_missing_entities": rule_def.get("allowMissingEntities", True),
                 },
             )
             rules.append(QualityRuleFactory.create_rule(rule_config))
@@ -454,6 +601,64 @@ class OntologyQualityParser:
                     },
                 )
                 rules.append(QualityRuleFactory.create_rule(rule_config))
+            elif rule_type == "property_alignment":
+                rule_config = QualityRuleConfig(
+                    rule_id=f"global.property_alignment.{idx}",
+                    rule_type=QualityRuleType.CROSS_ENTITY,
+                    severity=self._parse_severity(
+                        rule_def.get("severity"), default=QualitySeverity.WARNING
+                    ),
+                    name="Cross-entity property alignment",
+                    description="Ensure related entities share consistent properties",
+                    parameters={
+                        "rule_class": "cross_entity_consistency",
+                        "relationship_type": rule_def.get("relationshipType"),
+                        "source_property": rule_def.get("sourceProperty"),
+                        "target_property": rule_def.get("targetProperty"),
+                        "case_insensitive": rule_def.get("caseInsensitive", True),
+                        "allow_missing": rule_def.get("allowMissing", False),
+                        "allowed_pairs": rule_def.get("allowedPairs", []),
+                    },
+                )
+                rules.append(QualityRuleFactory.create_rule(rule_config))
+
+        return rules
+
+    def _parse_temporal_rules(
+        self, temporal_rules: List[Dict[str, Any]]
+    ) -> List[QualityRule]:
+        rules: List[QualityRule] = []
+
+        for idx, rule_def in enumerate(temporal_rules):
+            entity_type = rule_def.get("entityType")
+            property_name = rule_def.get("property")
+
+            if not entity_type or not property_name:
+                logger.warning(
+                    "Skipping temporal rule %s due to missing entityType/property",
+                    idx,
+                )
+                continue
+
+            rule_config = QualityRuleConfig(
+                rule_id=f"global.temporal.{entity_type}.{property_name}.{idx}",
+                rule_type=QualityRuleType.CROSS_ENTITY,
+                severity=self._parse_severity(
+                    rule_def.get("severity"), default=QualitySeverity.WARNING
+                ),
+                name=f"Temporal window for {entity_type}.{property_name}",
+                description="Ensure dates fall within configured window",
+                parameters={
+                    "rule_class": "global_date_window",
+                    "entity_type": entity_type,
+                    "property_name": property_name,
+                    "earliest": rule_def.get("earliest"),
+                    "latest": rule_def.get("latest"),
+                    "allow_future": rule_def.get("allowFuture", False),
+                    "allow_missing": rule_def.get("allowMissing", True),
+                },
+            )
+            rules.append(QualityRuleFactory.create_rule(rule_config))
 
         return rules
 
