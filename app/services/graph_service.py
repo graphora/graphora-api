@@ -18,6 +18,8 @@ from app.utils.constants import TRANSFORM_ID
 
 if TYPE_CHECKING:  # pragma: no cover - typing aid only
     from neo4j import Driver
+else:  # pragma: no cover - runtime fallback when type hints are evaluated
+    Driver = Any
 
 LABEL_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -36,7 +38,7 @@ class GraphService:
                 "Neo4j driver is unavailable. Install neo4j python driver to use GraphService."
             ) from exc
 
-        self.driver: "Driver" = GraphDatabase.driver(uri, auth=(user, password))
+        self.driver: Driver = GraphDatabase.driver(uri, auth=(user, password))
 
     @staticmethod
     def _ensure_safe_label(label: str) -> str:

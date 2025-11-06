@@ -162,6 +162,7 @@ def _install_langchain_and_splink_stubs() -> None:
                 return self._store.get(key)
 
             async def set(self, key, value, ex=None):
+                del ex
                 self._store[key] = value
                 return True
 

@@ -654,6 +654,319 @@
         "title": "CreateSchemaRequest",
         "type": "object"
       },
+      "DashboardPerformanceResponse": {
+        "properties": {
+          "timeseries": {
+            "items": {
+              "$ref": "#/components/schemas/PerformanceTimeseriesPoint"
+            },
+            "title": "Timeseries",
+            "type": "array"
+          },
+          "total_estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Estimated Cost Usd"
+          },
+          "total_llm_calls": {
+            "title": "Total Llm Calls",
+            "type": "integer"
+          },
+          "total_runs": {
+            "title": "Total Runs",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "window_end": {
+            "format": "date-time",
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "format": "date-time",
+            "title": "Window Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "window_start",
+          "window_end",
+          "total_runs",
+          "total_tokens",
+          "total_llm_calls",
+          "total_estimated_cost_usd",
+          "timeseries"
+        ],
+        "title": "DashboardPerformanceResponse",
+        "type": "object"
+      },
+      "DashboardQualityResponse": {
+        "properties": {
+          "average_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Score"
+          },
+          "entity_confidence": {
+            "items": {
+              "$ref": "#/components/schemas/EntityConfidenceStat"
+            },
+            "title": "Entity Confidence",
+            "type": "array"
+          },
+          "entity_coverage": {
+            "items": {
+              "$ref": "#/components/schemas/EntityCoverageStat"
+            },
+            "title": "Entity Coverage",
+            "type": "array"
+          },
+          "fail_count": {
+            "title": "Fail Count",
+            "type": "integer"
+          },
+          "p50_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Score"
+          },
+          "p95_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Score"
+          },
+          "pass_count": {
+            "title": "Pass Count",
+            "type": "integer"
+          },
+          "recent_reasons": {
+            "items": {
+              "$ref": "#/components/schemas/QualityReasonStat"
+            },
+            "title": "Recent Reasons",
+            "type": "array"
+          },
+          "requires_review_count": {
+            "title": "Requires Review Count",
+            "type": "integer"
+          },
+          "top_rules": {
+            "items": {
+              "$ref": "#/components/schemas/QualityRuleStat"
+            },
+            "title": "Top Rules",
+            "type": "array"
+          },
+          "warn_count": {
+            "title": "Warn Count",
+            "type": "integer"
+          },
+          "window_end": {
+            "format": "date-time",
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "format": "date-time",
+            "title": "Window Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "window_start",
+          "window_end",
+          "average_score",
+          "p50_score",
+          "p95_score",
+          "pass_count",
+          "warn_count",
+          "fail_count",
+          "requires_review_count",
+          "recent_reasons",
+          "top_rules",
+          "entity_coverage",
+          "entity_confidence"
+        ],
+        "title": "DashboardQualityResponse",
+        "type": "object"
+      },
+      "DashboardSummaryResponse": {
+        "description": "Aggregate pipeline snapshot for the dashboard top-line KPIs.",
+        "properties": {
+          "average_duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Duration Ms"
+          },
+          "average_tokens_per_run": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Tokens Per Run"
+          },
+          "completed_runs": {
+            "title": "Completed Runs",
+            "type": "integer"
+          },
+          "fail_count": {
+            "title": "Fail Count",
+            "type": "integer"
+          },
+          "failed_runs": {
+            "title": "Failed Runs",
+            "type": "integer"
+          },
+          "p50_duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Duration Ms"
+          },
+          "p95_duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Duration Ms"
+          },
+          "pass_count": {
+            "title": "Pass Count",
+            "type": "integer"
+          },
+          "recent_gate_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Recent Gate Reasons",
+            "type": "array"
+          },
+          "requires_review_count": {
+            "title": "Requires Review Count",
+            "type": "integer"
+          },
+          "running_runs": {
+            "title": "Running Runs",
+            "type": "integer"
+          },
+          "runs_per_day": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runs Per Day"
+          },
+          "total_estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Estimated Cost Usd"
+          },
+          "total_llm_calls": {
+            "title": "Total Llm Calls",
+            "type": "integer"
+          },
+          "total_runs": {
+            "title": "Total Runs",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "warn_count": {
+            "title": "Warn Count",
+            "type": "integer"
+          },
+          "window_end": {
+            "format": "date-time",
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "format": "date-time",
+            "title": "Window Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "window_start",
+          "window_end",
+          "total_runs",
+          "completed_runs",
+          "failed_runs",
+          "running_runs",
+          "pass_count",
+          "warn_count",
+          "fail_count",
+          "requires_review_count",
+          "average_duration_ms",
+          "p50_duration_ms",
+          "p95_duration_ms",
+          "average_tokens_per_run",
+          "total_tokens",
+          "total_llm_calls",
+          "total_estimated_cost_usd",
+          "runs_per_day"
+        ],
+        "title": "DashboardSummaryResponse",
+        "type": "object"
+      },
       "DatabaseConfig": {
         "description": "Schema for Neo4j database configuration",
         "properties": {
@@ -1049,6 +1362,42 @@
           }
         },
         "title": "EndSessionRequest",
+        "type": "object"
+      },
+      "EntityConfidenceStat": {
+        "properties": {
+          "average_confidence": {
+            "title": "Average Confidence",
+            "type": "number"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_type",
+          "average_confidence"
+        ],
+        "title": "EntityConfidenceStat",
+        "type": "object"
+      },
+      "EntityCoverageStat": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_type",
+          "count"
+        ],
+        "title": "EntityCoverageStat",
         "type": "object"
       },
       "ErrorSummary": {
@@ -1931,6 +2280,72 @@
         "title": "OperationResponse",
         "type": "object"
       },
+      "PerformanceTimeseriesPoint": {
+        "description": "Daily performance metrics for dashboard charts.",
+        "properties": {
+          "average_duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Duration Ms"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "p95_duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Duration Ms"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "total_estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Estimated Cost Usd"
+          },
+          "total_llm_calls": {
+            "title": "Total Llm Calls",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "date",
+          "runs",
+          "average_duration_ms",
+          "p95_duration_ms",
+          "total_tokens",
+          "total_llm_calls",
+          "total_estimated_cost_usd"
+        ],
+        "title": "PerformanceTimeseriesPoint",
+        "type": "object"
+      },
       "ProcessingPriority": {
         "enum": [
           "low",
@@ -2102,6 +2517,24 @@
         "title": "QualityMetrics",
         "type": "object"
       },
+      "QualityReasonStat": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "count"
+        ],
+        "title": "QualityReasonStat",
+        "type": "object"
+      },
       "QualityResults": {
         "description": "Complete quality validation results for a transform.",
         "properties": {
@@ -2226,6 +2659,29 @@
           "rules_applied"
         ],
         "title": "QualityResults",
+        "type": "object"
+      },
+      "QualityRuleStat": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_id",
+          "severity",
+          "count"
+        ],
+        "title": "QualityRuleStat",
         "type": "object"
       },
       "QualityRuleType": {
@@ -5551,6 +6007,130 @@
         ]
       }
     },
+    "/api/v1/dashboard/performance": {
+      "get": {
+        "operationId": "get_dashboard_performance_api_v1_dashboard_performance_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 14,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_runs",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Max Runs",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardPerformanceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Dashboard Performance",
+        "tags": [
+          "Dashboard"
+        ]
+      }
+    },
+    "/api/v1/dashboard/quality": {
+      "get": {
+        "operationId": "get_dashboard_quality_api_v1_dashboard_quality_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 14,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_runs",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Max Runs",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardQualityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Dashboard Quality",
+        "tags": [
+          "Dashboard"
+        ]
+      }
+    },
     "/api/v1/dashboard/runs": {
       "get": {
         "description": "Return the most recent transform runs with quality and usage context.",
@@ -5609,6 +6189,68 @@
           }
         ],
         "summary": "Get Recent Transform Runs",
+        "tags": [
+          "Dashboard"
+        ]
+      }
+    },
+    "/api/v1/dashboard/summary": {
+      "get": {
+        "operationId": "get_dashboard_summary_api_v1_dashboard_summary_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 14,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_runs",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Max Runs",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Dashboard Summary",
         "tags": [
           "Dashboard"
         ]
