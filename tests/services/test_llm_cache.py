@@ -1,4 +1,3 @@
-import pytest
 
 
 def test_create_cache_in_memory_without_redis(monkeypatch):

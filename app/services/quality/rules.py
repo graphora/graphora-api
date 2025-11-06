@@ -11,7 +11,6 @@ from .models import (
     QualityViolation,
     ValidationResult,
     QualityRuleConfig,
-    QualitySeverity,
 )
 
 logger = logging.getLogger(__name__)

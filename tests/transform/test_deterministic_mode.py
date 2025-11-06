@@ -2,6 +2,9 @@ from typing import List
 from types import SimpleNamespace
 import sys
 
+import pytest
+from pydantic import BaseModel
+
 
 class _SplinkStub(SimpleNamespace):
     def __init__(self):
@@ -19,20 +22,17 @@ _splink_stub = _SplinkStub()
 sys.modules.setdefault("splink", _splink_stub)
 sys.modules.setdefault("splink.comparison_library", _splink_stub.comparison_library)
 
-import pytest
-from pydantic import BaseModel
-
-from app.config import settings
-from app.services.transform.helpers import (
+from app.config import settings  # noqa: E402
+from app.services.transform.helpers import (  # noqa: E402
     transform_as_nodes,
     _generate_node_key,
     _make_deterministic_node_id,
 )
-from app.services.transform.graph_transformer import (
+from app.services.transform.graph_transformer import (  # noqa: E402
     _build_nodes_context,
     _build_relationships_context,
 )
-from app.services.transform.models import BaseNode, RelationshipInstance
+from app.services.transform.models import BaseNode, RelationshipInstance  # noqa: E402
 
 
 class CompanyModel(BaseModel):

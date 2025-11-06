@@ -164,7 +164,6 @@ class EntityLedgerService:
                         .execute()
                     )
                     for row in response.data or []:
-                        key = (entity_type, row["canonical_key"])
                         results[(entity_type, row["canonical_key"])] = EntityLedgerEntry(
                             user_id=user_id,
                             entity_type=entity_type,
