@@ -16,9 +16,6 @@ from app.config import settings
 
 @pytest.fixture(autouse=True)
 def stub_splink(monkeypatch):
-    from app.services import (
-        transform as transform_pkg,
-    )  # noqa: F401 to ensure package loaded
     import app.services.transform.helpers as helpers
 
     class DummyComparison:
