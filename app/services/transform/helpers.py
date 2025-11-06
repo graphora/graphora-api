@@ -1797,6 +1797,9 @@ def _create_splink_comparisons(
         limit: Optional[int] = None,
         allow_when_prefer_exact: bool = False,
     ) -> None:
+        max_entries = limit
+        if not allow_when_prefer_exact and comparisons:
+            max_entries = 1 if max_entries is None else min(max_entries, 1)
         count = 0
         for column in columns:
             if column in used_columns or not _column_has_data(column):
@@ -1805,7 +1808,7 @@ def _create_splink_comparisons(
             comparisons.append(_with_prior(comparison, STRING_PRIOR))
             used_columns.add(column)
             count += 1
-            if limit and count >= limit:
+            if max_entries is not None and count >= max_entries:
                 break
 
     def _append_numeric(columns: List[str], prior: ComparisonPrior) -> None:

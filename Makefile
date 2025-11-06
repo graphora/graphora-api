@@ -1,4 +1,4 @@
-.PHONY: dev start test test-unit test-integration help lint format deadcode openapi-snapshot
+.PHONY: dev start test test-unit test-integration help lint format deadcode openapi-snapshot typecheck pre-commit
 
 help:
 	@echo "Available commands:"
@@ -28,6 +28,10 @@ test-unit:
 test-integration:
 	uv run pytest -m integration
 
+lint-fix:
+	uv run ruff check --fix .
+	uv run black .
+
 lint:
 	uv run ruff check .
 	uv run black --check .
@@ -40,3 +44,12 @@ deadcode:
 
 openapi-snapshot:
 	PYTHONPATH=. uv run python scripts/openapi_snapshot.py
+
+typecheck:
+	uv run mypy app
+
+pre-commit:
+	$(MAKE) lint-fix
+# 	$(MAKE) typecheck
+	$(MAKE) test
+	$(MAKE) deadcode

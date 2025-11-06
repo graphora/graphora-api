@@ -39,8 +39,10 @@ def stub_splink(monkeypatch):
 
     comparison_module = SimpleNamespace(
         ExactMatch=lambda col: DummyComparison(col, "exact", 2),
-        JaroWinklerAtThresholds=lambda col, thresholds: DummyComparison(col, "jaro", 4),
-        LevenshteinAtThresholds=lambda col, thresholds: DummyComparison(col, "lev", 3),
+        JaroWinklerAtThresholds=lambda col, _thresholds: DummyComparison(
+            col, "jaro", 4
+        ),
+        LevenshteinAtThresholds=lambda col, _thresholds: DummyComparison(col, "lev", 3),
     )
 
     def fake_block_on(column):
