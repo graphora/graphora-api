@@ -76,7 +76,9 @@ def test_auto_approval_requires_gate_pass(quality_service, base_quality_results)
 
 
 def test_auto_approval_passes_for_gate_pass(quality_service, base_quality_results):
-    eligibility = quality_service.calculate_auto_approval_eligibility(base_quality_results)
+    eligibility = quality_service.calculate_auto_approval_eligibility(
+        base_quality_results
+    )
 
     assert eligibility["eligible"] is True
     assert not eligibility["reasons"]
@@ -103,7 +105,9 @@ async def test_store_quality_results_persists_violations(
     results = base_quality_results.model_copy(
         update={
             "violations": [violation],
-            "metrics": base_quality_results.metrics.model_copy(update={"total_violations": 1}),
+            "metrics": base_quality_results.metrics.model_copy(
+                update={"total_violations": 1}
+            ),
         }
     )
 
@@ -130,7 +134,9 @@ async def test_store_quality_results_persists_violations(
 async def test_store_quality_results_clears_existing_violations(
     quality_service, base_quality_results
 ):
-    await quality_service.store_quality_results("transform-xyz", base_quality_results, "user-1")
+    await quality_service.store_quality_results(
+        "transform-xyz", base_quality_results, "user-1"
+    )
 
     queries = quality_service.neo4j.queries
     assert len(queries) == 2

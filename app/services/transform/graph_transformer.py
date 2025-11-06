@@ -54,7 +54,9 @@ def _make_context_envelope(raw_context: str, *, stage: str) -> ContextEnvelope:
 
     limit = getattr(settings, "MAX_CONTEXT_CHARS", 0) or 0
     if limit <= 0 or len(raw_context) <= limit:
-        return ContextEnvelope(text=raw_context, truncated=False, raw_length=len(raw_context))
+        return ContextEnvelope(
+            text=raw_context, truncated=False, raw_length=len(raw_context)
+        )
 
     # Retain head/tail portions with a sentinel to preserve ordering cues.
     sentinel = _CONTEXT_TRUNCATION_SENTINEL
@@ -66,7 +68,11 @@ def _make_context_envelope(raw_context: str, *, stage: str) -> ContextEnvelope:
         tail_len = limit - len(sentinel) - head_len
         head = raw_context[:head_len].rstrip("\n")
         tail = raw_context[-tail_len:].lstrip("\n") if tail_len > 0 else ""
-        truncated_text = f"{head}\n{sentinel.strip()}\n{tail}" if tail else f"{head}\n{sentinel.strip()}"
+        truncated_text = (
+            f"{head}\n{sentinel.strip()}\n{tail}"
+            if tail
+            else f"{head}\n{sentinel.strip()}"
+        )
         if len(truncated_text) > limit:
             truncated_text = truncated_text[:limit]
 
@@ -83,7 +89,9 @@ def _make_context_envelope(raw_context: str, *, stage: str) -> ContextEnvelope:
             "max_chars": limit,
         },
     )
-    return ContextEnvelope(text=truncated_text, truncated=truncated, raw_length=len(raw_context))
+    return ContextEnvelope(
+        text=truncated_text, truncated=truncated, raw_length=len(raw_context)
+    )
 
 
 async def _timed_call(func: Callable[..., Any], *args, **kwargs) -> Tuple[Any, float]:
@@ -207,7 +215,9 @@ async def _build_graph_from(
     nodes_only_ontology = ontology_parser.build_entities_only_model()
     nodes: List[BaseNode] = []
     metrics: List[ChunkExtractionMetric] = []
-    context_envelope = ContextEnvelope(text="None", truncated=False, raw_length=len("None"))
+    context_envelope = ContextEnvelope(
+        text="None", truncated=False, raw_length=len("None")
+    )
 
     # Step 1: LLM-based entity extraction per chunk with deterministic context snapshots.
     for chunk_index, chunk in enumerate(chunks_or_pdf_paths):

@@ -458,7 +458,8 @@ class HybridDocumentChunker:
         document_length = len(text)
         semantic_min_length = (
             self.config.semantic_min_length
-            if hasattr(self.config, "semantic_min_length") and self.config.semantic_min_length
+            if hasattr(self.config, "semantic_min_length")
+            and self.config.semantic_min_length
             else settings.SEMANTIC_MIN_DOC_LENGTH
         )
 

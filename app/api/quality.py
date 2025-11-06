@@ -80,13 +80,14 @@ if QUALITY_API_AVAILABLE:
         property_fill_rates: Dict[str, float]
         entity_type_coverage: Dict[str, int]
 
-
     async def _get_quality_service(user_id: str) -> QualityService:
         user_config = await UserDatabaseService.get_user_config(user_id)
 
         try:
             from app.services.storage.neo4j import Neo4jStorage
-        except Exception as storage_error:  # pragma: no cover - import failure handled at runtime
+        except (
+            Exception
+        ) as storage_error:  # pragma: no cover - import failure handled at runtime
             logger.error(
                 "Neo4j storage backend unavailable for quality operations: %s",
                 storage_error,
@@ -240,9 +241,7 @@ if QUALITY_API_AVAILABLE:
                 status_code=500, detail="Failed to reject quality results"
             )
 
-    @router.get(
-        "/violations/{transform_id}", response_model=List[QualityViolation]
-    )
+    @router.get("/violations/{transform_id}", response_model=List[QualityViolation])
     async def list_quality_violations(
         transform_id: str,
         violation_type: Optional[QualityRuleType] = Query(
@@ -304,9 +303,7 @@ if QUALITY_API_AVAILABLE:
                 status_code=500, detail="Failed to retrieve quality violations"
             ) from exc
 
-    @router.get(
-        "/analytics/{transform_id}", response_model=QualityAnalyticsResponse
-    )
+    @router.get("/analytics/{transform_id}", response_model=QualityAnalyticsResponse)
     async def get_quality_analytics(
         transform_id: str, user_id: str = Depends(get_current_user_id)
     ):
@@ -331,7 +328,9 @@ if QUALITY_API_AVAILABLE:
                 by_severity=violations_section["by_severity"],
                 by_type=violations_section["by_type"],
                 by_entity_type=violations_section["by_entity_type"],
-                top_rules=[QualityTopRule(**item) for item in violations_section["top_rules"]],
+                top_rules=[
+                    QualityTopRule(**item) for item in violations_section["top_rules"]
+                ],
                 top_entities=[
                     QualityTopEntity(**item)
                     for item in violations_section["top_entities"]
@@ -432,9 +431,7 @@ if QUALITY_API_AVAILABLE:
             filename = f"quality-violations-{transform_id}.csv"
             return PlainTextResponse(  # type: ignore[return-value]
                 content=csv_payload,
-                headers={
-                    "Content-Disposition": f"attachment; filename={filename}"
-                },
+                headers={"Content-Disposition": f"attachment; filename={filename}"},
                 media_type="text/csv",
             )
         except HTTPException:

@@ -1,7 +1,10 @@
 import pytest
 
 from app.config import settings
-from app.services.chunking.config import ChunkingConfig, ChunkingStrategy as ConfigChunkingStrategy
+from app.services.chunking.config import (
+    ChunkingConfig,
+    ChunkingStrategy as ConfigChunkingStrategy,
+)
 from app.services.chunking.hybrid_chunker import HybridDocumentChunker, ChunkingStrategy
 from app.services.transform.graph_transformer import _build_nodes_context
 from app.services.transform.models import BaseNode
@@ -28,10 +31,7 @@ def test_chunk_count_respects_cap(monkeypatch):
         config=config,
     )
 
-    raw_chunks = [
-        f"Paragraph {i}\n" + ("x" * 300)
-        for i in range(10)
-    ]
+    raw_chunks = [f"Paragraph {i}\n" + ("x" * 300) for i in range(10)]
 
     bounded = chunker._enforce_size_limits(raw_chunks)
     assert len(bounded) <= 3

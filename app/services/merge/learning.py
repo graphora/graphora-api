@@ -25,7 +25,9 @@ class EntityMergeLearningStats:
 class MergeLearningService:
     """Tracks observed merge scores so thresholds can adapt over time."""
 
-    def __init__(self, *, alpha: float = 0.3, floor: float = 0.7, margin: float = 0.05) -> None:
+    def __init__(
+        self, *, alpha: float = 0.3, floor: float = 0.7, margin: float = 0.05
+    ) -> None:
         self._alpha = alpha
         self._floor = floor
         self._margin = margin
@@ -87,7 +89,9 @@ class MergeLearningService:
                 last_updated=timestamp,
             )
         else:
-            stats.ema_low_score = (1 - self._alpha) * stats.ema_low_score + self._alpha * low_score
+            stats.ema_low_score = (
+                1 - self._alpha
+            ) * stats.ema_low_score + self._alpha * low_score
             stats.sample_count += len(match_scores)
             stats.last_observed = low_score
             stats.last_updated = timestamp

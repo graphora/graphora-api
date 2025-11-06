@@ -411,10 +411,14 @@ def transform_as_relationships(
 
             source_node = node_by_id.get(raw_source_id)
             if not source_node:
-                source_node = node_by_canonical_id.get(raw_source_id) or node_by_canonical_key.get(raw_source_id)
+                source_node = node_by_canonical_id.get(
+                    raw_source_id
+                ) or node_by_canonical_key.get(raw_source_id)
             target_node = node_by_id.get(raw_target_id)
             if not target_node:
-                target_node = node_by_canonical_id.get(raw_target_id) or node_by_canonical_key.get(raw_target_id)
+                target_node = node_by_canonical_id.get(
+                    raw_target_id
+                ) or node_by_canonical_key.get(raw_target_id)
 
             if not source_node or not target_node:
                 logger.warning(
@@ -564,9 +568,7 @@ async def deduplicate_entities_with_splink(
             )
 
             entity_def = (
-                (parsed_ontology or {})
-                .get("entities", {})
-                .get(current_type, {})
+                (parsed_ontology or {}).get("entities", {}).get(current_type, {})
             )
             property_defs = entity_def.get("properties", {}) if entity_def else {}
             allowed_properties = set(property_defs.keys()) if property_defs else None
@@ -1441,11 +1443,7 @@ def _deduplicate_small_entity_group(
     entities: List[BaseNode | Node],
     parsed_ontology: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[BaseNode | Node], Dict[str, str]]:
-    entity_def = (
-        (parsed_ontology or {})
-        .get("entities", {})
-        .get(entity_type or "", {})
-    )
+    entity_def = (parsed_ontology or {}).get("entities", {}).get(entity_type or "", {})
     property_defs = entity_def.get("properties", {}) if entity_def else {}
 
     unique_props = sorted(
@@ -1692,7 +1690,9 @@ def _create_splink_comparisons(
     def _column_has_data(column: Optional[str]) -> bool:
         return bool(column) and column in df.columns and df[column].notna().sum() > 0
 
-    def _prefer_column(variants: Dict[str, str], prefer_canonical: bool = True) -> Optional[str]:
+    def _prefer_column(
+        variants: Dict[str, str], prefer_canonical: bool = True
+    ) -> Optional[str]:
         order = ["canonical", "raw"] if prefer_canonical else ["raw", "canonical"]
         for variant in order:
             column = variants.get(variant)
@@ -1720,8 +1720,12 @@ def _create_splink_comparisons(
             continue
 
         prop_type = prop_def.get("type") if isinstance(prop_def, dict) else None
-        unique_flag = bool(prop_def.get("unique")) if isinstance(prop_def, dict) else False
-        index_flag = bool(prop_def.get("index")) if isinstance(prop_def, dict) else False
+        unique_flag = (
+            bool(prop_def.get("unique")) if isinstance(prop_def, dict) else False
+        )
+        index_flag = (
+            bool(prop_def.get("index")) if isinstance(prop_def, dict) else False
+        )
 
         if unique_flag:
             column = canonical_col if _column_has_data(canonical_col) else primary_col
@@ -1833,7 +1837,11 @@ def _create_splink_comparisons(
                 comparison = cl.JaroWinklerAtThresholds(column, [0.95, 0.85])
                 comparisons.append(_with_prior(comparison, STRING_PRIOR))
             else:
-                prior = NUMERIC_PRIOR if _is_prop_type_number(prop_type) else FALLBACK_EXACT_PRIOR
+                prior = (
+                    NUMERIC_PRIOR
+                    if _is_prop_type_number(prop_type)
+                    else FALLBACK_EXACT_PRIOR
+                )
                 comparison = _exact_match(column)
                 comparisons.append(_with_prior(comparison, prior))
             used_columns.add(column)
@@ -1903,7 +1911,9 @@ def _create_blocking_rules(
     def _column_has_data(column: Optional[str]) -> bool:
         return bool(column) and column in df.columns and df[column].notna().sum() > 0
 
-    def _prefer_column(variants: Dict[str, str], prefer_canonical: bool = True) -> Optional[str]:
+    def _prefer_column(
+        variants: Dict[str, str], prefer_canonical: bool = True
+    ) -> Optional[str]:
         order = ["canonical", "raw"] if prefer_canonical else ["raw", "canonical"]
         for variant in order:
             column = variants.get(variant)
@@ -1933,8 +1943,12 @@ def _create_blocking_rules(
             continue
 
         prop_type = prop_def.get("type") if isinstance(prop_def, dict) else None
-        unique_flag = bool(prop_def.get("unique")) if isinstance(prop_def, dict) else False
-        index_flag = bool(prop_def.get("index")) if isinstance(prop_def, dict) else False
+        unique_flag = (
+            bool(prop_def.get("unique")) if isinstance(prop_def, dict) else False
+        )
+        index_flag = (
+            bool(prop_def.get("index")) if isinstance(prop_def, dict) else False
+        )
 
         if unique_flag:
             column = canonical_col if _column_has_data(canonical_col) else primary_col
@@ -1949,7 +1963,9 @@ def _create_blocking_rules(
             continue
 
         if prop_type and _is_prop_type_string(prop_type):
-            preferred = canonical_col if _column_has_data(canonical_col) else primary_col
+            preferred = (
+                canonical_col if _column_has_data(canonical_col) else primary_col
+            )
             if preferred not in string_columns:
                 string_columns.append(preferred)
             continue
@@ -2107,7 +2123,10 @@ def _run_splink_deduplication(df, comparisons, blocking_rules, threshold):
         match_scores: List[float] = []
         try:
             predictions_df = pairwise_predictions.as_pandas_dataframe()
-            if not predictions_df.empty and "match_probability" in predictions_df.columns:
+            if (
+                not predictions_df.empty
+                and "match_probability" in predictions_df.columns
+            ):
                 probability_series = predictions_df["match_probability"].dropna()
                 if not probability_series.empty:
                     match_scores = (
@@ -2117,7 +2136,9 @@ def _run_splink_deduplication(df, comparisons, blocking_rules, threshold):
                         .tolist()
                     )
         except Exception:  # pragma: no cover - telemetry only
-            logger.debug("Unable to extract match probability metrics from Splink output")
+            logger.debug(
+                "Unable to extract match probability metrics from Splink output"
+            )
 
         # Create a mapping of cluster IDs to representative entity IDs
         cluster_to_representative = {}

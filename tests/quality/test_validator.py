@@ -83,11 +83,7 @@ async def test_quality_validator_warn_band_allows_retry():
         "entities": {
             "Company": {
                 "properties": {
-                    "name": {
-                        "quality": {
-                            "format": {"pattern": "^[A-Z][a-z]+"}
-                        }
-                    }
+                    "name": {"quality": {"format": {"pattern": "^[A-Z][a-z]+"}}}
                 }
             }
         },
@@ -136,12 +132,8 @@ async def test_relationship_presence_rule_creates_violation():
         },
         "entities": {
             "Company": {
-                "properties": {
-                    "name": {"required": True}
-                },
-                "relationships": {
-                    "HAS_PRODUCT": {"target": "Product"}
-                },
+                "properties": {"name": {"required": True}},
+                "relationships": {"HAS_PRODUCT": {"target": "Product"}},
             },
             "Product": {"properties": {"name": {"required": True}}},
         },
@@ -286,9 +278,7 @@ async def test_symmetric_relationship_rule_detects_missing_inverse():
         "entities": {
             "Company": {
                 "properties": {"name": {"required": True}},
-                "relationships": {
-                    "ASSOCIATED_WITH": {"target": "Industry"}
-                },
+                "relationships": {"ASSOCIATED_WITH": {"target": "Industry"}},
             },
             "Industry": {"properties": {"name": {"required": True}}},
         },
@@ -321,7 +311,9 @@ async def test_symmetric_relationship_rule_detects_missing_inverse():
         )
     )
 
-    graph = DocumentKnowledgeGraph(nodes=[company, industry], relationships=relationships)
+    graph = DocumentKnowledgeGraph(
+        nodes=[company, industry], relationships=relationships
+    )
     results = await validator.validate_extraction(graph, "transform-symmetric")
 
     assert any(
@@ -389,16 +381,10 @@ async def test_cross_entity_consistency_rule_detects_mismatch():
         },
         "entities": {
             "Company": {
-                "properties": {
-                    "classificationStandard": {"type": "string"}
-                },
-                "relationships": {
-                    "CLASSIFIED_AS": {"target": "Industry"}
-                },
+                "properties": {"classificationStandard": {"type": "string"}},
+                "relationships": {"CLASSIFIED_AS": {"target": "Industry"}},
             },
-            "Industry": {
-                "properties": {"classification": {"type": "string"}}
-            },
+            "Industry": {"properties": {"classification": {"type": "string"}}},
         },
     }
 
@@ -465,8 +451,7 @@ async def test_property_coverage_rule_flags_low_fill_rate():
     validator = QualityValidator(ontology)
 
     nodes = [
-        BaseNode(id=f"company-{idx}", type="Company", properties={})
-        for idx in range(3)
+        BaseNode(id=f"company-{idx}", type="Company", properties={}) for idx in range(3)
     ]
     nodes.append(
         BaseNode(
@@ -478,9 +463,7 @@ async def test_property_coverage_rule_flags_low_fill_rate():
 
     knowledge_graph = DocumentKnowledgeGraph(nodes=nodes, relationships=[])
 
-    results = await validator.validate_extraction(
-        knowledge_graph, "transform-coverage"
-    )
+    results = await validator.validate_extraction(knowledge_graph, "transform-coverage")
 
     assert any(
         violation.rule_id.startswith("global.property_coverage")
@@ -504,13 +487,7 @@ async def test_global_date_window_rule_detects_out_of_range():
                 }
             ]
         },
-        "entities": {
-            "Industry": {
-                "properties": {
-                    "effectiveDate": {"type": "string"}
-                }
-            }
-        },
+        "entities": {"Industry": {"properties": {"effectiveDate": {"type": "string"}}}},
     }
 
     validator = QualityValidator(ontology)
@@ -530,9 +507,7 @@ async def test_global_date_window_rule_detects_out_of_range():
         nodes=[industry_ok, industry_bad], relationships=[]
     )
 
-    results = await validator.validate_extraction(
-        knowledge_graph, "transform-temporal"
-    )
+    results = await validator.validate_extraction(knowledge_graph, "transform-temporal")
 
     assert any(
         violation.rule_id.startswith("global.temporal")
@@ -554,12 +529,8 @@ async def test_confidence_threshold_rule_flags_low_confidence():
         },
         "entities": {
             "Company": {
-                "properties": {
-                    "name": {"required": True}
-                },
-                "relationships": {
-                    "HAS_SUBSIDIARY": {"target": "Company"}
-                },
+                "properties": {"name": {"required": True}},
+                "relationships": {"HAS_SUBSIDIARY": {"target": "Company"}},
             }
         },
     }
@@ -599,7 +570,9 @@ async def test_confidence_threshold_rule_flags_low_confidence():
     )
 
     confidence_violations = [
-        violation for violation in results.violations if violation.rule_id == "global.confidence_threshold"
+        violation
+        for violation in results.violations
+        if violation.rule_id == "global.confidence_threshold"
     ]
 
     assert confidence_violations, "Expected confidence threshold violations"
@@ -619,11 +592,7 @@ async def test_minimum_entities_rule_enforces_threshold():
                 }
             }
         },
-        "entities": {
-            "Company": {
-                "properties": {"name": {"required": True}}
-            }
-        },
+        "entities": {"Company": {"properties": {"name": {"required": True}}}},
     }
 
     validator = QualityValidator(ontology)
@@ -661,12 +630,8 @@ async def test_required_entity_types_rule_detects_missing_types():
             }
         },
         "entities": {
-            "Company": {
-                "properties": {"name": {"required": True}}
-            },
-            "Industry": {
-                "properties": {"name": {"required": True}}
-            },
+            "Company": {"properties": {"name": {"required": True}}},
+            "Industry": {"properties": {"name": {"required": True}}},
         },
     }
 
@@ -708,12 +673,8 @@ async def test_entity_balance_rule_enforces_expected_ratios():
             }
         },
         "entities": {
-            "Company": {
-                "properties": {"name": {"required": True}}
-            },
-            "Industry": {
-                "properties": {"name": {"required": True}}
-            },
+            "Company": {"properties": {"name": {"required": True}}},
+            "Industry": {"properties": {"name": {"required": True}}},
         },
     }
 
@@ -746,7 +707,6 @@ async def test_entity_balance_rule_enforces_expected_ratios():
     )
 
     assert any(
-        violation.rule_id == "global.entity_balance"
-        for violation in results.violations
+        violation.rule_id == "global.entity_balance" for violation in results.violations
     )
     assert results.violations_by_type[QualityRuleType.DISTRIBUTION] >= 1

@@ -72,4 +72,3 @@ class ConnectionTestResponse(BaseModel):
     success: bool
     message: str
     error: Optional[str] = None
-

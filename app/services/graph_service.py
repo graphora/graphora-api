@@ -26,8 +26,12 @@ class GraphService:
     def __init__(self, uri: str, user: str, password: str):
         """Initialize Neo4j connection"""
         try:
-            from neo4j import GraphDatabase  # Local import to avoid heavy dependency at module load
-        except Exception as exc:  # pragma: no cover - runtime environment without driver
+            from neo4j import (
+                GraphDatabase,
+            )  # Local import to avoid heavy dependency at module load
+        except (
+            Exception
+        ) as exc:  # pragma: no cover - runtime environment without driver
             raise RuntimeError(
                 "Neo4j driver is unavailable. Install neo4j python driver to use GraphService."
             ) from exc
