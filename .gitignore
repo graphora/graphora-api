@@ -17,9 +17,6 @@ downloads/
 eggs/
 .eggs/
 lib/
-# Allow frontend utility folder under app/src to be tracked
-!app/src/lib/
-!app/src/lib/**
 lib64/
 parts/
 sdist/
