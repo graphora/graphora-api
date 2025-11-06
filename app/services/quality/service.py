@@ -17,7 +17,9 @@ from .models import (
     QualityRuleType,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - import only for typing to avoid heavy deps at runtime
+if (
+    TYPE_CHECKING
+):  # pragma: no cover - import only for typing to avoid heavy deps at runtime
     from app.services.storage.neo4j import Neo4jStorage
 
 
@@ -221,7 +223,8 @@ class QualityService:
                 violations = [
                     v
                     for v in violations
-                    if getattr(v.rule_type, "value", v.rule_type) == violation_type_value
+                    if getattr(v.rule_type, "value", v.rule_type)
+                    == violation_type_value
                 ]
 
             if severity:
@@ -237,9 +240,7 @@ class QualityService:
                 ]
 
             if entity_type:
-                violations = [
-                    v for v in violations if v.entity_type == entity_type
-                ]
+                violations = [v for v in violations if v.entity_type == entity_type]
 
             return violations[offset : offset + limit]
         except Exception as e:
@@ -386,12 +387,16 @@ class QualityService:
             entity_offenders[violation.entity_type or "unknown"] += 1
             if violation.rule_id not in rule_metadata:
                 rule_metadata[violation.rule_id] = {
-                    "severity": violation.severity.value
-                    if isinstance(violation.severity, QualitySeverity)
-                    else str(violation.severity),
-                    "rule_type": violation.rule_type.value
-                    if isinstance(violation.rule_type, QualityRuleType)
-                    else str(violation.rule_type),
+                    "severity": (
+                        violation.severity.value
+                        if isinstance(violation.severity, QualitySeverity)
+                        else str(violation.severity)
+                    ),
+                    "rule_type": (
+                        violation.rule_type.value
+                        if isinstance(violation.rule_type, QualityRuleType)
+                        else str(violation.rule_type)
+                    ),
                 }
 
         top_rules = [
@@ -467,12 +472,16 @@ class QualityService:
             writer.writerow(
                 [
                     violation.rule_id,
-                    violation.rule_type.value
-                    if isinstance(violation.rule_type, QualityRuleType)
-                    else str(violation.rule_type),
-                    violation.severity.value
-                    if isinstance(violation.severity, QualitySeverity)
-                    else str(violation.severity),
+                    (
+                        violation.rule_type.value
+                        if isinstance(violation.rule_type, QualityRuleType)
+                        else str(violation.rule_type)
+                    ),
+                    (
+                        violation.severity.value
+                        if isinstance(violation.severity, QualitySeverity)
+                        else str(violation.severity)
+                    ),
                     violation.entity_type or "",
                     violation.entity_id or "",
                     violation.property_name or "",

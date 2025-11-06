@@ -183,9 +183,8 @@ async def get_recent_transform_runs(
                 estimated = row.get("estimated_cost_usd")
                 if estimated is not None:
                     llm_usage_summary.estimated_cost_usd = (
-                        (llm_usage_summary.estimated_cost_usd or 0.0)
-                        + _decimal_to_float(Decimal(str(estimated)))
-                    )
+                        llm_usage_summary.estimated_cost_usd or 0.0
+                    ) + _decimal_to_float(Decimal(str(estimated)))
                 provider = row.get("model_provider")
                 model = row.get("model_name")
                 if provider and model:
@@ -238,10 +237,11 @@ async def get_recent_transform_runs(
                     if record.get("processing_completed_at")
                     else None
                 ),
-                processing_duration_ms=
+                processing_duration_ms=(
                     int(record.get("processing_duration_ms", 0) or 0)
                     if record.get("processing_duration_ms") is not None
-                    else None,
+                    else None
+                ),
                 chunks_created=int(record.get("chunks_created", 0) or 0),
                 nodes_extracted=int(record.get("nodes_extracted", 0) or 0),
                 relationships_extracted=int(

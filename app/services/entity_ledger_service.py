@@ -42,10 +42,14 @@ class EntityLedgerService:
             self._enabled = True
         elif settings.SUPABASE_URL and settings.SUPABASE_KEY:
             try:
-                self._client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+                self._client = create_client(
+                    settings.SUPABASE_URL, settings.SUPABASE_KEY
+                )
                 self._enabled = True
             except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Failed to initialise Supabase client for entity ledger: %s", exc)
+                logger.warning(
+                    "Failed to initialise Supabase client for entity ledger: %s", exc
+                )
                 self._client = None
                 self._enabled = False
         else:
@@ -56,7 +60,9 @@ class EntityLedgerService:
 
     # Public API -----------------------------------------------------------------
 
-    async def hydrate_nodes(self, user_id: Optional[str], nodes: Iterable[BaseNode]) -> None:
+    async def hydrate_nodes(
+        self, user_id: Optional[str], nodes: Iterable[BaseNode]
+    ) -> None:
         """Populate canonical_id overrides from the ledger if available."""
 
         if not user_id or not nodes:
@@ -118,7 +124,11 @@ class EntityLedgerService:
                 logger.error("Failed to upsert entity ledger entries: %s", exc)
         else:
             for record in records:
-                key = (record["user_id"], record["entity_type"], record["canonical_key"])
+                key = (
+                    record["user_id"],
+                    record["entity_type"],
+                    record["canonical_key"],
+                )
                 existing = self._memory_store.get(key)
                 if existing:
                     existing.canonical_id = record["canonical_id"]  # type: ignore[assignment]
@@ -157,29 +167,35 @@ class EntityLedgerService:
                 for entity_type, key_list in keys_by_type.items():
                     response = (
                         self._client.table(self.TABLE_NAME)
-                        .select("canonical_key, canonical_id, features, confidence, first_seen_at, updated_at")
+                        .select(
+                            "canonical_key, canonical_id, features, confidence, first_seen_at, updated_at"
+                        )
                         .eq("user_id", user_id)
                         .eq("entity_type", entity_type)
                         .in_("canonical_key", key_list)
                         .execute()
                     )
                     for row in response.data or []:
-                        results[(entity_type, row["canonical_key"])] = EntityLedgerEntry(
-                            user_id=user_id,
-                            entity_type=entity_type,
-                            canonical_key=row["canonical_key"],
-                            canonical_id=row["canonical_id"],
-                            features=row.get("features", {}),
-                            confidence=row.get("confidence"),
-                            first_seen_at=row.get("first_seen_at"),
-                            updated_at=row.get("updated_at"),
+                        results[(entity_type, row["canonical_key"])] = (
+                            EntityLedgerEntry(
+                                user_id=user_id,
+                                entity_type=entity_type,
+                                canonical_key=row["canonical_key"],
+                                canonical_id=row["canonical_id"],
+                                features=row.get("features", {}),
+                                confidence=row.get("confidence"),
+                                first_seen_at=row.get("first_seen_at"),
+                                updated_at=row.get("updated_at"),
+                            )
                         )
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Failed to fetch entity ledger entries: %s", exc)
         else:
             for entity_type, key_list in keys_by_type.items():
                 for canonical_key in key_list:
-                    entry = self._memory_store.get((user_id, entity_type, canonical_key))
+                    entry = self._memory_store.get(
+                        (user_id, entity_type, canonical_key)
+                    )
                     if entry:
                         results[(entity_type, canonical_key)] = entry
 

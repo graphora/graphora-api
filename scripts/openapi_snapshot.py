@@ -21,7 +21,9 @@ def stub_dependencies() -> None:
     class AsyncGraphDatabase:
         @staticmethod
         def driver(*args, **kwargs):  # pragma: no cover - simple stub
-            raise RuntimeError("AsyncGraphDatabase driver stubbed for OpenAPI generation")
+            raise RuntimeError(
+                "AsyncGraphDatabase driver stubbed for OpenAPI generation"
+            )
 
     neo4j_stub.GraphDatabase = GraphDatabase
     neo4j_stub.AsyncGraphDatabase = AsyncGraphDatabase
@@ -73,7 +75,9 @@ def stub_dependencies() -> None:
 
         async def read_flow_run(self, *args, **kwargs):  # pragma: no cover
             return types.SimpleNamespace(
-                state=types.SimpleNamespace(type=types.SimpleNamespace(value="COMPLETED"))
+                state=types.SimpleNamespace(
+                    type=types.SimpleNamespace(value="COMPLETED")
+                )
             )
 
     prefect_stub.get_client = lambda: _PrefectClient()
@@ -86,10 +90,13 @@ def stub_dependencies() -> None:
     prefect_client_schemas_stub = types.ModuleType("prefect.client.schemas")
     sys.modules["prefect.client.schemas"] = prefect_client_schemas_stub
 
-    prefect_client_schemas_objects_stub = types.ModuleType("prefect.client.schemas.objects")
+    prefect_client_schemas_objects_stub = types.ModuleType(
+        "prefect.client.schemas.objects"
+    )
 
     class FlowRun:
         """Stub for Prefect FlowRun"""
+
         pass
 
     prefect_client_schemas_objects_stub.FlowRun = FlowRun
@@ -141,7 +148,9 @@ def stub_dependencies() -> None:
     class SemanticChunker:
         """Lightweight stub mimicking LangChain's SemanticChunker"""
 
-        def __init__(self, *args, **kwargs):  # pragma: no cover - initialization is trivial
+        def __init__(
+            self, *args, **kwargs
+        ):  # pragma: no cover - initialization is trivial
             self._config = kwargs
 
         def create_documents(self, texts):  # pragma: no cover - simple passthrough
@@ -159,7 +168,9 @@ def stub_dependencies() -> None:
     class HuggingFaceEmbeddings:
         """Stub for HuggingFaceEmbeddings used during schema generation."""
 
-        def __init__(self, *args, **kwargs):  # pragma: no cover - initialization is trivial
+        def __init__(
+            self, *args, **kwargs
+        ):  # pragma: no cover - initialization is trivial
             self._config = kwargs
 
         def embed_documents(self, texts):  # pragma: no cover - deterministic stub
@@ -231,6 +242,8 @@ def write_openapi_snapshot(output_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    output = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("tests/snapshots/openapi.json")
+    output = (
+        Path(sys.argv[1]) if len(sys.argv) > 1 else Path("tests/snapshots/openapi.json")
+    )
     write_openapi_snapshot(output)
     print(f"OpenAPI schema written to {output}")

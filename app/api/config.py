@@ -236,4 +236,3 @@ async def test_neo4j_connection(
             error = error_message
 
         return ConnectionTestResponse(success=False, message=message, error=error)
-

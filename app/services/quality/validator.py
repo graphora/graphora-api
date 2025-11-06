@@ -159,10 +159,9 @@ class QualityValidator:
             )
 
             # Determine if human review is required
-            requires_review = (
-                gate_evaluation["status"] == "fail"
-                or self._requires_human_review(all_violations, overall_score)
-            )
+            requires_review = gate_evaluation[
+                "status"
+            ] == "fail" or self._requires_human_review(all_violations, overall_score)
 
             # Build summary statistics
             violations_by_type = self._group_violations_by_type(all_violations)
@@ -612,9 +611,7 @@ class QualityValidator:
                 )
             if warnings > max_warnings:
                 status = "warn"
-                reasons.append(
-                    f"{warnings} warnings exceed limit of {max_warnings}"
-                )
+                reasons.append(f"{warnings} warnings exceed limit of {max_warnings}")
 
         if metrics.property_completeness_rate < (min_completeness * 100):
             status = "fail"
@@ -635,7 +632,12 @@ class QualityValidator:
         if not reasons and status == "pass":
             reasons.append("Quality gate passed")
 
-        return {"status": status, "reasons": reasons, "errors": errors, "warnings": warnings}
+        return {
+            "status": status,
+            "reasons": reasons,
+            "errors": errors,
+            "warnings": warnings,
+        }
 
     def _group_violations_by_type(
         self, violations: List[QualityViolation]

@@ -8,7 +8,9 @@ import pytest
 def _install_neo4j_stub() -> None:
     """Install lightweight neo4j stubs to avoid loading native deps during tests."""
 
-    if os.environ.get("GRAPHORA_TEST_REAL_NEO4J") == "1":  # Allow opt-out when real driver present
+    if (
+        os.environ.get("GRAPHORA_TEST_REAL_NEO4J") == "1"
+    ):  # Allow opt-out when real driver present
         return
 
     if "neo4j" in sys.modules:
@@ -18,7 +20,9 @@ def _install_neo4j_stub() -> None:
 
     class GraphDatabase:
         @staticmethod
-        def driver(*args, **kwargs):  # pragma: no cover - consistent failure for unexpected usage
+        def driver(
+            *args, **kwargs
+        ):  # pragma: no cover - consistent failure for unexpected usage
             raise RuntimeError("Neo4j GraphDatabase driver is stubbed for tests")
 
     class AsyncGraphDatabase:
@@ -108,7 +112,9 @@ def _install_langchain_and_splink_stubs() -> None:
             def create_documents(self, texts):  # pragma: no cover
                 return [types.SimpleNamespace(page_content=text) for text in texts]
 
-        text_splitters_stub.RecursiveCharacterTextSplitter = RecursiveCharacterTextSplitter
+        text_splitters_stub.RecursiveCharacterTextSplitter = (
+            RecursiveCharacterTextSplitter
+        )
         sys.modules["langchain_text_splitters"] = text_splitters_stub
 
     # Splink stub
@@ -164,7 +170,9 @@ def _install_langchain_and_splink_stubs() -> None:
                 return True
 
         redis_asyncio_stub.Redis = _StubAsyncRedis
-        redis_stub.from_url = _StubAsyncRedis.from_url  # Compatibility with sync helpers
+        redis_stub.from_url = (
+            _StubAsyncRedis.from_url
+        )  # Compatibility with sync helpers
         redis_stub.asyncio = redis_asyncio_stub
         sys.modules["redis.asyncio"] = redis_asyncio_stub
 
@@ -289,6 +297,7 @@ def _reset_merge_learning_service():
     merge_learning_service.reset()
     yield
     merge_learning_service.reset()
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:

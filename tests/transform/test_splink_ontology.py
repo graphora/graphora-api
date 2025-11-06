@@ -240,9 +240,7 @@ async def test_indexed_property_guides_splink_blocking():
 
 
 def _allowed_properties_for(ontology, entity_type: str) -> set[str]:
-    return set(
-        ontology["entities"].get(entity_type, {}).get("properties", {}).keys()
-    )
+    return set(ontology["entities"].get(entity_type, {}).get("properties", {}).keys())
 
 
 def _row_count(df) -> int:
@@ -314,7 +312,9 @@ def test_dataframe_uses_only_ontology_defined_properties():
         )
     ]
 
-    df, columns, record_count = _prepare_df(nodes, {"entities": ontology}, "EntitySigma")
+    df, columns, record_count = _prepare_df(
+        nodes, {"entities": ontology}, "EntitySigma"
+    )
 
     allowed = _allowed_properties_for({"entities": ontology}, "EntitySigma")
     assert allowed == {"uid", "label"}
@@ -362,9 +362,7 @@ def test_comparisons_apply_priors_from_ontology():
     )
 
     unique_matches = [
-        comp
-        for comp in comparisons
-        if comp.kind == "exact" and "code" in comp.column
+        comp for comp in comparisons if comp.kind == "exact" and "code" in comp.column
     ]
 
     assert unique_matches, "Expected unique comparison for canonical code"

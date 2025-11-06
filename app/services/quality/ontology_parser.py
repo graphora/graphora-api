@@ -35,9 +35,15 @@ class OntologyQualityParser:
         config = self._default_gating_config.copy()
         config.update(
             {
-                "pass_score": float(gating.get("passScore", gating.get("warnScore", config["pass_score"]))),
+                "pass_score": float(
+                    gating.get(
+                        "passScore", gating.get("warnScore", config["pass_score"])
+                    )
+                ),
                 "warn_score": float(gating.get("warnScore", config["warn_score"])),
-                "hard_fail_score": float(gating.get("hardFailScore", config["hard_fail_score"])),
+                "hard_fail_score": float(
+                    gating.get("hardFailScore", config["hard_fail_score"])
+                ),
                 "max_errors": int(gating.get("maxErrors", config["max_errors"])),
                 "max_warnings": int(gating.get("maxWarnings", config["max_warnings"])),
                 "min_property_completeness": float(
@@ -436,9 +442,7 @@ class OntologyQualityParser:
                 description="Ensure extracted entities and relationships meet minimum confidence thresholds",
                 parameters={
                     "rule_class": "confidence_threshold",
-                    "entity_threshold": confidence_thresholds.get(
-                        "entityExtraction"
-                    ),
+                    "entity_threshold": confidence_thresholds.get("entityExtraction"),
                     "relationship_threshold": confidence_thresholds.get(
                         "relationshipExtraction"
                     ),
@@ -500,7 +504,9 @@ class OntologyQualityParser:
         """Parse distribution/statistical quality rules."""
         rules = []
 
-        relationship_requirements = distribution_config.get("relationshipRequirements", [])
+        relationship_requirements = distribution_config.get(
+            "relationshipRequirements", []
+        )
         for idx, requirement in enumerate(relationship_requirements):
             rule_config = QualityRuleConfig(
                 rule_id=f"global.relationship_requirement.{idx}",
@@ -570,7 +576,9 @@ class OntologyQualityParser:
                     "entity_type": entity_type,
                     "property_name": property_name,
                     "min_coverage": float(min_coverage),
-                    "allow_missing_entities": rule_def.get("allowMissingEntities", True),
+                    "allow_missing_entities": rule_def.get(
+                        "allowMissingEntities", True
+                    ),
                 },
             )
             rules.append(QualityRuleFactory.create_rule(rule_config))

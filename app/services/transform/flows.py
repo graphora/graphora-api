@@ -816,7 +816,11 @@ def _is_llm_unavailable_error(exc: Optional[Exception]) -> bool:
         value = getattr(exc, attr, None)
         if isinstance(value, int) and value == 503:
             return True
-        if isinstance(value, str) and value.strip().lower() in {"503", "service_unavailable", "unavailable"}:
+        if isinstance(value, str) and value.strip().lower() in {
+            "503",
+            "service_unavailable",
+            "unavailable",
+        }:
             return True
 
     return False
@@ -841,9 +845,7 @@ def _classify_transform_failure(
         reason_key = details.get("reason")
         if reason_key == "no_graphs_generated":
             reason = TransformFailureReason.NO_GRAPH_GENERATED
-            recovery_instructions = (
-                "Ensure the source documents contain extractable entities or relationships."
-            )
+            recovery_instructions = "Ensure the source documents contain extractable entities or relationships."
         else:
             reason = TransformFailureReason.QUALITY_GATE_FAILED
             recovery_instructions = (
@@ -858,24 +860,25 @@ def _classify_transform_failure(
             reason = TransformFailureReason.LLM_UNAVAILABLE
             code = "llm_unavailable"
             is_recoverable = True
-            recovery_instructions = (
-                "Retry shortly; the upstream language model reported temporary unavailability."
-            )
+            recovery_instructions = "Retry shortly; the upstream language model reported temporary unavailability."
         else:
             reason = TransformFailureReason.TRANSFORM_EXECUTION_FAILED
             code = "extraction_failed"
             is_recoverable = True
-            recovery_instructions = "Retry the transform; if the issue persists, contact support."
+            recovery_instructions = (
+                "Retry the transform; if the issue persists, contact support."
+            )
         if underlying is not None:
             details["underlying_exception"] = type(underlying).__name__
             details["underlying_message"] = str(underlying)
 
-    elif isinstance(exc, ValueError) and "no graphs were successfully processed" in str(exc).lower():
+    elif (
+        isinstance(exc, ValueError)
+        and "no graphs were successfully processed" in str(exc).lower()
+    ):
         reason = TransformFailureReason.NO_GRAPH_GENERATED
         code = "no_graph_generated"
-        recovery_instructions = (
-            "Validate that the extraction produced entities and relationships before storage."
-        )
+        recovery_instructions = "Validate that the extraction produced entities and relationships before storage."
 
     if code is None:
         if stage == TransformationStage.PARSE:
@@ -893,9 +896,7 @@ def _classify_transform_failure(
         elif stage == TransformationStage.LOAD:
             reason = TransformFailureReason.STORAGE_FAILED
             code = "storage_failed"
-            recovery_instructions = (
-                "Check graph storage connectivity and credentials."
-            )
+            recovery_instructions = "Check graph storage connectivity and credentials."
         elif stage == TransformationStage.TRANSFORM:
             if reason == TransformFailureReason.UNKNOWN_ERROR:
                 reason = TransformFailureReason.TRANSFORM_EXECUTION_FAILED

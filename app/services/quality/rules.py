@@ -615,7 +615,9 @@ class PropertyCoverageRule(QualityRule):
         entity_type = self.parameters.get("entity_type")
         property_name = self.parameters.get("property_name")
         min_coverage = float(self.parameters.get("min_coverage", 1.0))
-        allow_missing_entities = bool(self.parameters.get("allow_missing_entities", True))
+        allow_missing_entities = bool(
+            self.parameters.get("allow_missing_entities", True)
+        )
 
         if not entity_type or not property_name:
             return ValidationResult(
@@ -623,7 +625,9 @@ class PropertyCoverageRule(QualityRule):
                 message="Property coverage rule missing entity_type/property_name",
             )
 
-        relevant_entities = [entity for entity in entities if entity.type == entity_type]
+        relevant_entities = [
+            entity for entity in entities if entity.type == entity_type
+        ]
 
         if not relevant_entities:
             if allow_missing_entities:
@@ -1124,7 +1128,9 @@ class GlobalDateWindowRule(QualityRule):
                 message="Global date window rule missing configuration",
             )
 
-        relevant_entities = [entity for entity in entities if entity.type == self.entity_type]
+        relevant_entities = [
+            entity for entity in entities if entity.type == self.entity_type
+        ]
         violations: List[QualityViolation] = []
 
         for entity in relevant_entities:

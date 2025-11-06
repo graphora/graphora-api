@@ -16,7 +16,9 @@ from app.config import settings
 
 @pytest.fixture(autouse=True)
 def stub_splink(monkeypatch):
-    from app.services import transform as transform_pkg  # noqa: F401 to ensure package loaded
+    from app.services import (
+        transform as transform_pkg,
+    )  # noqa: F401 to ensure package loaded
     import app.services.transform.helpers as helpers
 
     class DummyComparison:
@@ -317,7 +319,7 @@ def test_relationships_resolve_canonical_identifiers():
                 properties=None,
                 confidence_score=0.9,
             )
-        ]
+        ],
     )
 
     relationships = transform_as_relationships(
@@ -326,6 +328,8 @@ def test_relationships_resolve_canonical_identifiers():
         relationship_result,
     )
 
-    assert relationships, "Relationship should be created when canonical IDs are provided"
+    assert (
+        relationships
+    ), "Relationship should be created when canonical IDs are provided"
     assert relationships[0].source_id == "node-company"
     assert relationships[0].target_id == "node-product"

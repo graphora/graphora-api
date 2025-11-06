@@ -68,7 +68,9 @@ def extraction_result() -> ExtractionResult:
 
 
 @pytest.mark.parametrize("deterministic", [True, False])
-def test_transform_as_nodes_id_strategy(sample_ontology, extraction_result, deterministic, monkeypatch):
+def test_transform_as_nodes_id_strategy(
+    sample_ontology, extraction_result, deterministic, monkeypatch
+):
     monkeypatch.setattr(settings, "DETERMINISTIC_MODE", deterministic)
 
     first = transform_as_nodes(sample_ontology, extraction_result, transform_id="tx-1")
@@ -76,7 +78,9 @@ def test_transform_as_nodes_id_strategy(sample_ontology, extraction_result, dete
 
     if deterministic:
         assert first[0].id == second[0].id
-        other = transform_as_nodes(sample_ontology, extraction_result, transform_id="tx-2")
+        other = transform_as_nodes(
+            sample_ontology, extraction_result, transform_id="tx-2"
+        )
         assert first[0].id != other[0].id
     else:
         assert first[0].id != second[0].id
@@ -125,11 +129,19 @@ async def test_relationship_context_is_stable(monkeypatch):
         properties={"shares": "51%"},
     )
 
-    context_one = await _build_relationships_context(nodes, [rel_primary, rel_secondary])
-    context_two = await _build_relationships_context(nodes, [rel_secondary, rel_primary])
+    context_one = await _build_relationships_context(
+        nodes, [rel_primary, rel_secondary]
+    )
+    context_two = await _build_relationships_context(
+        nodes, [rel_secondary, rel_primary]
+    )
 
     assert context_one == context_two
-    lines = [line for line in context_one.splitlines() if line and not line.startswith("These")]
+    lines = [
+        line
+        for line in context_one.splitlines()
+        if line and not line.startswith("These")
+    ]
     assert lines[0].startswith("(Company")
     assert "These Nodes without any relationships:" in context_one
     assert "Office" in context_one
