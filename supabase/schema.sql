@@ -80,6 +80,7 @@ create table if not exists document_usage (
     id uuid primary key default gen_random_uuid(),
     user_id text not null,
     transform_id text not null,
+    session_id text,
     document_name text not null,
     document_type text not null,
     document_size_bytes bigint not null,
@@ -198,6 +199,7 @@ create table if not exists user_pricing_tiers (
 );
 
 create index if not exists idx_document_usage_user on document_usage(user_id);
+create index if not exists idx_document_usage_session on document_usage(session_id);
 create index if not exists idx_llm_usage_user on llm_usage(user_id);
 create index if not exists idx_audit_trail_user on audit_trail(user_id);
 create index if not exists idx_user_ai_configs_user on user_ai_configs(user_id);

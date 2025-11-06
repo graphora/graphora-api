@@ -209,6 +209,7 @@ async def document_transformation_flow(
 
                 usage_request = DocumentUsageRequest(
                     transform_id=transform_id,
+                    session_id=ontology_id,
                     document_name=path.name,
                     document_type=path.suffix.lstrip(".").upper() or "UNKNOWN",
                     document_size_bytes=file_size,

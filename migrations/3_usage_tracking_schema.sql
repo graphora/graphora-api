@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS document_usage (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     user_id VARCHAR(255) NOT NULL,
     transform_id VARCHAR(255) NOT NULL,
+    session_id VARCHAR(255),
     
     -- Document details
     document_name VARCHAR(500) NOT NULL,
@@ -173,6 +174,7 @@ CREATE TABLE IF NOT EXISTS user_pricing_tiers (
 -- Create indexes for efficient querying
 CREATE INDEX IF NOT EXISTS idx_document_usage_user_id ON document_usage(user_id);
 CREATE INDEX IF NOT EXISTS idx_document_usage_transform_id ON document_usage(transform_id);
+CREATE INDEX IF NOT EXISTS idx_document_usage_session_id ON document_usage(session_id);
 CREATE INDEX IF NOT EXISTS idx_document_usage_created_at ON document_usage(created_at);
 CREATE INDEX IF NOT EXISTS idx_document_usage_status ON document_usage(processing_status);
 

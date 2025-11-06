@@ -83,6 +83,9 @@ class DocumentUsage(BaseModel):
     id: Optional[str] = None
     user_id: str = Field(..., description="User's ID")
     transform_id: str = Field(..., description="Transformation ID")
+    session_id: Optional[str] = Field(
+        None, description="Session/ontology identifier for the transform"
+    )
 
     # Document details
     document_name: str = Field(..., description="Name of the processed document")
@@ -303,6 +306,9 @@ class DocumentUsageRequest(BaseModel):
     """Request schema for creating document usage records"""
 
     transform_id: str = Field(..., description="Transformation ID")
+    session_id: Optional[str] = Field(
+        None, description="Session/ontology identifier for the transform"
+    )
     document_name: str = Field(..., description="Document name")
     document_type: str = Field(..., description="Document type")
     document_size_bytes: int = Field(..., description="Document size")

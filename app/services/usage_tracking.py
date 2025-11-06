@@ -70,6 +70,7 @@ class UsageTrackingService:
                 "id": str(uuid.uuid4()),
                 "user_id": user_id,
                 "transform_id": request.transform_id,
+                "session_id": request.session_id,
                 "document_name": request.document_name,
                 "document_type": request.document_type.upper(),
                 "document_size_bytes": request.document_size_bytes,
