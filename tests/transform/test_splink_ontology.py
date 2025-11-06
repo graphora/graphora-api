@@ -6,7 +6,6 @@ from app.services.transform.helpers import (
     _prepare_entities_for_deduplication,
     _create_splink_dataframe,
     _create_splink_comparisons,
-    _create_blocking_rules,
     _base_property_from_column,
 )
 from app.utils.constants import SYSTEM_PROPERTIES

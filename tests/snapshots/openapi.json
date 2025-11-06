@@ -1254,6 +1254,57 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "LLMUsageSummary": {
+        "description": "Aggregated LLM usage for a transform run.",
+        "properties": {
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Estimated total cost in USD",
+            "title": "Estimated Cost Usd"
+          },
+          "input_tokens": {
+            "default": 0,
+            "description": "Total input tokens",
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "models_used": {
+            "description": "Distinct provider/model pairs",
+            "items": {
+              "type": "string"
+            },
+            "title": "Models Used",
+            "type": "array"
+          },
+          "output_tokens": {
+            "default": 0,
+            "description": "Total output tokens",
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "total_calls": {
+            "default": 0,
+            "description": "Total LLM invocations",
+            "title": "Total Calls",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "default": 0,
+            "description": "Total tokens (input + output)",
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "title": "LLMUsageSummary",
+        "type": "object"
+      },
       "LimitCheckResult": {
         "description": "Schema for limit check results",
         "properties": {
@@ -2672,6 +2723,35 @@
         "title": "QuestionType",
         "type": "string"
       },
+      "RecentRunsResponse": {
+        "description": "Response model for dashboard recent runs endpoint.",
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/TransformRunSummary"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "window_end": {
+            "format": "date-time",
+            "title": "Window End",
+            "type": "string"
+          },
+          "window_start": {
+            "format": "date-time",
+            "title": "Window Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runs",
+          "window_start",
+          "window_end"
+        ],
+        "title": "RecentRunsResponse",
+        "type": "object"
+      },
       "RejectQualityRequest": {
         "properties": {
           "rejection_reason": {
@@ -3545,6 +3625,144 @@
           "document_info"
         ],
         "title": "TransformInitResponse",
+        "type": "object"
+      },
+      "TransformRunSummary": {
+        "description": "Summary information for a transform run used by the dashboard.",
+        "properties": {
+          "chunks_created": {
+            "default": 0,
+            "title": "Chunks Created",
+            "type": "integer"
+          },
+          "document_name": {
+            "title": "Document Name",
+            "type": "string"
+          },
+          "document_size_bytes": {
+            "title": "Document Size Bytes",
+            "type": "integer"
+          },
+          "document_type": {
+            "title": "Document Type",
+            "type": "string"
+          },
+          "llm_usage": {
+            "$ref": "#/components/schemas/LLMUsageSummary",
+            "description": "Summarised LLM usage for the transform"
+          },
+          "nodes_extracted": {
+            "default": 0,
+            "title": "Nodes Extracted",
+            "type": "integer"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "processing_completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing Completed At"
+          },
+          "processing_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing Duration Ms"
+          },
+          "processing_started_at": {
+            "format": "date-time",
+            "title": "Processing Started At",
+            "type": "string"
+          },
+          "processing_status": {
+            "title": "Processing Status",
+            "type": "string"
+          },
+          "quality_gate_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Quality Gate Reasons",
+            "type": "array"
+          },
+          "quality_gate_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Gate Status"
+          },
+          "quality_requires_review": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Requires Review"
+          },
+          "quality_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Score"
+          },
+          "relationships_extracted": {
+            "default": 0,
+            "title": "Relationships Extracted",
+            "type": "integer"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "transform_id": {
+            "title": "Transform Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transform_id",
+          "document_name",
+          "document_type",
+          "document_size_bytes",
+          "page_count",
+          "processing_status",
+          "processing_started_at"
+        ],
+        "title": "TransformRunSummary",
         "type": "object"
       },
       "TransformationStage": {
@@ -5330,6 +5548,69 @@
         "summary": "Test Neo4J Connection",
         "tags": [
           "Configuration"
+        ]
+      }
+    },
+    "/api/v1/dashboard/runs": {
+      "get": {
+        "description": "Return the most recent transform runs with quality and usage context.",
+        "operationId": "get_recent_transform_runs_api_v1_dashboard_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 14,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecentRunsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Recent Transform Runs",
+        "tags": [
+          "Dashboard"
         ]
       }
     },

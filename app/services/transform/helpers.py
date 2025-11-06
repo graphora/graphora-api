@@ -1779,8 +1779,6 @@ def _create_splink_comparisons(
     comparisons: List[Any] = []
     used_columns: Set[str] = set()
 
-    prefer_exact_columns = record_count <= SMALL_ENTITY_GROUP_THRESHOLD
-
     def _append_exact(columns: List[str], prior: ComparisonPrior) -> None:
         for column in columns:
             if column in used_columns or not _column_has_data(column):
