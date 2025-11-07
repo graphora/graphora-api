@@ -8723,6 +8723,23 @@
         },
         "summary": "Health Check"
       }
+    },
+    "/ready": {
+      "get": {
+        "description": "Readiness endpoint that probes core dependencies.",
+        "operationId": "readiness_check_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readiness Check"
+      }
     }
   }
 }
