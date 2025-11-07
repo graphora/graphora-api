@@ -1103,6 +1103,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "anthropic", extra = ["vertex"] },
     { name = "baml-py" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "flask-login" },
     { name = "flask-wtf" },
@@ -1165,6 +1166,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.11.12" },
     { name = "anthropic", extras = ["vertex"], specifier = ">=0.43.1" },
     { name = "baml-py", specifier = "==0.89.0" },
+    { name = "cryptography", specifier = ">=42.0.0" },
     { name = "fastapi", specifier = ">=0.109.2" },
     { name = "flask-login", specifier = ">=0.6.3" },
     { name = "flask-wtf", specifier = ">=1.2.2" },
@@ -1176,7 +1178,6 @@ requires-dist = [
     { name = "google-cloud-aiplatform", specifier = ">=1.43.0" },
     { name = "google-genai", specifier = ">=1.2.0" },
     { name = "google-generativeai", specifier = "==0.8.3" },
-    { name = "google-generativeai", specifier = ">=0.3.2" },
     { name = "googleapis-common-protos", specifier = "==1.66.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "instructor", specifier = ">=1.7.0" },
@@ -1194,7 +1195,7 @@ requires-dist = [
     { name = "psutil", specifier = ">=5.9.8" },
     { name = "pydantic", specifier = ">=2.6.1" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9.0" },
-    { name = "pypdf2", specifier = ">=3.0.0" },
+    { name = "pypdf2", specifier = "==3.0.1" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.23.5" },
     { name = "pytest-benchmark", specifier = ">=4.0.0" },
@@ -1204,11 +1205,11 @@ requires-dist = [
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0.1" },
-    { name = "redis", specifier = ">=5.0.0" },
+    { name = "redis", specifier = ">=5.0.11" },
     { name = "scikit-learn", specifier = ">=1.4.1.post1" },
     { name = "sentence-transformers", specifier = ">=3.4.1" },
-    { name = "splink", specifier = ">=4.0.7" },
-    { name = "supabase", specifier = ">=2.4.0" },
+    { name = "splink", specifier = "==4.0.7" },
+    { name = "supabase", specifier = ">=2.15.0" },
     { name = "textstat", specifier = ">=0.7.3" },
     { name = "uvicorn", specifier = ">=0.27.1" },
     { name = "vertexai", specifier = ">=0.0.1" },
@@ -3557,7 +3558,7 @@ wheels = [
 
 [[package]]
 name = "splink"
-version = "4.0.9"
+version = "4.0.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "altair" },
@@ -3569,9 +3570,9 @@ dependencies = [
     { name = "pandas" },
     { name = "sqlglot" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b9/f9/296d24a45200463289271d611339279cb57ea6b139b4c9a94b7444d25a33/splink-4.0.9.tar.gz", hash = "sha256:9e55672c89cc5f348ad2ab59df3db0079ee800ae7732eb6ead94efd372017ec0", size = 4832278 }
+sdist = { url = "https://files.pythonhosted.org/packages/68/d0/b8e4bf9a2b1beb1cc41f083901791c3f5668217c0e2f70cfaa604eb790b6/splink-4.0.7.tar.gz", hash = "sha256:939404d239323308832bc5ebd0d5244fb82fb04e3bfb3d1b592ac38cbfa87c4d", size = 3657016 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b9/18/5abf634a8af56a6424a891ce3f2e3245a6297c5281e5931aa44edf7d4d1c/splink-4.0.9-py3-none-any.whl", hash = "sha256:4590d7ef2c4cf797d4c756bb9c924ad8a6d0af21c0439cf23b3943303677604d", size = 4902061 },
+    { url = "https://files.pythonhosted.org/packages/53/5d/2da96b1d6af0803b342fdcbb959ba6b32c0684f4af92ad83b6a6f3690357/splink-4.0.7-py3-none-any.whl", hash = "sha256:320d0c70d02992ebc3bfa33903d35f073f4edaafea5344bc3f871ccb8b0abadb", size = 3726158 },
 ]
 
 [[package]]
