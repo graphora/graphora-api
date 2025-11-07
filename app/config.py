@@ -1,7 +1,8 @@
 from functools import lru_cache
+from typing import List, Optional
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
-from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -14,6 +15,14 @@ class Settings(BaseSettings):
 
     # API Settings
     API_V1_STR: str = Field(default="/api/v1", description="API version prefix")
+    API_PORT: int = Field(default=8000, description="Port for local API server")
+    PUBLIC_API_URL: str = Field(
+        default="http://localhost:8000", description="Base URL exposed to other apps"
+    )
+    CORS_ORIGINS: List[str] = Field(
+        default_factory=lambda: ["*"],
+        description="Comma-separated origins allowed for CORS",
+    )
 
     # Upload Settings
     UPLOAD_DIR: str = Field(
@@ -252,6 +261,15 @@ class Settings(BaseSettings):
     CLERK_API_KEY: Optional[str] = Field(
         default=None, description="Clerk backend API key for management operations"
     )
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def split_cors_origins(cls, value):
+        """Allow comma-separated env strings for CORS origins."""
+        if isinstance(value, str):
+            parts = [origin.strip() for origin in value.split(",") if origin.strip()]
+            return parts or ["*"]
+        return value
 
     @property
     def ontology_dir(self) -> str:

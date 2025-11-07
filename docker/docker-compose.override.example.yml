@@ -1,0 +1,15 @@
+# Copy this file to docker-compose.override.yml to override settings locally.
+# Example tweaks: custom API port and Neo4j credentials.
+
+services:
+  api:
+    environment:
+      API_PORT: 8100
+      PUBLIC_API_URL: http://localhost:8100
+      LOG_LEVEL: debug
+    ports:
+      - "8100:8100"
+
+  neo4j-prod:
+    environment:
+      NEO4J_PROD_PASSWORD: super-secure-password

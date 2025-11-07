@@ -1,4 +1,6 @@
-.PHONY: dev start test test-unit test-integration help lint format deadcode openapi-snapshot typecheck pre-commit
+.PHONY: dev start test test-unit test-integration help lint format deadcode openapi-snapshot typecheck pre-commit dev-up dev-down dev-logs dev-shell
+
+DEV_COMPOSE ?= docker compose -f docker-compose.dev.yml
 
 help:
 	@echo "Available commands:"
@@ -12,12 +14,28 @@ help:
 	@echo "  make format - Format the codebase with Black"
 	@echo "  make deadcode - Run the dead code scanner"
 	@echo "  make openapi-snapshot - Generate OpenAPI schema snapshot"
+	@echo "  make dev-up   - Build + start dockerized dev stack"
+	@echo "  make dev-down - Stop stack, remove containers + volumes"
+	@echo "  make dev-logs - Tail API logs from docker stack"
+	@echo "  make dev-shell - Open a shell inside the API container"
 
 dev:
 	LOG_LEVEL=DEBUG uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 
 start:
 	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+dev-up:
+	$(DEV_COMPOSE) up -d --build
+
+dev-down:
+	$(DEV_COMPOSE) down -v --remove-orphans
+
+dev-logs:
+	$(DEV_COMPOSE) logs -f api
+
+dev-shell:
+	$(DEV_COMPOSE) exec api bash
 
 test:
 	uv run pytest

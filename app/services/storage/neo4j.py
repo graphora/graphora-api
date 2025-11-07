@@ -1752,8 +1752,9 @@ class Neo4jStorage(GraphStorageInterface):
             # If it fails, we'll catch the exception
             test_query = """
             CALL db.index.fulltext.queryNodes($index_name, "*")
-            YIELD node LIMIT 1
+            YIELD node
             RETURN count(node) as count
+            LIMIT 1
             """
             await self._execute_query(test_query, {"index_name": index_name})
             # If we get here, the index exists

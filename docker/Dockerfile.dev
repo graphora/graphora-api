@@ -1,0 +1,38 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/graphora/.venv \
+    VIRTUAL_ENV=/opt/graphora/.venv \
+    PATH="/opt/graphora/.venv/bin:$PATH" \
+    HOME=/home/appuser
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        build-essential \
+        curl \
+        git \
+        libmagic1 \
+        libmagic-dev \
+        libpq-dev \
+        pkg-config \
+    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir uv \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/graphora
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen
+
+WORKDIR /app
+COPY . .
+
+RUN addgroup --system appuser \
+    && adduser --system --home /home/appuser --ingroup appuser appuser \
+    && mkdir -p /home/appuser/.cache/uv \
+    && chown -R appuser:appuser /home/appuser /app /opt/graphora
+
+USER appuser
+
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
