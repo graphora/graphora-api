@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import httpx
+import redis.asyncio as redis_async
 
 from app.config import settings
 from app.utils.logger import logger
@@ -76,6 +78,47 @@ app.include_router(dashboard_router)
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness endpoint that probes core dependencies."""
+
+    checks = {}
+
+    # Redis probe
+    try:
+        redis_client = redis_async.from_url(
+            settings.REDIS_URL, encoding="utf-8", decode_responses=True
+        )
+        await redis_client.ping()
+        checks["redis"] = {"status": "ok"}
+        await redis_client.close()
+    except Exception as exc:  # pragma: no cover - best-effort probing
+        checks["redis"] = {"status": "error", "detail": str(exc)}
+
+    # Prefect API probe (best-effort)
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            health_url = settings.PREFECT_API_URL.rstrip("/") + "/health"
+            response = await client.get(health_url)
+        if response.status_code == 200:
+            checks["prefect"] = {"status": "ok"}
+        else:
+            checks["prefect"] = {
+                "status": "degraded",
+                "detail": f"HTTP {response.status_code}",
+            }
+    except Exception as exc:  # pragma: no cover - depends on environment
+        checks["prefect"] = {"status": "error", "detail": str(exc)}
+
+    overall_status = (
+        "ok"
+        if all(check.get("status") == "ok" for check in checks.values())
+        else "degraded"
+    )
+
+    return {"status": overall_status, "checks": checks}
 
 
 if __name__ == "__main__":
