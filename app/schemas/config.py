@@ -3,14 +3,13 @@ from typing import Optional
 from datetime import datetime
 
 
-class DatabaseConfig(BaseModel):
-    """Schema for Neo4j database configuration"""
+class DatabaseConfigBase(BaseModel):
+    """Shared fields for Neo4j configuration objects."""
 
     id: Optional[str] = None
     name: str = Field(..., description="Human-readable name for the database")
     uri: str = Field(..., description="Neo4j connection URI")
     username: str = Field(..., description="Database username")
-    password: str = Field(..., description="Database password")
 
     @field_validator("uri")
     def validate_uri(cls, v):
@@ -21,6 +20,20 @@ class DatabaseConfig(BaseModel):
                 "URI must start with neo4j://, bolt://, neo4j+s://, or bolt+s://"
             )
         return v
+
+
+class DatabaseConfig(DatabaseConfigBase):
+    """Schema for Neo4j database configuration"""
+
+    password: str = Field(..., description="Database password")
+
+
+class DatabaseConfigUpdate(DatabaseConfigBase):
+    """Schema for updating Neo4j configuration; password optional to allow selective rotation."""
+
+    password: Optional[str] = Field(
+        default=None, description="Database password (leave empty to keep existing)"
+    )
 
 
 class UserConfig(BaseModel):
@@ -43,10 +56,21 @@ class UserConfig(BaseModel):
 
 
 class ConfigRequest(BaseModel):
-    """Schema for creating/updating user configuration"""
+    """Schema for creating user configuration"""
 
     stagingDb: DatabaseConfig = Field(..., description="Staging database configuration")
     prodDb: DatabaseConfig = Field(..., description="Production database configuration")
+
+
+class ConfigUpdateRequest(BaseModel):
+    """Schema for updating user configuration (password optional)."""
+
+    stagingDb: Optional[DatabaseConfigUpdate] = Field(
+        default=None, description="Staging database configuration"
+    )
+    prodDb: Optional[DatabaseConfigUpdate] = Field(
+        default=None, description="Production database configuration"
+    )
 
 
 class ConfigResponse(BaseModel):

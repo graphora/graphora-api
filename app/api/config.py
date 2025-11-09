@@ -6,6 +6,7 @@ from app.config import get_settings
 from app.schemas.config import (
     UserConfig,
     ConfigRequest,
+    ConfigUpdateRequest,
     ConnectionTestRequest,
     ConnectionTestResponse,
 )
@@ -71,7 +72,11 @@ async def create_user_config(
     """
     try:
         # Validate that staging and prod databases are different
-        if config_request.stagingDb.uri == config_request.prodDb.uri:
+        if (
+            config_request.stagingDb
+            and config_request.prodDb
+            and config_request.stagingDb.uri == config_request.prodDb.uri
+        ):
             raise HTTPException(
                 status_code=400,
                 detail="Staging and production database URIs must be different",
@@ -91,7 +96,7 @@ async def create_user_config(
 
 @router.put("/config", response_model=UserConfig)
 async def update_user_config(
-    config_request: ConfigRequest,
+    config_request: ConfigUpdateRequest,
     user_id: str = Depends(get_current_user_id),
 ) -> UserConfig:
     """
@@ -107,8 +112,12 @@ async def update_user_config(
         HTTPException: 400 if validation fails, 404 if user not found
     """
     try:
-        # Validate that staging and prod databases are different
-        if config_request.stagingDb.uri == config_request.prodDb.uri:
+        # Validate that staging and prod databases are different when both provided
+        if (
+            config_request.stagingDb
+            and config_request.prodDb
+            and config_request.stagingDb.uri == config_request.prodDb.uri
+        ):
             raise HTTPException(
                 status_code=400,
                 detail="Staging and production database URIs must be different",
@@ -119,7 +128,7 @@ async def update_user_config(
 
     except ValueError as e:
         logger.warning(f"Validation error updating config for {user_id}: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating configuration for {user_id}: {str(e)}")
         traceback.print_exc()
