@@ -78,6 +78,26 @@ The API will be available at:
 - Configure the backend with Clerk credentials via `.env`: `CLERK_JWKS_URL`, `CLERK_ISSUER`, `CLERK_AUDIENCE`, and `CLERK_API_KEY` if server-to-server calls are required.
 - Clients no longer send the legacy `user-id` header; the backend derives the user from the JWT subject claim.
 
+#### Service-to-service / pipeline tokens
+You can call the API from CI jobs or data pipelines without any extra backend code. Mint short-lived Clerk JWTs on demand and feed them to the Graphora client:
+
+1. Create (or reuse) a Clerk user that represents the pipeline and add a JWT template (e.g. `graphora_pipeline`) whose `aud` value matches `CLERK_AUDIENCE`.
+2. When the pipeline starts, create a token via Clerk's backend API using your Clerk API key:
+   ```bash
+   curl -X POST "https://api.clerk.com/v1/users/<USER_ID>/tokens/graphora_pipeline" \\
+     -H "Authorization: Bearer $CLERK_API_KEY" \\
+     -H "Content-Type: application/json" \\
+     -d '{"expires_in_seconds": 3600}'
+   ```
+3. Export the returned `token` right before invoking the client:
+   ```bash
+   export GRAPHORA_AUTH_TOKEN="<clerk-jwt-from-step-2>"
+   python pipeline.py
+   ```
+4. Repeat the minting step whenever the token expires (keep TTLs short and rotate the Clerk API key like any other secret).
+
+The `graphora` Python package automatically reads `GRAPHORA_AUTH_TOKEN`, so no application changes are required as long as the bearer token is valid.
+
 ## Development Guide
 
 ### Project Structure
