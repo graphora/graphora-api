@@ -3,7 +3,13 @@ import uuid
 from datetime import datetime, timezone
 from supabase import create_client, Client
 from app.config import get_settings
-from app.schemas.config import UserConfig, DatabaseConfig, ConfigRequest
+from app.schemas.config import (
+    UserConfig,
+    DatabaseConfig,
+    DatabaseConfigUpdate,
+    ConfigRequest,
+    ConfigUpdateRequest,
+)
 from app.utils.logger import logger
 from app.utils.encryption import encrypt_password, decrypt_password
 
@@ -175,7 +181,7 @@ class ConfigService:
             raise
 
     async def update_user_config(
-        self, user_id: str, config_request: ConfigRequest
+        self, user_id: str, config_request: ConfigUpdateRequest
     ) -> UserConfig:
         """
         Update an existing user configuration
@@ -192,43 +198,83 @@ class ConfigService:
             if not existing_config:
                 raise ValueError(f"No configuration found for user: {user_id}")
 
-            # Update staging database config with encrypted password
-            staging_db_response = (
-                self.supabase.table("database_configs")
-                .update(
-                    {
-                        "name": config_request.stagingDb.name,
-                        "uri": config_request.stagingDb.uri,
-                        "username": config_request.stagingDb.username,
-                        "password": encrypt_password(config_request.stagingDb.password),
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
-                .eq("id", existing_config.stagingDb.id)
-                .execute()
+            def should_update(db_request: Optional[DatabaseConfigUpdate]) -> bool:
+                if not db_request:
+                    return False
+                uri = (db_request.uri or "").strip()
+                password = (db_request.password or "").strip()
+                return bool(uri and password)
+
+            def build_update_payload(
+                db_request: DatabaseConfigUpdate,
+                current_config: DatabaseConfig,
+            ) -> dict:
+                payload = {
+                    "name": db_request.name or current_config.name,
+                    "uri": db_request.uri or current_config.uri,
+                    "username": db_request.username or current_config.username,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                payload["password"] = encrypt_password(db_request.password.strip())
+                return payload
+
+            staging_should_update = should_update(config_request.stagingDb)
+            prod_should_update = should_update(config_request.prodDb)
+
+            def resolve_uri(
+                db_request: Optional[DatabaseConfigUpdate],
+                current_config: DatabaseConfig,
+                should_update_flag: bool,
+            ) -> str:
+                if should_update_flag and db_request and db_request.uri:
+                    return db_request.uri.strip()
+                return current_config.uri
+
+            new_staging_uri = resolve_uri(
+                config_request.stagingDb, existing_config.stagingDb, staging_should_update
+            )
+            new_prod_uri = resolve_uri(
+                config_request.prodDb, existing_config.prodDb, prod_should_update
             )
 
-            if not staging_db_response.data:
-                raise Exception("Failed to update staging database configuration")
-
-            # Update production database config with encrypted password
-            prod_db_response = (
-                self.supabase.table("database_configs")
-                .update(
-                    {
-                        "name": config_request.prodDb.name,
-                        "uri": config_request.prodDb.uri,
-                        "username": config_request.prodDb.username,
-                        "password": encrypt_password(config_request.prodDb.password),
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    }
+            if new_staging_uri == new_prod_uri:
+                raise ValueError(
+                    "Staging and production database URIs must be different"
                 )
-                .eq("id", existing_config.prodDb.id)
-                .execute()
-            )
 
-            if not prod_db_response.data:
-                raise Exception("Failed to update production database configuration")
+            if not staging_should_update and not prod_should_update:
+                logger.info(
+                    "No database credentials provided for update; leaving configuration unchanged",
+                )
+                return existing_config
+
+            if staging_should_update:
+                staging_payload = build_update_payload(
+                    config_request.stagingDb, existing_config.stagingDb
+                )
+                staging_db_response = (
+                    self.supabase.table("database_configs")
+                    .update(staging_payload)
+                    .eq("id", existing_config.stagingDb.id)
+                    .execute()
+                )
+
+                if not staging_db_response.data:
+                    raise Exception("Failed to update staging database configuration")
+
+            if prod_should_update:
+                prod_payload = build_update_payload(
+                    config_request.prodDb, existing_config.prodDb
+                )
+                prod_db_response = (
+                    self.supabase.table("database_configs")
+                    .update(prod_payload)
+                    .eq("id", existing_config.prodDb.id)
+                    .execute()
+                )
+
+                if not prod_db_response.data:
+                    raise Exception("Failed to update production database configuration")
 
             # Update user config timestamp
             config_response = (
