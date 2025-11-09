@@ -1,4 +1,4 @@
-.PHONY: dev start test test-unit test-integration help lint format deadcode openapi-snapshot typecheck pre-commit dev-up dev-down dev-logs dev-shell
+.PHONY: dev start test test-unit test-integration help lint format deadcode openapi-snapshot typecheck pre-commit dev-up dev-down dev-logs dev-shell dev-rebuild
 
 DEV_COMPOSE ?= docker compose -f docker-compose.dev.yml
 
@@ -36,6 +36,10 @@ dev-logs:
 
 dev-shell:
 	$(DEV_COMPOSE) exec api bash
+
+dev-rebuild:
+	$(DEV_COMPOSE) build --pull --no-cache
+	$(DEV_COMPOSE) up -d
 
 test:
 	uv run pytest

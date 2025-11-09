@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,8 +19,11 @@ class Settings(BaseSettings):
     PUBLIC_API_URL: str = Field(
         default="http://localhost:8000", description="Base URL exposed to other apps"
     )
-    CORS_ORIGINS: List[str] = Field(
-        default_factory=lambda: ["*"],
+    CORS_ORIGINS: Union[List[str], str] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ],
         description="Comma-separated origins allowed for CORS",
     )
 
@@ -271,6 +274,14 @@ class Settings(BaseSettings):
             return parts or ["*"]
         return value
 
+    @field_validator("LOG_LEVEL", mode="before")
+    @classmethod
+    def normalize_log_level(cls, value):
+        """Normalize log level strings while allowing numeric overrides."""
+        if isinstance(value, str):
+            return value.upper()
+        return value
+
     @property
     def ontology_dir(self) -> str:
         """Get the ontology directory path based on mode"""
@@ -279,7 +290,10 @@ class Settings(BaseSettings):
         return self.ONTOLOGY_DIR
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
     )
 
 
