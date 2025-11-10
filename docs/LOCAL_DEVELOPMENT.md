@@ -2,11 +2,15 @@
 
 This guide explains how to bring up the Graphora API locally with its core dependencies so you can exercise the transformation flow end to end.
 
+> **Need a one-command Docker stack?**
+> Check [`LOCAL_DEV_DOCKER.md`](LOCAL_DEV_DOCKER.md) for the 5-minute quickstart powered by
+> `make dev-up`. Continue below if you prefer running the API on your host.
+
 ## Prerequisites
 
 - Docker and Docker Compose (v2) for running Neo4j and Redis
 - Python 3.11 with [`uv`](https://docs.astral.sh/uv/getting-started/installation/) for dependency management
-- Access to a Supabase project (or compatible PostgREST + PostgreSQL instance)
+- Access to a PostgreSQL database (the docker stack ships one; a Supabase DSN also works)
 - LLM provider credentials (Gemini via Google AI Platform is currently required)
 - Prefect Cloud or a locally running Prefect server (v3+)
 
@@ -24,27 +28,51 @@ uv sync
    ```bash
    cp .env.example .env
    ```
-2. Required keys:
-   - `CLERK_JWKS_URL`, `CLERK_ISSUER`, `CLERK_AUDIENCE`, `CLERK_API_KEY`
-   - `SUPABASE_URL`, `SUPABASE_KEY`
-   - LLM credentials via Supabase AI config tables (see below)
+   2. Required keys:
+      - `CLERK_JWKS_URL`, `CLERK_ISSUER`, `CLERK_AUDIENCE`, `CLERK_API_KEY`
+      - `DATABASE_URL` pointing at the Postgres instance you want the API to use
+      - Optional: `DOCKER_DATABASE_URL` if Docker containers should hit a different DSN than your host
+      - Optional: `POSTGRES_DATA_SOURCE` if you need Postgres data stored on a specific host path (defaults
+        to the git-ignored `./.docker-data/postgres` directory next to this repo)
+      - Optional: `NEO4J_STAGING_*_SOURCE` / `NEO4J_PROD_*_SOURCE` to relocate each Neo4j instance’s data,
+        logs, and import folders (defaults live under `./.docker-data/neo4j-<env>/`)
+      - Optional: `REDIS_DATA_SOURCE` to relocate the Redis append-only dir (`./.docker-data/redis` by default)
+   - Optional: `SUPABASE_URL`, `SUPABASE_KEY` (only needed if you still proxy Supabase APIs elsewhere)
+   - LLM credentials for the AI config tables (see below)
    - `PREFECT_API_URL` (and optionally `PREFECT_API_KEY`)
 
 > **Tip:** keep `.env` outside of version control and rotate any temporary keys you use while testing.
 
 ## 3. Run local infrastructure
 
-The repository ships with a helper Compose file for Neo4j and Redis:
+### Option A — all-in-one Docker stack (recommended)
 
 ```bash
-make compose-up  # starts neo4j:5.20 and redis:7 (ports 7474, 7687, 6379)
+make dev-up
 ```
 
-You can tear it down with `make compose-down`. Data persists in named Docker volumes so subsequent runs retain your test graph.
+This builds `docker/Dockerfile.dev`, launches Postgres with pgvector, runs every SQL file in
+`migrations/` through the ephemeral `db-migrate` service, then starts Redis, Prefect, and the two
+Neo4j instances before exposing the API at `PUBLIC_API_URL` (default `http://localhost:8000`). Use `make dev-down` to stop the stack
+and remove containers/volumes, `make dev-logs` to tail the API logs, and `make dev-shell` to open a
+bash session inside the API container. See [`LOCAL_DEV_DOCKER.md`](LOCAL_DEV_DOCKER.md) for the full
+5-minute walkthrough.
+
+### Option B — only Neo4j + Redis via lightweight Compose
+
+If you prefer to run the API on bare metal but still want containerized Neo4j/Redis, use the legacy
+Compose file:
+
+```bash
+docker compose -f docker-compose.local.yml up -d  # neo4j:5.20 + redis:7 (ports 7474, 7687, 6379)
+```
+
+Tear it down with `docker compose -f docker-compose.local.yml down`. Data persists in named Docker
+volumes so subsequent runs retain your test graph.
 
 ### Neo4j connection strings
 
-The Compose stack provisions Neo4j with username `neo4j` and password `test-password`. Use the following URIs in your Supabase configuration:
+The Compose stack provisions Neo4j with username `neo4j` and password `test-password`. Use the following URIs when populating the `database_configs` table:
 
 - Staging URI: `bolt://localhost:7687`
 - Production URI: `bolt://localhost:7687` (change this to a dedicated instance for real deployments)
@@ -59,9 +87,24 @@ prefect server start
 
 Update `.env` with the API URL emitted during startup (usually `http://127.0.0.1:4200/api`).
 
-## 4. Seed Supabase configuration tables
+## 4. Apply application migrations
 
-The API expects Supabase tables matching the following structure:
+The API expects the Postgres database referenced by `DATABASE_URL` to contain the tables defined in
+`migrations/`. Apply (or reapply) them with:
+
+```bash
+uv run python scripts/run_migrations.py
+```
+
+The script records each filename in `schema_migrations`, so subsequent runs only execute new files.
+Point `DATABASE_URL` at your Supabase Postgres connection string if you prefer to manage data there.
+When you run `make dev-up`, the lightweight `db-migrate` service (built from
+`docker/Dockerfile.migrate` and bundled with only `psycopg` + `sqlparse`) executes the same script
+automatically against the bundled Postgres container. The API image now keeps only system packages;
+the entrypoint checks whether `/opt/graphora/.venv` (mapped to the `uv-venv` Docker volume) exists
+and runs `uv sync --frozen` when needed. Use `FORCE_UV_SYNC=1 make dev-up` to refresh dependencies.
+
+Schema overview:
 
 | Table | Purpose |
 | ----- | ------- |
@@ -71,7 +114,12 @@ The API expects Supabase tables matching the following structure:
 | `audit_trail` | Records operations for observability |
 | `document_usage`, `llm_usage` | Tracks usage metrics |
 
-If you have not generated these tables yet, review your Supabase migration scripts or replicate the schema via the admin UI. Ensure the encryption master key in `.env` matches the one used for existing records.
+If you are pointing at an existing database (Supabase or self-hosted), make sure the
+`ENCRYPTION_MASTER_KEY` in `.env` matches what was used to encrypt any stored credentials.
+
+> **Low disk?** Either run the relevant reset target (`make dev-reset-postgres`, `make dev-reset-neo4j`,
+> `make dev-reset-redis`) to delete the git-ignored directories under `./.docker-data`, or set the
+> corresponding `*_SOURCE` env var(s) to another host path before running `make dev-down && make dev-up`.
 
 ### Minimum configuration for testing
 
@@ -110,12 +158,16 @@ make test-unit  # Run unit tests only (skips integration)
 make test-integration  # Run integration tests only
 uv sync --group dev  # Install optional dev tooling (Vulture)
 make deadcode  # Run dead-code scan with Vulture
+make dev-reset-neo4j  # Remove local Neo4j data directories
+make dev-reset-postgres  # Remove local Postgres data directory
+make dev-reset-redis  # Remove local Redis data directory
 ```
 
 ## Troubleshooting
 
 - **Authentication errors**: verify your Clerk JWKS URL and audience/issuer values. Tokens must be signed with the keys exposed by Clerk.
-- **Supabase 401/404**: ensure the Supabase service role key is configured and tables are created.
+- **Database auth errors**: ensure `DATABASE_URL`/`DOCKER_DATABASE_URL` are correct and that your
+  Supabase service role key has privileges if you're targeting Supabase directly.
 - **Neo4j connection timeouts**: confirm the container is healthy via `docker ps` and the bolt port (7687) is reachable.
 - **LLM extraction failures**: check the Gemini quota and that your AI provider config is active.
 
