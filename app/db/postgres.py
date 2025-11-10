@@ -35,7 +35,7 @@ async def _create_pool() -> AsyncConnectionPool:
         conninfo=dsn,
         min_size=settings.DB_POOL_MIN_SIZE,
         max_size=settings.DB_POOL_MAX_SIZE,
-        kwargs={"row_factory": dict_row},
+        kwargs={"row_factory": dict_row, "prepare_threshold": None},
     )
 
 
@@ -63,7 +63,7 @@ def _create_sync_pool() -> ConnectionPool:
         conninfo=dsn,
         min_size=settings.DB_POOL_MIN_SIZE,
         max_size=settings.DB_POOL_MAX_SIZE,
-        kwargs={"row_factory": dict_row},
+        kwargs={"row_factory": dict_row, "prepare_threshold": None},
     )
 
 
