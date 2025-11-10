@@ -212,6 +212,8 @@ class AuditService:
                 existing_metadata = record.get("metadata") or {}
                 merged_metadata = {**existing_metadata, **metadata}
 
+            audit_id = record["id"]
+
             row = await db.fetchrow(
                 """
                 UPDATE audit_trail
@@ -227,7 +229,7 @@ class AuditService:
                 duration_ms,
                 error_message,
                 Json(merged_metadata) if merged_metadata is not None else None,
-                record["id"],
+                audit_id,
             )
 
             if row:
@@ -386,8 +388,6 @@ class AuditService:
                 "by_status": {},
                 "recent_operations": [],
             }
-
-
 
     async def _merge_metadata(
         self, audit_id: str, metadata: Optional[Dict[str, Any]]

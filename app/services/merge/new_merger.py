@@ -20,7 +20,7 @@ from app.services.merge.models import (
     MergePerformanceMetrics,
     MergeStatus,
 )
-from typing import Dict, Any, Optional, Tuple, List, Callable, Iterable
+from typing import Dict, Any, Optional, Tuple, List, Iterable
 import uuid
 import json
 from datetime import datetime

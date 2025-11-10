@@ -188,15 +188,17 @@ class EntityLedgerService:
                         key_list,
                     )
                     for row in rows or []:
-                        results[(entity_type, row["canonical_key"])] = EntityLedgerEntry(
-                            user_id=user_id,
-                            entity_type=entity_type,
-                            canonical_key=row["canonical_key"],
-                            canonical_id=row["canonical_id"],
-                            features=row.get("features", {}),
-                            confidence=row.get("confidence"),
-                            first_seen_at=row.get("first_seen_at"),
-                            updated_at=row.get("updated_at"),
+                        results[(entity_type, row["canonical_key"])] = (
+                            EntityLedgerEntry(
+                                user_id=user_id,
+                                entity_type=entity_type,
+                                canonical_key=row["canonical_key"],
+                                canonical_id=row["canonical_id"],
+                                features=row.get("features", {}),
+                                confidence=row.get("confidence"),
+                                first_seen_at=row.get("first_seen_at"),
+                                updated_at=row.get("updated_at"),
+                            )
                         )
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Failed to fetch entity ledger entries: %s", exc)

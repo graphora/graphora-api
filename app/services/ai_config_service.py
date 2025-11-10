@@ -22,7 +22,9 @@ class AIConfigService:
     def __init__(self):
         if not (settings.DATABASE_URL or settings.resolved_database_url):
             if not settings.test_mode:
-                raise ValueError("DATABASE_URL must be configured for AI config service")
+                raise ValueError(
+                    "DATABASE_URL must be configured for AI config service"
+                )
 
     async def get_providers(self) -> List[AIProvider]:
         """

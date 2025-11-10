@@ -277,7 +277,6 @@ async def _hydrate_runs(
     if not records:
         return [], []
 
-    usage_service = _get_usage_service()
     transform_ids = [
         record.get("transform_id") for record in records if record.get("transform_id")
     ]
