@@ -33,8 +33,6 @@ services:
       PREFECT_API_URL: http://prefect:${PREFECT_PORT:-4200}/api
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-graphora}:${POSTGRES_PASSWORD:-graphora}@postgres:5432/${POSTGRES_DB:-graphora}}
-      SUPABASE_URL: ${SUPABASE_URL}
-      SUPABASE_KEY: ${SUPABASE_KEY}
       CLERK_JWKS_URL: ${CLERK_JWKS_URL}
       CLERK_API_KEY: ${CLERK_API_KEY}
       CLERK_ISSUER: ${CLERK_ISSUER}
