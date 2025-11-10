@@ -5,20 +5,33 @@ from pathlib import Path
 
 import pytest
 
-os.environ.setdefault("TEST_MODE", "true")
-os.environ.setdefault(
-    "DATABASE_URL",
-    os.environ.get(
+
+def _configure_test_environment() -> None:
+    os.environ.setdefault("TEST_MODE", "true")
+    os.environ.setdefault(
         "DATABASE_URL",
-        "postgresql://graphora:graphora@localhost:5432/graphora",
-    ),
-)
+        os.environ.get(
+            "DATABASE_URL",
+            "postgresql://graphora:graphora@localhost:5432/graphora",
+        ),
+    )
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
-from app.config import settings
+def _ensure_project_on_path() -> None:
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+
+def _load_settings():
+    from app.config import settings as app_settings
+
+    return app_settings
+
+
+_configure_test_environment()
+_ensure_project_on_path()
+settings = _load_settings()
 
 
 def _install_neo4j_stub() -> None:

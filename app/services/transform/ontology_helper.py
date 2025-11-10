@@ -6,7 +6,6 @@ from app.utils.constants import get_full_text_index_name
 from pydantic import BaseModel, create_model, Field
 from pathlib import Path
 from typing import Union
-from app.config import settings
 from app.services.user_db_service import UserDatabaseService
 from app.db import postgres as db
 
@@ -134,7 +133,9 @@ class OntologyParser:
             return None
 
         except Exception as e:
-            logger.error("Error loading ontology '%s' from database: %s", ontology_id, e)
+            logger.error(
+                "Error loading ontology '%s' from database: %s", ontology_id, e
+            )
             return None
 
     def validate_ontology_structure(self) -> None:

@@ -434,14 +434,10 @@ class UsageTrackingService:
                 user_tier = tier_row
                 tier_data = {
                     "tier_name": user_tier["tier_name"],
-                    "monthly_document_limit": user_tier.get(
-                        "monthly_document_limit"
-                    ),
+                    "monthly_document_limit": user_tier.get("monthly_document_limit"),
                     "monthly_page_limit": user_tier.get("monthly_page_limit"),
                     "monthly_token_limit": user_tier.get("monthly_token_limit"),
-                    "monthly_cost_limit_usd": user_tier.get(
-                        "monthly_cost_limit_usd"
-                    ),
+                    "monthly_cost_limit_usd": user_tier.get("monthly_cost_limit_usd"),
                 }
                 current_usage = {
                     "current_documents": user_tier.get("current_documents", 0),

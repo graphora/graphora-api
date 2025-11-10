@@ -76,7 +76,11 @@ class FeedbackService:
                 )
                 return True
             else:
-                logger.error(f"Failed to store feedback: {result}")
+                logger.error(
+                    "Failed to store feedback for user %s, transform %s",
+                    user_id,
+                    transform_id,
+                )
                 return False
 
         except Exception as e:

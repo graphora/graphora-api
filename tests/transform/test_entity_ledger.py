@@ -54,4 +54,3 @@ async def test_entity_ledger_ignore_missing_user():
     await service.hydrate_nodes(None, [node])
     await service.record_nodes(None, [node])
     # no exceptions
-

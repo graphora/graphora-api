@@ -2,7 +2,6 @@ from typing import Tuple
 from google import genai
 import baml_py
 from app.services.ai_config_service import AIConfigService
-from app.utils.encryption import decrypt_password
 
 
 async def get_user_llm_credentials(user_id: str) -> Tuple[str, str]:
@@ -26,8 +25,8 @@ async def get_user_llm_credentials(user_id: str) -> Tuple[str, str]:
             f"No LLM configuration found for user: {user_id}. Please configure your LLM provider first."
         )
 
-    provider_name, api_key, model_name = await ai_config_service.get_user_provider_secret(
-        user_id
+    provider_name, api_key, model_name = (
+        await ai_config_service.get_user_provider_secret(user_id)
     )
     if not provider_name:
         raise ValueError(f"Failed to retrieve API key for user: {user_id}")
