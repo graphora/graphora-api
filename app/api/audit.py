@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 from app.config import settings
+from app.db import postgres as db
 from app.services.audit_service import audit_service, OperationType
 from app.auth import get_current_user_id
 
@@ -90,22 +91,17 @@ async def get_conflicts_summary(user_id: str = Depends(get_current_user_id)):
     - Summary of merge conflicts for the user
     """
     try:
-        from supabase import create_client
-
-        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-
-        # First, get merge_ids for merges initiated by this user
-        user_merges_result = (
-            supabase.table("audit_trail")
-            .select("operation_id")
-            .eq("user_id", user_id)
-            .eq("operation_type", "merge_started")
-            .execute()
+        user_merges = await db.fetch(
+            """
+            SELECT operation_id
+            FROM audit_trail
+            WHERE user_id = %s AND operation_type = %s
+            """,
+            user_id,
+            OperationType.MERGE_STARTED.value,
         )
 
-        user_merge_ids = [
-            merge["operation_id"] for merge in (user_merges_result.data or [])
-        ]
+        user_merge_ids = [merge["operation_id"] for merge in user_merges or []]
 
         if not user_merge_ids:
             # User has no merges, return empty summary
@@ -115,18 +111,14 @@ async def get_conflicts_summary(user_id: str = Depends(get_current_user_id)):
                 "recent_conflicts": [],
             }
 
-        # Get conflicts that need human review for user's merges only
-        conflicts_result = (
-            supabase.table("change_logs")
-            .select(
-                "merge_id, node_type, need_human_review, previous_props, changed_props"
-            )
-            .eq("need_human_review", True)
-            .in_("merge_id", user_merge_ids)
-            .execute()
+        conflicts = await db.fetch(
+            """
+            SELECT merge_id, node_type, need_human_review, previous_props, changed_props
+            FROM change_logs
+            WHERE need_human_review = TRUE AND merge_id = ANY(%s)
+            """,
+            user_merge_ids,
         )
-
-        conflicts = conflicts_result.data or []
 
         # Group by merge_id and node_type
         conflicts_by_merge = {}

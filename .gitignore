@@ -159,6 +159,9 @@ cython_debug/
 # Docker overrides
 docker-compose.override.yml
 
+# Local docker data/cache directories
+/.docker-data/
+
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

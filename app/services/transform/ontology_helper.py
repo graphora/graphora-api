@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Union
 from app.config import settings
 from app.services.user_db_service import UserDatabaseService
+from app.db import postgres as db
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +21,9 @@ class OntologyParser:
 
         Args:
             yaml_path: Path to YAML file or ontology ID or YAML content string
-            user_id: User ID for Supabase fallback (optional)
+            user_id: User ID for database fallback (optional)
         """
-        # Load YAML content with Supabase fallback
+        # Load YAML content with database fallback
         yaml_content = self._load_yaml_content(yaml_path, user_id)
         self.parsed_ontology = yaml.safe_load(yaml_content)
         self.ontology_yaml = yaml_content
@@ -34,7 +35,7 @@ class OntologyParser:
     def _load_yaml_content(
         self, yaml_path: Union[str, Path], user_id: Optional[str] = None
     ) -> str:
-        """Load YAML content from file, Supabase, or string with enhanced fallback logic"""
+        """Load YAML content from file, database, or string with enhanced fallback logic"""
 
         # If it's already YAML content (string), return it
         if isinstance(yaml_path, str) and not Path(yaml_path).exists():
@@ -59,7 +60,7 @@ class OntologyParser:
                 )
                 # Continue to database fallback if local file is corrupted
 
-        # If file doesn't exist or is corrupted and we have user_id, try Supabase
+        # If file doesn't exist or is corrupted and we have user_id, try database
         if user_id:
             # Extract ontology ID from filename if it's a path, otherwise use as-is
             if isinstance(yaml_path, (str, Path)):
@@ -74,12 +75,12 @@ class OntologyParser:
             logger.info(
                 f"Attempting to load ontology '{ontology_id}' from database for user {user_id}"
             )
-            supabase_content = self._load_from_supabase(ontology_id, user_id)
-            if supabase_content:
+            db_content = self._load_from_database(ontology_id, user_id)
+            if db_content:
                 logger.info(
                     f"Successfully loaded ontology '{ontology_id}' from database"
                 )
-                return supabase_content
+                return db_content
             else:
                 logger.info(
                     f"Ontology '{ontology_id}' not found in database for user {user_id}"
@@ -99,42 +100,41 @@ class OntologyParser:
 
         raise FileNotFoundError(error_msg)
 
-    def _load_from_supabase(self, ontology_id: str, user_id: str) -> Optional[str]:
-        """Load ontology content from Supabase with improved error handling"""
+    def _load_from_database(self, ontology_id: str, user_id: str) -> Optional[str]:
+        """Load ontology content from Postgres."""
         try:
-            from supabase import create_client
-
-            supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-
-            # Query the ontologies table
-            result = (
-                supabase.table("ontologies")
-                .select("yaml_content")
-                .eq("id", ontology_id)
-                .eq("user_id", user_id)
-                .eq("is_active", True)
-                .execute()
+            record = db.sync_fetchrow(
+                """
+                SELECT yaml_content
+                FROM ontologies
+                WHERE id = %s AND user_id = %s AND is_active = TRUE
+                """,
+                ontology_id,
+                user_id,
             )
 
-            if result.data and len(result.data) > 0:
-                yaml_content = result.data[0]["yaml_content"]
-                # Validate that the retrieved content is valid YAML
+            if record and record.get("yaml_content"):
+                yaml_content = record["yaml_content"]
                 try:
                     yaml.safe_load(yaml_content)
                     return yaml_content
                 except yaml.YAMLError as e:
                     logger.warning(
-                        f"Warning: Ontology '{ontology_id}' from database contains invalid YAML: {e}"
+                        "Warning: Ontology '%s' from database contains invalid YAML: %s",
+                        ontology_id,
+                        e,
                     )
                     return None
-            else:
-                logger.info(
-                    f"No active ontology found with id '{ontology_id}' for user '{user_id}'"
-                )
-                return None
+
+            logger.info(
+                "No active ontology found with id '%s' for user '%s'",
+                ontology_id,
+                user_id,
+            )
+            return None
 
         except Exception as e:
-            logger.error(f"Error loading ontology '{ontology_id}' from Supabase: {e}")
+            logger.error("Error loading ontology '%s' from database: %s", ontology_id, e)
             return None
 
     def validate_ontology_structure(self) -> None:

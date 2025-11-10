@@ -31,14 +31,13 @@ from app.utils.constants import (
     UPDATED,
     TRANSFORM_ID,
 )
-from supabase import create_client, Client
 from app.services.storage.interface import StorageBatchResult
 from app.services.user_db_service import UserDatabaseService
 from app.services.audit_service import audit_service, OperationType
+from app.services.merge import repository as merge_repo
 
 
 logger = logging.getLogger(__name__)
-supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
 
 def custom_cache_key_fn(context, parameters):
@@ -51,14 +50,6 @@ def custom_cache_key_fn(context, parameters):
         ),
     }
     return str(hash(frozenset(safe_params.items())))
-
-
-def _safe_supabase_call(description: str, func: Callable[[], Any]):
-    try:
-        return func()
-    except Exception as exc:  # pragma: no cover - external service
-        logger.error("Supabase %s failed: %s", description, exc)
-        raise
 
 
 @task(name="merge-persist-node-batch", retries=3, retry_delay_seconds=5)
@@ -147,15 +138,10 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
         merged_graph = copy.deepcopy(staging_graph)
 
         # Check merge status
-        merge_status = (
-            supabase.table("merge_status")
-            .select("*")
-            .eq("merge_id", merge_id)
-            .execute()
-        )
-        if not merge_status.data:
+        merge_status = merge_repo.get_merge_status_row(merge_id)
+        if not merge_status:
             start_merge_status_task(merge_id, transform_id, ontology_id)
-        elif merge_status.data[0]["status"] == MergeStatus.READY_TO_MERGE:
+        elif merge_status.get("status") == MergeStatus.READY_TO_MERGE.value:
             merged_graph = await _complete_prod_merge(
                 merge_id,
                 transform_id,
@@ -166,7 +152,7 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
                 user_id,
             )
             return merged_graph
-        elif merge_status.data[0]["status"] == MergeStatus.COMPLETED:
+        elif merge_status.get("status") == MergeStatus.COMPLETED.value:
             # For re-merge, load existing prod graph and reconcile
             prod_graph = await _get_prod_graph(merge_id, user_id)
             merged_graph = _reconcile_graphs(staging_graph, prod_graph)
@@ -390,12 +376,10 @@ def _reconcile_graphs(
 
 
 def _log_merge_failure(merge_id: str, error: str):
-    _safe_supabase_call(
-        "log_merge_failure",
-        lambda: supabase.table("merge_status")
-        .update({"status": MergeStatus.FAILED, "error": error})
-        .eq("merge_id", merge_id)
-        .execute(),
+    merge_repo.update_merge_status(
+        merge_id,
+        status=MergeStatus.FAILED,
+        error=error,
     )
 
 
@@ -405,30 +389,17 @@ def log_merge_failure_task(merge_id: str, error: str):
 
 
 def get_merge_status(merge_id: str) -> MergeStatus:
-    merge_status = _safe_supabase_call(
-        "get_merge_status",
-        lambda: supabase.table("merge_status")
-        .select("*")
-        .eq("merge_id", merge_id)
-        .execute(),
-    )
-    if not merge_status.data:
+    merge_status = merge_repo.get_merge_status_row(merge_id)
+    if not merge_status:
         return MergeStatus.NOT_FOUND
-    return MergeStatus(merge_status.data[0]["status"])
+    return MergeStatus(merge_status.get("status"))
 
 
 def get_human_review_items(merge_id: str) -> List[ChangeLog]:
-    change_logs_data = _safe_supabase_call(
-        "get_human_review_items",
-        lambda: supabase.table("change_logs")
-        .select("*")
-        .eq("merge_id", merge_id)
-        .eq("need_human_review", True)
-        .execute(),
-    )
-    change_logs = []
-    for change_log in change_logs_data.data:
-        record = ChangeLogRecord.from_supabase(change_log)
+    change_logs_data = merge_repo.fetch_unresolved_change_logs(merge_id)
+    change_logs: List[ChangeLog] = []
+    for change_log in change_logs_data:
+        record = ChangeLogRecord.from_row(change_log)
         prop_changes = {
             key: (record.changed_props.get(key), record.previous_props.get(key))
             for key in record.changed_props
@@ -480,30 +451,16 @@ async def apply_resolution(
     Returns:
         True if the resolution was applied successfully, False otherwise
     """
-    change_log = _safe_supabase_call(
-        "fetch_change_log",
-        lambda: supabase.table("change_logs")
-        .select("*")
-        .eq("merge_id", merge_id)
-        .eq("id", change_log_id)
-        .execute(),
-    )
-    if len(change_log.data) > 0:
-        conflict_record = ChangeLogRecord.from_supabase(change_log.data[0])
+    change_log_row = merge_repo.fetch_change_log_by_id(change_log_id)
+    if change_log_row and change_log_row.get("merge_id") == merge_id:
+        conflict_record = ChangeLogRecord.from_row(change_log_row)
 
         # Get ontology_id from merge_status
-        merge_info = _safe_supabase_call(
-            "fetch_merge_info",
-            lambda: supabase.table("merge_status")
-            .select("ontology_id")
-            .eq("merge_id", merge_id)
-            .execute(),
-        )
-        if not merge_info.data:
+        merge_info = merge_repo.fetch_merge_info(merge_id)
+        if not merge_info:
             logger.error(f"Could not find merge info for merge_id {merge_id}")
             return False
-
-        ontology_id = merge_info.data[0].get("ontology_id")
+        ontology_id = merge_info.get("ontology_id")
 
         # Save resolution for future learning
         save_resolution_task(
@@ -520,17 +477,10 @@ async def apply_resolution(
         )
 
         # Check if all conflicts are resolved
-        unresolved_conflicts = _safe_supabase_call(
-            "fetch_unresolved_conflicts",
-            lambda: supabase.table("change_logs")
-            .select("*")
-            .eq("merge_id", merge_id)
-            .eq("need_human_review", True)
-            .execute(),
-        )
-        if len(unresolved_conflicts.data) == 0:
+        unresolved_conflicts = merge_repo.fetch_unresolved_change_logs(merge_id)
+        if not unresolved_conflicts:
             update_merge_status_task(merge_id, MergeStatus.READY_TO_MERGE)
-            transform_id = merge_info.data[0].get("transform_id")
+            transform_id = merge_info.get("transform_id")
             if transform_id and ontology_id:
                 await merge_flow(merge_id, transform_id, ontology_id, user_id)
         return True
@@ -538,17 +488,7 @@ async def apply_resolution(
 
 
 async def get_merge_statistics(merge_id: str) -> Dict[str, Any]:
-    merge_status = (
-        supabase.table("merge_status")
-        .select("statistics")
-        .eq("merge_id", merge_id)
-        .execute()
-    )
-    if not merge_status.data:
-        return None
-
-    statistics = merge_status.data[0].get("statistics")
-    return statistics if statistics else None
+    return merge_repo.fetch_merge_statistics(merge_id)
 
 
 async def get_merge_graph(
@@ -560,17 +500,12 @@ async def get_merge_graph(
     )
 
     # Check merge status
-    merge_status = (
-        supabase.table("merge_status")
-        .select("status")
-        .eq("merge_id", merge_id)
-        .execute()
-    )
-    if not merge_status.data:
+    merge_status = merge_repo.get_merge_status_row(merge_id)
+    if not merge_status:
         logger.warning(f"No merge status found for merge_id: {merge_id}")
         return None
 
-    status = merge_status.data[0]["status"]
+    status = merge_status.get("status")
     logger.info(f"Merge status for {merge_id}: {status}")
 
     # Always fetch staging graph and apply resolved changes
@@ -582,14 +517,12 @@ async def get_merge_graph(
     )
 
     # Fetch change_logs and apply resolved changes on top of staging graph
-    change_logs = (
-        supabase.table("change_logs").select("*").eq("merge_id", merge_id).execute()
-    )
+    change_logs = merge_repo.fetch_change_logs(merge_id)
     logger.info(
-        f"Found {len(change_logs.data) if change_logs.data else 0} change logs for merge_id: {merge_id}"
+        f"Found {len(change_logs) if change_logs else 0} change logs for merge_id: {merge_id}"
     )
 
-    if not change_logs.data:
+    if not change_logs:
         logger.info("No change logs found, returning original staging graph")
         return staging_graph
 
@@ -597,7 +530,7 @@ async def get_merge_graph(
     node_map = {node.id: node for node in staging_graph.nodes}
     applied_changes = 0
 
-    for change_log in change_logs.data:
+    for change_log in change_logs:
         try:
             node_id = change_log.get("node_id")
             if not node_id or node_id not in node_map:
@@ -1308,26 +1241,16 @@ def _add_ingestion_stats(
     if metrics:
         statistics["performance"] = metrics.model_dump(mode="json")
     else:
-        existing_stats = _safe_supabase_call(
-            "fetch_existing_statistics",
-            lambda: supabase.table("merge_status")
-            .select("statistics")
-            .eq("merge_id", merge_id)
-            .execute(),
-        )
-        if existing_stats.data:
-            performance = (
-                existing_stats.data[0].get("statistics", {}).get("performance")
-            )
+        existing_stats = merge_repo.fetch_merge_statistics(merge_id) or {}
+        if isinstance(existing_stats, dict):
+            performance = existing_stats.get("performance")
             if performance is not None:
                 statistics["performance"] = performance
 
-    _safe_supabase_call(
-        "update_merge_statistics",
-        lambda: supabase.table("merge_status")
-        .update({"statistics": statistics, "status": MergeStatus.COMPLETED})
-        .eq("merge_id", merge_id)
-        .execute(),
+    merge_repo.update_merge_status(
+        merge_id,
+        statistics=statistics,
+        status=MergeStatus.COMPLETED,
     )
 
 
@@ -1343,29 +1266,14 @@ def add_ingestion_stats_task(
 
 def _record_merge_metrics(merge_id: str, metrics: MergePerformanceMetrics) -> None:
     """Persist performance metrics for visibility in the merge dashboard."""
-    existing_stats = _safe_supabase_call(
-        "fetch_existing_statistics",
-        lambda: supabase.table("merge_status")
-        .select("statistics")
-        .eq("merge_id", merge_id)
-        .execute(),
-    )
-
     statistics: Dict[str, Any] = {}
-    if existing_stats.data:
-        existing_statistics = existing_stats.data[0].get("statistics") or {}
-        if isinstance(existing_statistics, dict):
-            statistics.update(existing_statistics)
+    existing_stats = merge_repo.fetch_merge_statistics(merge_id)
+    if isinstance(existing_stats, dict):
+        statistics.update(existing_stats)
 
     statistics["performance"] = metrics.model_dump(mode="json")
 
-    _safe_supabase_call(
-        "record_merge_metrics",
-        lambda: supabase.table("merge_status")
-        .update({"statistics": statistics})
-        .eq("merge_id", merge_id)
-        .execute(),
-    )
+    merge_repo.update_merge_status(merge_id, statistics=statistics)
 
 
 @task(name="merge-record-metrics", retries=3, retry_delay_seconds=10)
@@ -1403,14 +1311,12 @@ async def _get_prod_graph(merge_id: str, user_id: str) -> GraphResponse:
 
 
 async def get_past_resolution(ontology_id: str, node_type: str) -> str:
-    response = (
-        supabase.table("resolutions").select("*").eq("node_type", node_type).execute()
-    )
-    if not response.data:
+    response = merge_repo.fetch_resolutions_by_node_type(node_type)
+    if not response:
         return "None"
     learnings = []
     i = 1
-    for log in response.data:
+    for log in response:
         # Handle different resolution strategies
         if log["resolution"] == ResolutionStrategy.KEEP_BOTH.value:
             resolution_description = "Keep Both (Staging and Production)"
@@ -1436,14 +1342,7 @@ async def get_past_resolution(ontology_id: str, node_type: str) -> str:
 
 def _save_change_log(merge_id, change_log, need_human_review: bool = False):
     record = change_log.to_record(merge_id, need_human_review=need_human_review)
-    payload = record.to_supabase_payload()
-
-    _safe_supabase_call(
-        "save_change_log",
-        lambda: supabase.table("change_logs")
-        .upsert(payload, on_conflict="id")
-        .execute(),
-    )
+    merge_repo.upsert_change_log(record)
 
 
 @task(name="save-change-log", retries=3, retry_delay_seconds=10)
@@ -1491,29 +1390,13 @@ def _save_resolution(
         learning_comment=learning_comment or None,
     )
 
-    payload = resolution_record.to_supabase_payload()
-
-    _safe_supabase_call(
-        "save_resolution",
-        lambda: supabase.table("resolutions")
-        .upsert(payload, on_conflict="id")
-        .execute(),
-    )
+    merge_repo.insert_resolution(resolution_record)
 
     updated_props = {} if resolution == ResolutionStrategy.KEEP_BOTH else resolved_props
-
-    _safe_supabase_call(
-        "mark_change_log_resolved",
-        lambda: supabase.table("change_logs")
-        .update(
-            {
-                "need_human_review": False,
-                "changed_props": updated_props,
-            }
-        )
-        .eq("merge_id", merge_id)
-        .eq("id", change_log_id)
-        .execute(),
+    merge_repo.mark_change_log_resolved(
+        merge_id,
+        change_log_id,
+        changed_props=updated_props,
     )
 
     logger.info(f"Successfully saved resolution for node {node_id}")
@@ -1547,19 +1430,7 @@ def save_resolution_task(
 
 
 def _start_merge_status_impl(merge_id, transform_id, ontology_id):
-    _safe_supabase_call(
-        "start_merge_status",
-        lambda: supabase.table("merge_status")
-        .insert(
-            {
-                "merge_id": merge_id,
-                "transform_id": transform_id,
-                "ontology_id": ontology_id,
-                "status": MergeStatus.STARTED,
-            }
-        )
-        .execute(),
-    )
+    merge_repo.insert_merge_status(merge_id, transform_id, ontology_id)
 
 
 @task(name="merge-start-status", retries=3, retry_delay_seconds=10)
@@ -1568,13 +1439,7 @@ def start_merge_status_task(merge_id, transform_id, ontology_id):
 
 
 def _update_merge_status_impl(merge_id, status):
-    _safe_supabase_call(
-        "update_merge_status",
-        lambda: supabase.table("merge_status")
-        .update({"status": status})
-        .eq("merge_id", merge_id)
-        .execute(),
-    )
+    merge_repo.update_merge_status(merge_id, status=status)
 
 
 @task(name="merge-update-status", retries=3, retry_delay_seconds=10)
@@ -1604,15 +1469,9 @@ async def _complete_prod_merge(
 
     try:
         # Get all change logs for this merge
-        change_logs = _safe_supabase_call(
-            "fetch_change_logs",
-            lambda: supabase.table("change_logs")
-            .select("*")
-            .eq("merge_id", merge_id)
-            .execute(),
-        )
+        change_logs = merge_repo.fetch_change_logs(merge_id)
 
-        if not change_logs.data:
+        if not change_logs:
             logger.info(
                 f"No change logs found for merge {merge_id}, proceeding with direct merge"
             )
@@ -1644,7 +1503,7 @@ async def _complete_prod_merge(
         conflicts_resolved = 0
 
         # Apply all resolved conflicts
-        for change_log in change_logs.data:
+        for change_log in change_logs:
             try:
                 node_id = change_log.get("node_id")
                 node_type = change_log.get("node_type")

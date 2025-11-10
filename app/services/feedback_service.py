@@ -1,12 +1,14 @@
-"""Feedback Service for storing quality validation feedback in Supabase"""
+"""Feedback Service for storing quality validation feedback in Postgres."""
 
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from enum import Enum
 
-from supabase import create_client, Client
+from psycopg.types.json import Json
+
 from app.config import settings
+from app.db import postgres as db
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +22,16 @@ class FeedbackType(str, Enum):
 
 
 class FeedbackService:
-    """Service for managing user feedback in Supabase"""
+    """Service for managing user feedback in Postgres."""
 
     def __init__(self):
-        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
+        if not (settings.DATABASE_URL or settings.resolved_database_url):
             logger.warning(
-                "Supabase credentials not configured, feedback service will be disabled"
+                "Database credentials not configured, feedback service will be disabled"
             )
-            self.client = None
+            self.enabled = False
         else:
-            self.client: Client = create_client(
-                settings.SUPABASE_URL, settings.SUPABASE_KEY
-            )
+            self.enabled = True
 
     async def store_quality_feedback(
         self,
@@ -42,27 +42,35 @@ class FeedbackService:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Store quality validation feedback"""
-        if not self.client:
-            logger.warning("Supabase client not available, skipping feedback storage")
+        if not self.enabled:
+            logger.warning("Feedback service disabled, skipping feedback storage")
             return False
 
         try:
-            feedback_data = {
-                "user_id": user_id,
-                "transform_id": transform_id,
-                "feedback_type": feedback_type.value,
-                "feedback_content": feedback_content,
-                "metadata": metadata or {},
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "source": "quality_dashboard",
-            }
-
-            # Insert into feedback table
-            result = (
-                self.client.table("quality_feedback").insert(feedback_data).execute()
+            row = await db.fetchrow(
+                """
+                INSERT INTO quality_feedback (
+                    user_id,
+                    transform_id,
+                    feedback_type,
+                    feedback_content,
+                    metadata,
+                    created_at,
+                    source
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                user_id,
+                transform_id,
+                feedback_type.value,
+                feedback_content,
+                Json(metadata or {}),
+                datetime.now(timezone.utc),
+                "quality_dashboard",
             )
 
-            if result.data:
+            if row:
                 logger.info(
                     f"Quality feedback stored successfully for user {user_id}, transform {transform_id}"
                 )
@@ -77,20 +85,23 @@ class FeedbackService:
 
     async def get_user_feedback(self, user_id: str, limit: int = 50) -> list:
         """Get feedback history for a user"""
-        if not self.client:
+        if not self.enabled:
             return []
 
         try:
-            result = (
-                self.client.table("quality_feedback")
-                .select("*")
-                .eq("user_id", user_id)
-                .order("created_at", desc=True)
-                .limit(limit)
-                .execute()
+            rows = await db.fetch(
+                """
+                SELECT *
+                FROM quality_feedback
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                user_id,
+                limit,
             )
 
-            return result.data if result.data else []
+            return rows or []
 
         except Exception as e:
             logger.error(f"Error retrieving user feedback: {e}")
@@ -98,21 +109,19 @@ class FeedbackService:
 
     async def get_feedback_stats(self) -> Dict[str, Any]:
         """Get feedback statistics"""
-        if not self.client:
+        if not self.enabled:
             return {}
 
         try:
-            # Get counts by feedback type
-            result = (
-                self.client.table("quality_feedback")
-                .select("feedback_type, count")
-                .execute()
+            rows = await db.fetch(
+                """
+                SELECT feedback_type, COUNT(*) AS count
+                FROM quality_feedback
+                GROUP BY feedback_type
+                """
             )
 
-            stats = {}
-            if result.data:
-                for row in result.data:
-                    stats[row["feedback_type"]] = row.get("count", 0)
+            stats = {row["feedback_type"]: row["count"] for row in rows or []}
 
             return stats
 

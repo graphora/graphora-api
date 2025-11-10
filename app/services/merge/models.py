@@ -130,20 +130,17 @@ class ChangeLogRecord(BaseModel):
     match_strategy: Optional[str] = None
 
     @classmethod
-    def from_supabase(cls, payload: Dict[str, Any]) -> "ChangeLogRecord":
-        """Create a record instance from a Supabase payload."""
+    def from_row(cls, payload: Dict[str, Any]) -> "ChangeLogRecord":
+        """Create a record instance from a database row."""
 
         return cls.model_validate(payload)
 
-    def to_supabase_payload(self) -> Dict[str, Any]:
-        """Return a JSON-serialisable payload for Supabase inserts/updates."""
+    def to_row(self) -> Dict[str, Any]:
+        """Return a JSON-serialisable payload for database inserts/updates."""
 
-        # Some self-hosted Supabase instances cache table schemas; stick to the
-        # baseline columns we know exist across deployments.
         return self.model_dump(
             mode="json",
             exclude_none=True,
-            exclude={"created_at", "match_confidence", "match_strategy"},
         )
 
 
@@ -163,17 +160,17 @@ class ChangeLogResolution(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     @classmethod
-    def from_supabase(cls, payload: Dict[str, Any]) -> "ChangeLogResolution":
+    def from_row(cls, payload: Dict[str, Any]) -> "ChangeLogResolution":
         return cls.model_validate(payload)
 
-    def to_supabase_payload(self) -> Dict[str, Any]:
+    def to_row(self) -> Dict[str, Any]:
         # Include fields that exist in the resolutions table schema
         # Note: merge_id and node_id are not in the database schema
-        payload = self.model_dump(
+        return self.model_dump(
             mode="json",
             include={
                 "id",
-                "ontology_id",  # Required NOT NULL field
+                "ontology_id",
                 "node_type",
                 "previous_props",
                 "changed_props",
@@ -183,8 +180,6 @@ class ChangeLogResolution(BaseModel):
                 "created_at",
             },
         )
-
-        return payload
 
 
 class MergePerformanceMetrics(BaseModel):
