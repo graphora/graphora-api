@@ -1,8 +1,9 @@
 from typing import Optional, List
 import uuid
 from datetime import datetime, timezone
-from supabase import create_client, Client
+from psycopg.types.json import Json
 from app.config import get_settings
+from app.db import postgres as db
 from app.schemas.ai_config import (
     AIProvider,
     AIModel,
@@ -16,15 +17,12 @@ settings = get_settings()
 
 
 class AIConfigService:
-    """Service for managing AI provider configurations in Supabase"""
+    """Service for managing AI provider configurations in Postgres."""
 
     def __init__(self):
-        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be configured")
-
-        self.supabase: Client = create_client(
-            settings.SUPABASE_URL, settings.SUPABASE_KEY
-        )
+        if not (settings.DATABASE_URL or settings.resolved_database_url):
+            if not settings.test_mode:
+                raise ValueError("DATABASE_URL must be configured for AI config service")
 
     async def get_providers(self) -> List[AIProvider]:
         """
@@ -34,21 +32,18 @@ class AIConfigService:
             List[AIProvider]: List of available providers
         """
         try:
-            response = (
-                self.supabase.table("ai_providers")
-                .select("*")
-                .eq("is_active", True)
-                .execute()
+            rows = await db.fetch(
+                "SELECT id, name, display_name, is_active FROM ai_providers WHERE is_active = TRUE"
             )
 
             providers = [
                 AIProvider(
-                    id=row["id"],
+                    id=str(row["id"]),
                     name=row["name"],
                     display_name=row["display_name"],
                     is_active=row["is_active"],
                 )
-                for row in response.data
+                for row in rows or []
             ]
 
             logger.info(f"Retrieved {len(providers)} AI providers")
@@ -69,35 +64,17 @@ class AIConfigService:
             List[AIModel]: List of available models for the provider
         """
         try:
-            response = (
-                self.supabase.table("ai_models")
-                .select(
-                    """
-                id,
-                provider_id,
-                name,
-                display_name,
-                version,
-                is_active,
-                ai_providers!inner(name)
+            rows = await db.fetch(
                 """
-                )
-                .eq("ai_providers.name", provider_name)
-                .eq("is_active", True)
-                .execute()
+                SELECT m.*
+                FROM ai_models m
+                JOIN ai_providers p ON m.provider_id = p.id
+                WHERE p.name = %s AND m.is_active = TRUE
+                """,
+                provider_name,
             )
 
-            models = [
-                AIModel(
-                    id=row["id"],
-                    provider_id=row["provider_id"],
-                    name=row["name"],
-                    display_name=row["display_name"],
-                    version=row["version"],
-                    is_active=row["is_active"],
-                )
-                for row in response.data
-            ]
+            models = [self._map_model(row) for row in rows or []]
 
             logger.info(
                 f"Retrieved {len(models)} AI models for provider {provider_name}"
@@ -110,6 +87,26 @@ class AIConfigService:
             )
             raise
 
+    async def get_all_models(self) -> List[AIModel]:
+        """Return every active AI model regardless of provider."""
+
+        rows = await db.fetch(
+            "SELECT id, provider_id, name, display_name, version, is_active FROM ai_models WHERE is_active = TRUE"
+        )
+
+        return [self._map_model(row) for row in rows or []]
+
+    @staticmethod
+    def _map_model(row: dict) -> AIModel:
+        return AIModel(
+            id=str(row["id"]),
+            provider_id=str(row["provider_id"]),
+            name=row["name"],
+            display_name=row["display_name"],
+            version=row["version"],
+            is_active=row["is_active"],
+        )
+
     async def get_user_ai_config(self, user_id: str) -> Optional[UserAIConfigDisplay]:
         """
         Get user's AI configuration with masked API key
@@ -121,54 +118,53 @@ class AIConfigService:
             UserAIConfigDisplay if found, None otherwise
         """
         try:
-            # Query user_ai_configs with all related data
-            response = (
-                self.supabase.table("user_ai_configs")
-                .select(
-                    """
-                id,
-                user_id,
-                created_at,
-                updated_at,
-                ai_provider_configs!inner(
-                    id,
-                    api_key,
-                    ai_providers!inner(name, display_name),
-                    ai_models!inner(name, display_name)
-                )
+            config_data = await db.fetchrow(
                 """
-                )
-                .eq("user_id", user_id)
-                .execute()
+                SELECT u.id as user_config_id,
+                       u.user_id,
+                       u.created_at,
+                       u.updated_at,
+                       pc.id as provider_config_id,
+                       pc.api_key,
+                       p.name as provider_name,
+                       p.display_name as provider_display_name,
+                       m.name as model_name,
+                       m.display_name as model_display_name
+                FROM user_ai_configs u
+                JOIN ai_provider_configs pc ON u.active_provider_config_id = pc.id
+                JOIN ai_providers p ON pc.provider_id = p.id
+                JOIN ai_models m ON pc.default_model_id = m.id
+                WHERE u.user_id = %s
+                LIMIT 1
+                """,
+                user_id,
             )
 
-            if not response.data:
+            if not config_data:
                 logger.info(f"No AI configuration found for user: {user_id}")
                 return None
 
-            config_data = response.data[0]
-            provider_config = config_data["ai_provider_configs"]
-            provider = provider_config["ai_providers"]
-            model = provider_config["ai_models"]
-
-            # Decrypt and mask API key
-            decrypted_key = decrypt_password(provider_config["api_key"])
+            decrypted_key = decrypt_password(config_data["api_key"])
             masked_key = self._mask_api_key(decrypted_key)
 
+            created_at = config_data.get("created_at")
+            if isinstance(created_at, str):
+                created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+
+            updated_at = config_data.get("updated_at")
+            if isinstance(updated_at, str):
+                updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+
             user_config = UserAIConfigDisplay(
-                id=config_data["id"],
-                user_id=config_data["user_id"],
-                provider_name=provider["name"],
-                provider_display_name=provider["display_name"],
+                id=str(config_data["user_config_id"]),
+                user_id=str(config_data["user_id"]),
+                provider_name=config_data["provider_name"],
+                provider_display_name=config_data["provider_display_name"],
                 api_key_masked=masked_key,
-                default_model_name=model["name"],
-                default_model_display_name=model["display_name"],
-                created_at=datetime.fromisoformat(
-                    config_data["created_at"].replace("Z", "+00:00")
-                ),
-                updated_at=datetime.fromisoformat(
-                    config_data["updated_at"].replace("Z", "+00:00")
-                ),
+                default_model_name=config_data["model_name"],
+                default_model_display_name=config_data["model_display_name"],
+                created_at=created_at,
+                updated_at=updated_at,
             )
 
             logger.info(f"Retrieved AI configuration for user: {user_id}")
@@ -177,6 +173,35 @@ class AIConfigService:
         except Exception as e:
             logger.error(f"Error retrieving user AI config for {user_id}: {str(e)}")
             raise
+
+    async def get_user_provider_secret(
+        self, user_id: str
+    ) -> Optional[tuple[str, str, str]]:
+        """Return provider name, decrypted API key, and default model for a user."""
+
+        row = await db.fetchrow(
+            """
+            SELECT p.name AS provider_name,
+                   pc.api_key,
+                   m.name AS model_name
+            FROM user_ai_configs u
+            JOIN ai_provider_configs pc ON u.active_provider_config_id = pc.id
+            JOIN ai_providers p ON pc.provider_id = p.id
+            JOIN ai_models m ON pc.default_model_id = m.id
+            WHERE u.user_id = %s
+            LIMIT 1
+            """,
+            user_id,
+        )
+
+        if not row:
+            return None
+
+        return (
+            row["provider_name"],
+            decrypt_password(row["api_key"]),
+            row["model_name"],
+        )
 
     async def create_gemini_config(
         self, user_id: str, config_request: GeminiConfigRequest
@@ -197,81 +222,65 @@ class AIConfigService:
             if existing_config:
                 raise ValueError(f"AI configuration already exists for user: {user_id}")
 
-            # Get Gemini provider
-            gemini_provider = (
-                self.supabase.table("ai_providers")
-                .select("id")
-                .eq("name", "gemini")
-                .execute()
+            provider_row = await db.fetchrow(
+                "SELECT id FROM ai_providers WHERE name = %s",
+                "gemini",
             )
-            if not gemini_provider.data:
+            if not provider_row:
                 raise ValueError("Gemini provider not found")
-            provider_id = gemini_provider.data[0]["id"]
+            provider_id = provider_row["id"]
 
-            # Get the requested model and validate it exists
-            model_response = (
-                self.supabase.table("ai_models")
-                .select("id, name, display_name")
-                .eq("provider_id", provider_id)
-                .eq("name", config_request.default_model_name)
-                .eq("is_active", True)
-                .execute()
+            model_row = await db.fetchrow(
+                """
+                SELECT id
+                FROM ai_models
+                WHERE provider_id = %s AND name = %s AND is_active = TRUE
+                """,
+                provider_id,
+                config_request.default_model_name,
             )
 
-            if not model_response.data:
-                # Get available models to show in error message
-                available_models = (
-                    self.supabase.table("ai_models")
-                    .select("name, display_name")
-                    .eq("provider_id", provider_id)
-                    .eq("is_active", True)
-                    .execute()
+            if not model_row:
+                available_models = await db.fetch(
+                    "SELECT name FROM ai_models WHERE provider_id = %s AND is_active = TRUE",
+                    provider_id,
                 )
-                available_names = (
-                    [model["name"] for model in available_models.data]
-                    if available_models.data
-                    else []
-                )
+                available_names = [model["name"] for model in available_models or []]
                 raise ValueError(
                     f"Model '{config_request.default_model_name}' not found for Gemini. Available models: {', '.join(available_names)}"
                 )
-            model_id = model_response.data[0]["id"]
+            model_id = model_row["id"]
 
-            # Create AI provider config with encrypted API key
             provider_config_id = str(uuid.uuid4())
-            provider_config_response = (
-                self.supabase.table("ai_provider_configs")
-                .insert(
-                    {
-                        "id": provider_config_id,
-                        "provider_id": provider_id,
-                        "api_key": encrypt_password(config_request.api_key),
-                        "default_model_id": model_id,
-                        "config_data": {},
-                    }
-                )
-                .execute()
-            )
-
-            if not provider_config_response.data:
-                raise Exception("Failed to create AI provider configuration")
-
-            # Create user AI config
             user_config_id = str(uuid.uuid4())
-            user_config_response = (
-                self.supabase.table("user_ai_configs")
-                .insert(
-                    {
-                        "id": user_config_id,
-                        "user_id": user_id,
-                        "active_provider_config_id": provider_config_id,
-                    }
-                )
-                .execute()
-            )
+            encrypted_key = encrypt_password(config_request.api_key)
 
-            if not user_config_response.data:
-                raise Exception("Failed to create user AI configuration")
+            async with db.transaction() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO ai_provider_configs (
+                        id, provider_id, api_key, default_model_id, config_data
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        provider_config_id,
+                        provider_id,
+                        encrypted_key,
+                        model_id,
+                        Json({}),
+                    ),
+                )
+
+                await cur.execute(
+                    """
+                    INSERT INTO user_ai_configs (
+                        id, user_id, active_provider_config_id
+                    )
+                    VALUES (%s, %s, %s)
+                    """,
+                    (user_config_id, user_id, provider_config_id),
+                )
 
             logger.info(f"Created Gemini configuration for user: {user_id}")
 
@@ -301,78 +310,64 @@ class AIConfigService:
             # Get existing configuration
             existing_config = await self.get_user_ai_config(user_id)
             if not existing_config:
-                raise ValueError(f"No AI configuration found for user: {user_id}")
+                # UI may call update before create (e.g., after DB reset); treat as upsert.
+                return await self.create_gemini_config(user_id, config_request)
 
-            # Get the user's current provider config ID
-            user_config_response = (
-                self.supabase.table("user_ai_configs")
-                .select("active_provider_config_id")
-                .eq("user_id", user_id)
-                .execute()
+            user_config_row = await db.fetchrow(
+                "SELECT active_provider_config_id FROM user_ai_configs WHERE user_id = %s",
+                user_id,
             )
 
-            if not user_config_response.data:
+            if not user_config_row:
                 raise ValueError(f"User AI configuration not found for user: {user_id}")
 
-            provider_config_id = user_config_response.data[0][
-                "active_provider_config_id"
-            ]
+            provider_config_id = user_config_row["active_provider_config_id"]
 
-            # Get Gemini provider
-            gemini_provider = (
-                self.supabase.table("ai_providers")
-                .select("id")
-                .eq("name", "gemini")
-                .execute()
+            provider_row = await db.fetchrow(
+                "SELECT id FROM ai_providers WHERE name = %s",
+                "gemini",
             )
-            if not gemini_provider.data:
+            if not provider_row:
                 raise ValueError("Gemini provider not found")
-            provider_id = gemini_provider.data[0]["id"]
+            provider_id = provider_row["id"]
 
-            # Get the requested model and validate it exists
-            model_response = (
-                self.supabase.table("ai_models")
-                .select("id, name, display_name")
-                .eq("provider_id", provider_id)
-                .eq("name", config_request.default_model_name)
-                .eq("is_active", True)
-                .execute()
+            model_row = await db.fetchrow(
+                """
+                SELECT id
+                FROM ai_models
+                WHERE provider_id = %s AND name = %s AND is_active = TRUE
+                """,
+                provider_id,
+                config_request.default_model_name,
             )
 
-            if not model_response.data:
-                # Get available models to show in error message
-                available_models = (
-                    self.supabase.table("ai_models")
-                    .select("name, display_name")
-                    .eq("provider_id", provider_id)
-                    .eq("is_active", True)
-                    .execute()
+            if not model_row:
+                available_models = await db.fetch(
+                    "SELECT name FROM ai_models WHERE provider_id = %s AND is_active = TRUE",
+                    provider_id,
                 )
-                available_names = (
-                    [model["name"] for model in available_models.data]
-                    if available_models.data
-                    else []
-                )
+                available_names = [model["name"] for model in available_models or []]
                 raise ValueError(
                     f"Model '{config_request.default_model_name}' not found for Gemini. Available models: {', '.join(available_names)}"
                 )
-            model_id = model_response.data[0]["id"]
+            model_id = model_row["id"]
 
-            # Update AI provider config with encrypted API key
-            update_response = (
-                self.supabase.table("ai_provider_configs")
-                .update(
-                    {
-                        "api_key": encrypt_password(config_request.api_key),
-                        "default_model_id": model_id,
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
-                .eq("id", provider_config_id)
-                .execute()
+            result = await db.fetchrow(
+                """
+                UPDATE ai_provider_configs
+                SET api_key = %s,
+                    default_model_id = %s,
+                    updated_at = %s
+                WHERE id = %s
+                RETURNING id
+                """,
+                encrypt_password(config_request.api_key),
+                model_id,
+                datetime.now(timezone.utc),
+                provider_config_id,
             )
 
-            if not update_response.data:
+            if not result:
                 raise Exception("Failed to update AI provider configuration")
 
             logger.info(f"Updated Gemini configuration for user: {user_id}")

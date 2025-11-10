@@ -28,12 +28,20 @@ class DatabaseConfig(DatabaseConfigBase):
     password: str = Field(..., description="Database password")
 
 
-class DatabaseConfigUpdate(DatabaseConfigBase):
-    """Schema for updating Neo4j configuration; password optional to allow selective rotation."""
+class DatabaseConfigUpdate(BaseModel):
+    """Schema for updating Neo4j configuration; fields optional."""
 
-    password: Optional[str] = Field(
-        default=None, description="Database password (leave empty to keep existing)"
-    )
+    name: Optional[str] = None
+    uri: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+    @field_validator("uri")
+    @classmethod
+    def validate_optional_uri(cls, value):
+        if value is None:
+            return value
+        return DatabaseConfigBase.validate_uri(value)
 
 
 class UserConfig(BaseModel):

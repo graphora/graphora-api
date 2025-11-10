@@ -12,7 +12,6 @@ from app.services.ontology_validator import (
 )
 from app.services.audit_service import audit_service, OperationType
 from app.services.ontology_storage_service import ontology_storage_service
-from supabase import create_client
 from app.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
@@ -161,26 +160,12 @@ async def list_ontologies(user_id: str = Depends(get_current_user_id)):
     List all ontologies for a user from Supabase database only
     """
     try:
-        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        ontologies = await ontology_storage_service.list_ontologies(user_id)
 
-        # Get ontologies from Supabase database only
-        result = (
-            supabase.table("ontologies")
-            .select("id, name, version, created_at, updated_at")
-            .eq("user_id", user_id)
-            .eq("is_active", True)
-            .order("updated_at", desc=True)
-            .execute()
-        )
-
-        ontologies = result.data or []
-
-        # Add source field and ensure file_name exists for database ontologies
         for ontology in ontologies:
             ontology["source"] = "database"
-            # Add file_name and metadata for compatibility
-            ontology["file_name"] = f"{ontology['id']}.yaml"
-            ontology["metadata"] = {}
+            ontology.setdefault("file_name", f"{ontology['id']}.yaml")
+            ontology.setdefault("metadata", {})
 
         return {"ontologies": ontologies, "total": len(ontologies)}
 
@@ -199,20 +184,9 @@ async def get_ontology_by_id(
     Get a specific ontology by ID from Supabase database only
     """
     try:
-        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        ontology = await ontology_storage_service.get_ontology(user_id, ontology_id)
 
-        # Get from Supabase database only
-        result = (
-            supabase.table("ontologies")
-            .select("*")
-            .eq("id", ontology_id)
-            .eq("user_id", user_id)
-            .eq("is_active", True)
-            .execute()
-        )
-
-        if result.data and len(result.data) > 0:
-            ontology = result.data[0]
+        if ontology:
             return {
                 "id": ontology["id"],
                 "name": ontology.get("name", f"Ontology {ontology['id'][:8]}"),
@@ -221,8 +195,8 @@ async def get_ontology_by_id(
                 "version": ontology["version"],
                 "metadata": ontology.get("metadata", {}),
                 "source": "database",
-                "created_at": ontology["created_at"],
-                "updated_at": ontology["updated_at"],
+                "created_at": ontology.get("created_at"),
+                "updated_at": ontology.get("updated_at"),
             }
 
         raise HTTPException(

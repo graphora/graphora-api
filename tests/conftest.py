@@ -2,7 +2,23 @@ import os
 import sys
 import types
 from pathlib import Path
+
 import pytest
+
+os.environ.setdefault("TEST_MODE", "true")
+os.environ.setdefault(
+    "DATABASE_URL",
+    os.environ.get(
+        "DATABASE_URL",
+        "postgresql://graphora:graphora@localhost:5432/graphora",
+    ),
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.config import settings
 
 
 def _install_neo4j_stub() -> None:
@@ -59,6 +75,7 @@ def _install_neo4j_stub() -> None:
 
 
 _install_neo4j_stub()
+settings.test_mode = True
 
 
 def _install_langchain_and_splink_stubs() -> None:
@@ -299,10 +316,6 @@ def _reset_merge_learning_service():
     yield
     merge_learning_service.reset()
 
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 # Provide placeholder Supabase settings so service singletons configure without
 # raising during import in CI environments.

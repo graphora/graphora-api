@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 from app.config import settings
+from app.db import postgres as db
 
 logger = logging.getLogger(__name__)
 
@@ -84,22 +85,18 @@ async def load_ontology(
 async def _load_from_database(ontology_id: str, user_id: str) -> Optional[str]:
     """Load ontology content from database"""
     try:
-        from supabase import create_client
-
-        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-
-        # Query the ontologies table
-        result = (
-            supabase.table("ontologies")
-            .select("yaml_content")
-            .eq("id", ontology_id)
-            .eq("user_id", user_id)
-            .eq("is_active", True)
-            .execute()
+        record = await db.fetchrow(
+            """
+            SELECT yaml_content
+            FROM ontologies
+            WHERE id = %s AND user_id = %s AND is_active = TRUE
+            """,
+            ontology_id,
+            user_id,
         )
 
-        if result.data and len(result.data) > 0:
-            yaml_content = result.data[0]["yaml_content"]
+        if record and record.get("yaml_content"):
+            yaml_content = record["yaml_content"]
             # Validate that the retrieved content is valid YAML
             try:
                 yaml.safe_load(yaml_content)

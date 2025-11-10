@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import pytest
@@ -14,69 +13,6 @@ from app.services.quality.models import (
     QualitySeverity,
     QualityViolation,
 )
-
-
-class FakeQuery:
-    def __init__(self, rows: List[Dict[str, Any]]) -> None:
-        self._rows = rows
-        self._filters: List[Dict[str, Any]] = []
-        self._order: Dict[str, Any] | None = None
-        self._limit: int | None = None
-
-    def select(self, *_args, **_kwargs):
-        return self
-
-    def eq(self, column: str, value: Any):
-        self._filters.append({"op": "eq", "column": column, "value": value})
-        return self
-
-    def gte(self, column: str, value: str):
-        self._filters.append({"op": "gte", "column": column, "value": value})
-        return self
-
-    def order(self, column: str, desc: bool = False):
-        self._order = {"column": column, "desc": desc}
-        return self
-
-    def limit(self, value: int):
-        self._limit = value
-        return self
-
-    def execute(self):
-        data = list(self._rows)
-        for filt in self._filters:
-            if filt["op"] == "eq":
-                data = [row for row in data if row.get(filt["column"]) == filt["value"]]
-            elif filt["op"] == "gte":
-                threshold = datetime.fromisoformat(filt["value"].replace("Z", "+00:00"))
-                data = [
-                    row
-                    for row in data
-                    if datetime.fromisoformat(
-                        row[filt["column"]].replace("Z", "+00:00")
-                    )
-                    >= threshold
-                ]
-        if self._order:
-            column = self._order["column"]
-            reverse = bool(self._order.get("desc"))
-            data = sorted(data, key=lambda row: row[column], reverse=reverse)
-        if self._limit is not None:
-            data = data[: self._limit]
-        return SimpleNamespace(data=data)
-
-
-class FakeSupabase:
-    def __init__(self, tables: Dict[str, List[Dict[str, Any]]]):
-        self._tables = tables
-
-    def table(self, name: str) -> FakeQuery:
-        return FakeQuery(list(self._tables.get(name, [])))
-
-
-class FakeUsageService:
-    def __init__(self, supabase: FakeSupabase) -> None:
-        self.supabase = supabase
 
 
 def _build_quality_results(
@@ -207,15 +143,18 @@ def dashboard_client(monkeypatch):
         },
     ]
 
-    supabase = FakeSupabase(
-        {
-            "document_usage": document_rows,
-            "llm_usage": llm_rows,
-        }
-    )
+    async def fake_fetch(query: str, *params):
+        if "FROM llm_usage" in query:
+            return list(llm_rows)
+        raise AssertionError(f"Unexpected query: {query}")
 
-    usage_service = FakeUsageService(supabase)
-    monkeypatch.setattr("app.api.dashboard.usage_tracking_service", usage_service)
+    def fake_sync_fetch(query: str, *params):
+        if "FROM document_usage" in query:
+            return list(document_rows)
+        raise AssertionError(f"Unexpected sync query: {query}")
+
+    monkeypatch.setattr("app.api.dashboard.db.fetch", fake_fetch)
+    monkeypatch.setattr("app.api.dashboard.db.sync_fetch", fake_sync_fetch)
 
     violation = QualityViolation(
         rule_id="Company.name.missing",

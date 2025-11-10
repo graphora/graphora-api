@@ -13,3 +13,25 @@ services:
   neo4j-prod:
     environment:
       NEO4J_PROD_PASSWORD: super-secure-password
+
+  postgres:
+    # Point Postgres at a custom host path or alternate Docker volume if you run out of space.
+    # Example: POSTGRES_DATA_SOURCE=~/graphora-pg-data make dev-up
+    volumes:
+      - ${POSTGRES_DATA_SOURCE:-./.docker-data/postgres}:/var/lib/postgresql/data
+
+  redis:
+    volumes:
+      - ${REDIS_DATA_SOURCE:-./.docker-data/redis}:/data
+
+  neo4j-staging:
+    volumes:
+      - ${NEO4J_STAGING_DATA_SOURCE:-./.docker-data/neo4j-staging/data}:/data
+      - ${NEO4J_STAGING_LOG_SOURCE:-./.docker-data/neo4j-staging/logs}:/logs
+      - ${NEO4J_STAGING_IMPORT_SOURCE:-./.docker-data/neo4j-staging/import}:/import
+
+  neo4j-prod:
+    volumes:
+      - ${NEO4J_PROD_DATA_SOURCE:-./.docker-data/neo4j-prod/data}:/data
+      - ${NEO4J_PROD_LOG_SOURCE:-./.docker-data/neo4j-prod/logs}:/logs
+      - ${NEO4J_PROD_IMPORT_SOURCE:-./.docker-data/neo4j-prod/import}:/import

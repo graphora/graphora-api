@@ -81,19 +81,6 @@ class GeminiConfigRequest(BaseModel):
         return v.strip()
 
 
-class AIConfigResponse(BaseModel):
-    """Schema for AI configuration API responses"""
-
-    success: bool = True
-    message: Optional[str] = None
-    error: Optional[str] = None
-
-    # Response data
-    user_config: Optional[UserAIConfig] = None
-    providers: Optional[list[AIProvider]] = None
-    models: Optional[list[AIModel]] = None
-
-
 class UserAIConfigDisplay(BaseModel):
     """Schema for displaying user AI config (with masked API key)"""
 
@@ -108,3 +95,4 @@ class UserAIConfigDisplay(BaseModel):
     )
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+

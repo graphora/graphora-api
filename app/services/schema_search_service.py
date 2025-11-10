@@ -2,23 +2,22 @@ import logging
 import time
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from supabase import create_client, Client
 
 from app.schemas.schema import SchemaSearchResponse, SchemaSearchResult, StoredSchema
 from app.config import settings
+from app.db import postgres as db
 
 logger = logging.getLogger(__name__)
 
 
 class SchemaSearchService:
-    """Service for searching schemas using vector similarity and text search"""
+    """Service for searching schemas using vector similarity and text search."""
 
     def __init__(self):
-        self.supabase: Client = create_client(
-            settings.SUPABASE_URL, settings.SUPABASE_KEY
-        )
+        if not (settings.DATABASE_URL or settings.resolved_database_url):
+            if not settings.test_mode:
+                raise ValueError("DATABASE_URL must be configured for schema search")
         self.schemas_table = "generated_schemas"
-        self.embeddings_table = "schema_embeddings"
 
     async def search_schemas(
         self,
@@ -71,31 +70,32 @@ class SchemaSearchService:
         """Perform text-based search as fallback"""
 
         try:
-            # Build base query - always include content field for StoredSchema compatibility
-            select_fields = "id, title, description, content, domain, tags, created_at, updated_at, usage_count, user_id"
-
-            # Search in public schemas and user's own schemas
-            query_builder = (
-                self.supabase.table(self.schemas_table)
-                .select(select_fields)
-                .or_(f"user_id.eq.{user_id},is_public.eq.true")
-            )
-
-            # Add domain filter if specified
+            params: List[Any] = [user_id]
+            domain_clause = ""
             if domain and domain != "Other":
-                query_builder = query_builder.eq("domain", domain)
+                domain_clause = " AND domain = %s"
+                params.append(domain)
 
-            # Execute query
-            result = (
-                query_builder.order("usage_count", desc=True).limit(limit * 2).execute()
+            params.append(limit * 2)
+
+            rows = await db.fetch(
+                f"""
+                SELECT id, title, description, content, domain, tags,
+                       created_at, updated_at, usage_count, user_id, is_public
+                FROM {self.schemas_table}
+                WHERE (user_id = %s OR is_public = TRUE){domain_clause}
+                ORDER BY usage_count DESC, updated_at DESC
+                LIMIT %s
+                """,
+                *params,
             )
 
-            if not result.data:
+            if not rows:
                 return []
 
             # Convert to StoredSchema objects for easier handling
             schemas = []
-            for item in result.data:
+            for item in rows:
                 try:
                     # Ensure required fields have default values if missing
                     schema_data = {
@@ -240,23 +240,28 @@ class SchemaSearchService:
         """Get popular schemas filtered by domain"""
 
         try:
-            query_builder = (
-                self.supabase.table(self.schemas_table)
-                .select(
-                    "id, title, description, domain, tags, created_at, updated_at, usage_count, user_id"
-                )
-                .eq("is_public", True)
-            )
-
+            params: List[Any] = []
+            domain_clause = ""
             if domain and domain != "Other":
-                query_builder = query_builder.eq("domain", domain)
+                domain_clause = " AND domain = %s"
+                params.append(domain)
 
-            result = (
-                query_builder.order("usage_count", desc=True).limit(limit).execute()
+            params.append(limit)
+
+            rows = await db.fetch(
+                f"""
+                SELECT id, title, description, domain, tags,
+                       created_at, updated_at, usage_count, user_id
+                FROM {self.schemas_table}
+                WHERE is_public = TRUE{domain_clause}
+                ORDER BY usage_count DESC, updated_at DESC
+                LIMIT %s
+                """,
+                *params,
             )
 
             search_results = []
-            for item in result.data:
+            for item in rows or []:
                 search_result = SchemaSearchResult(
                     id=item["id"],
                     title=item["title"],
@@ -284,21 +289,22 @@ class SchemaSearchService:
         """Get schemas related to a given schema"""
 
         try:
-            # Get the source schema
-            source_schema = (
-                self.supabase.table(self.schemas_table)
-                .select("title, description, domain, tags")
-                .eq("id", schema_id)
-                .single()
-                .execute()
+            source_schema = await db.fetchrow(
+                f"""
+                SELECT title, description, domain, tags
+                FROM {self.schemas_table}
+                WHERE id = %s
+                """,
+                schema_id,
             )
 
-            if not source_schema.data:
+            if not source_schema:
                 return []
 
             # Create a search query from the source schema
-            query_parts = [source_schema.data["domain"], source_schema.data["title"]]
-            query_parts.extend(source_schema.data["tags"][:3])  # Add some tags
+            query_parts = [source_schema["domain"], source_schema["title"]]
+            tags = source_schema.get("tags") or []
+            query_parts.extend(tags[:3])  # Add some tags
 
             search_query = " ".join(query_parts)
 
@@ -306,7 +312,7 @@ class SchemaSearchService:
             results = await self.search_schemas(
                 user_id=user_id,
                 query=search_query,
-                domain=source_schema.data["domain"],
+                domain=source_schema["domain"],
                 limit=limit + 1,  # Get one extra in case source schema is included
                 threshold=0.3,
             )
