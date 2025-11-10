@@ -1,12 +1,13 @@
-"""Audit Trail Service for tracking operations in Supabase"""
+"""Audit Trail Service for tracking operations in Postgres."""
 
 import logging
-from datetime import datetime
 from typing import Dict, Any, Optional, List
 from enum import Enum
 
-from supabase import create_client, Client
+from psycopg.types.json import Json
+
 from app.config import settings
+from app.db import postgres as db
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +45,9 @@ class AuditService:
     """Service for logging audit trails"""
 
     def __init__(self):
-        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be configured")
-
-        self.supabase: Client = create_client(
-            settings.SUPABASE_URL, settings.SUPABASE_KEY
-        )
+        if not (settings.DATABASE_URL or settings.resolved_database_url):
+            if not settings.test_mode:
+                raise ValueError("DATABASE_URL must be configured for audit service")
 
     async def log_operation_start(
         self,
@@ -65,21 +63,29 @@ class AuditService:
             audit_id: ID of the created audit record
         """
         try:
-            audit_data = {
-                "user_id": user_id,
-                "operation_type": operation_type.value,
-                "operation_id": operation_id,
-                "resource_name": resource_name,
-                "status": OperationStatus.IN_PROGRESS.value,
-                "metadata": metadata or {},
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
-            }
+            row = await db.fetchrow(
+                """
+                INSERT INTO audit_trail (
+                    user_id,
+                    operation_type,
+                    operation_id,
+                    resource_name,
+                    status,
+                    metadata
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                user_id,
+                operation_type.value,
+                operation_id,
+                resource_name,
+                OperationStatus.IN_PROGRESS.value,
+                Json(metadata or {}),
+            )
 
-            result = self.supabase.table("audit_trail").insert(audit_data).execute()
-
-            if result.data and len(result.data) > 0:
-                audit_id = result.data[0]["id"]
+            if row:
+                audit_id = row["id"]
                 logger.info(
                     f"Started audit trail {audit_id} for {operation_type.value} by user {user_id}"
                 )
@@ -100,36 +106,25 @@ class AuditService:
     ) -> bool:
         """Log successful completion of an operation"""
         try:
-            update_data = {
-                "status": OperationStatus.SUCCESS.value,
-                "updated_at": datetime.utcnow().isoformat(),
-            }
+            merged_metadata = await self._merge_metadata(audit_id, metadata)
 
-            if duration_ms is not None:
-                update_data["duration_ms"] = duration_ms
-
-            if metadata:
-                # Merge with existing metadata
-                existing_record = (
-                    self.supabase.table("audit_trail")
-                    .select("metadata")
-                    .eq("id", audit_id)
-                    .execute()
-                )
-                if existing_record.data and len(existing_record.data) > 0:
-                    existing_metadata = existing_record.data[0].get("metadata", {})
-                    update_data["metadata"] = {**existing_metadata, **metadata}
-                else:
-                    update_data["metadata"] = metadata
-
-            result = (
-                self.supabase.table("audit_trail")
-                .update(update_data)
-                .eq("id", audit_id)
-                .execute()
+            row = await db.fetchrow(
+                """
+                UPDATE audit_trail
+                SET status = %s,
+                    duration_ms = COALESCE(%s, duration_ms),
+                    metadata = COALESCE(%s::jsonb, metadata),
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING id
+                """,
+                OperationStatus.SUCCESS.value,
+                duration_ms,
+                Json(merged_metadata) if merged_metadata is not None else None,
+                audit_id,
             )
 
-            if result.data and len(result.data) > 0:
+            if row:
                 logger.info(f"Successfully completed audit trail {audit_id}")
                 return True
             else:
@@ -149,37 +144,27 @@ class AuditService:
     ) -> bool:
         """Log failed completion of an operation"""
         try:
-            update_data = {
-                "status": OperationStatus.FAILED.value,
-                "error_message": error_message,
-                "updated_at": datetime.utcnow().isoformat(),
-            }
+            merged_metadata = await self._merge_metadata(audit_id, metadata)
 
-            if duration_ms is not None:
-                update_data["duration_ms"] = duration_ms
-
-            if metadata:
-                # Merge with existing metadata
-                existing_record = (
-                    self.supabase.table("audit_trail")
-                    .select("metadata")
-                    .eq("id", audit_id)
-                    .execute()
-                )
-                if existing_record.data and len(existing_record.data) > 0:
-                    existing_metadata = existing_record.data[0].get("metadata", {})
-                    update_data["metadata"] = {**existing_metadata, **metadata}
-                else:
-                    update_data["metadata"] = metadata
-
-            result = (
-                self.supabase.table("audit_trail")
-                .update(update_data)
-                .eq("id", audit_id)
-                .execute()
+            row = await db.fetchrow(
+                """
+                UPDATE audit_trail
+                SET status = %s,
+                    error_message = %s,
+                    duration_ms = COALESCE(%s, duration_ms),
+                    metadata = COALESCE(%s::jsonb, metadata),
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING id
+                """,
+                OperationStatus.FAILED.value,
+                error_message,
+                duration_ms,
+                Json(merged_metadata) if merged_metadata is not None else None,
+                audit_id,
             )
 
-            if result.data and len(result.data) > 0:
+            if row:
                 logger.info(
                     f"Logged failure for audit trail {audit_id}: {error_message}"
                 )
@@ -204,48 +189,50 @@ class AuditService:
         """Log the end of an operation by finding and updating the audit record"""
         try:
             # Find the audit record by user_id and operation_id
-            existing_record = (
-                self.supabase.table("audit_trail")
-                .select("id, metadata")
-                .eq("user_id", user_id)
-                .eq("operation_id", operation_id)
-                .order("created_at", desc=True)
-                .limit(1)
-                .execute()
+            record = await db.fetchrow(
+                """
+                SELECT id, metadata
+                FROM audit_trail
+                WHERE user_id = %s AND operation_id = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                user_id,
+                operation_id,
             )
 
-            if not existing_record.data or len(existing_record.data) == 0:
+            if not record:
                 logger.error(
                     f"No audit record found for user {user_id} and operation {operation_id}"
                 )
                 return False
 
-            audit_id = existing_record.data[0]["id"]
-            existing_metadata = existing_record.data[0].get("metadata", {})
-
-            update_data = {
-                "status": status.value,
-                "updated_at": datetime.utcnow().isoformat(),
-            }
-
-            if duration_ms is not None:
-                update_data["duration_ms"] = duration_ms
-
-            if error_message:
-                update_data["error_message"] = error_message
-
+            merged_metadata: Optional[Dict[str, Any]] = None
             if metadata:
-                # Merge with existing metadata
-                update_data["metadata"] = {**existing_metadata, **metadata}
+                existing_metadata = record.get("metadata") or {}
+                merged_metadata = {**existing_metadata, **metadata}
 
-            result = (
-                self.supabase.table("audit_trail")
-                .update(update_data)
-                .eq("id", audit_id)
-                .execute()
+            audit_id = record["id"]
+
+            row = await db.fetchrow(
+                """
+                UPDATE audit_trail
+                SET status = %s,
+                    duration_ms = COALESCE(%s, duration_ms),
+                    error_message = %s,
+                    metadata = COALESCE(%s::jsonb, metadata),
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING id
+                """,
+                status.value,
+                duration_ms,
+                error_message,
+                Json(merged_metadata) if merged_metadata is not None else None,
+                audit_id,
             )
 
-            if result.data and len(result.data) > 0:
+            if row:
                 logger.info(
                     f"Logged end of operation {operation_id} for user {user_id} with status {status.value}"
                 )
@@ -271,23 +258,33 @@ class AuditService:
     ) -> str:
         """Log a complete operation in one call"""
         try:
-            audit_data = {
-                "user_id": user_id,
-                "operation_type": operation_type.value,
-                "operation_id": operation_id,
-                "resource_name": resource_name,
-                "status": status.value,
-                "metadata": metadata or {},
-                "error_message": error_message,
-                "duration_ms": duration_ms,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
-            }
+            row = await db.fetchrow(
+                """
+                INSERT INTO audit_trail (
+                    user_id,
+                    operation_type,
+                    operation_id,
+                    resource_name,
+                    status,
+                    metadata,
+                    error_message,
+                    duration_ms
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                user_id,
+                operation_type.value,
+                operation_id,
+                resource_name,
+                status.value,
+                Json(metadata or {}),
+                error_message,
+                duration_ms,
+            )
 
-            result = self.supabase.table("audit_trail").insert(audit_data).execute()
-
-            if result.data and len(result.data) > 0:
-                audit_id = result.data[0]["id"]
+            if row:
+                audit_id = row["id"]
                 logger.info(
                     f"Logged audit trail {audit_id} for {operation_type.value} by user {user_id}"
                 )
@@ -309,20 +306,25 @@ class AuditService:
     ) -> List[Dict[str, Any]]:
         """Get audit trail for a user"""
         try:
-            query = (
-                self.supabase.table("audit_trail").select("*").eq("user_id", user_id)
-            )
-
+            params: List[Any] = [user_id]
+            filters = "WHERE user_id = %s"
             if operation_type:
-                query = query.eq("operation_type", operation_type.value)
+                filters += " AND operation_type = %s"
+                params.append(operation_type.value)
 
-            result = (
-                query.order("created_at", desc=True)
-                .range(offset, offset + limit - 1)
-                .execute()
+            params.extend([limit, offset])
+            rows = await db.fetch(
+                f"""
+                SELECT *
+                FROM audit_trail
+                {filters}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                *params,
             )
 
-            return result.data or []
+            return rows or []
 
         except Exception as e:
             logger.error(f"Error fetching audit trail: {str(e)}")
@@ -332,14 +334,14 @@ class AuditService:
         """Get audit trail summary for dashboard"""
         try:
             # Get counts by operation type
-            result = (
-                self.supabase.table("audit_trail")
-                .select("operation_type, status")
-                .eq("user_id", user_id)
-                .execute()
+            operations = await db.fetch(
+                """
+                SELECT operation_type, status
+                FROM audit_trail
+                WHERE user_id = %s
+                """,
+                user_id,
             )
-
-            operations = result.data or []
 
             summary = {
                 "total_operations": len(operations),
@@ -365,16 +367,16 @@ class AuditService:
                 summary["by_status"][status] += 1
 
             # Get recent operations
-            recent_result = (
-                self.supabase.table("audit_trail")
-                .select("*")
-                .eq("user_id", user_id)
-                .order("created_at", desc=True)
-                .limit(10)
-                .execute()
+            summary["recent_operations"] = await db.fetch(
+                """
+                SELECT *
+                FROM audit_trail
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT 10
+                """,
+                user_id,
             )
-
-            summary["recent_operations"] = recent_result.data or []
 
             return summary
 
@@ -386,6 +388,22 @@ class AuditService:
                 "by_status": {},
                 "recent_operations": [],
             }
+
+    async def _merge_metadata(
+        self, audit_id: str, metadata: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        if not metadata:
+            return None
+
+        existing = await db.fetchrow(
+            "SELECT metadata FROM audit_trail WHERE id = %s",
+            audit_id,
+        )
+        existing_metadata = {}
+        if existing and existing.get("metadata"):
+            existing_metadata = existing["metadata"]
+
+        return {**existing_metadata, **metadata}
 
 
 # Create global instance

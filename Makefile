@@ -1,4 +1,4 @@
-.PHONY: dev start test test-unit test-integration help lint format deadcode openapi-snapshot typecheck pre-commit dev-up dev-down dev-logs dev-shell dev-rebuild
+.PHONY: dev start test test-unit test-integration help lint format deadcode openapi-snapshot typecheck pre-commit dev-up dev-down dev-logs dev-shell dev-rebuild dev-reset-postgres dev-reset-neo4j dev-reset-redis
 
 DEV_COMPOSE ?= docker compose -f docker-compose.dev.yml
 
@@ -18,6 +18,9 @@ help:
 	@echo "  make dev-down - Stop stack, remove containers + volumes"
 	@echo "  make dev-logs - Tail API logs from docker stack"
 	@echo "  make dev-shell - Open a shell inside the API container"
+	@echo "  make dev-reset-postgres - Delete the local Postgres data dir (./.docker-data/postgres)"
+	@echo "  make dev-reset-neo4j - Delete the local Neo4j data dirs (./.docker-data/neo4j-*)"
+	@echo "  make dev-reset-redis - Delete the local Redis data dir (./.docker-data/redis)"
 
 dev:
 	LOG_LEVEL=DEBUG uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
@@ -26,6 +29,14 @@ start:
 	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 dev-up:
+	mkdir -p .docker-data/postgres \
+		.docker-data/redis \
+		.docker-data/neo4j-staging/data \
+		.docker-data/neo4j-staging/logs \
+		.docker-data/neo4j-staging/import \
+		.docker-data/neo4j-prod/data \
+		.docker-data/neo4j-prod/logs \
+		.docker-data/neo4j-prod/import
 	$(DEV_COMPOSE) up -d --build
 
 dev-down:
@@ -40,6 +51,19 @@ dev-shell:
 dev-rebuild:
 	$(DEV_COMPOSE) build --pull --no-cache
 	$(DEV_COMPOSE) up -d
+
+dev-reset-postgres:
+	rm -rf .docker-data/postgres
+	-docker volume rm graphora-dev_postgres-data >/dev/null 2>&1 || true
+
+dev-reset-neo4j:
+	rm -rf .docker-data/neo4j-staging .docker-data/neo4j-prod
+	-docker volume rm graphora-dev_neo4j-staging-data graphora-dev_neo4j-staging-logs graphora-dev_neo4j-staging-import \
+		graphora-dev_neo4j-prod-data graphora-dev_neo4j-prod-logs graphora-dev_neo4j-prod-import >/dev/null 2>&1 || true
+
+dev-reset-redis:
+	rm -rf .docker-data/redis
+	-docker volume rm graphora-dev_redis-data >/dev/null 2>&1 || true
 
 test:
 	uv run pytest

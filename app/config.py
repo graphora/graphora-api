@@ -245,6 +245,19 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = Field(default="", description="Supabase URL")
     SUPABASE_KEY: str = Field(default="", description="Supabase key")
 
+    # Postgres / application database
+    DATABASE_URL: str = Field(
+        default="",
+        description="SQLAlchemy/asyncpg compatible Postgres connection string",
+    )
+    POSTGRES_HOST: Optional[str] = Field(default=None)
+    POSTGRES_PORT: int = Field(default=5432)
+    POSTGRES_DB: Optional[str] = Field(default=None)
+    POSTGRES_USER: Optional[str] = Field(default=None)
+    POSTGRES_PASSWORD: Optional[str] = Field(default=None)
+    DB_POOL_MIN_SIZE: int = Field(default=1)
+    DB_POOL_MAX_SIZE: int = Field(default=10)
+
     # Security Settings
     ENCRYPTION_MASTER_KEY: Optional[str] = Field(
         default=None,
@@ -296,12 +309,27 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @property
+    def resolved_database_url(self) -> str:
+        if self.DATABASE_URL:
+            return self.DATABASE_URL
+        if self.POSTGRES_HOST and self.POSTGRES_DB and self.POSTGRES_USER:
+            password = self.POSTGRES_PASSWORD or ""
+            auth = f":{password}" if password else ""
+            return (
+                f"postgresql://{self.POSTGRES_USER}{auth}@{self.POSTGRES_HOST}:"
+                f"{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+            )
+        return ""
+
 
 @lru_cache()
 def get_settings() -> Settings:
     """Create and cache application settings."""
     try:
         settings = Settings()
+        if not settings.DATABASE_URL:
+            settings.DATABASE_URL = settings.resolved_database_url
         print(f"Loaded settings from environment with LOG_LEVEL={settings.LOG_LEVEL}")
         return settings
     except Exception as e:

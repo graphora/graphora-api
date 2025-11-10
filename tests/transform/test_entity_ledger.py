@@ -7,14 +7,14 @@ from app.services.transform.helpers import _make_canonical_node_id
 
 
 @pytest.fixture(autouse=True)
-def disable_supabase(monkeypatch):
-    monkeypatch.setattr(settings, "SUPABASE_URL", "")
-    monkeypatch.setattr(settings, "SUPABASE_KEY", "")
+def disable_database(monkeypatch):
+    monkeypatch.setattr(settings, "DATABASE_URL", "")
+    monkeypatch.setattr(settings, "POSTGRES_HOST", None)
 
 
 @pytest.mark.asyncio
 async def test_entity_ledger_memory_store_roundtrip():
-    service = EntityLedgerService(supabase_client=None, memory_store={})
+    service = EntityLedgerService(memory_store={})
 
     canonical_key = "Company:name=acme"
     canonical_id = _make_canonical_node_id(canonical_key)
@@ -48,53 +48,9 @@ async def test_entity_ledger_memory_store_roundtrip():
 
 @pytest.mark.asyncio
 async def test_entity_ledger_ignore_missing_user():
-    service = EntityLedgerService(supabase_client=None, memory_store={})
+    service = EntityLedgerService(memory_store={})
 
     node = BaseNode(type="Company")
     await service.hydrate_nodes(None, [node])
     await service.record_nodes(None, [node])
     # no exceptions
-
-
-class _DummyTable:
-    def __init__(self) -> None:
-        self.calls = []
-
-    def upsert(self, data, on_conflict=None):  # type: ignore[override]
-        self.calls.append((data, on_conflict))
-        return self
-
-    def execute(self):  # pragma: no cover - simple stub
-        class _Response:
-            data = []
-
-        return _Response()
-
-
-class _DummySupabaseClient:
-    def __init__(self, table: _DummyTable) -> None:
-        self._table = table
-
-    def table(self, name: str):  # type: ignore[override]
-        assert name == EntityLedgerService.TABLE_NAME
-        return self._table
-
-
-@pytest.mark.asyncio
-async def test_entity_ledger_supabase_upsert_uses_composite_constraint(monkeypatch):
-    dummy_table = _DummyTable()
-    dummy_client = _DummySupabaseClient(dummy_table)
-    service = EntityLedgerService(supabase_client=dummy_client, memory_store=None)
-
-    node = BaseNode(
-        type="Company",
-        canonical_key="Company:name=acme",
-        canonical_id="canonical-id",
-        canonical_properties={"name": "acme"},
-    )
-
-    await service.record_nodes("user-1", [node])
-
-    assert dummy_table.calls, "Expected upsert to be invoked"
-    _, on_conflict = dummy_table.calls[0]
-    assert on_conflict == "user_id,entity_type,canonical_key"

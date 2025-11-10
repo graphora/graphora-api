@@ -32,6 +32,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       PREFECT_API_URL: http://prefect:${PREFECT_PORT:-4200}/api
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-graphora}:${POSTGRES_PASSWORD:-graphora}@postgres:5432/${POSTGRES_DB:-graphora}}
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_KEY: ${SUPABASE_KEY}
       CLERK_JWKS_URL: ${CLERK_JWKS_URL}
@@ -41,9 +42,14 @@ services:
     volumes:
       - .:/app:delegated
       - uv-cache:/home/appuser/.cache/uv
+      - uv-venv:/opt/graphora/.venv
     ports:
       - "${API_PORT:-8000}:${API_PORT:-8000}"
     depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       neo4j-staging:
@@ -59,12 +65,48 @@ services:
       retries: 5
       start_period: 30s
 
+  db-migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.migrate
+    image: graphora-migrate:latest
+    container_name: graphora-db-migrate
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-graphora}:${POSTGRES_PASSWORD:-graphora}@postgres:5432/${POSTGRES_DB:-graphora}}
+    volumes:
+      - .:/app:delegated
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  postgres:
+    image: pgvector/pgvector:0.7.4-pg16
+    container_name: graphora-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-graphora}
+      POSTGRES_USER: ${POSTGRES_USER:-graphora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-graphora}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ${POSTGRES_DATA_SOURCE:-./.docker-data/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-graphora} -d ${POSTGRES_DB:-graphora}
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     container_name: graphora-redis
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - redis-data:/data
+      - ${REDIS_DATA_SOURCE:-./.docker-data/redis}:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -87,9 +129,9 @@ services:
       - "${NEO4J_STAGING_HTTP_PORT:-7474}:7474"
       - "${NEO4J_STAGING_BOLT_PORT:-7687}:7687"
     volumes:
-      - neo4j-staging-data:/data
-      - neo4j-staging-logs:/logs
-      - neo4j-staging-import:/import
+      - ${NEO4J_STAGING_DATA_SOURCE:-./.docker-data/neo4j-staging/data}:/data
+      - ${NEO4J_STAGING_LOG_SOURCE:-./.docker-data/neo4j-staging/logs}:/logs
+      - ${NEO4J_STAGING_IMPORT_SOURCE:-./.docker-data/neo4j-staging/import}:/import
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_STAGING_USER:-neo4j} -p ${NEO4J_STAGING_PASSWORD:-staging_password} 'RETURN 1'"]
       interval: 30s
@@ -112,9 +154,9 @@ services:
       - "${NEO4J_PROD_HTTP_PORT:-8474}:7474"
       - "${NEO4J_PROD_BOLT_PORT:-8687}:7687"
     volumes:
-      - neo4j-prod-data:/data
-      - neo4j-prod-logs:/logs
-      - neo4j-prod-import:/import
+      - ${NEO4J_PROD_DATA_SOURCE:-./.docker-data/neo4j-prod/data}:/data
+      - ${NEO4J_PROD_LOG_SOURCE:-./.docker-data/neo4j-prod/logs}:/logs
+      - ${NEO4J_PROD_IMPORT_SOURCE:-./.docker-data/neo4j-prod/import}:/import
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_PROD_USER:-neo4j} -p ${NEO4J_PROD_PASSWORD:-prod_password} 'RETURN 1'"]
       interval: 30s
@@ -150,6 +192,7 @@ services:
 
 volumes:
   redis-data:
+  postgres-data:
   neo4j-staging-data:
   neo4j-staging-logs:
   neo4j-staging-import:
@@ -157,3 +200,4 @@ volumes:
   neo4j-prod-logs:
   neo4j-prod-import:
   uv-cache:
+  uv-venv:

@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional
 
-from supabase import Client, create_client
+from psycopg.types.json import Json
 
 from app.config import settings
+from app.db import postgres as db
 from app.services.transform.models import BaseNode
 
 logger = logging.getLogger(__name__)
@@ -34,28 +35,9 @@ class EntityLedgerService:
 
     def __init__(
         self,
-        supabase_client: Optional[Client] = None,
         memory_store: Optional[Dict[tuple, EntityLedgerEntry]] = None,
     ) -> None:
-        if supabase_client is not None:
-            self._client = supabase_client
-            self._enabled = True
-        elif settings.SUPABASE_URL and settings.SUPABASE_KEY:
-            try:
-                self._client = create_client(
-                    settings.SUPABASE_URL, settings.SUPABASE_KEY
-                )
-                self._enabled = True
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(
-                    "Failed to initialise Supabase client for entity ledger: %s", exc
-                )
-                self._client = None
-                self._enabled = False
-        else:
-            self._client = None
-            self._enabled = False
-
+        self._enabled = bool(settings.DATABASE_URL or settings.resolved_database_url)
         self._memory_store: Dict[tuple, EntityLedgerEntry] = memory_store or {}
 
     # Public API -----------------------------------------------------------------
@@ -111,15 +93,44 @@ class EntityLedgerService:
         if not records:
             return
 
-        if self._enabled and self._client is not None:
+        if self._enabled:
             try:
                 chunk_size = 50
+                query = """
+                    INSERT INTO entity_ledger (
+                        user_id,
+                        entity_type,
+                        canonical_key,
+                        canonical_id,
+                        features,
+                        confidence,
+                        first_seen_at,
+                        updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, entity_type, canonical_key)
+                    DO UPDATE SET
+                        canonical_id = EXCLUDED.canonical_id,
+                        features = EXCLUDED.features,
+                        confidence = EXCLUDED.confidence,
+                        updated_at = EXCLUDED.updated_at
+                """
                 for idx in range(0, len(records), chunk_size):
                     chunk = records[idx : idx + chunk_size]
-                    self._client.table(self.TABLE_NAME).upsert(
-                        chunk,
-                        on_conflict="user_id,entity_type,canonical_key",
-                    ).execute()
+                    params = [
+                        (
+                            record["user_id"],
+                            record["entity_type"],
+                            record["canonical_key"],
+                            record["canonical_id"],
+                            Json(record["features"]),
+                            record.get("confidence"),
+                            record["first_seen_at"],
+                            record["updated_at"],
+                        )
+                        for record in chunk
+                    ]
+                    await db.executemany(query, params)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Failed to upsert entity ledger entries: %s", exc)
         else:
@@ -162,20 +173,21 @@ class EntityLedgerService:
 
         results: Dict[tuple, EntityLedgerEntry] = {}
 
-        if self._enabled and self._client is not None:
+        if self._enabled:
             try:
                 for entity_type, key_list in keys_by_type.items():
-                    response = (
-                        self._client.table(self.TABLE_NAME)
-                        .select(
-                            "canonical_key, canonical_id, features, confidence, first_seen_at, updated_at"
-                        )
-                        .eq("user_id", user_id)
-                        .eq("entity_type", entity_type)
-                        .in_("canonical_key", key_list)
-                        .execute()
+                    rows = await db.fetch(
+                        """
+                        SELECT canonical_key, canonical_id, features, confidence,
+                               first_seen_at, updated_at
+                        FROM entity_ledger
+                        WHERE user_id = %s AND entity_type = %s AND canonical_key = ANY(%s)
+                        """,
+                        user_id,
+                        entity_type,
+                        key_list,
                     )
-                    for row in response.data or []:
+                    for row in rows or []:
                         results[(entity_type, row["canonical_key"])] = (
                             EntityLedgerEntry(
                                 user_id=user_id,

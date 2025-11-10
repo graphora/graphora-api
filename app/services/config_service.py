@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 from typing import Optional
 import uuid
 from datetime import datetime, timezone
-from supabase import create_client, Client
-from app.config import get_settings
+
+from app.config import settings
+from app.db import postgres as db
 from app.schemas.config import (
     UserConfig,
     DatabaseConfig,
@@ -13,329 +16,231 @@ from app.schemas.config import (
 from app.utils.logger import logger
 from app.utils.encryption import encrypt_password, decrypt_password
 
-settings = get_settings()
-
 
 class ConfigService:
-    """Service for managing user configurations in Supabase"""
+    """Service for managing user database configurations."""
 
-    def __init__(self):
-        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be configured")
-
-        self.supabase: Client = create_client(
-            settings.SUPABASE_URL, settings.SUPABASE_KEY
-        )
+    def __init__(self) -> None:
+        if not (settings.DATABASE_URL or settings.resolved_database_url):
+            if not settings.test_mode:
+                raise ValueError("DATABASE_URL must be configured")
 
     async def get_user_config(self, user_id: str) -> Optional[UserConfig]:
+        query = """
+            SELECT
+                c.id,
+                c.user_id,
+                c.created_at,
+                c.updated_at,
+                json_build_object(
+                    'id', s.id,
+                    'name', s.name,
+                    'uri', s.uri,
+                    'username', s.username,
+                    'password', s.password
+                ) AS staging_db,
+                json_build_object(
+                    'id', p.id,
+                    'name', p.name,
+                    'uri', p.uri,
+                    'username', p.username,
+                    'password', p.password
+                ) AS prod_db
+            FROM configs c
+            JOIN database_configs s ON s.id = c.staging_db_id
+            JOIN database_configs p ON p.id = c.prod_db_id
+            WHERE c.user_id = %s
+            LIMIT 1
         """
-        Retrieve user configuration by user ID
 
-        Args:
-            user_id: User's ID
+        record = await db.fetchrow(query, user_id)
+        if not record:
+            logger.info("No configuration found for user %s", user_id)
+            return None
 
-        Returns:
-            UserConfig if found, None otherwise
-        """
-        try:
-            # Query configs table with joins to database_configs
-            response = (
-                self.supabase.table("configs")
-                .select(
-                    """
-                id,
-                user_id,
-                created_at,
-                updated_at,
-                staging_db:staging_db_id(id, name, uri, username, password),
-                prod_db:prod_db_id(id, name, uri, username, password)
-                """
-                )
-                .eq("user_id", user_id)
-                .execute()
-            )
-
-            if not response.data:
-                logger.info(f"No configuration found for user: {user_id}")
-                return None
-
-            config_data = response.data[0]
-
-            # Convert to UserConfig schema with password decryption
-            user_config = UserConfig(
-                id=config_data["id"],
-                userId=config_data["user_id"],
-                stagingDb=DatabaseConfig(
-                    id=config_data["staging_db"]["id"],
-                    name=config_data["staging_db"]["name"],
-                    uri=config_data["staging_db"]["uri"],
-                    username=config_data["staging_db"]["username"],
-                    password=decrypt_password(config_data["staging_db"]["password"]),
-                ),
-                prodDb=DatabaseConfig(
-                    id=config_data["prod_db"]["id"],
-                    name=config_data["prod_db"]["name"],
-                    uri=config_data["prod_db"]["uri"],
-                    username=config_data["prod_db"]["username"],
-                    password=decrypt_password(config_data["prod_db"]["password"]),
-                ),
-                createdAt=datetime.fromisoformat(
-                    config_data["created_at"].replace("Z", "+00:00")
-                ),
-                updatedAt=datetime.fromisoformat(
-                    config_data["updated_at"].replace("Z", "+00:00")
-                ),
-            )
-
-            logger.info(f"Retrieved configuration for user: {user_id}")
-            return user_config
-
-        except Exception as e:
-            logger.error(f"Error retrieving user config for {user_id}: {str(e)}")
-            raise
+        return self._map_record_to_user_config(record)
 
     async def create_user_config(
         self, user_id: str, config_request: ConfigRequest
     ) -> UserConfig:
-        """
-        Create a new user configuration
+        existing = await self.get_user_config(user_id)
+        if existing:
+            raise ValueError(f"Configuration already exists for user: {user_id}")
 
-        Args:
-            config_request: Configuration data
+        staging_db_id = str(uuid.uuid4())
+        prod_db_id = str(uuid.uuid4())
+        config_id = str(uuid.uuid4())
 
-        Returns:
-            Created UserConfig
-        """
-        try:
-            # Check if user already has a configuration
-            existing_config = await self.get_user_config(user_id)
-            if existing_config:
-                raise ValueError(f"Configuration already exists for user: {user_id}")
-
-            # Create staging database config with encrypted password
-            staging_db_id = str(uuid.uuid4())
-            staging_db_response = (
-                self.supabase.table("database_configs")
-                .insert(
-                    {
-                        "id": staging_db_id,
-                        "name": config_request.stagingDb.name,
-                        "uri": config_request.stagingDb.uri,
-                        "username": config_request.stagingDb.username,
-                        "password": encrypt_password(config_request.stagingDb.password),
-                    }
-                )
-                .execute()
+        async with db.transaction() as cur:
+            await cur.execute(
+                """
+                INSERT INTO database_configs (id, name, uri, username, password)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    staging_db_id,
+                    config_request.stagingDb.name,
+                    config_request.stagingDb.uri,
+                    config_request.stagingDb.username,
+                    encrypt_password(config_request.stagingDb.password),
+                ),
             )
 
-            if not staging_db_response.data:
-                raise Exception("Failed to create staging database configuration")
-
-            # Create production database config with encrypted password
-            prod_db_id = str(uuid.uuid4())
-            prod_db_response = (
-                self.supabase.table("database_configs")
-                .insert(
-                    {
-                        "id": prod_db_id,
-                        "name": config_request.prodDb.name,
-                        "uri": config_request.prodDb.uri,
-                        "username": config_request.prodDb.username,
-                        "password": encrypt_password(config_request.prodDb.password),
-                    }
-                )
-                .execute()
+            await cur.execute(
+                """
+                INSERT INTO database_configs (id, name, uri, username, password)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    prod_db_id,
+                    config_request.prodDb.name,
+                    config_request.prodDb.uri,
+                    config_request.prodDb.username,
+                    encrypt_password(config_request.prodDb.password),
+                ),
             )
 
-            if not prod_db_response.data:
-                raise Exception("Failed to create production database configuration")
-
-            # Create user config
-            config_id = str(uuid.uuid4())
-            config_response = (
-                self.supabase.table("configs")
-                .insert(
-                    {
-                        "id": config_id,
-                        "user_id": user_id,
-                        "staging_db_id": staging_db_id,
-                        "prod_db_id": prod_db_id,
-                    }
-                )
-                .execute()
+            await cur.execute(
+                """
+                INSERT INTO configs (id, user_id, staging_db_id, prod_db_id)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (config_id, user_id, staging_db_id, prod_db_id),
             )
 
-            if not config_response.data:
-                raise Exception("Failed to create user configuration")
-
-            # Return the created configuration
-            created_config = await self.get_user_config(user_id)
-            if not created_config:
-                raise Exception("Failed to retrieve created configuration")
-
-            logger.info(f"Created configuration for user: {user_id}")
-            return created_config
-
-        except Exception as e:
-            logger.error(f"Error creating user config for {user_id}: {str(e)}")
-            raise
+        logger.info("Created configuration for user %s", user_id)
+        created = await self.get_user_config(user_id)
+        if not created:
+            raise RuntimeError("Failed to load configuration after insert")
+        return created
 
     async def update_user_config(
         self, user_id: str, config_request: ConfigUpdateRequest
     ) -> UserConfig:
-        """
-        Update an existing user configuration
+        existing = await self.get_user_config(user_id)
+        if not existing:
+            raise ValueError(f"No configuration found for user: {user_id}")
 
-        Args:
-            config_request: Updated configuration data
+        async with db.transaction() as cur:
+            if self._should_update(config_request.stagingDb):
+                await cur.execute(
+                    """
+                    UPDATE database_configs
+                    SET name = %s,
+                        uri = %s,
+                        username = %s,
+                        password = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (
+                        config_request.stagingDb.name or existing.stagingDb.name,
+                        config_request.stagingDb.uri or existing.stagingDb.uri,
+                        config_request.stagingDb.username
+                        or existing.stagingDb.username,
+                        encrypt_password(config_request.stagingDb.password),
+                        existing.stagingDb.id,
+                    ),
+                )
 
-        Returns:
-            Updated UserConfig
-        """
-        try:
-            # Get existing configuration
-            existing_config = await self.get_user_config(user_id)
-            if not existing_config:
-                raise ValueError(f"No configuration found for user: {user_id}")
+            if self._should_update(config_request.prodDb):
+                await cur.execute(
+                    """
+                    UPDATE database_configs
+                    SET name = %s,
+                        uri = %s,
+                        username = %s,
+                        password = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (
+                        config_request.prodDb.name or existing.prodDb.name,
+                        config_request.prodDb.uri or existing.prodDb.uri,
+                        config_request.prodDb.username or existing.prodDb.username,
+                        encrypt_password(config_request.prodDb.password),
+                        existing.prodDb.id,
+                    ),
+                )
 
-            def should_update(db_request: Optional[DatabaseConfigUpdate]) -> bool:
-                if not db_request:
-                    return False
-                uri = (db_request.uri or "").strip()
-                password = (db_request.password or "").strip()
-                return bool(uri and password)
-
-            def build_update_payload(
-                db_request: DatabaseConfigUpdate,
-                current_config: DatabaseConfig,
-            ) -> dict:
-                payload = {
-                    "name": db_request.name or current_config.name,
-                    "uri": db_request.uri or current_config.uri,
-                    "username": db_request.username or current_config.username,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-                payload["password"] = encrypt_password(db_request.password.strip())
-                return payload
-
-            staging_should_update = should_update(config_request.stagingDb)
-            prod_should_update = should_update(config_request.prodDb)
-
-            def resolve_uri(
-                db_request: Optional[DatabaseConfigUpdate],
-                current_config: DatabaseConfig,
-                should_update_flag: bool,
-            ) -> str:
-                if should_update_flag and db_request and db_request.uri:
-                    return db_request.uri.strip()
-                return current_config.uri
-
-            new_staging_uri = resolve_uri(
-                config_request.stagingDb, existing_config.stagingDb, staging_should_update
-            )
-            new_prod_uri = resolve_uri(
-                config_request.prodDb, existing_config.prodDb, prod_should_update
+            await cur.execute(
+                "UPDATE configs SET updated_at = NOW() WHERE id = %s",
+                (existing.id,),
             )
 
-            if new_staging_uri == new_prod_uri:
-                raise ValueError(
-                    "Staging and production database URIs must be different"
-                )
-
-            if not staging_should_update and not prod_should_update:
-                logger.info(
-                    "No database credentials provided for update; leaving configuration unchanged",
-                )
-                return existing_config
-
-            if staging_should_update:
-                staging_payload = build_update_payload(
-                    config_request.stagingDb, existing_config.stagingDb
-                )
-                staging_db_response = (
-                    self.supabase.table("database_configs")
-                    .update(staging_payload)
-                    .eq("id", existing_config.stagingDb.id)
-                    .execute()
-                )
-
-                if not staging_db_response.data:
-                    raise Exception("Failed to update staging database configuration")
-
-            if prod_should_update:
-                prod_payload = build_update_payload(
-                    config_request.prodDb, existing_config.prodDb
-                )
-                prod_db_response = (
-                    self.supabase.table("database_configs")
-                    .update(prod_payload)
-                    .eq("id", existing_config.prodDb.id)
-                    .execute()
-                )
-
-                if not prod_db_response.data:
-                    raise Exception("Failed to update production database configuration")
-
-            # Update user config timestamp
-            config_response = (
-                self.supabase.table("configs")
-                .update({"updated_at": datetime.now(timezone.utc).isoformat()})
-                .eq("id", existing_config.id)
-                .execute()
-            )
-
-            if not config_response.data:
-                raise Exception("Failed to update user configuration timestamp")
-
-            # Return the updated configuration
-            updated_config = await self.get_user_config(user_id)
-            if not updated_config:
-                raise Exception("Failed to retrieve updated configuration")
-
-            logger.info(f"Updated configuration for user: {user_id}")
-            return updated_config
-
-        except Exception as e:
-            logger.error(f"Error updating user config for {user_id}: {str(e)}")
-            raise
+        updated = await self.get_user_config(user_id)
+        if not updated:
+            raise RuntimeError("Failed to load configuration after update")
+        logger.info("Updated configuration for user %s", user_id)
+        return updated
 
     async def delete_user_config(self, user_id: str) -> bool:
-        """
-        Delete a user configuration
+        existing = await self.get_user_config(user_id)
+        if not existing:
+            return False
 
-        Args:
-            user_id: User's ID
+        async with db.transaction() as cur:
+            await cur.execute("DELETE FROM configs WHERE user_id = %s", (user_id,))
+            await cur.execute(
+                "DELETE FROM database_configs WHERE id = %s",
+                (existing.stagingDb.id,),
+            )
+            await cur.execute(
+                "DELETE FROM database_configs WHERE id = %s",
+                (existing.prodDb.id,),
+            )
 
-        Returns:
-            True if deleted successfully
-        """
-        try:
-            # Get existing configuration
-            existing_config = await self.get_user_config(user_id)
-            if not existing_config:
-                logger.info(f"No configuration found to delete for user: {user_id}")
-                return True
+        logger.info("Deleted configuration for user %s", user_id)
+        return True
 
-            # Delete user config (this should cascade to database configs if foreign keys are set up properly)
-            self.supabase.table("configs").delete().eq(
-                "id", existing_config.id
-            ).execute()
+    def _map_record_to_user_config(self, record: dict) -> UserConfig:
+        staging = record["staging_db"]
+        prod = record["prod_db"]
+        return UserConfig(
+            id=str(record["id"]),
+            userId=str(record["user_id"]),
+            stagingDb=DatabaseConfig(
+                id=str(staging["id"]),
+                name=staging["name"],
+                uri=staging["uri"],
+                username=staging["username"],
+                password=decrypt_password(staging["password"]),
+            ),
+            prodDb=DatabaseConfig(
+                id=str(prod["id"]),
+                name=prod["name"],
+                uri=prod["uri"],
+                username=prod["username"],
+                password=decrypt_password(prod["password"]),
+            ),
+            createdAt=self._parse_ts(record["created_at"]),
+            updatedAt=self._parse_ts(record["updated_at"]),
+        )
 
-            # Delete database configs explicitly (in case cascade is not set up)
-            self.supabase.table("database_configs").delete().eq(
-                "id", existing_config.stagingDb.id
-            ).execute()
-            self.supabase.table("database_configs").delete().eq(
-                "id", existing_config.prodDb.id
-            ).execute()
+    @staticmethod
+    def _parse_ts(value: Optional[datetime | str]) -> datetime:
+        """Normalise DB timestamps returned as either strings or datetime objects."""
+        if value is None:
+            return datetime.now(timezone.utc)
 
-            logger.info(f"Deleted configuration for user: {user_id}")
-            return True
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
-        except Exception as e:
-            logger.error(f"Error deleting user config for {user_id}: {str(e)}")
-            raise
+        if isinstance(value, str):
+            normalised = value.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalised)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+        raise TypeError(f"Unsupported timestamp type: {type(value)!r}")
+
+    @staticmethod
+    def _should_update(db_request: Optional[DatabaseConfigUpdate]) -> bool:
+        if not db_request:
+            return False
+        return bool(
+            (db_request.uri and db_request.uri.strip())
+            and (db_request.password and db_request.password.strip())
+        )
 
 
-# Global instance
 config_service = ConfigService()

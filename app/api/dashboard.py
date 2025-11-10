@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.auth import get_current_user_id
 from app.config import settings
+from app.db import postgres as db
 from app.services.quality.models import QualityResults, QualitySeverity
 from app.services.quality.service import QualityService
 from app.services.usage_tracking import UsageTrackingService
@@ -268,24 +269,6 @@ def _coerce_datetime(value: Any) -> Optional[datetime]:
     return None
 
 
-class _LLMQuery:
-    """Small helper to fetch llm usage rows from Supabase."""
-
-    def __init__(self, supabase):
-        self.supabase = supabase
-
-    def fetch(self, transform_id: str) -> List[Dict[str, Any]]:
-        response = (
-            self.supabase.table("llm_usage")
-            .select(
-                "model_provider, model_name, input_tokens, output_tokens, total_tokens, estimated_cost_usd"
-            )
-            .eq("transform_id", transform_id)
-            .execute()
-        )
-        return response.data or []
-
-
 async def _hydrate_runs(
     user_id: str,
     records: Iterable[Dict[str, Any]],
@@ -294,9 +277,25 @@ async def _hydrate_runs(
     if not records:
         return [], []
 
-    usage_service = _get_usage_service()
-    supabase = usage_service.supabase
-    llm_query = _LLMQuery(supabase)
+    transform_ids = [
+        record.get("transform_id") for record in records if record.get("transform_id")
+    ]
+
+    llm_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    if transform_ids:
+        llm_rows = await db.fetch(
+            """
+            SELECT transform_id, model_provider, model_name,
+                   input_tokens, output_tokens, total_tokens, estimated_cost_usd
+            FROM llm_usage
+            WHERE transform_id = ANY(%s)
+            """,
+            transform_ids,
+        )
+        for row in llm_rows or []:
+            key = row.get("transform_id")
+            if key:
+                llm_map[key].append(row)
 
     quality_service: Optional[QualityService] = None
     try:
@@ -314,7 +313,7 @@ async def _hydrate_runs(
 
         llm_usage_summary = LLMUsageSummary()
         try:
-            llm_rows = llm_query.fetch(transform_id)
+            llm_rows = llm_map.get(transform_id, [])
             model_set = set()
             for row in llm_rows:
                 llm_usage_summary.total_calls += 1
@@ -336,7 +335,7 @@ async def _hydrate_runs(
                 llm_usage_summary.estimated_cost_usd = round(
                     llm_usage_summary.estimated_cost_usd, 4
                 )
-        except Exception as exc:  # pragma: no cover - supabase errors
+        except Exception as exc:  # pragma: no cover - db errors
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         quality_details: Dict[str, Any]
@@ -389,30 +388,25 @@ def _query_document_usage(
     days: int,
     limit: Optional[int],
 ) -> Tuple[List[Dict[str, Any]], datetime, datetime]:
-    usage_service = _get_usage_service()
-    try:
-        supabase = usage_service.supabase
-    except Exception as exc:  # pragma: no cover - defensive
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
     window_end = datetime.utcnow()
     window_start = window_end - timedelta(days=days)
 
     try:
-        query = (
-            supabase.table("document_usage")
-            .select("*")
-            .eq("user_id", user_id)
-            .gte("processing_started_at", window_start.isoformat())
-            .order("processing_started_at", desc=True)
-        )
+        query = """
+            SELECT *
+            FROM document_usage
+            WHERE user_id = %s AND processing_started_at >= %s
+            ORDER BY processing_started_at DESC
+        """
+        params: List[Any] = [user_id, window_start]
         if limit is not None:
-            query = query.limit(limit)
-        response = query.execute()
-    except Exception as exc:  # pragma: no cover - supabase errors
+            query += " LIMIT %s"
+            params.append(limit)
+        records = db.sync_fetch(query, *params)
+    except Exception as exc:  # pragma: no cover - db errors
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    records: List[Dict[str, Any]] = response.data or []
+    records = records or []
     return records, window_start, window_end
 
 

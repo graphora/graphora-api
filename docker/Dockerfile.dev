@@ -21,18 +21,16 @@ RUN apt-get update \
     && pip install --no-cache-dir uv \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /opt/graphora
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen
-
 WORKDIR /app
+COPY docker/entrypoint.dev.sh /entrypoint.dev.sh
 COPY . .
 
 RUN addgroup --system appuser \
     && adduser --system --home /home/appuser --ingroup appuser appuser \
-    && mkdir -p /home/appuser/.cache/uv \
-    && chown -R appuser:appuser /home/appuser /app /opt/graphora
+    && mkdir -p /home/appuser/.cache/uv ${UV_PROJECT_ENVIRONMENT} \
+    && chown -R appuser:appuser /home/appuser /app ${UV_PROJECT_ENVIRONMENT} /entrypoint.dev.sh
 
 USER appuser
 
+ENTRYPOINT ["/entrypoint.dev.sh"]
 CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

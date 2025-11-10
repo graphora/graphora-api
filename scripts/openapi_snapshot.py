@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def stub_dependencies() -> None:
@@ -231,8 +236,19 @@ def stub_dependencies() -> None:
     sys.modules["pandas"] = pandas_stub
 
 
+def _prepare_environment() -> None:
+    """Ensure FastAPI loads in test-mode without a real database."""
+
+    os.environ.setdefault("TEST_MODE", "true")
+    os.environ.setdefault(
+        "DATABASE_URL",
+        "postgresql://graphora:graphora@localhost:5432/graphora",
+    )
+
+
 def write_openapi_snapshot(output_path: Path) -> None:
     stub_dependencies()
+    _prepare_environment()
 
     from app.main import app
 

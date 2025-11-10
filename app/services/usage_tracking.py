@@ -5,12 +5,12 @@ This service tracks and stores usage metrics for pricing and analytics,
 including document processing statistics and LLM token consumption.
 """
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 import uuid
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
-from supabase import create_client, Client
 from app.config import get_settings
+from app.db import postgres as db
 from app.schemas.usage import (
     DocumentUsage,
     LLMUsage,
@@ -28,16 +28,19 @@ from app.utils.logger import logger
 settings = get_settings()
 
 
+def _stringify_uuid(value: Any) -> Any:
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    return value
+
+
 class UsageTrackingService:
     """Service for tracking and managing usage data"""
 
     def __init__(self):
-        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be configured")
-
-        self.supabase: Client = create_client(
-            settings.SUPABASE_URL, settings.SUPABASE_KEY
-        )
+        if not (settings.DATABASE_URL or settings.resolved_database_url):
+            if not settings.test_mode:
+                raise ValueError("DATABASE_URL must be configured for usage tracking")
 
         # Cache for model pricing to avoid repeated DB queries
         self._pricing_cache: Dict[str, Dict[str, Dict[str, float]]] = {}
@@ -62,35 +65,47 @@ class UsageTrackingService:
             DocumentUsage: Created usage record
         """
         try:
-            # Calculate billable pages (minimum 1)
             billable_pages = max(1, request.page_count)
+            started_at = processing_started_at or datetime.now(timezone.utc)
+            usage_id = str(uuid.uuid4())
 
-            # Create usage record
-            usage_data = {
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "transform_id": request.transform_id,
-                "session_id": request.session_id,
-                "document_name": request.document_name,
-                "document_type": request.document_type.upper(),
-                "document_size_bytes": request.document_size_bytes,
-                "page_count": request.page_count,
-                "processing_status": ProcessingStatus.IN_PROGRESS.value,
-                "processing_started_at": (
-                    processing_started_at or datetime.now(timezone.utc)
-                ).isoformat(),
-                "billable_pages": billable_pages,
-                "billable_processing_units": 1,
-            }
-
-            response = (
-                self.supabase.table("document_usage").insert(usage_data).execute()
+            row = await db.fetchrow(
+                """
+                INSERT INTO document_usage (
+                    id,
+                    user_id,
+                    transform_id,
+                    session_id,
+                    document_name,
+                    document_type,
+                    document_size_bytes,
+                    page_count,
+                    processing_status,
+                    processing_started_at,
+                    billable_pages,
+                    billable_processing_units
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                usage_id,
+                user_id,
+                request.transform_id,
+                request.session_id,
+                request.document_name,
+                request.document_type.upper(),
+                request.document_size_bytes,
+                request.page_count,
+                ProcessingStatus.IN_PROGRESS.value,
+                started_at,
+                billable_pages,
+                1,
             )
 
-            if not response.data:
+            if not row:
                 raise Exception("Failed to create document usage record")
 
-            record = response.data[0]
+            record = self._map_document_usage_row(row)
             logger.info(
                 f"Tracked document processing for user {user_id}: {request.document_name}"
             )
@@ -131,45 +146,52 @@ class UsageTrackingService:
         try:
             completed_at = processing_completed_at or datetime.now(timezone.utc)
 
-            # Get the original record to calculate duration
-            existing = (
-                self.supabase.table("document_usage")
-                .select("processing_started_at")
-                .eq("id", document_usage_id)
-                .execute()
+            existing = await db.fetchrow(
+                """
+                SELECT processing_started_at
+                FROM document_usage
+                WHERE id = %s
+                """,
+                document_usage_id,
             )
-            if not existing.data:
+            if not existing:
                 raise Exception(f"Document usage record {document_usage_id} not found")
 
-            started_at = datetime.fromisoformat(
-                existing.data[0]["processing_started_at"].replace("Z", "+00:00")
-            )
+            started_at = existing["processing_started_at"]
+            if isinstance(started_at, str):
+                started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
             duration_ms = int((completed_at - started_at).total_seconds() * 1000)
 
-            # Update data
-            update_data = {
-                "processing_status": processing_status.value,
-                "processing_completed_at": completed_at.isoformat(),
-                "processing_duration_ms": duration_ms,
-                "chunks_created": chunks_created,
-                "nodes_extracted": nodes_extracted,
-                "relationships_extracted": relationships_extracted,
-            }
-
-            if success_rate is not None:
-                update_data["success_rate"] = success_rate
-
-            response = (
-                self.supabase.table("document_usage")
-                .update(update_data)
-                .eq("id", document_usage_id)
-                .execute()
+            row = await db.fetchrow(
+                """
+                UPDATE document_usage
+                SET processing_status = %s,
+                    processing_completed_at = %s,
+                    processing_duration_ms = %s,
+                    chunks_created = %s,
+                    nodes_extracted = %s,
+                    relationships_extracted = %s,
+                    success_rate = COALESCE(%s, success_rate),
+                    error_message = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                processing_status.value,
+                completed_at,
+                duration_ms,
+                chunks_created,
+                nodes_extracted,
+                relationships_extracted,
+                success_rate,
+                error_message,
+                document_usage_id,
             )
 
-            if not response.data:
+            if not row:
                 raise Exception("Failed to update document usage record")
 
-            record = response.data[0]
+            record = self._map_document_usage_row(row)
             logger.info(
                 f"Updated document processing {document_usage_id}: {processing_status.value}"
             )
@@ -237,39 +259,56 @@ class UsageTrackingService:
                 estimated_cost = input_cost + output_cost
 
             # Create usage record
-            usage_data = {
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "transform_id": request.transform_id,
-                "document_usage_id": request.document_usage_id,
-                "model_provider": request.model_provider.value,
-                "model_name": request.model_name,
-                "input_tokens": request.input_tokens,
-                "output_tokens": request.output_tokens,
-                "total_tokens": request.input_tokens + request.output_tokens,
-                "estimated_cost_usd": str(estimated_cost) if estimated_cost else None,
-                "cost_per_1k_input_tokens": (
-                    str(cost_per_1k_input) if cost_per_1k_input else None
-                ),
-                "cost_per_1k_output_tokens": (
-                    str(cost_per_1k_output) if cost_per_1k_output else None
-                ),
-                "operation_type": request.operation_type,
-                "latency_ms": latency_ms,
-                "success": success,
-                "error_message": error_message,
-                "request_timestamp": req_time.isoformat(),
-                "response_timestamp": (
-                    resp_time.isoformat() if response_timestamp else None
-                ),
-            }
+            usage_id = str(uuid.uuid4())
+            row = await db.fetchrow(
+                """
+                INSERT INTO llm_usage (
+                    id,
+                    user_id,
+                    transform_id,
+                    document_usage_id,
+                    model_provider,
+                    model_name,
+                    input_tokens,
+                    output_tokens,
+                    total_tokens,
+                    estimated_cost_usd,
+                    cost_per_1k_input_tokens,
+                    cost_per_1k_output_tokens,
+                    operation_type,
+                    latency_ms,
+                    success,
+                    error_message,
+                    request_timestamp,
+                    response_timestamp
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                usage_id,
+                user_id,
+                request.transform_id,
+                request.document_usage_id,
+                request.model_provider.value,
+                request.model_name,
+                request.input_tokens,
+                request.output_tokens,
+                request.input_tokens + request.output_tokens,
+                estimated_cost,
+                cost_per_1k_input,
+                cost_per_1k_output,
+                request.operation_type,
+                latency_ms,
+                success,
+                error_message,
+                req_time,
+                resp_time if response_timestamp else None,
+            )
 
-            response = self.supabase.table("llm_usage").insert(usage_data).execute()
-
-            if not response.data:
+            if not row:
                 raise Exception("Failed to create LLM usage record")
 
-            record = response.data[0]
+            record = self._map_llm_usage_row(row)
             logger.info(
                 f"Tracked LLM usage for user {user_id}: {request.model_name} ({request.input_tokens + request.output_tokens} tokens)"
             )
@@ -284,26 +323,23 @@ class UsageTrackingService:
         """Load model pricing from database"""
         try:
             # Get all model pricing with provider information
-            response = (
-                self.supabase.table("model_pricing")
-                .select(
-                    """
-                *,
-                provider:provider_id(provider_name)
+            rows = await db.fetch(
                 """
-                )
-                .eq("is_active", True)
-                .execute()
+                SELECT mp.*, mpv.provider_name
+                FROM model_pricing mp
+                JOIN model_providers mpv ON mp.provider_id = mpv.id
+                WHERE mp.is_active = TRUE
+                """
             )
 
-            if not response.data:
+            if not rows:
                 logger.warning("No model pricing found in database")
                 return {}
 
             # Organize pricing by provider and model
             pricing_data = {}
-            for pricing in response.data:
-                provider_name = pricing["provider"]["provider_name"]
+            for pricing in rows:
+                provider_name = pricing["provider_name"]
                 model_name = pricing["model_name"]
 
                 if provider_name not in pricing_data:
@@ -314,7 +350,7 @@ class UsageTrackingService:
                     "output": float(pricing["output_price_per_1k_tokens"]),
                 }
 
-            logger.info(f"Loaded pricing for {len(response.data)} models from database")
+            logger.info(f"Loaded pricing for {len(rows)} models from database")
             return pricing_data
 
         except Exception as e:
@@ -366,20 +402,21 @@ class UsageTrackingService:
         """
         try:
             # Get user's pricing tier
-            tier_response = (
-                self.supabase.table("user_pricing_tiers")
-                .select(
-                    """
-                *,
-                pricing_tier:tier_id(*)
+            tier_row = await db.fetchrow(
                 """
-                )
-                .eq("user_id", user_id)
-                .eq("is_active", True)
-                .execute()
+                SELECT upt.*, pt.tier_name, pt.monthly_document_limit,
+                       pt.monthly_page_limit, pt.monthly_token_limit,
+                       pt.monthly_cost_limit_usd
+                FROM user_pricing_tiers upt
+                JOIN pricing_tiers pt ON upt.tier_id = pt.id
+                WHERE upt.user_id = %s AND upt.is_active = TRUE
+                ORDER BY upt.updated_at DESC
+                LIMIT 1
+                """,
+                user_id,
             )
 
-            if not tier_response.data:
+            if not tier_row:
                 # Default to free tier if no assignment
                 tier_data = {
                     "tier_name": "Free",
@@ -394,13 +431,21 @@ class UsageTrackingService:
                     "current_cost_usd": Decimal("0"),
                 }
             else:
-                user_tier = tier_response.data[0]
-                tier_data = user_tier["pricing_tier"]
+                user_tier = tier_row
+                tier_data = {
+                    "tier_name": user_tier["tier_name"],
+                    "monthly_document_limit": user_tier.get("monthly_document_limit"),
+                    "monthly_page_limit": user_tier.get("monthly_page_limit"),
+                    "monthly_token_limit": user_tier.get("monthly_token_limit"),
+                    "monthly_cost_limit_usd": user_tier.get("monthly_cost_limit_usd"),
+                }
                 current_usage = {
-                    "current_documents": user_tier["current_documents"],
-                    "current_pages": user_tier["current_pages"],
-                    "current_tokens": user_tier["current_tokens"],
-                    "current_cost_usd": Decimal(str(user_tier["current_cost_usd"])),
+                    "current_documents": user_tier.get("current_documents", 0),
+                    "current_pages": user_tier.get("current_pages", 0),
+                    "current_tokens": user_tier.get("current_tokens", 0),
+                    "current_cost_usd": Decimal(
+                        str(user_tier.get("current_cost_usd", 0))
+                    ),
                 }
 
             # Check limits
@@ -491,6 +536,20 @@ class UsageTrackingService:
             logger.error(f"Error checking user limits for {user_id}: {str(e)}")
             raise
 
+    def _map_document_usage_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        record = dict(row)
+        for key in ("id", "user_id", "transform_id", "session_id"):
+            if key in record:
+                record[key] = _stringify_uuid(record[key])
+        return record
+
+    def _map_llm_usage_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        record = dict(row)
+        for key in ("id", "user_id", "transform_id", "document_usage_id"):
+            if key in record:
+                record[key] = _stringify_uuid(record[key])
+        return record
+
     async def get_usage_report(
         self, user_id: str, period_start: datetime, period_end: datetime
     ) -> UsageReport:
@@ -506,28 +565,34 @@ class UsageTrackingService:
             UsageReport: Usage report
         """
         try:
-            # Get document usage
-            doc_response = (
-                self.supabase.table("document_usage")
-                .select("*")
-                .eq("user_id", user_id)
-                .gte("created_at", period_start.isoformat())
-                .lte("created_at", period_end.isoformat())
-                .execute()
+            doc_data = await db.fetch(
+                """
+                SELECT *
+                FROM document_usage
+                WHERE user_id = %s
+                  AND created_at BETWEEN %s AND %s
+                ORDER BY created_at ASC
+                """,
+                user_id,
+                period_start,
+                period_end,
             )
 
-            # Get LLM usage
-            llm_response = (
-                self.supabase.table("llm_usage")
-                .select("*")
-                .eq("user_id", user_id)
-                .gte("created_at", period_start.isoformat())
-                .lte("created_at", period_end.isoformat())
-                .execute()
+            llm_data = await db.fetch(
+                """
+                SELECT *
+                FROM llm_usage
+                WHERE user_id = %s
+                  AND created_at BETWEEN %s AND %s
+                ORDER BY created_at ASC
+                """,
+                user_id,
+                period_start,
+                period_end,
             )
 
-            doc_data = doc_response.data or []
-            llm_data = llm_response.data or []
+            doc_data = doc_data or []
+            llm_data = llm_data or []
 
             # Calculate summary statistics
             total_documents = len(doc_data)
@@ -647,13 +712,10 @@ class UsageTrackingService:
     async def get_all_model_providers(self) -> List[ModelProviderSchema]:
         """Get all active model providers"""
         try:
-            response = (
-                self.supabase.table("model_providers")
-                .select("*")
-                .eq("is_active", True)
-                .execute()
+            rows = await db.fetch(
+                "SELECT * FROM model_providers WHERE is_active = TRUE"
             )
-            return [ModelProviderSchema(**provider) for provider in response.data or []]
+            return [ModelProviderSchema(**provider) for provider in rows or []]
         except Exception as e:
             logger.error(f"Error getting model providers: {str(e)}")
             raise
@@ -663,20 +725,17 @@ class UsageTrackingService:
     ) -> List[ModelPricingSchema]:
         """Get all pricing for a specific provider"""
         try:
-            response = (
-                self.supabase.table("model_pricing")
-                .select(
-                    """
-                *,
-                provider:provider_id(provider_name)
+            rows = await db.fetch(
                 """
-                )
-                .eq("provider.provider_name", provider_name)
-                .eq("is_active", True)
-                .execute()
+                SELECT mp.*
+                FROM model_pricing mp
+                JOIN model_providers mpv ON mp.provider_id = mpv.id
+                WHERE mpv.provider_name = %s AND mp.is_active = TRUE
+                """,
+                provider_name,
             )
 
-            return [ModelPricingSchema(**pricing) for pricing in response.data or []]
+            return [ModelPricingSchema(**pricing) for pricing in rows or []]
         except Exception as e:
             logger.error(
                 f"Error getting pricing for provider {provider_name}: {str(e)}"
@@ -706,14 +765,25 @@ class UsageTrackingService:
             if not update_data:
                 raise ValueError("No update data provided")
 
-            response = (
-                self.supabase.table("model_pricing")
-                .update(update_data)
-                .eq("id", pricing_id)
-                .execute()
+            set_clause = []
+            params = []
+            for column, value in update_data.items():
+                set_clause.append(f"{column} = %s")
+                params.append(value)
+
+            params.append(pricing_id)
+
+            row = await db.fetchrow(
+                f"""
+                UPDATE model_pricing
+                SET {', '.join(set_clause)}, updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+                """,
+                *params,
             )
 
-            if not response.data:
+            if not row:
                 raise Exception(
                     f"Model pricing {pricing_id} not found or update failed"
                 )
@@ -723,7 +793,7 @@ class UsageTrackingService:
             self._cache_last_updated = None
 
             logger.info(f"Updated model pricing {pricing_id}")
-            return ModelPricingSchema(**response.data[0])
+            return ModelPricingSchema(**row)
 
         except Exception as e:
             logger.error(f"Error updating model pricing {pricing_id}: {str(e)}")
@@ -742,17 +812,15 @@ class UsageTrackingService:
         """Add new model pricing"""
         try:
             # Get provider ID
-            provider_response = (
-                self.supabase.table("model_providers")
-                .select("id")
-                .eq("provider_name", provider_name)
-                .execute()
+            provider_row = await db.fetchrow(
+                "SELECT id FROM model_providers WHERE provider_name = %s",
+                provider_name,
             )
 
-            if not provider_response.data:
+            if not provider_row:
                 raise ValueError(f"Provider {provider_name} not found")
 
-            provider_id = provider_response.data[0]["id"]
+            provider_id = provider_row["id"]
 
             # Create pricing record
             pricing_data = {
@@ -770,11 +838,32 @@ class UsageTrackingService:
             if model_context_window:
                 pricing_data["model_context_window"] = model_context_window
 
-            response = (
-                self.supabase.table("model_pricing").insert(pricing_data).execute()
+            row = await db.fetchrow(
+                """
+                INSERT INTO model_pricing (
+                    id,
+                    provider_id,
+                    model_name,
+                    input_price_per_1k_tokens,
+                    output_price_per_1k_tokens,
+                    model_version,
+                    model_description,
+                    model_context_window
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                pricing_data.get("id"),
+                provider_id,
+                pricing_data.get("model_name"),
+                pricing_data.get("input_price_per_1k_tokens"),
+                pricing_data.get("output_price_per_1k_tokens"),
+                pricing_data.get("model_version"),
+                pricing_data.get("model_description"),
+                pricing_data.get("model_context_window"),
             )
 
-            if not response.data:
+            if not row:
                 raise Exception("Failed to create model pricing")
 
             # Clear cache to force reload
@@ -782,7 +871,7 @@ class UsageTrackingService:
             self._cache_last_updated = None
 
             logger.info(f"Added pricing for {provider_name}:{model_name}")
-            return ModelPricingSchema(**response.data[0])
+            return ModelPricingSchema(**row)
 
         except Exception as e:
             logger.error(

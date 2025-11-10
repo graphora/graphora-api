@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List
 from enum import Enum
 
+from app.db import postgres as db
 from app.services.audit_service import AuditService, OperationType, OperationStatus
 
 logger = logging.getLogger(__name__)
@@ -219,27 +220,25 @@ class ChatSessionService:
             raise ValueError("limit must be a positive integer")
 
         try:
-            # Query audit trail for session messages and metadata
-            query = (
-                self.audit_service.supabase.table("audit_trail")
-                .select("*")
-                .eq("user_id", user_id)
-                .in_(
-                    "operation_type",
-                    [
-                        OperationType.CHAT_MESSAGE_SENT.value,
-                        OperationType.CHAT_MESSAGE_RECEIVED.value,
-                        OperationType.CHAT_SESSION_STARTED.value,
-                    ],
-                )
-                .contains("metadata", {"session_id": session_id})
-                .order("created_at", desc=False)
-                .limit(limit + 1)
-            )  # +1 to account for session start entry
+            rows = await db.fetch(
+                """
+                SELECT *
+                FROM audit_trail
+                WHERE user_id = %s
+                  AND metadata ->> 'session_id' = %s
+                  AND operation_type IN (%s, %s, %s)
+                ORDER BY created_at ASC
+                LIMIT %s
+                """,
+                user_id,
+                session_id,
+                OperationType.CHAT_MESSAGE_SENT.value,
+                OperationType.CHAT_MESSAGE_RECEIVED.value,
+                OperationType.CHAT_SESSION_STARTED.value,
+                limit + 1,
+            )
 
-            result = query.execute()
-
-            if not result.data:
+            if not rows:
                 logger.warning(
                     f"No session data found for session {session_id} and user {user_id}"
                 )
@@ -249,7 +248,7 @@ class ChatSessionService:
             messages = []
             session_context = {}
 
-            for entry in result.data:
+            for entry in rows:
                 metadata = entry.get("metadata", {})
 
                 if entry["operation_type"] == OperationType.CHAT_SESSION_STARTED.value:
@@ -347,28 +346,34 @@ class ChatSessionService:
 
         try:
             # Build query for session start entries
-            query = (
-                self.audit_service.supabase.table("audit_trail")
-                .select("*")
-                .eq("user_id", user_id)
-                .eq("operation_type", OperationType.CHAT_SESSION_STARTED.value)
-                .order("created_at", desc=True)
-                .limit(limit)
+            params: List[Any] = [user_id, OperationType.CHAT_SESSION_STARTED.value]
+            context_filter = ""
+            if context_type:
+                context_filter = " AND metadata ->> 'context_type' = %s"
+                params.append(context_type.value)
+
+            params.append(limit)
+
+            rows = await db.fetch(
+                f"""
+                SELECT *
+                FROM audit_trail
+                WHERE user_id = %s
+                  AND operation_type = %s
+                  {context_filter}
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                *params,
             )
 
-            # Apply context type filter if specified
-            if context_type:
-                query = query.contains("metadata", {"context_type": context_type.value})
-
-            result = query.execute()
-
-            if not result.data:
+            if not rows:
                 logger.info(f"No chat sessions found for user {user_id}")
                 return []
 
             # Build session list with enriched metadata
             sessions = []
-            for entry in result.data:
+            for entry in rows:
                 metadata = entry.get("metadata", {})
                 session_id = metadata.get("session_id", entry["operation_id"])
 
@@ -421,22 +426,20 @@ class ChatSessionService:
             return 0
 
         try:
-            result = (
-                self.audit_service.supabase.table("audit_trail")
-                .select("operation_id", count="exact")
-                .eq("user_id", user_id)
-                .in_(
-                    "operation_type",
-                    [
-                        OperationType.CHAT_MESSAGE_SENT.value,
-                        OperationType.CHAT_MESSAGE_RECEIVED.value,
-                    ],
-                )
-                .contains("metadata", {"session_id": session_id})
-                .execute()
+            count = await db.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM audit_trail
+                WHERE user_id = %s
+                  AND metadata ->> 'session_id' = %s
+                  AND operation_type IN (%s, %s)
+                """,
+                user_id,
+                session_id,
+                OperationType.CHAT_MESSAGE_SENT.value,
+                OperationType.CHAT_MESSAGE_RECEIVED.value,
             )
-
-            count = result.count or 0
+            count = count or 0
             logger.debug(f"Session {session_id} has {count} messages")
             return count
 

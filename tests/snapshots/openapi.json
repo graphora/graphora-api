@@ -528,7 +528,7 @@
         "type": "object"
       },
       "ConfigRequest": {
-        "description": "Schema for creating/updating user configuration",
+        "description": "Schema for creating user configuration",
         "properties": {
           "prodDb": {
             "$ref": "#/components/schemas/DatabaseConfig",
@@ -544,6 +544,35 @@
           "prodDb"
         ],
         "title": "ConfigRequest",
+        "type": "object"
+      },
+      "ConfigUpdateRequest": {
+        "description": "Schema for updating user configuration (password optional).",
+        "properties": {
+          "prodDb": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatabaseConfigUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Production database configuration"
+          },
+          "stagingDb": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatabaseConfigUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Staging database configuration"
+          }
+        },
+        "title": "ConfigUpdateRequest",
         "type": "object"
       },
       "ConnectionTestRequest": {
@@ -1009,6 +1038,57 @@
           "password"
         ],
         "title": "DatabaseConfig",
+        "type": "object"
+      },
+      "DatabaseConfigUpdate": {
+        "description": "Schema for updating Neo4j configuration; fields optional.",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uri"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          }
+        },
+        "title": "DatabaseConfigUpdate",
         "type": "object"
       },
       "DetailedTransformStatus": {
@@ -5926,7 +6006,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ConfigRequest"
+                "$ref": "#/components/schemas/ConfigUpdateRequest"
               }
             }
           },

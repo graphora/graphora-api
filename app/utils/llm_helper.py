@@ -2,7 +2,6 @@ from typing import Tuple
 from google import genai
 import baml_py
 from app.services.ai_config_service import AIConfigService
-from app.utils.encryption import decrypt_password
 
 
 async def get_user_llm_credentials(user_id: str) -> Tuple[str, str]:
@@ -26,34 +25,16 @@ async def get_user_llm_credentials(user_id: str) -> Tuple[str, str]:
             f"No LLM configuration found for user: {user_id}. Please configure your LLM provider first."
         )
 
-    # Currently only supporting Gemini, but can be extended for other providers
-    if user_config.provider_name != "gemini":
-        raise ValueError(
-            f"Unsupported LLM provider: {user_config.provider_name}. Currently only Gemini is supported."
-        )
-
-    # Get the decrypted API key from the database
-    # We need to query the database again to get the encrypted key and decrypt it
-    response = (
-        ai_config_service.supabase.table("user_ai_configs")
-        .select(
-            """
-        ai_provider_configs!inner(
-            api_key,
-            ai_models!inner(name)
-        )
-        """
-        )
-        .eq("user_id", user_id)
-        .execute()
+    provider_name, api_key, model_name = (
+        await ai_config_service.get_user_provider_secret(user_id)
     )
-
-    if not response.data:
+    if not provider_name:
         raise ValueError(f"Failed to retrieve API key for user: {user_id}")
 
-    provider_config = response.data[0]["ai_provider_configs"]
-    api_key = decrypt_password(provider_config["api_key"])
-    model_name = provider_config["ai_models"]["name"]
+    if provider_name != "gemini":
+        raise ValueError(
+            f"Unsupported LLM provider: {provider_name}. Currently only Gemini is supported."
+        )
 
     return api_key, model_name
 

@@ -2,7 +2,8 @@ import logging
 import uuid
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from supabase import create_client, Client
+
+from psycopg.types.json import Json
 
 from app.schemas.schema import (
     StoredSchema,
@@ -11,17 +12,18 @@ from app.schemas.schema import (
     SchemaUsageEvent,
 )
 from app.config import settings
+from app.db import postgres as db
 
 logger = logging.getLogger(__name__)
 
 
 class SchemaStorageService:
-    """Service for storing and managing schemas in Supabase"""
+    """Service for storing and managing schemas in Postgres."""
 
     def __init__(self):
-        self.supabase: Client = create_client(
-            settings.SUPABASE_URL, settings.SUPABASE_KEY
-        )
+        if not (settings.DATABASE_URL or settings.resolved_database_url):
+            if not settings.test_mode:
+                raise ValueError("DATABASE_URL must be configured for schema storage")
         self.schemas_table = "generated_schemas"
         self.usage_table = "schema_usage_events"
 
@@ -59,30 +61,36 @@ class SchemaStorageService:
                 tags.append(context["data_volume"].lower().replace(" ", "_"))
 
             # Store in database
-            data = {
-                "id": schema_id,
-                "user_id": user_id,
-                "title": title,
-                "description": description,
-                "content": schema_content,
-                "domain": context.get("domain", "General"),
-                "tags": tags,
-                "confidence": confidence,
-                "context": context,
-                "is_public": False,
-                "usage_count": 0,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
-            }
+            now = datetime.utcnow()
+            row = await db.fetchrow(
+                f"""
+                INSERT INTO {self.schemas_table} (
+                    id, user_id, title, description, content, domain,
+                    tags, confidence, context, is_public, usage_count,
+                    created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, 0, %s, %s)
+                RETURNING id
+                """,
+                schema_id,
+                user_id,
+                title,
+                description,
+                schema_content,
+                context.get("domain", "General"),
+                tags,
+                confidence,
+                Json(context),
+                now,
+                now,
+            )
 
-            result = self.supabase.table(self.schemas_table).insert(data).execute()
-
-            if result.data:
+            if row:
                 logger.info(f"Stored generated schema {schema_id} for user {user_id}")
                 return True
-            else:
-                logger.error(f"Failed to store schema {schema_id}: No data returned")
-                return False
+
+            logger.error(f"Failed to store schema {schema_id}: insert returned no row")
+            return False
 
         except Exception as e:
             logger.error(f"Error storing generated schema {schema_id}: {str(e)}")
@@ -92,17 +100,19 @@ class SchemaStorageService:
         """Get a specific schema by ID"""
 
         try:
-            result = (
-                self.supabase.table(self.schemas_table)
-                .select("*")
-                .eq("id", schema_id)
-                .or_(f"user_id.eq.{user_id},is_public.eq.true")
-                .single()
-                .execute()
+            row = await db.fetchrow(
+                f"""
+                SELECT *
+                FROM {self.schemas_table}
+                WHERE id = %s AND (user_id = %s OR is_public = TRUE)
+                LIMIT 1
+                """,
+                schema_id,
+                user_id,
             )
 
-            if result.data:
-                return StoredSchema(**result.data)
+            if row:
+                return StoredSchema(**row)
 
             return None
 
@@ -120,24 +130,35 @@ class SchemaStorageService:
         """List schemas for a user"""
 
         try:
-            query = self.supabase.table(self.schemas_table).select("*")
-
+            rows: List[Dict[str, Any]]
             if include_public:
-                query = query.or_(f"user_id.eq.{user_id},is_public.eq.true")
+                rows = await db.fetch(
+                    f"""
+                    SELECT *
+                    FROM {self.schemas_table}
+                    WHERE user_id = %s OR is_public = TRUE
+                    ORDER BY updated_at DESC
+                    OFFSET %s LIMIT %s
+                    """,
+                    user_id,
+                    offset,
+                    limit,
+                )
             else:
-                query = query.eq("user_id", user_id)
+                rows = await db.fetch(
+                    f"""
+                    SELECT *
+                    FROM {self.schemas_table}
+                    WHERE user_id = %s
+                    ORDER BY updated_at DESC
+                    OFFSET %s LIMIT %s
+                    """,
+                    user_id,
+                    offset,
+                    limit,
+                )
 
-            result = (
-                query.order("updated_at", desc=True)
-                .range(offset, offset + limit - 1)
-                .execute()
-            )
-
-            schemas = []
-            for item in result.data:
-                schemas.append(StoredSchema(**item))
-
-            return schemas
+            return [StoredSchema(**item) for item in rows or []]
 
         except Exception as e:
             logger.error(f"Error listing schemas for user {user_id}: {str(e)}")
@@ -151,24 +172,31 @@ class SchemaStorageService:
         try:
             schema_id = str(uuid.uuid4())
 
-            data = {
-                "id": schema_id,
-                "user_id": user_id,
-                "title": request.title,
-                "description": request.description,
-                "content": request.content,
-                "domain": request.domain,
-                "tags": request.tags,
-                "is_public": request.is_public,
-                "usage_count": 0,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
-            }
+            now = datetime.utcnow()
+            row = await db.fetchrow(
+                f"""
+                INSERT INTO {self.schemas_table} (
+                    id, user_id, title, description, content,
+                    domain, tags, is_public, usage_count,
+                    created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
+                RETURNING *
+                """,
+                schema_id,
+                user_id,
+                request.title,
+                request.description,
+                request.content,
+                request.domain,
+                request.tags,
+                request.is_public,
+                now,
+                now,
+            )
 
-            result = self.supabase.table(self.schemas_table).insert(data).execute()
-
-            if result.data:
-                return StoredSchema(**result.data[0])
+            if row:
+                return StoredSchema(**row)
 
             return None
 
@@ -198,16 +226,31 @@ class SchemaStorageService:
             if request.is_public is not None:
                 update_data["is_public"] = request.is_public
 
-            result = (
-                self.supabase.table(self.schemas_table)
-                .update(update_data)
-                .eq("id", schema_id)
-                .eq("user_id", user_id)
-                .execute()
+            row = await db.fetchrow(
+                f"""
+                UPDATE {self.schemas_table}
+                SET title = COALESCE(%s, title),
+                    description = COALESCE(%s, description),
+                    content = COALESCE(%s, content),
+                    domain = COALESCE(%s, domain),
+                    tags = COALESCE(%s, tags),
+                    is_public = COALESCE(%s, is_public),
+                    updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+                RETURNING *
+                """,
+                update_data.get("title"),
+                update_data.get("description"),
+                update_data.get("content"),
+                update_data.get("domain"),
+                update_data.get("tags"),
+                update_data.get("is_public"),
+                schema_id,
+                user_id,
             )
 
-            if result.data:
-                return StoredSchema(**result.data[0])
+            if row:
+                return StoredSchema(**row)
 
             return None
 
@@ -219,15 +262,17 @@ class SchemaStorageService:
         """Delete a schema"""
 
         try:
-            result = (
-                self.supabase.table(self.schemas_table)
-                .delete()
-                .eq("id", schema_id)
-                .eq("user_id", user_id)
-                .execute()
+            row = await db.fetchrow(
+                f"""
+                DELETE FROM {self.schemas_table}
+                WHERE id = %s AND user_id = %s
+                RETURNING id
+                """,
+                schema_id,
+                user_id,
             )
 
-            return bool(result.data)
+            return bool(row)
 
         except Exception as e:
             logger.error(f"Error deleting schema {schema_id}: {str(e)}")
@@ -256,15 +301,22 @@ class SchemaStorageService:
                     context.update({"refinement": refinement_metadata})
                     update_data["context"] = context
 
-            result = (
-                self.supabase.table(self.schemas_table)
-                .update(update_data)
-                .eq("id", schema_id)
-                .eq("user_id", user_id)
-                .execute()
+            row = await db.fetchrow(
+                f"""
+                UPDATE {self.schemas_table}
+                SET content = %s,
+                    context = COALESCE(%s::jsonb, context),
+                    updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+                RETURNING id
+                """,
+                updated_content,
+                Json(update_data.get("context")) if "context" in update_data else None,
+                schema_id,
+                user_id,
             )
 
-            return bool(result.data)
+            return bool(row)
 
         except Exception as e:
             logger.error(f"Error updating generated schema {schema_id}: {str(e)}")
@@ -275,30 +327,12 @@ class SchemaStorageService:
 
         try:
             # Use a stored procedure or direct SQL for atomic increment
-            result = self.supabase.rpc(
-                "increment_schema_usage", {"schema_id": schema_id}
-            ).execute()
+            row = await db.fetchrow(
+                "SELECT increment_schema_usage(%s) AS updated",
+                schema_id,
+            )
 
-            # Fallback to read-modify-write if stored procedure doesn't exist
-            if not result.data:
-                schema = (
-                    self.supabase.table(self.schemas_table)
-                    .select("usage_count")
-                    .eq("id", schema_id)
-                    .single()
-                    .execute()
-                )
-
-                if schema.data:
-                    new_count = (schema.data.get("usage_count", 0) or 0) + 1
-                    result = (
-                        self.supabase.table(self.schemas_table)
-                        .update({"usage_count": new_count})
-                        .eq("id", schema_id)
-                        .execute()
-                    )
-
-            return bool(result.data)
+            return bool(row and row.get("updated"))
 
         except Exception as e:
             logger.error(
@@ -316,22 +350,27 @@ class SchemaStorageService:
         """Log a schema usage event"""
 
         try:
-            data = {
-                "id": str(uuid.uuid4()),
-                "schema_id": schema_id,
-                "user_id": user_id,
-                "event_type": event_type,
-                "metadata": metadata or {},
-                "timestamp": datetime.utcnow().isoformat(),
-            }
+            row = await db.fetchrow(
+                f"""
+                INSERT INTO {self.usage_table} (
+                    id, schema_id, user_id, event_type, metadata, timestamp
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                str(uuid.uuid4()),
+                schema_id,
+                user_id,
+                event_type,
+                Json(metadata or {}),
+                datetime.utcnow(),
+            )
 
-            result = self.supabase.table(self.usage_table).insert(data).execute()
-
-            # Also increment usage count
-            if result.data:
+            if row:
                 await self.increment_usage_count(schema_id)
+                return True
 
-            return bool(result.data)
+            return False
 
         except Exception as e:
             logger.error(f"Error logging usage event for schema {schema_id}: {str(e)}")
@@ -349,16 +388,18 @@ class SchemaStorageService:
                 return None
 
             # Get recent usage events
-            usage_result = (
-                self.supabase.table(self.usage_table)
-                .select("*")
-                .eq("schema_id", schema_id)
-                .order("timestamp", desc=True)
-                .limit(20)
-                .execute()
+            usage_rows = await db.fetch(
+                f"""
+                SELECT *
+                FROM {self.usage_table}
+                WHERE schema_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 20
+                """,
+                schema_id,
             )
 
-            usage_events = [SchemaUsageEvent(**event) for event in usage_result.data]
+            usage_events = [SchemaUsageEvent(**event) for event in usage_rows or []]
 
             # Calculate unique users
             unique_users = len(set(event.user_id for event in usage_events))
@@ -384,22 +425,26 @@ class SchemaStorageService:
         """Get popular public schemas"""
 
         try:
-            query = (
-                self.supabase.table(self.schemas_table)
-                .select("*")
-                .eq("is_public", True)
+            params: List[Any] = []
+            domain_clause = ""
+            if domain:
+                domain_clause = " AND domain = %s"
+                params.append(domain)
+
+            params.append(limit)
+
+            rows = await db.fetch(
+                f"""
+                SELECT *
+                FROM {self.schemas_table}
+                WHERE is_public = TRUE{domain_clause}
+                ORDER BY usage_count DESC, updated_at DESC
+                LIMIT %s
+                """,
+                *params,
             )
 
-            if domain:
-                query = query.eq("domain", domain)
-
-            result = query.order("usage_count", desc=True).limit(limit).execute()
-
-            schemas = []
-            for item in result.data:
-                schemas.append(StoredSchema(**item))
-
-            return schemas
+            return [StoredSchema(**item) for item in rows or []]
 
         except Exception as e:
             logger.error(f"Error getting popular schemas: {str(e)}")
