@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 MIGRATIONS_DIR = ROOT / "migrations"
 SCHEMA_TABLE = "schema_migrations"
+_MIGRATION_VERSION_RE = re.compile(r"^(?P<version>\d+)_")
 
 
 def _log(message: str) -> None:
@@ -63,6 +65,13 @@ def _ensure_extensions(conn: psycopg.Connection) -> None:
             cur.execute(f'CREATE EXTENSION IF NOT EXISTS "{extension}";')
 
 
+def _migration_sort_key(path: Path) -> tuple[int, str]:
+    match = _MIGRATION_VERSION_RE.match(path.name)
+    if match:
+        return (int(match.group("version")), path.name)
+    return (sys.maxsize, path.name)
+
+
 def _apply_migration(conn: psycopg.Connection, migration_file: Path) -> None:
     sql_text = migration_file.read_text()
     statements = [stmt.strip() for stmt in sqlparse.split(sql_text) if stmt.strip()]
@@ -81,7 +90,7 @@ def _apply_migration(conn: psycopg.Connection, migration_file: Path) -> None:
 def main() -> None:
     dsn = _build_database_url()
     _log(f"Connecting to {dsn}")
-    migrations = sorted(MIGRATIONS_DIR.glob("*.sql"), key=lambda path: path.name)
+    migrations = sorted(MIGRATIONS_DIR.glob("*.sql"), key=_migration_sort_key)
     if not migrations:
         _log("No migrations found; exiting")
         return
