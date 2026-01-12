@@ -70,15 +70,12 @@ def _decode_token(token: str) -> dict:
         options["verify_iss"] = False
 
     if audience is None:
-        if is_production:
-            raise AuthConfigError(
-                "CLERK_AUDIENCE must be configured in production environment. "
-                "JWT audience validation is required for security."
-            )
+        # Audience is optional - Clerk's default session tokens don't include 'aud'
+        # Only warn once, don't block in production since issuer validation is sufficient
         if not _auth_warnings_logged:
             logger.warning(
                 "CLERK_AUDIENCE is not configured. JWT audience validation is disabled. "
-                "This is a security risk and should not be used in production."
+                "Consider setting CLERK_AUDIENCE for additional security if using custom JWT templates."
             )
         options["verify_aud"] = False
 
