@@ -51,6 +51,7 @@ dependencies = [
     "aiocache>=0.12.3",
     "redis>=5.0.11",
     "httpx>=0.28.0",
+    "slowapi>=0.1.9",
     "python-magic>=0.4.27",
     "textstat>=0.7.3",
     "sqlparse>=0.5.1",

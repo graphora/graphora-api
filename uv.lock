@@ -1135,6 +1135,7 @@ dependencies = [
     { name = "redis" },
     { name = "scikit-learn" },
     { name = "sentence-transformers" },
+    { name = "slowapi" },
     { name = "splink" },
     { name = "sqlalchemy" },
     { name = "sqlparse" },
@@ -1203,6 +1204,7 @@ requires-dist = [
     { name = "redis", specifier = ">=5.0.11" },
     { name = "scikit-learn", specifier = ">=1.4.1.post1" },
     { name = "sentence-transformers", specifier = ">=3.4.1" },
+    { name = "slowapi", specifier = ">=0.1.9" },
     { name = "splink", specifier = "==4.0.7" },
     { name = "sqlalchemy", specifier = ">=2.0.36" },
     { name = "sqlparse", specifier = ">=0.5.1" },
@@ -1831,6 +1833,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/70/29/c34a2f19565a8115d1b9a186c6f4c1c61e0aaabbba01c9641a409a0c11d8/langsmith-0.2.3.tar.gz", hash = "sha256:54c231b07fdeb0f8472925074a0ec0ed2cb654a0437d63c6ccf76a9da635900d", size = 308910 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a1/f0/9040d7adff12c3d4bebedb561aed3235b76d04051aee1f267124ef061a53/langsmith-0.2.3-py3-none-any.whl", hash = "sha256:4958b6e918f57fedba6ddc55b8534d1e06478bb44c779aa73713ce898ca6ae87", size = 320665 },
+]
+
+[[package]]
+name = "limits"
+version = "5.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "deprecated" },
+    { name = "packaging" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bb/e5/c968d43a65128cd54fb685f257aafb90cd5e4e1c67d084a58f0e4cbed557/limits-5.6.0.tar.gz", hash = "sha256:807fac75755e73912e894fdd61e2838de574c5721876a19f7ab454ae1fffb4b5", size = 182984 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/40/96/4fcd44aed47b8fcc457653b12915fcad192cd646510ef3f29fd216f4b0ab/limits-5.6.0-py3-none-any.whl", hash = "sha256:b585c2104274528536a5b68864ec3835602b3c4a802cd6aa0b07419798394021", size = 60604 },
 ]
 
 [[package]]
@@ -3585,6 +3601,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050 },
+]
+
+[[package]]
+name = "slowapi"
+version = "0.1.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "limits" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a0/99/adfc7f94ca024736f061257d39118e1542bade7a52e86415a4c4ae92d8ff/slowapi-0.1.9.tar.gz", hash = "sha256:639192d0f1ca01b1c6d95bf6c71d794c3a9ee189855337b4821f7f457dddad77", size = 14028 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2b/bb/f71c4b7d7e7eb3fc1e8c0458a8979b912f40b58002b9fbf37729b8cb464b/slowapi-0.1.9-py3-none-any.whl", hash = "sha256:cfad116cfb84ad9d763ee155c1e5c5cbf00b0d47399a769b227865f5df576e36", size = 14670 },
 ]
 
 [[package]]
