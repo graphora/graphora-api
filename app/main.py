@@ -1,39 +1,65 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+
 import httpx
 import redis.asyncio as redis_async
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
-from app.config import settings
-from app.utils.logger import logger
-
-# Initialize rate limiter with Redis backend for distributed rate limiting
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=["100/minute"],  # Default rate limit for all endpoints
-    storage_uri=settings.REDIS_URL,
-    strategy="fixed-window",
-)
-
-from app.api.ontology import router as ontology_router
-from app.api.transform import router as transform_router
-from app.api.graph import router as graph_router
-from app.api.merge import router as merge_router
-from app.api.config import router as config_router
 from app.api.ai_config import router as ai_config_router
 from app.api.audit import router as audit_router
-from app.api.usage import router as usage_router
-from app.api.schema import router as schema_router
 from app.api.chat import router as chat_router
-from app.api.quality import router as quality_router
-from app.api.dashboard import router as dashboard_router
 from app.api.chunking import router as chunking_router
-from app.services.transform.prefect_client import configure_prefect
+from app.api.config import router as config_router
+from app.api.dashboard import router as dashboard_router
+from app.api.graph import router as graph_router
+from app.api.merge import router as merge_router
+from app.api.ontology import router as ontology_router
+from app.api.quality import router as quality_router
+from app.api.schema import router as schema_router
+from app.api.transform import router as transform_router
+from app.api.usage import router as usage_router
+from app.config import settings
 from app.services.transform.flows import progress_tracker
+from app.services.transform.prefect_client import configure_prefect
+from app.utils.logger import logger
+
+
+def _create_limiter() -> Limiter:
+    """Create rate limiter with Redis backend, falling back to memory for tests."""
+    # Use in-memory storage for test mode to avoid Redis dependency
+    if settings.test_mode:
+        return Limiter(
+            key_func=get_remote_address,
+            default_limits=["100/minute"],
+            storage_uri="memory://",
+            strategy="fixed-window",
+        )
+
+    # Try Redis-backed storage for production
+    try:
+        return Limiter(
+            key_func=get_remote_address,
+            default_limits=["100/minute"],
+            storage_uri=settings.REDIS_URL,
+            strategy="fixed-window",
+        )
+    except Exception as e:
+        logger.warning(
+            f"Failed to initialize Redis-backed rate limiter: {e}. "
+            "Falling back to in-memory storage."
+        )
+        return Limiter(
+            key_func=get_remote_address,
+            default_limits=["100/minute"],
+            storage_uri="memory://",
+            strategy="fixed-window",
+        )
+
+
+limiter = _create_limiter()
 
 
 @asynccontextmanager

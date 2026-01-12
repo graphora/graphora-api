@@ -10,7 +10,9 @@ class Settings(BaseSettings):
 
     # Test mode flag
     test_mode: bool = Field(
-        default=False, description="Whether the application is running in test mode"
+        default=False,
+        description="Whether the application is running in test mode",
+        validation_alias="TEST_MODE",
     )
 
     # API Settings
