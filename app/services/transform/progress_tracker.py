@@ -3,6 +3,8 @@ from datetime import datetime
 import json
 import platform
 import time
+import shutil
+from pathlib import Path
 
 import psutil
 import redis
@@ -334,10 +336,61 @@ class ProgressTracker:
             logger.debug(f"Failed to fail stage: {str(e)}")
 
     def cleanup_transform(self, transform_id: str):
-        """Clean up transformation data"""
+        """Clean up transformation data including Redis status and filesystem files"""
         try:
-            # Remove status
+            # Remove Redis status
             self.redis.delete(self._get_redis_key(transform_id, "status"))
+            logger.info(f"Cleaned up Redis status for transform {transform_id}")
 
         except Exception as e:
-            logger.debug(f"Failed to cleanup: {str(e)}")
+            logger.warning(f"Failed to cleanup Redis status: {str(e)}")
+
+        # Clean up filesystem files
+        try:
+            transform_dir = Path(settings.UPLOAD_DIR) / transform_id
+            if transform_dir.exists():
+                shutil.rmtree(transform_dir)
+                logger.info(f"Cleaned up transform directory: {transform_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup transform directory: {str(e)}")
+
+    def cleanup_old_transforms(self, max_age_hours: int = 24):
+        """
+        Clean up old transform directories that exceed the maximum age.
+
+        Args:
+            max_age_hours: Maximum age in hours before a transform directory is cleaned up
+        """
+        try:
+            upload_dir = Path(settings.UPLOAD_DIR)
+            if not upload_dir.exists():
+                return
+
+            current_time = time.time()
+            max_age_seconds = max_age_hours * 3600
+
+            cleaned_count = 0
+            for item in upload_dir.iterdir():
+                if item.is_dir() and item.name.startswith("transform_"):
+                    try:
+                        # Check directory age based on modification time
+                        dir_mtime = item.stat().st_mtime
+                        age_seconds = current_time - dir_mtime
+
+                        if age_seconds > max_age_seconds:
+                            shutil.rmtree(item)
+                            cleaned_count += 1
+                            logger.info(
+                                f"Cleaned up old transform directory: {item.name} "
+                                f"(age: {age_seconds / 3600:.1f} hours)"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to cleanup directory {item.name}: {str(e)}"
+                        )
+
+            if cleaned_count > 0:
+                logger.info(f"Cleaned up {cleaned_count} old transform directories")
+
+        except Exception as e:
+            logger.warning(f"Failed to cleanup old transforms: {str(e)}")

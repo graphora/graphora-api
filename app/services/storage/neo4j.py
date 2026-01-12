@@ -8,6 +8,7 @@ import asyncio
 import uuid
 import json
 import ast
+import re
 from datetime import datetime, timezone
 import time
 from app.utils.constants import (
@@ -35,6 +36,63 @@ from app.schemas.graph import GraphResponse, Node, Edge
 
 # Configure logger
 logger = logging.getLogger(__name__)
+
+# Pattern for valid Cypher identifiers (labels, relationship types, property names)
+# Allows alphanumeric characters and underscores, must start with letter or underscore
+CYPHER_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+class CypherInjectionError(Exception):
+    """Raised when a potential Cypher injection is detected."""
+    pass
+
+
+def validate_cypher_identifier(identifier: str, identifier_type: str = "identifier") -> str:
+    """
+    Validate that a string is safe to use as a Cypher identifier (label, relationship type, etc.).
+
+    Args:
+        identifier: The string to validate
+        identifier_type: Type of identifier for error messages (e.g., "label", "relationship type")
+
+    Returns:
+        The validated identifier
+
+    Raises:
+        CypherInjectionError: If the identifier contains invalid characters
+    """
+    if not identifier:
+        raise CypherInjectionError(f"Empty {identifier_type} is not allowed")
+
+    if not CYPHER_IDENTIFIER_PATTERN.match(identifier):
+        raise CypherInjectionError(
+            f"Invalid {identifier_type} '{identifier}': must contain only alphanumeric "
+            f"characters and underscores, and must start with a letter or underscore"
+        )
+
+    # Additional check for suspiciously long identifiers
+    if len(identifier) > 256:
+        raise CypherInjectionError(
+            f"Invalid {identifier_type} '{identifier[:50]}...': exceeds maximum length of 256 characters"
+        )
+
+    return identifier
+
+
+def validate_cypher_labels(labels: List[str]) -> List[str]:
+    """
+    Validate a list of Cypher labels.
+
+    Args:
+        labels: List of label strings to validate
+
+    Returns:
+        List of validated labels
+
+    Raises:
+        CypherInjectionError: If any label contains invalid characters
+    """
+    return [validate_cypher_identifier(label, "label") for label in labels]
 
 
 class Neo4jStorage(GraphStorageInterface):
@@ -183,15 +241,27 @@ class Neo4jStorage(GraphStorageInterface):
         ):
             properties.update(node.provenance)
 
-        # Build labels string
+        # Build labels string with validation to prevent Cypher injection
         labels = [node_type] if node_type else []
+        if labels:
+            validated_labels = validate_cypher_labels(labels)
+            labels_str = ':'.join(validated_labels)
+        else:
+            labels_str = ""
 
         # Build query
-        query = (
-            f"{'MERGE' if merge else 'CREATE'} (n:{':'.join(labels)} {{id: $id}}) "
-            "SET n += $properties "
-            "RETURN n"
-        )
+        if labels_str:
+            query = (
+                f"{'MERGE' if merge else 'CREATE'} (n:{labels_str} {{id: $id}}) "
+                "SET n += $properties "
+                "RETURN n"
+            )
+        else:
+            query = (
+                f"{'MERGE' if merge else 'CREATE'} (n {{id: $id}}) "
+                "SET n += $properties "
+                "RETURN n"
+            )
 
         return query, {"id": node_id, "properties": properties}
 
@@ -199,12 +269,17 @@ class Neo4jStorage(GraphStorageInterface):
         self, index_name: str, entity_name: str, properties: List[str]
     ) -> None:
         """Create a full text index for a node entity"""
+        # Validate identifiers to prevent Cypher injection
+        validated_index_name = validate_cypher_identifier(index_name, "index name")
+        validated_entity_name = validate_cypher_identifier(entity_name, "entity name")
+        validated_properties = [validate_cypher_identifier(p, "property name") for p in properties]
+
         async with self._get_session() as session:
-            query = f"DROP INDEX {index_name} IF EXISTS;"
+            query = f"DROP INDEX {validated_index_name} IF EXISTS;"
             await session.run(query)
             node_alias = "n"
-            prop_names = [f"{node_alias}.{prop}" for prop in properties]
-            query = f"CREATE FULLTEXT INDEX {index_name} FOR ({node_alias}:`{entity_name}`) ON EACH [{', '.join(prop_names)}];"
+            prop_names = [f"{node_alias}.{prop}" for prop in validated_properties]
+            query = f"CREATE FULLTEXT INDEX {validated_index_name} FOR ({node_alias}:`{validated_entity_name}`) ON EACH [{', '.join(prop_names)}];"
             logger.debug(query)
             await session.run(query)
 
@@ -217,33 +292,38 @@ class Neo4jStorage(GraphStorageInterface):
         properties: List[str],
     ) -> None:
         """Create a full text index for a relationship entity"""
+        # Validate identifiers to prevent Cypher injection
+        validated_index_name = validate_cypher_identifier(index_name, "index name")
+        validated_rel_name = validate_cypher_identifier(rel_name, "relationship type")
+        validated_properties = [validate_cypher_identifier(p, "property name") for p in properties]
+
         async with self._get_session() as session:
             try:
                 # Drop existing index if it exists
-                query = f"DROP INDEX {index_name} IF EXISTS;"
+                query = f"DROP INDEX {validated_index_name} IF EXISTS;"
                 await session.run(query)
 
                 # Create new index with correct syntax
                 # Neo4j relationship index syntax requires direction and variable naming
                 rel_alias = "r"
-                prop_names = [f"{rel_alias}.{prop}" for prop in properties]
+                prop_names = [f"{rel_alias}.{prop}" for prop in validated_properties]
 
                 if not prop_names:
                     logger.warning(
-                        f"No properties provided for full-text index {index_name}, skipping creation"
+                        f"No properties provided for full-text index {validated_index_name}, skipping creation"
                     )
                     return
 
                 # Use correct syntax with direction and properly formatted relationship pattern
                 query = f"""
-                CREATE FULLTEXT INDEX {index_name} 
-                FOR ()-[{rel_alias}:`{rel_name}`]->() 
+                CREATE FULLTEXT INDEX {validated_index_name}
+                FOR ()-[{rel_alias}:`{validated_rel_name}`]->()
                 ON EACH [{', '.join(prop_names)}];
                 """
                 logger.debug(query)
                 await session.run(query)
                 logger.info(
-                    f"Created full-text index {index_name} for relationship {rel_name}"
+                    f"Created full-text index {validated_index_name} for relationship {validated_rel_name}"
                 )
             except Exception as e:
                 logger.error(
@@ -261,9 +341,12 @@ class Neo4jStorage(GraphStorageInterface):
         Returns:
             List of property names, excluding system properties
         """
+        # Validate entity name to prevent Cypher injection
+        validated_entity_name = validate_cypher_identifier(entity_name, "entity name")
+
         async with self._get_session() as session:
             try:
-                query = f"MATCH (n:`{entity_name}`) RETURN keys(n) as props LIMIT 1"
+                query = f"MATCH (n:`{validated_entity_name}`) RETURN keys(n) as props LIMIT 1"
                 result = await session.run(query)
                 record = await result.single(None)
                 if record:
@@ -273,7 +356,7 @@ class Neo4jStorage(GraphStorageInterface):
                 return []
             except Exception as e:
                 logger.error(
-                    f"Error getting node properties for {entity_name}: {str(e)}"
+                    f"Error getting node properties for {validated_entity_name}: {str(e)}"
                 )
                 return []
 
@@ -287,9 +370,12 @@ class Neo4jStorage(GraphStorageInterface):
         Returns:
             List of property names, excluding system properties
         """
+        # Validate relationship name to prevent Cypher injection
+        validated_rel_name = validate_cypher_identifier(rel_name, "relationship type")
+
         async with self._get_session() as session:
             try:
-                query = f"MATCH ()-[r:`{rel_name}`]->() RETURN keys(r) as props LIMIT 1"
+                query = f"MATCH ()-[r:`{validated_rel_name}`]->() RETURN keys(r) as props LIMIT 1"
                 result = await session.run(query)
                 record = await result.single(None)
                 if record:
@@ -299,7 +385,7 @@ class Neo4jStorage(GraphStorageInterface):
                 return []
             except Exception as e:
                 logger.error(
-                    f"Error getting relationship properties for {rel_name}: {str(e)}"
+                    f"Error getting relationship properties for {validated_rel_name}: {str(e)}"
                 )
                 return []
 
@@ -547,8 +633,11 @@ class Neo4jStorage(GraphStorageInterface):
         self, session, rel: RelationshipInstance
     ) -> Optional[Dict]:
         """Check for an existing relationship in Neo4j"""
+        # Validate relationship type to prevent Cypher injection
+        validated_rel_type = validate_cypher_identifier(rel.type, "relationship type")
+
         query = f"""
-        MATCH (s)-[r:`{rel.type}`]->(t)
+        MATCH (s)-[r:`{validated_rel_type}`]->(t)
         WHERE s.id = $source_id AND t.id = $target_id AND r.{VALID_TO} IS NULL
         RETURN r
         """
@@ -583,7 +672,10 @@ class Neo4jStorage(GraphStorageInterface):
         source_id = rel.source_id
         target_id = rel.target_id
         rel_id = rel.id if merge else str(uuid.uuid4())
-        rel_type = rel.type
+
+        # Validate relationship type to prevent Cypher injection
+        validated_rel_type = validate_cypher_identifier(rel.type, "relationship type")
+
         rel_properties = properties if properties is not None else rel.properties
 
         # Sanitize properties
@@ -611,7 +703,7 @@ class Neo4jStorage(GraphStorageInterface):
         query = f"""
         MATCH (s), (t)
         WHERE s.id = $source_id AND t.id = $target_id
-        {"MERGE" if merge else "CREATE"} (s)-[r:`{rel_type}`]->(t)
+        {"MERGE" if merge else "CREATE"} (s)-[r:`{validated_rel_type}`]->(t)
         SET r = $properties, r.id = $rel_id
         RETURN r
         """
@@ -1138,24 +1230,25 @@ class Neo4jStorage(GraphStorageInterface):
                 param_key = f"value{idx}"
                 params[param_key] = str(value).lower()  # Convert all values to strings
 
-                # Create individual similarity conditions
-        if isinstance(value, list):
-            similarity_conditions.append(
-                f"CASE WHEN apoc.text.join([x IN n.{key} | toString(x)], ',') = ${param_key} THEN 1.0 ELSE 0.0 END"
-            )
-        elif isinstance(value, dict):
-            similarity_conditions.append(
-                f"CASE WHEN apoc.convert.toJson(n.{key}) = ${param_key} THEN 1.0 ELSE 0.0 END"
-            )
-        else:
-            # Text distance similarity
-            similarity_conditions.append(
-                f"CASE WHEN apoc.text.distance(toLower(toString(coalesce(n.{key}, ''))), ${param_key}) < 5 THEN 1.0 ELSE 0.0 END"
-            )
-            # Metaphone similarity (phonetic)
-            similarity_conditions.append(
-                f"CASE WHEN apoc.text.doubleMetaphone(toLower(toString(coalesce(n.{key}, '')))) = apoc.text.doubleMetaphone(${param_key}) THEN 1.0 ELSE 0.0 END"
-            )
+                # Create individual similarity conditions for each property
+                # (Note: This block MUST be inside the for loop to process all properties)
+                if isinstance(value, list):
+                    similarity_conditions.append(
+                        f"CASE WHEN apoc.text.join([x IN n.{key} | toString(x)], ',') = ${param_key} THEN 1.0 ELSE 0.0 END"
+                    )
+                elif isinstance(value, dict):
+                    similarity_conditions.append(
+                        f"CASE WHEN apoc.convert.toJson(n.{key}) = ${param_key} THEN 1.0 ELSE 0.0 END"
+                    )
+                else:
+                    # Text distance similarity
+                    similarity_conditions.append(
+                        f"CASE WHEN apoc.text.distance(toLower(toString(coalesce(n.{key}, ''))), ${param_key}) < 5 THEN 1.0 ELSE 0.0 END"
+                    )
+                    # Metaphone similarity (phonetic)
+                    similarity_conditions.append(
+                        f"CASE WHEN apoc.text.doubleMetaphone(toLower(toString(coalesce(n.{key}, '')))) = apoc.text.doubleMetaphone(${param_key}) THEN 1.0 ELSE 0.0 END"
+                    )
 
         # Build final query with conditional relationship score calculation
         if not similarity_conditions:
@@ -1402,6 +1495,9 @@ class Neo4jStorage(GraphStorageInterface):
         Returns:
             Edge: The created relationship
         """
+        # Validate relationship type to prevent Cypher injection
+        validated_rel_type = validate_cypher_identifier(rel_type, "relationship type")
+
         # Ensure properties is a dict and not None
         if properties is None:
             properties = {}
@@ -1425,7 +1521,7 @@ class Neo4jStorage(GraphStorageInterface):
             SET r = $properties
             RETURN r
             """.format(
-                rel_type
+                validated_rel_type
             )
 
             records = await self._execute_query(
@@ -1567,12 +1663,15 @@ class Neo4jStorage(GraphStorageInterface):
         Returns:
             Edge if found, None otherwise
         """
+        # Validate relationship type to prevent Cypher injection
+        validated_rel_type = validate_cypher_identifier(rel_type, "relationship type")
+
         query = """
                 MATCH (s)-[r:`{}`]->(t)
                 WHERE s.id = $source_id AND t.id = $target_id
                 RETURN r
                 """.format(
-            rel_type
+            validated_rel_type
         )
 
         records = await self._execute_query(
@@ -1738,13 +1837,15 @@ class Neo4jStorage(GraphStorageInterface):
         Returns:
             List[Node]: List of nodes matching the search criteria
         """
+        # Validate label to prevent Cypher injection
+        validated_label = validate_cypher_identifier(label, "label")
 
         # Skip if no properties to search
         if not properties:
             return []
 
         # Get index name for this entity type
-        index_name = get_full_text_index_name(label)
+        index_name = get_full_text_index_name(validated_label)
 
         # First check if the index exists - use a more compatible approach
         try:
@@ -1842,7 +1943,7 @@ class Neo4jStorage(GraphStorageInterface):
                         query = f"""
                         CALL db.index.fulltext.queryNodes($index_name, $search_query)
                         YIELD node, score
-                        WHERE node:`{label}`
+                        WHERE node:`{validated_label}`
                         RETURN node, score
                         ORDER BY score DESC
                         LIMIT $max_results
@@ -1865,7 +1966,7 @@ class Neo4jStorage(GraphStorageInterface):
                                 node_label = (
                                     list(record[0].labels)[0]
                                     if record[0].labels
-                                    else label
+                                    else validated_label
                                 )
                                 all_results.append(
                                     Node(

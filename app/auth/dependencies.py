@@ -2,6 +2,8 @@
 
 from functools import lru_cache
 from typing import Optional
+import logging
+import os
 
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -11,11 +13,22 @@ from jwt import PyJWKClient
 from app.auth.models import AuthContext
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 bearer_scheme = HTTPBearer(auto_error=False)
+
+# Track if we've already logged auth warnings to avoid spam
+_auth_warnings_logged = False
 
 
 class AuthConfigError(RuntimeError):
     """Raised when the authentication environment is misconfigured."""
+
+
+def _is_production() -> bool:
+    """Check if we're running in production mode."""
+    env = os.getenv("ENVIRONMENT", "").lower()
+    return env in ("production", "prod")
 
 
 @lru_cache(maxsize=1)
@@ -29,6 +42,8 @@ def _get_jwk_client() -> PyJWKClient:
 
 def _decode_token(token: str) -> dict:
     """Decode and validate a Clerk-issued JWT."""
+    global _auth_warnings_logged
+
     jwk_client = _get_jwk_client()
     signing_key = jwk_client.get_signing_key_from_jwt(token)
 
@@ -38,10 +53,38 @@ def _decode_token(token: str) -> dict:
     issuer: Optional[str] = settings.CLERK_ISSUER or None
     audience: Optional[str] = settings.CLERK_AUDIENCE or None
 
+    # Check for missing issuer/audience configuration
+    is_production = _is_production()
+
     if issuer is None:
+        if is_production:
+            raise AuthConfigError(
+                "CLERK_ISSUER must be configured in production environment. "
+                "JWT issuer validation is required for security."
+            )
+        if not _auth_warnings_logged:
+            logger.warning(
+                "CLERK_ISSUER is not configured. JWT issuer validation is disabled. "
+                "This is a security risk and should not be used in production."
+            )
         options["verify_iss"] = False
+
     if audience is None:
+        if is_production:
+            raise AuthConfigError(
+                "CLERK_AUDIENCE must be configured in production environment. "
+                "JWT audience validation is required for security."
+            )
+        if not _auth_warnings_logged:
+            logger.warning(
+                "CLERK_AUDIENCE is not configured. JWT audience validation is disabled. "
+                "This is a security risk and should not be used in production."
+            )
         options["verify_aud"] = False
+
+    # Only log warnings once to avoid log spam
+    if not _auth_warnings_logged and (issuer is None or audience is None):
+        _auth_warnings_logged = True
 
     decoded = jwt.decode(
         token,

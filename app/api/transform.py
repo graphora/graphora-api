@@ -14,6 +14,8 @@ import uuid
 import traceback
 import time
 import json
+import os
+import re
 from fastapi.responses import JSONResponse
 from app.utils.logger import logger
 from app.schemas.transform import (
@@ -35,6 +37,41 @@ from app.services.chunking.config import ChunkingConfig
 from app.auth import get_current_user_id
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitize a filename to prevent path traversal attacks.
+
+    Args:
+        filename: The original filename from user input
+
+    Returns:
+        A safe filename with path traversal characters removed
+
+    Raises:
+        ValueError: If the filename is invalid or empty after sanitization
+    """
+    if not filename:
+        raise ValueError("Filename cannot be empty")
+
+    # Get just the basename to remove any directory components
+    safe_name = os.path.basename(filename)
+
+    # Check for path traversal attempts
+    if ".." in filename or filename != safe_name:
+        raise ValueError(f"Invalid filename: path traversal detected in '{filename}'")
+
+    # Remove any remaining dangerous characters (keep alphanumeric, dots, hyphens, underscores)
+    # Allow spaces but be strict about other characters
+    if not re.match(r"^[\w\-. ]+$", safe_name):
+        raise ValueError(f"Invalid filename: contains disallowed characters '{filename}'")
+
+    # Ensure filename is not empty after sanitization
+    if not safe_name or safe_name in (".", ".."):
+        raise ValueError(f"Invalid filename after sanitization: '{filename}'")
+
+    return safe_name
 
 
 async def run_transform_flow(
@@ -186,19 +223,28 @@ async def upload_documents(
         total_file_size = 0
 
         for file in files:
+            # Sanitize filename to prevent path traversal attacks
+            try:
+                safe_filename = sanitize_filename(file.filename)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(e),
+                )
+
             # Validate file
             validation_result = await validator.validate(file)
             logger.info(
-                f"Validated file {file.filename} for user {user_id}: {validation_result}"
+                f"Validated file {safe_filename} for user {user_id}: {validation_result}"
             )
             if not validation_result.is_valid:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid file {file.filename}: {validation_result.errors}",
+                    detail=f"Invalid file {safe_filename}: {validation_result.errors}",
                 )
 
-            # Save file temporarily
-            temp_path = temp_dir / file.filename
+            # Save file temporarily using sanitized filename
+            temp_path = temp_dir / safe_filename
             async with aiofiles.open(temp_path, "wb") as f:
                 content = await file.read()
                 await file.seek(0)
@@ -208,10 +254,10 @@ async def upload_documents(
             total_file_size += len(content)
             logger.info(f"File saved to TMP directory {temp_path} for user {user_id}")
 
-            # Create metadata
+            # Create metadata using sanitized filename
             metadata = DocumentMetadata(
-                source=file.filename,
-                document_type=DocumentType(Path(file.filename).suffix[1:]),
+                source=safe_filename,
+                document_type=DocumentType(Path(safe_filename).suffix[1:]),
                 tags=[ontology_id, user_id],  # Add user ID to tags
             )
             doc_metadata.append(metadata)
@@ -219,7 +265,7 @@ async def upload_documents(
 
             # Create document info for response
             doc_info = DocumentInfo(
-                filename=file.filename,
+                filename=safe_filename,
                 size=len(content),
                 document_type=metadata.document_type,
                 metadata=metadata,

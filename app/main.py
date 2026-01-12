@@ -1,11 +1,23 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import httpx
 import redis.asyncio as redis_async
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
 from app.utils.logger import logger
+
+# Initialize rate limiter with Redis backend for distributed rate limiting
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["100/minute"],  # Default rate limit for all endpoints
+    storage_uri=settings.REDIS_URL,
+    strategy="fixed-window",
+)
 
 from app.api.ontology import router as ontology_router
 from app.api.transform import router as transform_router
@@ -21,6 +33,7 @@ from app.api.quality import router as quality_router
 from app.api.dashboard import router as dashboard_router
 from app.api.chunking import router as chunking_router
 from app.services.transform.prefect_client import configure_prefect
+from app.services.transform.flows import progress_tracker
 
 
 @asynccontextmanager
@@ -30,6 +43,14 @@ async def lifespan(app: FastAPI):
     print("GRAPHORA API STARTING...", flush=True)
     logger.info("Starting Graphora API")
     configure_prefect()
+
+    # Clean up old transform directories on startup (older than 24 hours)
+    try:
+        progress_tracker.cleanup_old_transforms(max_age_hours=24)
+        logger.info("Cleaned up old transform directories on startup")
+    except Exception as e:
+        logger.warning(f"Failed to cleanup old transforms on startup: {str(e)}")
+
     print("✓ GRAPHORA API READY - Server is now accepting requests", flush=True)
     print("=" * 60, flush=True)
 
@@ -48,8 +69,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configure CORS
-origins = settings.CORS_ORIGINS or ["*"]
+# Add rate limiter to app state and exception handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Configure CORS - require explicit configuration, warn if using wildcard
+origins = settings.CORS_ORIGINS
+if not origins:
+    logger.warning(
+        "CORS_ORIGINS not configured. Using wildcard '*' which allows any origin. "
+        "This is not recommended for production."
+    )
+    origins = ["*"]
+elif origins == ["*"]:
+    logger.warning(
+        "CORS_ORIGINS is set to wildcard '*'. "
+        "This allows any origin and is not recommended for production."
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -75,12 +112,14 @@ app.include_router(dashboard_router)
 
 
 @app.get("/health")
+@limiter.exempt  # Health checks should not be rate limited
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
 
 
 @app.get("/ready")
+@limiter.exempt  # Readiness checks should not be rate limited
 async def readiness_check():
     """Readiness endpoint that probes core dependencies."""
 
