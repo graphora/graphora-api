@@ -31,7 +31,9 @@ class FileValidator:
         "application/pdf": {".pdf"},
         "text/plain": {".txt", ".text"},
         "text/markdown": {".md", ".markdown"},
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {".docx"},
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+            ".docx"
+        },
     }
 
     def _validate_filename(self, filename: str) -> List[str]:
@@ -86,7 +88,9 @@ class FileValidator:
 
         return errors
 
-    def _validate_extension_matches_mime(self, filename: str, mime_type: str) -> List[str]:
+    def _validate_extension_matches_mime(
+        self, filename: str, mime_type: str
+    ) -> List[str]:
         """
         Validate that the file extension matches the detected MIME type.
 
@@ -150,7 +154,9 @@ class FileValidator:
 
             # Validate extension matches MIME type (prevent extension spoofing)
             if file.filename and mime in self.ALLOWED_MIME_TYPES:
-                extension_errors = self._validate_extension_matches_mime(file.filename, mime)
+                extension_errors = self._validate_extension_matches_mime(
+                    file.filename, mime
+                )
                 errors.extend(extension_errors)
 
             return ValidationResult(is_valid=len(errors) == 0, errors=errors)

@@ -44,10 +44,13 @@ CYPHER_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 class CypherInjectionError(Exception):
     """Raised when a potential Cypher injection is detected."""
+
     pass
 
 
-def validate_cypher_identifier(identifier: str, identifier_type: str = "identifier") -> str:
+def validate_cypher_identifier(
+    identifier: str, identifier_type: str = "identifier"
+) -> str:
     """
     Validate that a string is safe to use as a Cypher identifier (label, relationship type, etc.).
 
@@ -245,7 +248,7 @@ class Neo4jStorage(GraphStorageInterface):
         labels = [node_type] if node_type else []
         if labels:
             validated_labels = validate_cypher_labels(labels)
-            labels_str = ':'.join(validated_labels)
+            labels_str = ":".join(validated_labels)
         else:
             labels_str = ""
 
@@ -272,7 +275,9 @@ class Neo4jStorage(GraphStorageInterface):
         # Validate identifiers to prevent Cypher injection
         validated_index_name = validate_cypher_identifier(index_name, "index name")
         validated_entity_name = validate_cypher_identifier(entity_name, "entity name")
-        validated_properties = [validate_cypher_identifier(p, "property name") for p in properties]
+        validated_properties = [
+            validate_cypher_identifier(p, "property name") for p in properties
+        ]
 
         async with self._get_session() as session:
             query = f"DROP INDEX {validated_index_name} IF EXISTS;"
@@ -295,7 +300,9 @@ class Neo4jStorage(GraphStorageInterface):
         # Validate identifiers to prevent Cypher injection
         validated_index_name = validate_cypher_identifier(index_name, "index name")
         validated_rel_name = validate_cypher_identifier(rel_name, "relationship type")
-        validated_properties = [validate_cypher_identifier(p, "property name") for p in properties]
+        validated_properties = [
+            validate_cypher_identifier(p, "property name") for p in properties
+        ]
 
         async with self._get_session() as session:
             try:

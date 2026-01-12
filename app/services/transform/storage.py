@@ -10,6 +10,7 @@ import shutil
 
 class PathTraversalError(Exception):
     """Raised when a path traversal attack is detected."""
+
     pass
 
 
@@ -122,7 +123,9 @@ class DocumentStorage:
 
             # Save metadata with validated path
             metadata_path = transform_dir / f"{safe_filename}.metadata.json"
-            metadata_path = self._validate_path_containment(metadata_path, transform_dir)
+            metadata_path = self._validate_path_containment(
+                metadata_path, transform_dir
+            )
             async with aiofiles.open(metadata_path, "w") as f:
                 await f.write(metadata.model_dump_json())
 

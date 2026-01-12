@@ -65,7 +65,9 @@ def sanitize_filename(filename: str) -> str:
     # Remove any remaining dangerous characters (keep alphanumeric, dots, hyphens, underscores)
     # Allow spaces but be strict about other characters
     if not re.match(r"^[\w\-. ]+$", safe_name):
-        raise ValueError(f"Invalid filename: contains disallowed characters '{filename}'")
+        raise ValueError(
+            f"Invalid filename: contains disallowed characters '{filename}'"
+        )
 
     # Ensure filename is not empty after sanitization
     if not safe_name or safe_name in (".", ".."):
