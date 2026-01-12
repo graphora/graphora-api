@@ -161,6 +161,9 @@ class Settings(BaseSettings):
     REDIS_HOST: str = Field(default="localhost", description="Redis host")
     REDIS_PORT: int = Field(default=6379, description="Redis port")
     REDIS_DB: int = Field(default=0, description="Redis database number")
+    REDIS_RATE_LIMIT_DB: int = Field(
+        default=1, description="Redis database number for rate limiting (isolated)"
+    )
     REDIS_PASSWORD: Optional[str] = Field(default=None, description="Redis password")
     CACHE_TTL_HOURS: int = Field(default=24, description="Cache TTL in hours")
 
@@ -194,6 +197,12 @@ class Settings(BaseSettings):
         """Construct Redis URL from components"""
         auth = f":{self.REDIS_PASSWORD}@" if self.REDIS_PASSWORD else ""
         return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+
+    @property
+    def REDIS_RATE_LIMIT_URL(self) -> str:
+        """Construct Redis URL for rate limiting (uses separate database)"""
+        auth = f":{self.REDIS_PASSWORD}@" if self.REDIS_PASSWORD else ""
+        return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_RATE_LIMIT_DB}"
 
     # Logging
     LOG_LEVEL: str = Field(default="INFO", description="Application logging level")

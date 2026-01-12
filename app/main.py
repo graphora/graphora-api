@@ -38,12 +38,12 @@ def _create_limiter() -> Limiter:
             strategy="fixed-window",
         )
 
-    # Try Redis-backed storage for production
+    # Try Redis-backed storage for production (uses separate database to avoid conflicts)
     try:
         return Limiter(
             key_func=get_remote_address,
             default_limits=["100/minute"],
-            storage_uri=settings.REDIS_URL,
+            storage_uri=settings.REDIS_RATE_LIMIT_URL,
             strategy="fixed-window",
         )
     except Exception as e:
