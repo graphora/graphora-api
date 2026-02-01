@@ -81,7 +81,7 @@ class TestGetCurrentAuth:
 
     @pytest.mark.asyncio
     async def test_should_extract_user_id_from_sub_claim(
-        self, mock_jwt_decoder, mock_jwk_client, valid_credentials
+        self, mock_jwt_decoder, mock_jwk_client
     ):
         """Should use 'sub' claim as user_id."""
 
@@ -193,7 +193,7 @@ class TestAuthEnvironmentBehavior:
         assert _is_production() is False
 
     @pytest.mark.asyncio
-    async def test_should_warn_when_audience_not_configured(self, monkeypatch, caplog):
+    async def test_should_warn_when_audience_not_configured(self, monkeypatch):
         """Should log warning when CLERK_AUDIENCE not configured."""
 
         monkeypatch.delenv("CLERK_AUDIENCE", raising=False)
