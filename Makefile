@@ -24,6 +24,7 @@ help:
 	@echo "  make test-api-unit    - Run API unit tests only"
 	@echo "  make test-audit       - Run audit service tests"
 	@echo "  make test-chunking    - Run chunking config tests"
+	@echo "  make test-entity-resolution - Run entity resolution tests"
 	@echo "  make test-quality     - Run quality validation tests"
 	@echo ""
 	@echo "Code Quality:"
@@ -129,6 +130,9 @@ test-audit:
 
 test-chunking:
 	uv run pytest tests/unit/services/chunking/ -v
+
+test-entity-resolution:
+	uv run pytest tests/unit/services/entity_resolution/ -v
 
 lint-fix:
 	uv run ruff check --fix .
