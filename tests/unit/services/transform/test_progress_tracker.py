@@ -51,6 +51,7 @@ def progress_tracker(mock_redis, mock_settings):
         mock_redis_module.from_url.return_value = mock_redis
 
         from app.services.transform.progress_tracker import ProgressTracker
+
         tracker = ProgressTracker()
         tracker.redis = mock_redis
         return tracker
@@ -303,9 +304,7 @@ class TestCompleteStage:
         """Should set overall status to COMPLETED when LOAD completes."""
         mock_redis.get.return_value = sample_status.model_dump_json()
 
-        await progress_tracker.complete_stage(
-            "transform-123", TransformationStage.LOAD
-        )
+        await progress_tracker.complete_stage("transform-123", TransformationStage.LOAD)
 
         # Verify the saved status has COMPLETED overall
         call_args = mock_redis.set.call_args
@@ -417,9 +416,7 @@ class TestUpdateStageProgress:
         """Should update progress in Redis."""
         mock_redis.get.return_value = sample_status.model_dump_json()
 
-        with patch.object(
-            progress_tracker, "_get_resource_metrics"
-        ) as mock_metrics:
+        with patch.object(progress_tracker, "_get_resource_metrics") as mock_metrics:
             mock_metrics.return_value = {
                 "cpu_usage_percent": 25.0,
                 "memory_usage_mb": 512.0,
@@ -446,9 +443,7 @@ class TestUpdateStageProgress:
         """Should store timing when stage completes (items_processed == items_total)."""
         mock_redis.get.return_value = sample_status.model_dump_json()
 
-        with patch.object(
-            progress_tracker, "_get_resource_metrics"
-        ) as mock_metrics:
+        with patch.object(progress_tracker, "_get_resource_metrics") as mock_metrics:
             mock_metrics.return_value = {
                 "cpu_usage_percent": 25.0,
                 "memory_usage_mb": 512.0,

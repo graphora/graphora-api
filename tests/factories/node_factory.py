@@ -1,7 +1,6 @@
 """Node factory for creating test nodes."""
 
 from typing import Any, Dict, List, Optional
-import uuid
 
 
 class NodeFactory:
@@ -76,7 +75,9 @@ class NodeFactory:
                 if isinstance(value, str):
                     canonical_properties[key] = value.lower().strip()
                 else:
-                    canonical_properties[key] = str(value) if value is not None else None
+                    canonical_properties[key] = (
+                        str(value) if value is not None else None
+                    )
 
         # Build canonical key if not provided
         if canonical_key is None:
@@ -172,7 +173,10 @@ class NodeFactory:
         template = properties_template or {"name": f"{node_type} {{i}}"}
 
         for i in range(count):
-            props = {k: v.format(i=i) if isinstance(v, str) else v for k, v in template.items()}
+            props = {
+                k: v.format(i=i) if isinstance(v, str) else v
+                for k, v in template.items()
+            }
             nodes.append(cls.create(node_type=node_type, properties=props, **kwargs))
 
         return nodes

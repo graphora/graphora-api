@@ -6,7 +6,6 @@ Tests for file upload validation and security checks.
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from io import BytesIO
 
 from app.services.transform.validators import FileValidator
 
@@ -25,6 +24,7 @@ def file_validator():
 @pytest.fixture
 def mock_upload_file():
     """Create a factory for mock upload files."""
+
     def _create(
         filename: str = "document.pdf",
         content: bytes = b"%PDF-1.4 mock pdf content",
@@ -37,6 +37,7 @@ def mock_upload_file():
         mock_file.read = AsyncMock(return_value=content)
         mock_file.seek = AsyncMock()
         return mock_file
+
     return _create
 
 
@@ -66,7 +67,9 @@ class TestFilenameValidation:
         """Should reject filenames with path traversal sequences."""
         errors = file_validator._validate_filename("../etc/passwd")
         assert len(errors) > 0
-        assert any("path traversal" in e.lower() or "directory" in e.lower() for e in errors)
+        assert any(
+            "path traversal" in e.lower() or "directory" in e.lower() for e in errors
+        )
 
     def test_should_reject_directory_separators(self, file_validator):
         """Should reject filenames with directory separators."""
@@ -259,7 +262,9 @@ class TestFullFileValidation:
             result = await file_validator.validate(mock_file)
 
             assert result.is_valid is False
-            assert any("exceeds" in e.lower() or "size" in e.lower() for e in result.errors)
+            assert any(
+                "exceeds" in e.lower() or "size" in e.lower() for e in result.errors
+            )
 
     @pytest.mark.asyncio
     async def test_should_reject_extension_mismatch(
@@ -337,7 +342,9 @@ class TestAllowedTypes:
 
     def test_should_have_docx_in_allowed_types(self, file_validator):
         """Should allow DOCX files."""
-        docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        docx_mime = (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
         assert docx_mime in file_validator.ALLOWED_MIME_TYPES
 
     def test_should_not_allow_executable_types(self, file_validator):

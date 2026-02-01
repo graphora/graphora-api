@@ -1,7 +1,6 @@
 """Relationship factory for creating test relationships."""
 
 from typing import Any, Dict, List, Optional
-import uuid
 
 
 class RelationshipFactory:

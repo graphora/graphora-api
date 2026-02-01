@@ -11,8 +11,7 @@ The audit service is critical for:
 
 import pytest
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any
+from unittest.mock import AsyncMock, patch
 
 from app.services.audit_service import (
     AuditService,
@@ -87,7 +86,9 @@ class TestAuditServiceInitialization:
 
         assert service is not None
 
-    def test_should_initialize_when_resolved_database_url_configured(self, mock_settings):
+    def test_should_initialize_when_resolved_database_url_configured(
+        self, mock_settings
+    ):
         """Should initialize when resolved_database_url is set."""
         mock_settings.DATABASE_URL = None
         mock_settings.resolved_database_url = "postgresql://test@localhost/test"

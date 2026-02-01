@@ -468,7 +468,7 @@ class TestCacheFactory:
             mock_settings.LLM_CACHE_MAX_ENTRIES = 256
             mock_settings.LLM_CACHE_URL = None
 
-            from app.services.llm.client import _create_cache, _AsyncLRUCache
+            from app.services.llm.client import _create_cache
 
             cache = _create_cache("test-namespace")
 

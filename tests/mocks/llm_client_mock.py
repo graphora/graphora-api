@@ -7,7 +7,7 @@ without making actual API calls. They focus on verifying interactions
 
 from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 class MockLLMResponse:
@@ -348,7 +348,9 @@ class MockLLMClient:
     def assert_not_called(self, method: str):
         """Assert that a method was not called."""
         count = self._call_counts.get(method, 0)
-        assert count == 0, f"Expected {method} to not be called, but was called {count} times"
+        assert (
+            count == 0
+        ), f"Expected {method} to not be called, but was called {count} times"
 
     def reset(self):
         """Reset all call tracking and configured responses."""

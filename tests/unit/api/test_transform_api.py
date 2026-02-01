@@ -7,11 +7,9 @@ London School TDD with mocked dependencies.
 import json
 import pytest
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from io import BytesIO
 
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -68,9 +66,7 @@ def mock_file_validator():
     """Mock file validator."""
     with patch("app.api.transform.FileValidator") as MockClass:
         instance = MagicMock()
-        instance.validate = AsyncMock(
-            return_value=MagicMock(is_valid=True, errors=[])
-        )
+        instance.validate = AsyncMock(return_value=MagicMock(is_valid=True, errors=[]))
         MockClass.return_value = instance
         yield instance
 
@@ -233,9 +229,7 @@ class TestTransformCleanupEndpoint:
         self, test_client, mock_progress_tracker
     ):
         """Should schedule cleanup as background task."""
-        response = test_client.post(
-            "/api/v1/transform/status/transform-abc123/cleanup"
-        )
+        response = test_client.post("/api/v1/transform/status/transform-abc123/cleanup")
 
         assert response.status_code == 200
         data = response.json()
@@ -246,9 +240,7 @@ class TestTransformCleanupEndpoint:
         self, test_client, mock_progress_tracker
     ):
         """Should include user context in response."""
-        response = test_client.post(
-            "/api/v1/transform/status/transform-abc123/cleanup"
-        )
+        response = test_client.post("/api/v1/transform/status/transform-abc123/cleanup")
 
         assert response.status_code == 200
         data = response.json()
@@ -303,9 +295,7 @@ class TestUploadEndpointValidation:
         mock_progress_tracker,
     ):
         """Should reject filenames with path traversal."""
-        files = {
-            "files": ("../../../etc/passwd", BytesIO(b"content"), "text/plain")
-        }
+        files = {"files": ("../../../etc/passwd", BytesIO(b"content"), "text/plain")}
 
         with patch("app.api.transform.settings") as mock_settings:
             mock_settings.UPLOAD_DIR = "/tmp/test-uploads"
@@ -337,7 +327,6 @@ class TestChunkingConfigValidation:
         """Should handle invalid JSON in chunking config gracefully."""
         # Test that the endpoint handles invalid JSON without crashing
         # The actual validation happens within the endpoint
-        import json
 
         invalid_json = "not valid json {"
 
@@ -416,13 +405,9 @@ class TestTransformResponseFormats:
         assert "start_time" in data
         assert "resource_metrics" in data
 
-    def test_cleanup_response_should_be_json(
-        self, test_client, mock_progress_tracker
-    ):
+    def test_cleanup_response_should_be_json(self, test_client, mock_progress_tracker):
         """Cleanup response should be valid JSON."""
-        response = test_client.post(
-            "/api/v1/transform/status/transform-abc123/cleanup"
-        )
+        response = test_client.post("/api/v1/transform/status/transform-abc123/cleanup")
 
         assert response.status_code == 200
         assert response.headers["content-type"] == "application/json"

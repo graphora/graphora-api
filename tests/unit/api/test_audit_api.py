@@ -6,7 +6,7 @@ London School TDD with mocked dependencies.
 
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -141,9 +141,7 @@ class TestAuditSummaryEndpoint:
         self, test_client, mock_audit_service
     ):
         """Should return 500 on internal errors."""
-        mock_audit_service.get_audit_summary.side_effect = Exception(
-            "Database error"
-        )
+        mock_audit_service.get_audit_summary.side_effect = Exception("Database error")
 
         response = test_client.get("/api/v1/audit/summary")
 
@@ -272,9 +270,7 @@ class TestConflictsSummaryEndpoint:
         assert data["conflicts_by_merge"] == []
         assert data["recent_conflicts"] == []
 
-    def test_get_conflicts_should_aggregate_by_merge(
-        self, test_client, mock_db
-    ):
+    def test_get_conflicts_should_aggregate_by_merge(self, test_client, mock_db):
         """Should aggregate conflicts by merge ID."""
         # First query returns user's merges
         mock_db.fetch.side_effect = [
@@ -320,9 +316,7 @@ class TestConflictsSummaryEndpoint:
         assert merge_1_summary["total_conflicts"] == 2
         assert merge_1_summary["by_type"]["Company"] == 2
 
-    def test_get_conflicts_should_limit_recent_conflicts(
-        self, test_client, mock_db
-    ):
+    def test_get_conflicts_should_limit_recent_conflicts(self, test_client, mock_db):
         """Should return only 10 most recent conflicts."""
         # First query returns user's merges
         mock_db.fetch.side_effect = [
@@ -346,9 +340,7 @@ class TestConflictsSummaryEndpoint:
         data = response.json()
         assert len(data["recent_conflicts"]) == 10
 
-    def test_get_conflicts_should_return_500_on_error(
-        self, test_client, mock_db
-    ):
+    def test_get_conflicts_should_return_500_on_error(self, test_client, mock_db):
         """Should return 500 on internal errors."""
         mock_db.fetch.side_effect = Exception("Database error")
 
@@ -417,9 +409,7 @@ class TestAuditResponseFormats:
         assert "offset" in data
         assert "limit" in data
 
-    def test_conflicts_response_should_include_structure(
-        self, test_client, mock_db
-    ):
+    def test_conflicts_response_should_include_structure(self, test_client, mock_db):
         """Conflicts response should include expected structure."""
         mock_db.fetch.return_value = []
 
@@ -442,9 +432,7 @@ class TestAuditResponseFormats:
 class TestOperationTypeValidation:
     """Test operation type parameter validation."""
 
-    def test_should_accept_valid_operation_types(
-        self, test_client, mock_audit_service
-    ):
+    def test_should_accept_valid_operation_types(self, test_client, mock_audit_service):
         """Should accept all valid operation types."""
         mock_audit_service.get_user_audit_trail.return_value = []
 

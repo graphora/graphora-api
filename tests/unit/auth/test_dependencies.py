@@ -10,7 +10,7 @@ Focus is on:
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import patch
 from fastapi import HTTPException
 
 from tests.mocks.auth_mock import (
@@ -84,7 +84,6 @@ class TestGetCurrentAuth:
         self, mock_jwt_decoder, mock_jwk_client, valid_credentials
     ):
         """Should use 'sub' claim as user_id."""
-        import jwt
 
         mock_jwt_decoder.configure_token(
             "valid-jwt-token",
@@ -95,9 +94,10 @@ class TestGetCurrentAuth:
             },
         )
 
-        with patch("app.auth.dependencies._get_jwk_client", return_value=mock_jwk_client):
+        with patch(
+            "app.auth.dependencies._get_jwk_client", return_value=mock_jwk_client
+        ):
             with patch("app.auth.dependencies.jwt.decode", mock_jwt_decoder.decode):
-                from app.auth.dependencies import get_current_auth
 
                 # This would work with proper mocking of the full chain
                 # For now, test the mock behavior
@@ -171,7 +171,6 @@ class TestAuthEnvironmentBehavior:
     @pytest.mark.asyncio
     async def test_should_require_issuer_in_production(self, monkeypatch):
         """In production, should fail when CLERK_ISSUER not set."""
-        import os
 
         monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.delenv("CLERK_ISSUER", raising=False)
@@ -186,7 +185,6 @@ class TestAuthEnvironmentBehavior:
     @pytest.mark.asyncio
     async def test_should_allow_missing_issuer_in_development(self, monkeypatch):
         """In development, should warn but allow missing CLERK_ISSUER."""
-        import os
 
         monkeypatch.setenv("ENVIRONMENT", "development")
 
@@ -197,7 +195,6 @@ class TestAuthEnvironmentBehavior:
     @pytest.mark.asyncio
     async def test_should_warn_when_audience_not_configured(self, monkeypatch, caplog):
         """Should log warning when CLERK_AUDIENCE not configured."""
-        import logging
 
         monkeypatch.delenv("CLERK_AUDIENCE", raising=False)
 

@@ -19,8 +19,7 @@ Coverage targets:
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
-from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
 
 from tests.mocks.neo4j_mock import (
@@ -28,8 +27,6 @@ from tests.mocks.neo4j_mock import (
     MockNeo4jNode,
     MockNeo4jRelationship,
     MockNeo4jSession,
-    MockNeo4jDriver,
-    MockNeo4jResult,
     create_mock_neo4j_storage,
 )
 from tests.factories.node_factory import NodeFactory
@@ -207,7 +204,7 @@ class TestNeo4jStorageInitialization:
 
                 from app.services.storage.neo4j import Neo4jStorage
 
-                storage = Neo4jStorage(
+                _storage = Neo4jStorage(
                     uri="bolt://localhost:7687",
                     username="neo4j",
                     password="password",
@@ -225,7 +222,7 @@ class TestNeo4jStorageInitialization:
         from neo4j.exceptions import AuthError
         from app.services.storage.exceptions import StorageAuthError
 
-        with patch("app.services.storage.neo4j.AsyncGraphDatabase") as mock_async_db:
+        with patch("app.services.storage.neo4j.AsyncGraphDatabase") as _mock_async_db:
             with patch("app.services.storage.neo4j.GraphDatabase") as mock_sync_db:
                 mock_sync_db.driver.side_effect = AuthError("Invalid credentials")
 
@@ -246,9 +243,11 @@ class TestNeo4jStorageInitialization:
         from neo4j.exceptions import ServiceUnavailable
         from app.services.storage.exceptions import StorageConnectionError
 
-        with patch("app.services.storage.neo4j.AsyncGraphDatabase") as mock_async_db:
+        with patch("app.services.storage.neo4j.AsyncGraphDatabase") as _mock_async_db:
             with patch("app.services.storage.neo4j.GraphDatabase") as mock_sync_db:
-                mock_sync_db.driver.side_effect = ServiceUnavailable("Connection refused")
+                mock_sync_db.driver.side_effect = ServiceUnavailable(
+                    "Connection refused"
+                )
 
                 from app.services.storage.neo4j import Neo4jStorage
 
@@ -272,7 +271,7 @@ class TestNeo4jStorageInitialization:
                 from app.services.storage.neo4j import Neo4jStorage
 
                 # Provide transaction_manager to skip sync test
-                storage = Neo4jStorage(
+                _storage = Neo4jStorage(
                     uri="bolt://localhost:7687",
                     username="neo4j",
                     password="password",
@@ -393,7 +392,6 @@ class TestNeo4jStorageNodeOperations:
         self, mock_neo4j_storage
     ):
         """When node has provenance, should include it in properties."""
-        session = mock_neo4j_storage.session
         NodeFactory.reset_counter()
 
         node = NodeFactory.create_company(
@@ -494,9 +492,7 @@ class TestNeo4jStorageRelationshipOperations:
         assert "transform_id" in queries[0]["parameters"]
 
     @pytest.mark.asyncio
-    async def test_store_relationships_should_skip_duplicates(
-        self, mock_neo4j_storage
-    ):
+    async def test_store_relationships_should_skip_duplicates(self, mock_neo4j_storage):
         """Should skip storing duplicate relationships with same ID."""
         session = mock_neo4j_storage.session
         RelationshipFactory.reset_counter()
@@ -650,9 +646,7 @@ class TestNeo4jStorageQueryOperations:
             }
         )
 
-        result = await mock_storage.session.run(
-            "MATCH (n)-[r]->(m) RETURN n, r, m"
-        )
+        result = await mock_storage.session.run("MATCH (n)-[r]->(m) RETURN n, r, m")
 
         record = await result.single()
         assert record["n"]["name"] == "Acme Corp"
@@ -733,7 +727,10 @@ class TestNeo4jStorageIndexOperations:
         )
 
         # Valid property
-        assert validate_cypher_identifier("company_name", "property name") == "company_name"
+        assert (
+            validate_cypher_identifier("company_name", "property name")
+            == "company_name"
+        )
 
         # Invalid property
         with pytest.raises(CypherInjectionError):
@@ -812,7 +809,6 @@ class TestNeo4jStorageRetryLogic:
     async def test_should_raise_storage_error_after_max_retries(self):
         """After max retries, should raise StorageError."""
         from neo4j.exceptions import ServiceUnavailable
-        from app.services.storage.exceptions import StorageError
 
         mock_storage = create_mock_neo4j_storage(
             raise_on_query=ServiceUnavailable("Service down")
@@ -988,8 +984,7 @@ class TestNeo4jStorageFindSimilarNodes:
         }
 
         search_props = {
-            k: v for k, v in properties.items()
-            if k not in SYSTEM_PROPERTIES
+            k: v for k, v in properties.items() if k not in SYSTEM_PROPERTIES
         }
 
         assert "name" in search_props
@@ -1034,7 +1029,9 @@ class TestNeo4jStorageBatchOperations:
     """Test batch storage operations."""
 
     @pytest.mark.asyncio
-    async def test_store_nodes_batch_should_return_batch_result(self, mock_neo4j_storage):
+    async def test_store_nodes_batch_should_return_batch_result(
+        self, mock_neo4j_storage
+    ):
         """store_nodes should return StorageBatchResult."""
         from app.services.storage.models import StorageBatchResult
 

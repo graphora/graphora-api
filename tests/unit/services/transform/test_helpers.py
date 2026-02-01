@@ -14,8 +14,6 @@ Coverage targets:
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any
 
 from tests.factories.node_factory import NodeFactory
 from tests.factories.relationship_factory import RelationshipFactory
@@ -436,11 +434,7 @@ class TestNodeKeyGeneration:
         from app.services.transform.helpers import _generate_node_key
 
         parsed_ontology = {
-            "entities": {
-                "Company": {
-                    "properties": {"name": {"type": "string"}}
-                }
-            }
+            "entities": {"Company": {"properties": {"name": {"type": "string"}}}}
         }
 
         key1 = _generate_node_key(parsed_ontology, "Company", {"name": "acme"})
@@ -453,11 +447,7 @@ class TestNodeKeyGeneration:
         from app.services.transform.helpers import _generate_node_key
 
         parsed_ontology = {
-            "entities": {
-                "Company": {
-                    "properties": {"name": {"type": "string"}}
-                }
-            }
+            "entities": {"Company": {"properties": {"name": {"type": "string"}}}}
         }
 
         key1 = _generate_node_key(parsed_ontology, "Company", {"name": "acme"})
@@ -671,7 +661,9 @@ class TestEntityDeduplicationPreparation:
         system_properties = {"id"}
 
         # Function returns (DataFrame, properties_columns)
-        df, properties_columns = _create_splink_dataframe(entities_data, system_properties)
+        df, properties_columns = _create_splink_dataframe(
+            entities_data, system_properties
+        )
 
         # Should have rows for each entity
         assert len(df) == 2

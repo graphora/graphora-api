@@ -10,10 +10,13 @@ The focus is on INTERACTIONS, not implementation details.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from tests.mocks.llm_client_mock import MockLLMClient, MockLLMResponse, MockEntityResolution
+from tests.mocks.llm_client_mock import (
+    MockLLMClient,
+    MockLLMResponse,
+    MockEntityResolution,
+)
 from tests.factories.node_factory import NodeFactory
 from tests.factories.relationship_factory import RelationshipFactory
 from tests.fixtures.ontologies import COMPANY_PERSON_ONTOLOGY
@@ -269,7 +272,7 @@ class TestGraphTransformerEntityResolution:
     async def test_should_skip_resolution_for_single_node(self, mock_llm_client):
         """Should not call resolution when only one node of type."""
         NodeFactory.reset_counter()
-        single_node = NodeFactory.create_company(name="Unique Corp")
+        _single_node = NodeFactory.create_company(name="Unique Corp")
 
         # For a single node, resolution should not be called
         # This is what we expect GraphTransformer to do
@@ -288,14 +291,19 @@ class TestGraphTransformerContextBuilding:
     async def test_nodes_context_should_be_sorted_deterministically(self):
         """Nodes context should sort by type, properties, id for consistency."""
         from app.services.transform.graph_transformer import _build_nodes_context
-        from app.config import settings
 
         NodeFactory.reset_counter()
 
         # Create nodes in random order
-        node_z = NodeFactory.create(node_id="z", node_type="Company", properties={"name": "Zebra"})
-        node_a = NodeFactory.create(node_id="a", node_type="Company", properties={"name": "Alpha"})
-        node_m = NodeFactory.create(node_id="m", node_type="Person", properties={"name": "Maria"})
+        node_z = NodeFactory.create(
+            node_id="z", node_type="Company", properties={"name": "Zebra"}
+        )
+        node_a = NodeFactory.create(
+            node_id="a", node_type="Company", properties={"name": "Alpha"}
+        )
+        node_m = NodeFactory.create(
+            node_id="m", node_type="Person", properties={"name": "Maria"}
+        )
 
         # Build context in different orders
         context_1 = await _build_nodes_context([node_z, node_a, node_m])
@@ -307,7 +315,9 @@ class TestGraphTransformerContextBuilding:
     @pytest.mark.asyncio
     async def test_relationships_context_should_identify_orphan_nodes(self):
         """Should list nodes not in any relationship."""
-        from app.services.transform.graph_transformer import _build_relationships_context
+        from app.services.transform.graph_transformer import (
+            _build_relationships_context,
+        )
 
         NodeFactory.reset_counter()
         RelationshipFactory.reset_counter()
@@ -315,7 +325,9 @@ class TestGraphTransformerContextBuilding:
         # Create nodes where one has no relationships
         company = NodeFactory.create_company(name="Acme", node_id="company-1")
         person = NodeFactory.create_person(name="Jane", node_id="person-1")
-        orphan = NodeFactory.create(node_id="orphan-1", node_type="Location", properties={"name": "HQ"})
+        orphan = NodeFactory.create(
+            node_id="orphan-1", node_type="Location", properties={"name": "HQ"}
+        )
 
         # Only company-person relationship exists
         relationship = RelationshipFactory.create_employs(
@@ -343,11 +355,12 @@ class TestGraphTransformerNodeMerging:
     def test_merge_nodes_should_combine_provenance_chunk_ids(self):
         """Merged node should have combined chunk IDs from both sources."""
         from app.services.transform.helpers import merge_nodes
-        from app.services.transform.models import NodeProvenance
 
         NodeFactory.reset_counter()
 
-        existing = NodeFactory.create_company(name="Acme", chunk_ids=["chunk-1", "chunk-2"])
+        existing = NodeFactory.create_company(
+            name="Acme", chunk_ids=["chunk-1", "chunk-2"]
+        )
         new_node = NodeFactory.create_company(name="Acme Corp", chunk_ids=["chunk-3"])
 
         merged = merge_nodes(existing, new_node)
@@ -396,7 +409,7 @@ class TestGraphTransformerNodeMerging:
             confidence=0.9,  # Same confidence
         )
 
-        merged = merge_nodes(existing, new_node)
+        _merged = merge_nodes(existing, new_node)
 
         # Longer value should be preferred (implementation may vary)
         # This documents expected behavior
