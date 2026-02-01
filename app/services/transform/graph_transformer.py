@@ -167,8 +167,40 @@ async def build_graph_from_chunks(
     progress_callback: Optional[Callable[[int, int], None]] = None,
     user_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
+    enable_multi_pass: bool = False,
+    max_passes: int = 2,
 ) -> DocumentKnowledgeGraph:
+    """Build knowledge graph from text chunks.
+
+    Args:
+        ontology_parser: Parser for the target ontology.
+        chunks: List of text chunks to extract from.
+        transform_id: Unique identifier for this transform.
+        progress_callback: Optional callback for progress updates.
+        user_id: User ID for LLM credentials.
+        document_usage_id: Document usage tracking ID.
+        enable_multi_pass: Whether to use multi-pass extraction with validation.
+        max_passes: Maximum extraction passes when multi-pass is enabled.
+
+    Returns:
+        DocumentKnowledgeGraph with extracted nodes and relationships.
+    """
     llm_client = LLMClient()
+
+    # Use multi-pass extraction if enabled
+    if enable_multi_pass:
+        return await _build_graph_with_multi_pass(
+            ontology_parser,
+            chunks,
+            transform_id,
+            llm_client,
+            progress_callback,
+            user_id,
+            document_usage_id,
+            max_passes,
+        )
+
+    # Default single-pass extraction
     return await _build_graph_from(
         ontology_parser,
         chunks,
@@ -569,3 +601,104 @@ def _is_duplicate_relationship(
         and existing_relationship.type == new_relationship.type
         and existing_relationship.target_id == new_relationship.target_id
     )
+
+
+async def _build_graph_with_multi_pass(
+    ontology_parser: OntologyParser,
+    chunks: List[str],
+    transform_id: str,
+    llm_client: LLMClient,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    user_id: Optional[str] = None,
+    document_usage_id: Optional[str] = None,
+    max_passes: int = 2,
+) -> DocumentKnowledgeGraph:
+    """Build knowledge graph using multi-pass extraction with validation.
+
+    This function uses the MultiPassExtractor to perform validation-driven
+    iterative extraction that identifies and addresses gaps in the initial
+    extraction through targeted refinement passes.
+
+    Args:
+        ontology_parser: Parser for the target ontology.
+        chunks: List of text chunks to extract from.
+        transform_id: Unique identifier for this transform.
+        llm_client: LLM client for extraction.
+        progress_callback: Optional callback for progress updates.
+        user_id: User ID for LLM credentials.
+        document_usage_id: Document usage tracking ID.
+        max_passes: Maximum extraction passes.
+
+    Returns:
+        DocumentKnowledgeGraph with extracted nodes and relationships.
+    """
+    from app.services.extraction import MultiPassExtractor, MultiPassConfig
+
+    logger.info(
+        "Starting multi-pass extraction",
+        extra={
+            "transform_id": transform_id,
+            "chunk_count": len(chunks),
+            "max_passes": max_passes,
+        },
+    )
+
+    # Configure multi-pass extraction
+    config = MultiPassConfig(
+        max_passes=max_passes,
+        gap_severity_threshold=0.5,
+        enable_parallel_refinement=True,
+    )
+
+    # Create multi-pass extractor
+    extractor = MultiPassExtractor(
+        ontology_parser=ontology_parser,
+        llm_client=llm_client,
+        config=config,
+    )
+
+    # Perform multi-pass extraction
+    nodes, relationships = await extractor.extract(
+        chunks=chunks,
+        transform_id=transform_id,
+        user_id=user_id,
+        max_passes=max_passes,
+        progress_callback=progress_callback,
+    )
+
+    # Hydrate nodes with entity ledger if user_id provided
+    if user_id:
+        await entity_ledger_service.hydrate_nodes(user_id, nodes)
+
+    # Apply entity resolution and deduplication
+    nodes = await _compare_and_merge_nodes(
+        nodes,
+        user_id=user_id,
+        transform_id=transform_id,
+        document_usage_id=document_usage_id,
+    )
+    nodes, relationships = await deduplicate_entities_with_splink(
+        entities=nodes,
+        relationships=relationships,
+        parsed_ontology=ontology_parser.parsed_ontology,
+        user_id=user_id,
+    )
+
+    # Record nodes to entity ledger
+    if user_id:
+        await entity_ledger_service.record_nodes(user_id, nodes)
+
+    # Build final graph and prune orphans
+    kg = DocumentKnowledgeGraph(nodes=nodes, relationships=relationships)
+    prune_orphaned_nodes(ontology_parser.parsed_ontology, kg)
+
+    logger.info(
+        "Multi-pass extraction complete",
+        extra={
+            "transform_id": transform_id,
+            "node_count": len(kg.nodes),
+            "relationship_count": len(kg.relationships),
+        },
+    )
+
+    return kg

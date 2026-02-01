@@ -609,6 +609,32 @@ class LlmResponseParser:
 
       return cast(types.ConflictClassification, parsed)
     
+    def ComprehensiveRefinement(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "ComprehensiveRefinement",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        False,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(types.DynamicContainer, parsed)
+    
     def EvalChanges(
         self,
         llm_response: str,
@@ -634,6 +660,32 @@ class LlmResponseParser:
       )
 
       return cast(List[types.ChangeResult], parsed)
+    
+    def ExtractExpectedRelationships(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "ExtractExpectedRelationships",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        False,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(types.DynamicContainer, parsed)
     
     def ExtractNodesFromChunk(
         self,
@@ -675,6 +727,32 @@ class LlmResponseParser:
 
       parsed = self.__runtime.parse_llm_response(
         "ExtractRelationshipsFromChunk",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        False,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(types.DynamicContainer, parsed)
+    
+    def FindMissingRelationships(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "FindMissingRelationships",
         llm_response,
         types,
         types,
@@ -947,6 +1025,32 @@ class LlmResponseParser:
 
       return cast(List[types.RelationshipInference], parsed)
     
+    def RefineIncompleteEntity(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "RefineIncompleteEntity",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        False,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(types.DynamicContainer, parsed)
+    
     def RefineKnowledgeGraphSchema(
         self,
         llm_response: str,
@@ -972,6 +1076,32 @@ class LlmResponseParser:
       )
 
       return cast(types.SchemaGenerationResult, parsed)
+    
+    def RefineUncertainEntities(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "RefineUncertainEntities",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        False,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(types.DynamicContainer, parsed)
     
     def ResolveEntities(
         self,
@@ -1634,6 +1764,32 @@ class LlmStreamParser:
 
       return cast(partial_types.ConflictClassification, parsed)
     
+    def ComprehensiveRefinement(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> partial_types.DynamicContainer:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "ComprehensiveRefinement",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        True,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(partial_types.DynamicContainer, parsed)
+    
     def EvalChanges(
         self,
         llm_response: str,
@@ -1659,6 +1815,32 @@ class LlmStreamParser:
       )
 
       return cast(List[partial_types.ChangeResult], parsed)
+    
+    def ExtractExpectedRelationships(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> partial_types.DynamicContainer:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "ExtractExpectedRelationships",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        True,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(partial_types.DynamicContainer, parsed)
     
     def ExtractNodesFromChunk(
         self,
@@ -1700,6 +1882,32 @@ class LlmStreamParser:
 
       parsed = self.__runtime.parse_llm_response(
         "ExtractRelationshipsFromChunk",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        True,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(partial_types.DynamicContainer, parsed)
+    
+    def FindMissingRelationships(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> partial_types.DynamicContainer:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "FindMissingRelationships",
         llm_response,
         types,
         types,
@@ -1972,6 +2180,32 @@ class LlmStreamParser:
 
       return cast(List[partial_types.RelationshipInference], parsed)
     
+    def RefineIncompleteEntity(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> partial_types.DynamicContainer:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "RefineIncompleteEntity",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        True,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(partial_types.DynamicContainer, parsed)
+    
     def RefineKnowledgeGraphSchema(
         self,
         llm_response: str,
@@ -1997,6 +2231,32 @@ class LlmStreamParser:
       )
 
       return cast(partial_types.SchemaGenerationResult, parsed)
+    
+    def RefineUncertainEntities(
+        self,
+        llm_response: str,
+        baml_options: BamlCallOptions = {},
+    ) -> partial_types.DynamicContainer:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      parsed = self.__runtime.parse_llm_response(
+        "RefineUncertainEntities",
+        llm_response,
+        types,
+        types,
+        partial_types,
+        True,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+      )
+
+      return cast(partial_types.DynamicContainer, parsed)
     
     def ResolveEntities(
         self,

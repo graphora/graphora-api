@@ -692,6 +692,33 @@ class BamlSyncClient:
       )
       return cast(types.ConflictClassification, raw.cast_to(types, types, partial_types, False))
     
+    def ComprehensiveRefinement(
+        self,
+        chunk: str,gaps_context: str,existing_entities: str,existing_relationships: str,ontology_yaml: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.call_function_sync(
+        "ComprehensiveRefinement",
+        {
+          "chunk": chunk,"gaps_context": gaps_context,"existing_entities": existing_entities,"existing_relationships": existing_relationships,"ontology_yaml": ontology_yaml,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+      return cast(types.DynamicContainer, raw.cast_to(types, types, partial_types, False))
+    
     def EvalChanges(
         self,
         change_logs: str,past_resolutions: str,
@@ -718,6 +745,33 @@ class BamlSyncClient:
         collectors,
       )
       return cast(List[types.ChangeResult], raw.cast_to(types, types, partial_types, False))
+    
+    def ExtractExpectedRelationships(
+        self,
+        chunk: str,source_entity: str,expected_relationship_type: str,target_entity_type: str,potential_targets: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.call_function_sync(
+        "ExtractExpectedRelationships",
+        {
+          "chunk": chunk,"source_entity": source_entity,"expected_relationship_type": expected_relationship_type,"target_entity_type": target_entity_type,"potential_targets": potential_targets,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+      return cast(types.DynamicContainer, raw.cast_to(types, types, partial_types, False))
     
     def ExtractNodesFromChunk(
         self,
@@ -765,6 +819,33 @@ class BamlSyncClient:
         "ExtractRelationshipsFromChunk",
         {
           "chunk": chunk,"context": context,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+      return cast(types.DynamicContainer, raw.cast_to(types, types, partial_types, False))
+    
+    def FindMissingRelationships(
+        self,
+        chunk: str,orphan_nodes: str,existing_relationships: str,ontology_relationships: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.call_function_sync(
+        "FindMissingRelationships",
+        {
+          "chunk": chunk,"orphan_nodes": orphan_nodes,"existing_relationships": existing_relationships,"ontology_relationships": ontology_relationships,
         },
         self.__ctx_manager.get(),
         tb,
@@ -1043,6 +1124,33 @@ class BamlSyncClient:
       )
       return cast(List[types.RelationshipInference], raw.cast_to(types, types, partial_types, False))
     
+    def RefineIncompleteEntity(
+        self,
+        chunk: str,entity_context: str,missing_properties: str,entity_type: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.call_function_sync(
+        "RefineIncompleteEntity",
+        {
+          "chunk": chunk,"entity_context": entity_context,"missing_properties": missing_properties,"entity_type": entity_type,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+      return cast(types.DynamicContainer, raw.cast_to(types, types, partial_types, False))
+    
     def RefineKnowledgeGraphSchema(
         self,
         current_schema_yaml: str,user_feedback: str,use_case: str,domain: str,
@@ -1069,6 +1177,33 @@ class BamlSyncClient:
         collectors,
       )
       return cast(types.SchemaGenerationResult, raw.cast_to(types, types, partial_types, False))
+    
+    def RefineUncertainEntities(
+        self,
+        chunk: str,uncertain_entities: str,ontology_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.DynamicContainer:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.call_function_sync(
+        "RefineUncertainEntities",
+        {
+          "chunk": chunk,"uncertain_entities": uncertain_entities,"ontology_context": ontology_context,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+      return cast(types.DynamicContainer, raw.cast_to(types, types, partial_types, False))
     
     def ResolveEntities(
         self,
@@ -1985,6 +2120,44 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
       )
     
+    def ComprehensiveRefinement(
+        self,
+        chunk: str,gaps_context: str,existing_entities: str,existing_relationships: str,ontology_yaml: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.stream_function_sync(
+        "ComprehensiveRefinement",
+        {
+          "chunk": chunk,
+          "gaps_context": gaps_context,
+          "existing_entities": existing_entities,
+          "existing_relationships": existing_relationships,
+          "ontology_yaml": ontology_yaml,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+
+      return baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer](
+        raw,
+        lambda x: cast(partial_types.DynamicContainer, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.DynamicContainer, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
     def EvalChanges(
         self,
         change_logs: str,past_resolutions: str,
@@ -2017,6 +2190,44 @@ class BamlStreamClient:
         raw,
         lambda x: cast(List[partial_types.ChangeResult], x.cast_to(types, types, partial_types, True)),
         lambda x: cast(List[types.ChangeResult], x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def ExtractExpectedRelationships(
+        self,
+        chunk: str,source_entity: str,expected_relationship_type: str,target_entity_type: str,potential_targets: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.stream_function_sync(
+        "ExtractExpectedRelationships",
+        {
+          "chunk": chunk,
+          "source_entity": source_entity,
+          "expected_relationship_type": expected_relationship_type,
+          "target_entity_type": target_entity_type,
+          "potential_targets": potential_targets,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+
+      return baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer](
+        raw,
+        lambda x: cast(partial_types.DynamicContainer, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.DynamicContainer, x.cast_to(types, types, partial_types, False)),
         self.__ctx_manager.get(),
       )
     
@@ -2075,6 +2286,43 @@ class BamlStreamClient:
         {
           "chunk": chunk,
           "context": context,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+
+      return baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer](
+        raw,
+        lambda x: cast(partial_types.DynamicContainer, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.DynamicContainer, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def FindMissingRelationships(
+        self,
+        chunk: str,orphan_nodes: str,existing_relationships: str,ontology_relationships: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.stream_function_sync(
+        "FindMissingRelationships",
+        {
+          "chunk": chunk,
+          "orphan_nodes": orphan_nodes,
+          "existing_relationships": existing_relationships,
+          "ontology_relationships": ontology_relationships,
         },
         None,
         self.__ctx_manager.get(),
@@ -2463,6 +2711,43 @@ class BamlStreamClient:
         self.__ctx_manager.get(),
       )
     
+    def RefineIncompleteEntity(
+        self,
+        chunk: str,entity_context: str,missing_properties: str,entity_type: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.stream_function_sync(
+        "RefineIncompleteEntity",
+        {
+          "chunk": chunk,
+          "entity_context": entity_context,
+          "missing_properties": missing_properties,
+          "entity_type": entity_type,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+
+      return baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer](
+        raw,
+        lambda x: cast(partial_types.DynamicContainer, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.DynamicContainer, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
     def RefineKnowledgeGraphSchema(
         self,
         current_schema_yaml: str,user_feedback: str,use_case: str,domain: str,
@@ -2497,6 +2782,42 @@ class BamlStreamClient:
         raw,
         lambda x: cast(partial_types.SchemaGenerationResult, x.cast_to(types, types, partial_types, True)),
         lambda x: cast(types.SchemaGenerationResult, x.cast_to(types, types, partial_types, False)),
+        self.__ctx_manager.get(),
+      )
+    
+    def RefineUncertainEntities(
+        self,
+        chunk: str,uncertain_entities: str,ontology_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer]:
+      options: BamlCallOptions = {**self.__baml_options, **(baml_options or {})}
+      __tb__ = options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = options.get("client_registry", None)
+      collector = options.get("collector", None)
+      collectors = collector if isinstance(collector, list) else [collector] if collector is not None else []
+
+      raw = self.__runtime.stream_function_sync(
+        "RefineUncertainEntities",
+        {
+          "chunk": chunk,
+          "uncertain_entities": uncertain_entities,
+          "ontology_context": ontology_context,
+        },
+        None,
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        collectors,
+      )
+
+      return baml_py.BamlSyncStream[partial_types.DynamicContainer, types.DynamicContainer](
+        raw,
+        lambda x: cast(partial_types.DynamicContainer, x.cast_to(types, types, partial_types, True)),
+        lambda x: cast(types.DynamicContainer, x.cast_to(types, types, partial_types, False)),
         self.__ctx_manager.get(),
       )
     

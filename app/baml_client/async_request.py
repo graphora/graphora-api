@@ -616,6 +616,33 @@ class AsyncHttpRequest:
         False,
       )
     
+    async def ComprehensiveRefinement(
+        self,
+        chunk: str,gaps_context: str,existing_entities: str,existing_relationships: str,ontology_yaml: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "ComprehensiveRefinement",
+        {
+          "chunk": chunk,
+          "gaps_context": gaps_context,
+          "existing_entities": existing_entities,
+          "existing_relationships": existing_relationships,
+          "ontology_yaml": ontology_yaml,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
     async def EvalChanges(
         self,
         change_logs: str,past_resolutions: str,
@@ -633,6 +660,33 @@ class AsyncHttpRequest:
         {
           "change_logs": change_logs,
           "past_resolutions": past_resolutions,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
+    async def ExtractExpectedRelationships(
+        self,
+        chunk: str,source_entity: str,expected_relationship_type: str,target_entity_type: str,potential_targets: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "ExtractExpectedRelationships",
+        {
+          "chunk": chunk,
+          "source_entity": source_entity,
+          "expected_relationship_type": expected_relationship_type,
+          "target_entity_type": target_entity_type,
+          "potential_targets": potential_targets,
         },
         self.__ctx_manager.get(),
         tb,
@@ -681,6 +735,32 @@ class AsyncHttpRequest:
         {
           "chunk": chunk,
           "context": context,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
+    async def FindMissingRelationships(
+        self,
+        chunk: str,orphan_nodes: str,existing_relationships: str,ontology_relationships: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "FindMissingRelationships",
+        {
+          "chunk": chunk,
+          "orphan_nodes": orphan_nodes,
+          "existing_relationships": existing_relationships,
+          "ontology_relationships": ontology_relationships,
         },
         self.__ctx_manager.get(),
         tb,
@@ -951,6 +1031,32 @@ class AsyncHttpRequest:
         False,
       )
     
+    async def RefineIncompleteEntity(
+        self,
+        chunk: str,entity_context: str,missing_properties: str,entity_type: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "RefineIncompleteEntity",
+        {
+          "chunk": chunk,
+          "entity_context": entity_context,
+          "missing_properties": missing_properties,
+          "entity_type": entity_type,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
     async def RefineKnowledgeGraphSchema(
         self,
         current_schema_yaml: str,user_feedback: str,use_case: str,domain: str,
@@ -970,6 +1076,31 @@ class AsyncHttpRequest:
           "user_feedback": user_feedback,
           "use_case": use_case,
           "domain": domain,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
+    async def RefineUncertainEntities(
+        self,
+        chunk: str,uncertain_entities: str,ontology_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "RefineUncertainEntities",
+        {
+          "chunk": chunk,
+          "uncertain_entities": uncertain_entities,
+          "ontology_context": ontology_context,
         },
         self.__ctx_manager.get(),
         tb,
@@ -1640,6 +1771,33 @@ class AsyncHttpStreamRequest:
         True,
       )
     
+    async def ComprehensiveRefinement(
+        self,
+        chunk: str,gaps_context: str,existing_entities: str,existing_relationships: str,ontology_yaml: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "ComprehensiveRefinement",
+        {
+          "chunk": chunk,
+          "gaps_context": gaps_context,
+          "existing_entities": existing_entities,
+          "existing_relationships": existing_relationships,
+          "ontology_yaml": ontology_yaml,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
     async def EvalChanges(
         self,
         change_logs: str,past_resolutions: str,
@@ -1657,6 +1815,33 @@ class AsyncHttpStreamRequest:
         {
           "change_logs": change_logs,
           "past_resolutions": past_resolutions,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
+    async def ExtractExpectedRelationships(
+        self,
+        chunk: str,source_entity: str,expected_relationship_type: str,target_entity_type: str,potential_targets: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "ExtractExpectedRelationships",
+        {
+          "chunk": chunk,
+          "source_entity": source_entity,
+          "expected_relationship_type": expected_relationship_type,
+          "target_entity_type": target_entity_type,
+          "potential_targets": potential_targets,
         },
         self.__ctx_manager.get(),
         tb,
@@ -1705,6 +1890,32 @@ class AsyncHttpStreamRequest:
         {
           "chunk": chunk,
           "context": context,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
+    async def FindMissingRelationships(
+        self,
+        chunk: str,orphan_nodes: str,existing_relationships: str,ontology_relationships: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "FindMissingRelationships",
+        {
+          "chunk": chunk,
+          "orphan_nodes": orphan_nodes,
+          "existing_relationships": existing_relationships,
+          "ontology_relationships": ontology_relationships,
         },
         self.__ctx_manager.get(),
         tb,
@@ -1975,6 +2186,32 @@ class AsyncHttpStreamRequest:
         True,
       )
     
+    async def RefineIncompleteEntity(
+        self,
+        chunk: str,entity_context: str,missing_properties: str,entity_type: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "RefineIncompleteEntity",
+        {
+          "chunk": chunk,
+          "entity_context": entity_context,
+          "missing_properties": missing_properties,
+          "entity_type": entity_type,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
     async def RefineKnowledgeGraphSchema(
         self,
         current_schema_yaml: str,user_feedback: str,use_case: str,domain: str,
@@ -1994,6 +2231,31 @@ class AsyncHttpStreamRequest:
           "user_feedback": user_feedback,
           "use_case": use_case,
           "domain": domain,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
+    async def RefineUncertainEntities(
+        self,
+        chunk: str,uncertain_entities: str,ontology_context: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "RefineUncertainEntities",
+        {
+          "chunk": chunk,
+          "uncertain_entities": uncertain_entities,
+          "ontology_context": ontology_context,
         },
         self.__ctx_manager.get(),
         tb,
