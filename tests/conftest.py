@@ -312,6 +312,17 @@ def _install_langchain_and_splink_stubs() -> None:
                     raise IndexError(row_idx)
                 return self._rows[row_idx].get(column)
 
+            def __len__(self):
+                return len(self._rows)
+
+            @property
+            def shape(self):
+                return (len(self._rows), len(self._columns))
+
+            @property
+            def index(self):
+                return range(len(self._rows))
+
         pandas_stub.DataFrame = DataFrame
         pandas_stub.Series = _MiniSeries
         pandas_stub.concat = lambda *args, **kwargs: DataFrame()

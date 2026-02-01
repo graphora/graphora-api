@@ -1,26 +1,51 @@
-.PHONY: dev start test test-unit test-integration help lint format deadcode openapi-snapshot typecheck pre-commit dev-up dev-down dev-logs dev-shell dev-rebuild dev-reset-postgres dev-reset-neo4j dev-reset-redis
+.PHONY: dev start test test-unit test-integration test-storage test-transform test-llm test-api test-api-unit test-audit test-chunking test-cov test-watch help lint format deadcode openapi-snapshot typecheck pre-commit dev-up dev-down dev-logs dev-shell dev-rebuild dev-reset-postgres dev-reset-neo4j dev-reset-redis
 
 DEV_COMPOSE ?= docker compose -f docker-compose.dev.yml
 
 help:
 	@echo "Available commands:"
-	@echo "  make dev    - Start development server with auto-reload"
-	@echo "                (takes ~5s to start, watches app/ directory only)"
-	@echo "  make start  - Start production server without auto-reload"
-	@echo "  make test   - Run tests"
-	@echo "  make test-unit - Run unit tests (excludes integration marked tests)"
+	@echo ""
+	@echo "Development:"
+	@echo "  make dev              - Start development server with auto-reload"
+	@echo "  make start            - Start production server without auto-reload"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make test             - Run all tests"
+	@echo "  make test-unit        - Run unit tests (excludes integration marked tests)"
 	@echo "  make test-integration - Run integration tests only"
-	@echo "  make lint   - Run Ruff and Black checks"
-	@echo "  make format - Format the codebase with Black"
-	@echo "  make deadcode - Run the dead code scanner"
+	@echo "  make test-cov         - Run tests with coverage report"
+	@echo "  make test-watch       - Run tests in watch mode (requires pytest-watch)"
+	@echo ""
+	@echo "Component Tests:"
+	@echo "  make test-storage     - Run storage layer tests"
+	@echo "  make test-transform   - Run transform service tests"
+	@echo "  make test-llm         - Run LLM client tests"
+	@echo "  make test-api         - Run all API tests (unit + integration)"
+	@echo "  make test-api-unit    - Run API unit tests only"
+	@echo "  make test-audit       - Run audit service tests"
+	@echo "  make test-chunking    - Run chunking config tests"
+	@echo "  make test-quality     - Run quality validation tests"
+	@echo ""
+	@echo "Code Quality:"
+	@echo "  make lint             - Run Ruff and Black checks"
+	@echo "  make lint-fix         - Run Ruff and Black with auto-fix"
+	@echo "  make format           - Format the codebase with Black"
+	@echo "  make deadcode         - Run the dead code scanner"
+	@echo "  make typecheck        - Run mypy type checking"
+	@echo "  make pre-commit       - Run all pre-commit checks"
+	@echo ""
+	@echo "Docker Development:"
+	@echo "  make dev-up           - Build + start dockerized dev stack"
+	@echo "  make dev-down         - Stop stack, remove containers + volumes"
+	@echo "  make dev-logs         - Tail API logs from docker stack"
+	@echo "  make dev-shell        - Open a shell inside the API container"
+	@echo "  make dev-rebuild      - Rebuild and restart docker stack"
+	@echo "  make dev-reset-postgres - Delete local Postgres data"
+	@echo "  make dev-reset-neo4j  - Delete local Neo4j data"
+	@echo "  make dev-reset-redis  - Delete local Redis data"
+	@echo ""
+	@echo "Other:"
 	@echo "  make openapi-snapshot - Generate OpenAPI schema snapshot"
-	@echo "  make dev-up   - Build + start dockerized dev stack"
-	@echo "  make dev-down - Stop stack, remove containers + volumes"
-	@echo "  make dev-logs - Tail API logs from docker stack"
-	@echo "  make dev-shell - Open a shell inside the API container"
-	@echo "  make dev-reset-postgres - Delete the local Postgres data dir (./.docker-data/postgres)"
-	@echo "  make dev-reset-neo4j - Delete the local Neo4j data dirs (./.docker-data/neo4j-*)"
-	@echo "  make dev-reset-redis - Delete the local Redis data dir (./.docker-data/redis)"
 
 dev:
 	LOG_LEVEL=DEBUG uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
@@ -73,6 +98,37 @@ test-unit:
 
 test-integration:
 	uv run pytest -m integration
+
+test-cov:
+	uv run pytest --cov=app --cov-report=html --cov-report=term-missing
+
+test-watch:
+	uv run pytest-watch -- -v
+
+# Component-specific test targets
+test-storage:
+	uv run pytest tests/unit/services/storage/ -v
+
+test-transform:
+	uv run pytest tests/unit/services/transform/ -v
+
+test-llm:
+	uv run pytest tests/unit/services/llm/ -v
+
+test-api-unit:
+	uv run pytest tests/unit/api/ -v
+
+test-api:
+	uv run pytest tests/api/ tests/unit/api/ -v
+
+test-quality:
+	uv run pytest tests/quality/ -v
+
+test-audit:
+	uv run pytest tests/unit/services/audit/ -v
+
+test-chunking:
+	uv run pytest tests/unit/services/chunking/ -v
 
 lint-fix:
 	uv run ruff check --fix .
