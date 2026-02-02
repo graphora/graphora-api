@@ -11,6 +11,14 @@ from app.services.storage.memory import (
 from app.services.storage.models import StorageStage
 from app.services.transform.models import BaseNode, RelationshipInstance
 from app.schemas.graph import Node
+from app.schemas.graph_changes import (
+    SaveGraphRequest,
+    NodeChanges,
+    EdgeChanges,
+    NodeCreation,
+    NodeUpdate,
+    EdgeCreation,
+)
 
 
 @pytest.fixture
@@ -152,7 +160,7 @@ class TestInMemoryStorage:
             transform_id=transform_id,
         )
 
-        response = storage.get_transformation_data(transform_id)
+        response = await storage.get_transformation_data(transform_id)
 
         assert response.total_nodes == 3
         assert response.total_edges == 2
@@ -372,6 +380,181 @@ class TestInMemoryStorage:
         assert len(similar) >= 1
         # Alice should be the most similar
         assert similar[0].properties["name"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_save_graph_changes_create_node(self, storage, sample_nodes):
+        """Test creating nodes via save_graph_changes."""
+        transform_id = "test-transform-1"
+
+        # Store initial nodes
+        await storage.store_nodes(
+            nodes=sample_nodes,
+            batch_index=0,
+            transform_id=transform_id,
+        )
+
+        # Create a new node
+        changes = SaveGraphRequest(
+            nodes=NodeChanges(
+                created=[
+                    NodeCreation(
+                        id="node-4",
+                        type="Person",
+                        label="Person",
+                        properties={"name": "Charlie", "age": 35},
+                    )
+                ]
+            )
+        )
+
+        result = await storage.save_graph_changes(transform_id, changes)
+
+        assert result.data is not None
+        assert len(result.data["nodes"]) == 4  # 3 original + 1 new
+
+        # Verify the new node exists
+        new_node = await storage.get_node_by_id("node-4")
+        assert new_node is not None
+        assert new_node.properties["name"] == "Charlie"
+
+    @pytest.mark.asyncio
+    async def test_save_graph_changes_update_node(self, storage, sample_nodes):
+        """Test updating nodes via save_graph_changes."""
+        transform_id = "test-transform-1"
+
+        await storage.store_nodes(
+            nodes=sample_nodes,
+            batch_index=0,
+            transform_id=transform_id,
+        )
+
+        # Update an existing node
+        changes = SaveGraphRequest(
+            nodes=NodeChanges(
+                updated=[
+                    NodeUpdate(
+                        id="node-1",
+                        properties={"age": 31, "city": "Boston"},
+                    )
+                ]
+            )
+        )
+
+        await storage.save_graph_changes(transform_id, changes)
+
+        # Verify the update
+        updated_node = await storage.get_node_by_id("node-1")
+        assert updated_node.properties["age"] == 31
+        assert updated_node.properties["city"] == "Boston"
+        assert updated_node.properties["name"] == "Alice"  # Original preserved
+
+    @pytest.mark.asyncio
+    async def test_save_graph_changes_delete_node(self, storage, sample_nodes):
+        """Test deleting nodes via save_graph_changes."""
+        transform_id = "test-transform-1"
+
+        await storage.store_nodes(
+            nodes=sample_nodes,
+            batch_index=0,
+            transform_id=transform_id,
+        )
+
+        # Delete a node
+        changes = SaveGraphRequest(nodes=NodeChanges(deleted=["node-2"]))
+
+        result = await storage.save_graph_changes(transform_id, changes)
+
+        assert len(result.data["nodes"]) == 2  # 3 - 1 deleted
+
+        # Verify the node is deleted
+        deleted_node = await storage.get_node_by_id("node-2")
+        assert deleted_node is None
+
+    @pytest.mark.asyncio
+    async def test_save_graph_changes_create_edge(
+        self, storage, sample_nodes, sample_relationships
+    ):
+        """Test creating edges via save_graph_changes."""
+        transform_id = "test-transform-1"
+
+        await storage.store_nodes(
+            nodes=sample_nodes,
+            batch_index=0,
+            transform_id=transform_id,
+        )
+        await storage.store_relationships(
+            relationships=sample_relationships,
+            batch_index=0,
+            transform_id=transform_id,
+        )
+
+        # Create a new edge
+        changes = SaveGraphRequest(
+            edges=EdgeChanges(
+                created=[
+                    EdgeCreation(
+                        id="rel-3",
+                        source="node-2",
+                        target="node-3",
+                        type="WORKS_AT",
+                        label="WORKS_AT",
+                        properties={"position": "Manager"},
+                    )
+                ]
+            )
+        )
+
+        result = await storage.save_graph_changes(transform_id, changes)
+
+        assert len(result.data["edges"]) == 3  # 2 original + 1 new
+
+    @pytest.mark.asyncio
+    async def test_save_graph_changes_delete_edge(
+        self, storage, sample_nodes, sample_relationships
+    ):
+        """Test deleting edges via save_graph_changes."""
+        transform_id = "test-transform-1"
+
+        await storage.store_nodes(
+            nodes=sample_nodes,
+            batch_index=0,
+            transform_id=transform_id,
+        )
+        await storage.store_relationships(
+            relationships=sample_relationships,
+            batch_index=0,
+            transform_id=transform_id,
+        )
+
+        # Delete an edge
+        changes = SaveGraphRequest(edges=EdgeChanges(deleted=["rel-1"]))
+
+        result = await storage.save_graph_changes(transform_id, changes)
+
+        assert len(result.data["edges"]) == 1  # 2 - 1 deleted
+
+    @pytest.mark.asyncio
+    async def test_save_graph_changes_nonexistent_node_warning(self, storage):
+        """Test warning when updating non-existent node."""
+        transform_id = "test-transform-1"
+
+        changes = SaveGraphRequest(
+            nodes=NodeChanges(
+                updated=[
+                    NodeUpdate(
+                        id="nonexistent-node",
+                        properties={"foo": "bar"},
+                    )
+                ]
+            )
+        )
+
+        result = await storage.save_graph_changes(transform_id, changes)
+
+        assert result.messages is not None
+        assert len(result.messages) == 1
+        assert result.messages[0].type == "warning"
+        assert "not found" in result.messages[0].message
 
 
 class TestInMemoryGraphStore:

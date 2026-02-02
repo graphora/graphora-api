@@ -62,7 +62,7 @@ class UserDatabaseService:
     @staticmethod
     async def get_database_config(
         user_id: str, environment: DatabaseEnvironment
-    ) -> DatabaseConfig:
+    ) -> DatabaseConfig | None:
         """
         Get specific database configuration for user
 
@@ -71,7 +71,8 @@ class UserDatabaseService:
             environment: Database environment (staging or production)
 
         Returns:
-            DatabaseConfig: Database configuration for the specified environment
+            DatabaseConfig: Database configuration for the specified environment,
+                           or None if not configured
         """
         user_config = await UserDatabaseService.get_user_config(user_id)
 
@@ -97,8 +98,18 @@ class UserDatabaseService:
 
         Returns:
             GraphService: Configured graph service instance
+
+        Raises:
+            ValueError: If the requested database is not configured
         """
         db_config = await UserDatabaseService.get_database_config(user_id, environment)
+
+        # Handle case where database is not configured
+        if db_config is None:
+            raise ValueError(
+                f"{environment.capitalize()} database is not configured. "
+                f"Please configure a {environment} database in Settings → Databases."
+            )
 
         logger.info(
             f"Creating graph service for user {user_id} on {environment} database: {db_config.uri}"

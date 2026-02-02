@@ -48,12 +48,18 @@ async def get_graph_by_transform_id(
         if limit > 10000:
             raise HTTPException(status_code=400, detail="Maximum limit is 10000 nodes")
 
-        # Use in-memory storage if enabled
-        if is_memory_storage_enabled():
+        # Check if user has staging DB configured or if memory storage is globally enabled
+        from app.services.storage.factory import user_has_staging_db
+
+        use_in_memory = is_memory_storage_enabled() or not await user_has_staging_db(
+            auth.user_id
+        )
+
+        if use_in_memory:
             from app.services.storage.memory import InMemoryStorage
 
             storage = InMemoryStorage(user_id=auth.user_id)
-            response = storage.get_transformation_data(transform_id)
+            response = await storage.get_transformation_data(transform_id)
 
             # Apply pagination
             nodes = response.nodes[skip : skip + limit]
@@ -139,6 +145,25 @@ async def save_graph_changes(
     """
     graph_service = None
     try:
+        # Check if user has staging DB configured or if memory storage is globally enabled
+        from app.services.storage.factory import user_has_staging_db
+
+        use_in_memory = is_memory_storage_enabled() or not await user_has_staging_db(
+            auth.user_id
+        )
+
+        if use_in_memory:
+            # Use in-memory storage for saving changes
+            from app.services.storage.memory import InMemoryStorage
+
+            storage = InMemoryStorage(user_id=auth.user_id)
+            result = await storage.save_graph_changes(transform_id, changes)
+
+            logger.info(
+                "Saved graph changes for user %s in in-memory storage",
+                auth.user_id,
+            )
+            return result
 
         # Get user's staging database (graph operations always use staging)
         graph_service = await UserDatabaseService.get_staging_graph_service(

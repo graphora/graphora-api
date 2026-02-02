@@ -70,12 +70,12 @@ class GraphStorageInterface(ABC):
         pass
 
     @abstractmethod
-    def get_transformation_data(self, transform_id: str) -> GraphResponse:
+    async def get_transformation_data(self, transform_id: str) -> GraphResponse:
         """Get all nodes and relationships for a transformation"""
         pass
 
     @abstractmethod
-    def get_merge_data(self, merge_id: str) -> GraphResponse:
+    async def get_merge_data(self, merge_id: str) -> GraphResponse:
         """Get all nodes and relationships for a merge"""
         pass
 

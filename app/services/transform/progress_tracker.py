@@ -249,10 +249,19 @@ class ProgressTracker:
             # Parse status
             status = DetailedTransformStatus.model_validate_json(status_data)
 
-            # Update Prefect status
-            prefect_status = await self._get_prefect_status(transform_id)
-            if prefect_status:
-                status.overall_status = TransformStatus(prefect_status)
+            # Only update from Prefect if our internal status is not terminal
+            # This prevents Prefect's "RUNNING" from overwriting our "COMPLETED"
+            if status.overall_status not in (
+                TransformStatus.COMPLETED,
+                TransformStatus.FAILED,
+            ):
+                prefect_status = await self._get_prefect_status(transform_id)
+                if prefect_status:
+                    # If Prefect says failed, always update (failure takes precedence)
+                    if prefect_status.lower() == "failed":
+                        status.overall_status = TransformStatus.FAILED
+                    else:
+                        status.overall_status = TransformStatus(prefect_status)
 
             # Update resource metrics
             current_metrics = self._get_resource_metrics()

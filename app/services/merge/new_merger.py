@@ -121,11 +121,22 @@ async def merge_flow(merge_id: str, transform_id: str, ontology_id: str, user_id
     )
 
     try:
+        # Validate production database is configured (required for merge operations)
+        from app.services.storage.factory import user_has_production_db
+
+        if not await user_has_production_db(user_id):
+            error_msg = (
+                "Production database is required for merge operations. "
+                "Please configure a production database in Settings → Databases."
+            )
+            logger.error(f"Merge {merge_id} failed: {error_msg}")
+            raise ValueError(error_msg)
+
         ontology_path = Path(settings.ONTOLOGY_DIR).expanduser() / f"{ontology_id}.yaml"
         ontology_parser = OntologyParser(ontology_path, user_id)
         ontology = ontology_parser.parsed_ontology
 
-        # Step-1: Extract Staging Graph (using user's staging database)
+        # Step-1: Extract Staging Graph (using user's staging database or in-memory fallback)
         stage_timer = time.perf_counter()
         staging_graph: GraphResponse = await _extract_staging_graph(
             transform_id, user_id
@@ -646,6 +657,13 @@ async def _map_production_entities(
         # Get user's production database configuration
         user_config = await UserDatabaseService.get_user_config(user_id)
 
+        # Validate production database is configured
+        if user_config.prodDb is None:
+            raise ValueError(
+                "Production database is required for entity mapping. "
+                "Please configure a production database in Settings → Databases."
+            )
+
         from app.services.storage.neo4j import Neo4jStorage
 
         storage = Neo4jStorage(
@@ -1105,6 +1123,13 @@ async def _persist_to_prod(
     # Get user's production database configuration
     user_config = await UserDatabaseService.get_user_config(user_id)
 
+    # Validate production database is configured
+    if user_config.prodDb is None:
+        raise ValueError(
+            "Production database is required to persist merged graph. "
+            "Please configure a production database in Settings → Databases."
+        )
+
     node_results: List[StorageBatchResult] = []
     for batch_index, chunk in enumerate(
         _iter_chunks(merged_graph.nodes, settings.MERGE_NODE_BATCH_SIZE)
@@ -1282,6 +1307,14 @@ async def _get_prod_graph(merge_id: str, user_id: str) -> GraphResponse:
 
     # Get user's production database configuration
     user_config = await UserDatabaseService.get_user_config(user_id)
+
+    # Validate production database is configured
+    if user_config.prodDb is None:
+        raise ValueError(
+            "Production database is required to retrieve production graph. "
+            "Please configure a production database in Settings → Databases."
+        )
+
     logger.info(
         f"Retrieved user config for production database: {user_config.prodDb.uri}"
     )

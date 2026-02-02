@@ -10,9 +10,12 @@ import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from app.schemas.graph import Edge, GraphResponse, Node
+
+if TYPE_CHECKING:
+    from app.schemas.graph_changes import SaveGraphRequest, SaveGraphResponse
 from app.services.storage.interface import GraphStorageInterface
 from app.services.storage.models import (
     StorageBatchResult,
@@ -20,6 +23,7 @@ from app.services.storage.models import (
     StorageStage,
 )
 from app.services.transform.models import BaseNode, RelationshipInstance
+from app.utils.constants import TRANSFORM_ID, MERGE_ID
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,8 @@ class InMemoryGraphStore:
         self._checkpoints: Dict[str, StorageCheckpoint] = {}
         # Full-text indexes (simplified - just track which properties are indexed)
         self._ft_indexes: Dict[str, Dict[str, Any]] = {}
+        # Quality results storage: keyed by (transform_id, user_id) tuple
+        self._quality_results: Dict[tuple, Dict[str, Any]] = {}
 
     def add_node(
         self,
@@ -128,6 +134,7 @@ class InMemoryGraphStore:
         self._edges_by_target.clear()
         self._checkpoints.clear()
         self._ft_indexes.clear()
+        self._quality_results.clear()
 
 
 # Global store for in-memory graphs, keyed by user_id
@@ -226,8 +233,8 @@ class InMemoryStorage(GraphStorageInterface):
                 properties={
                     **base_node.properties,
                     **base_node.canonical_properties,
-                    "transform_id": transform_id,
-                    **({"merge_id": merge_id} if merge_id else {}),
+                    TRANSFORM_ID: transform_id,
+                    **({MERGE_ID: merge_id} if merge_id else {}),
                 },
             )
 
@@ -291,8 +298,8 @@ class InMemoryStorage(GraphStorageInterface):
                 type=rel.type,
                 properties={
                     **rel.properties,
-                    "transform_id": transform_id,
-                    **({"merge_id": merge_id} if merge_id else {}),
+                    TRANSFORM_ID: transform_id,
+                    **({MERGE_ID: merge_id} if merge_id else {}),
                 },
             )
 
@@ -325,7 +332,7 @@ class InMemoryStorage(GraphStorageInterface):
             timestamp=datetime.now(timezone.utc),
         )
 
-    def get_transformation_data(self, transform_id: str) -> GraphResponse:
+    async def get_transformation_data(self, transform_id: str) -> GraphResponse:
         """Get all nodes and relationships for a transformation."""
         nodes = self._store.get_nodes_by_transform(transform_id)
         edges = self._store.get_edges_by_transform(transform_id)
@@ -338,7 +345,7 @@ class InMemoryStorage(GraphStorageInterface):
             metadata={"storage_type": "memory", "transform_id": transform_id},
         )
 
-    def get_merge_data(self, merge_id: str) -> GraphResponse:
+    async def get_merge_data(self, merge_id: str) -> GraphResponse:
         """Get all nodes and relationships for a merge."""
         nodes = self._store.get_nodes_by_merge(merge_id)
         edges = self._store.get_edges_by_merge(merge_id)
@@ -544,3 +551,364 @@ class InMemoryStorage(GraphStorageInterface):
     async def get_edges_between(self, source_id: str, target_id: str) -> List[Edge]:
         """Get all edges between two nodes."""
         return await self.get_relationships_between(source_id, target_id)
+
+    async def execute_query(
+        self, query: str, params: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """Execute a Cypher-like query on the in-memory store.
+
+        This is a simplified implementation that handles specific query patterns
+        used by QualityService. It does NOT implement a full Cypher parser.
+
+        Supported patterns:
+        - MERGE (qr:QualityResults ...) SET ... - Store/update quality results
+        - MATCH (qr:QualityResults ...) RETURN ... - Read quality results
+        - MATCH (qr:QualityResults ...) SET ... - Update quality results
+        - MATCH (qr:QualityResults ...)-[:HAS_VIOLATION]->... DELETE ... - Delete violations
+        - MATCH (qr:QualityResults ...) ... CREATE ... - Create violations
+        - MATCH (qr:QualityResults ...) OPTIONAL MATCH ... DETACH DELETE - Delete results
+        """
+        params = params or {}
+        query_upper = query.upper()
+
+        # Handle QualityResults operations
+        if "QUALITYRESULTS" in query_upper:
+            return await self._handle_quality_query(query, query_upper, params)
+
+        logger.warning(
+            f"Unsupported query pattern for in-memory storage: {query[:100]}"
+        )
+        return []
+
+    async def _handle_quality_query(
+        self, query: str, query_upper: str, params: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Handle QualityResults-related queries."""
+        transform_id = params.get("transform_id")
+        user_id = params.get("user_id")
+        key = (transform_id, user_id) if transform_id and user_id else None
+
+        # MERGE or CREATE quality results
+        if "MERGE" in query_upper and "QUALITYRESULTS" in query_upper:
+            if not key:
+                return []
+
+            # Get or create quality result
+            qr = self._store._quality_results.get(key, {})
+
+            # Update with all provided params
+            for param_name, param_value in params.items():
+                if param_name not in ("transform_id", "user_id"):
+                    qr[param_name] = param_value
+
+            qr["transform_id"] = transform_id
+            qr["user_id"] = user_id
+            self._store._quality_results[key] = qr
+
+            logger.debug(f"Stored quality results for {key}")
+            return [{"qr": qr}]
+
+        # MATCH and RETURN quality results
+        if (
+            "MATCH" in query_upper
+            and "RETURN" in query_upper
+            and "SET" not in query_upper
+        ):
+            # Check if this is a summary query (no transform_id)
+            if "USER_ID" in query_upper and transform_id is None:
+                # Summary query - get all results for user
+                results = []
+                limit = params.get("limit", 10)
+                for qr_key, qr in self._store._quality_results.items():
+                    if qr.get("user_id") == user_id:
+                        results.append(qr)
+
+                # Sort by created_at descending and limit
+                results.sort(
+                    key=lambda x: x.get("created_at", ""),
+                    reverse=True,
+                )
+                return results[:limit]
+
+            # Single result query
+            if not key:
+                return []
+
+            qr = self._store._quality_results.get(key)
+            if qr:
+                return [qr]
+            return []
+
+        # MATCH and SET (approve/reject)
+        if "MATCH" in query_upper and "SET" in query_upper:
+            if not key:
+                return []
+
+            qr = self._store._quality_results.get(key)
+            if not qr:
+                return []
+
+            # Update with provided params
+            for param_name, param_value in params.items():
+                if param_name not in ("transform_id", "user_id"):
+                    qr[param_name] = param_value
+
+            self._store._quality_results[key] = qr
+            logger.debug(f"Updated quality results for {key}")
+            return [{"qr": qr}]
+
+        # DELETE violations or quality results
+        if "DELETE" in query_upper:
+            if "HAS_VIOLATION" in query_upper:
+                # Delete violations - no-op for in-memory (violations are in results_json)
+                logger.debug(f"Cleared quality violations for {key} (no-op in memory)")
+                return []
+
+            if "DETACH DELETE" in query_upper or "OPTIONAL MATCH" in query_upper:
+                # Delete quality results
+                if key and key in self._store._quality_results:
+                    del self._store._quality_results[key]
+                    logger.debug(f"Deleted quality results for {key}")
+                    return [{"deleted": True}]
+                return []
+
+        # CREATE violations (stored inline in results_json, so this is a no-op)
+        if "CREATE" in query_upper and "VIOLATION" in query_upper:
+            logger.debug(
+                f"Created quality violations for {key} (stored in results_json)"
+            )
+            return []
+
+        logger.warning(f"Unhandled quality query pattern: {query[:100]}")
+        return []
+
+    async def save_graph_changes(
+        self,
+        transform_id: str,
+        changes: "SaveGraphRequest",
+    ) -> "SaveGraphResponse":
+        """Save graph changes to in-memory storage.
+
+        Args:
+            transform_id: The transform ID for the changes
+            changes: The graph changes to apply (nodes and edges to create/update/delete)
+
+        Returns:
+            SaveGraphResponse with updated graph data and messages
+        """
+        from app.schemas.graph_changes import SaveGraphResponse, Message
+
+        messages: List[Dict[str, str]] = []
+
+        try:
+            # 1. Create new nodes
+            if changes.nodes:
+                for node_create in changes.nodes.created:
+                    new_node = Node(
+                        id=node_create.id,
+                        label=node_create.label,
+                        type=node_create.type,
+                        properties={
+                            **node_create.properties,
+                            TRANSFORM_ID: transform_id,
+                        },
+                    )
+                    self._store.add_node(new_node, transform_id)
+                    logger.debug(f"Created node {node_create.id} in memory")
+
+                # 2. Update existing nodes
+                for node_update in changes.nodes.updated:
+                    existing = self._store.get_node(node_update.id)
+                    if existing:
+                        # Filter out None values (properties to delete)
+                        updated_props = {
+                            k: v
+                            for k, v in node_update.properties.items()
+                            if v is not None
+                        }
+                        # Remove properties set to None
+                        props_to_remove = {
+                            k for k, v in node_update.properties.items() if v is None
+                        }
+                        new_props = {
+                            k: v
+                            for k, v in existing.properties.items()
+                            if k not in props_to_remove
+                        }
+                        new_props.update(updated_props)
+
+                        updated_node = Node(
+                            id=existing.id,
+                            label=existing.label,
+                            type=existing.type,
+                            properties=new_props,
+                            updated_at=datetime.now(timezone.utc),
+                        )
+                        self._store._nodes[existing.id] = updated_node
+                        logger.debug(f"Updated node {node_update.id} in memory")
+                    else:
+                        messages.append(
+                            {
+                                "type": "warning",
+                                "message": f"Node {node_update.id} not found for update",
+                            }
+                        )
+
+            # 3. Create new edges
+            if changes.edges:
+                for edge_create in changes.edges.created:
+                    # Verify source and target nodes exist
+                    source_node = self._store.get_node(edge_create.source)
+                    target_node = self._store.get_node(edge_create.target)
+
+                    if not source_node:
+                        messages.append(
+                            {
+                                "type": "warning",
+                                "message": f"Source node {edge_create.source} not found for edge {edge_create.id}",
+                            }
+                        )
+                        continue
+                    if not target_node:
+                        messages.append(
+                            {
+                                "type": "warning",
+                                "message": f"Target node {edge_create.target} not found for edge {edge_create.id}",
+                            }
+                        )
+                        continue
+
+                    new_edge = Edge(
+                        id=edge_create.id,
+                        source=edge_create.source,
+                        target=edge_create.target,
+                        type=edge_create.type,
+                        properties={
+                            **edge_create.properties,
+                            TRANSFORM_ID: transform_id,
+                        },
+                    )
+                    self._store.add_edge(new_edge, transform_id)
+                    logger.debug(f"Created edge {edge_create.id} in memory")
+
+                # 4. Update existing edges
+                for edge_update in changes.edges.updated:
+                    existing = self._store.get_edge(edge_update.id)
+                    if existing:
+                        # Filter out None values (properties to delete)
+                        updated_props = {
+                            k: v
+                            for k, v in edge_update.properties.items()
+                            if v is not None
+                        }
+                        # Remove properties set to None
+                        props_to_remove = {
+                            k for k, v in edge_update.properties.items() if v is None
+                        }
+                        new_props = {
+                            k: v
+                            for k, v in existing.properties.items()
+                            if k not in props_to_remove
+                        }
+                        new_props.update(updated_props)
+
+                        updated_edge = Edge(
+                            id=existing.id,
+                            source=existing.source,
+                            target=existing.target,
+                            type=existing.type,
+                            properties=new_props,
+                            updated_at=datetime.now(timezone.utc),
+                        )
+                        self._store._edges[existing.id] = updated_edge
+                        logger.debug(f"Updated edge {edge_update.id} in memory")
+                    else:
+                        messages.append(
+                            {
+                                "type": "warning",
+                                "message": f"Edge {edge_update.id} not found for update",
+                            }
+                        )
+
+                # 5. Delete edges
+                for edge_id in changes.edges.deleted:
+                    if edge_id in self._store._edges:
+                        edge = self._store._edges[edge_id]
+                        # Remove from indexes
+                        self._store._edges_by_source[edge.source].discard(edge_id)
+                        self._store._edges_by_target[edge.target].discard(edge_id)
+                        # Remove from transform index if present
+                        for t_id, edge_ids in self._store._edges_by_transform.items():
+                            edge_ids.discard(edge_id)
+                        # Remove the edge
+                        del self._store._edges[edge_id]
+                        logger.debug(f"Deleted edge {edge_id} from memory")
+                    else:
+                        messages.append(
+                            {
+                                "type": "warning",
+                                "message": f"Edge {edge_id} not found for deletion",
+                            }
+                        )
+
+            # 6. Delete nodes (after edges to avoid orphaned edges)
+            if changes.nodes:
+                for node_id in changes.nodes.deleted:
+                    if node_id in self._store._nodes:
+                        node = self._store._nodes[node_id]
+                        # Remove from label index
+                        self._store._nodes_by_label[node.label].discard(node_id)
+                        # Remove from transform index
+                        for t_id, node_ids in self._store._nodes_by_transform.items():
+                            node_ids.discard(node_id)
+                        # Remove the node
+                        del self._store._nodes[node_id]
+                        logger.debug(f"Deleted node {node_id} from memory")
+                    else:
+                        messages.append(
+                            {
+                                "type": "warning",
+                                "message": f"Node {node_id} not found for deletion",
+                            }
+                        )
+
+            # Get updated graph state
+            updated_graph = await self.get_transformation_data(transform_id)
+
+            # Convert to response format
+            nodes_dict = [
+                {
+                    "id": node.id,
+                    "label": node.label,
+                    "type": node.type,
+                    "properties": node.properties,
+                }
+                for node in updated_graph.nodes
+            ]
+
+            edges_dict = [
+                {
+                    "id": edge.id,
+                    "source": edge.source,
+                    "target": edge.target,
+                    "type": edge.type,
+                    "properties": edge.properties,
+                }
+                for edge in updated_graph.edges
+            ]
+
+            # Convert messages to Message objects
+            message_objects = (
+                [Message(type=m["type"], message=m["message"]) for m in messages]
+                if messages
+                else None
+            )
+
+            return SaveGraphResponse(
+                data={"nodes": nodes_dict, "edges": edges_dict},
+                messages=message_objects,
+            )
+
+        except Exception as e:
+            logger.error(f"Error saving graph changes to memory: {str(e)}")
+            raise
