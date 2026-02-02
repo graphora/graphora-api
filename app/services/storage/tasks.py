@@ -9,7 +9,10 @@ from app.services.storage.models import (
     StorageMetrics,
     StorageError,
 )
-from app.services.storage.factory import create_storage_for_user, is_memory_storage_enabled
+from app.services.storage.factory import (
+    create_storage_for_user,
+    is_memory_storage_enabled,
+)
 from app.services.transform.models import DocumentKnowledgeGraph
 from app.config import settings
 

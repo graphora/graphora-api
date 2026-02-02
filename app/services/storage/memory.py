@@ -110,9 +110,9 @@ class InMemoryGraphStore:
 
     def get_edges_for_node(self, node_id: str) -> List[Edge]:
         """Get all edges connected to a node."""
-        edge_ids = self._edges_by_source.get(node_id, set()) | self._edges_by_target.get(
+        edge_ids = self._edges_by_source.get(
             node_id, set()
-        )
+        ) | self._edges_by_target.get(node_id, set())
         return [self._edges[eid] for eid in edge_ids]
 
     def clear(self) -> None:
@@ -274,10 +274,14 @@ class InMemoryStorage(GraphStorageInterface):
             target_node = self._store.get_node(rel.target_id)
 
             if not source_node:
-                warnings.append(f"Source node {rel.source_id} not found for relationship")
+                warnings.append(
+                    f"Source node {rel.source_id} not found for relationship"
+                )
                 continue
             if not target_node:
-                warnings.append(f"Target node {rel.target_id} not found for relationship")
+                warnings.append(
+                    f"Target node {rel.target_id} not found for relationship"
+                )
                 continue
 
             edge = Edge(

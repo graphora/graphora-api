@@ -34,7 +34,9 @@ class UserDatabaseService:
         """
         # In memory mode, we don't need database configuration
         if is_memory_storage_enabled():
-            logger.info(f"Memory storage enabled, skipping database config for user {user_id}")
+            logger.info(
+                f"Memory storage enabled, skipping database config for user {user_id}"
+            )
             # Return a placeholder config for memory mode
             return UserConfig(
                 stagingDb=DatabaseConfig(

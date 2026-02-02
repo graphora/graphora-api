@@ -197,7 +197,9 @@ async def create_auto_schema_ontology(
     if not success:
         raise ValueError("Failed to store auto-generated ontology")
 
-    logger.info(f"Created auto-schema ontology {ontology_id} for transform {transform_id}")
+    logger.info(
+        f"Created auto-schema ontology {ontology_id} for transform {transform_id}"
+    )
 
     return ontology_id
 

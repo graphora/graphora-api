@@ -365,6 +365,7 @@ class TestAuditAuthenticationRequirements:
 
         # Need to reload settings after env change
         from app.config import Settings
+
         test_settings = Settings()
 
         with patch("app.auth.dependencies.settings", test_settings):
@@ -379,6 +380,7 @@ class TestAuditAuthenticationRequirements:
         monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
         from app.config import Settings
+
         test_settings = Settings()
 
         with patch("app.auth.dependencies.settings", test_settings):
@@ -392,6 +394,7 @@ class TestAuditAuthenticationRequirements:
         monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
         from app.config import Settings
+
         test_settings = Settings()
 
         with patch("app.auth.dependencies.settings", test_settings):

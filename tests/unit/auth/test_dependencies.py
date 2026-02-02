@@ -74,6 +74,7 @@ class TestGetCurrentAuth:
         monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
         from app.config import Settings
+
         test_settings = Settings()
 
         with patch("app.auth.dependencies.settings", test_settings):

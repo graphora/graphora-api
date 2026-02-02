@@ -1,18 +1,16 @@
 """Unit tests for in-memory graph storage."""
 
 import pytest
-from datetime import datetime, timezone
 
 from app.services.storage.memory import (
     InMemoryStorage,
-    InMemoryGraphStore,
     get_memory_store,
     clear_memory_store,
     clear_all_memory_stores,
 )
 from app.services.storage.models import StorageStage
 from app.services.transform.models import BaseNode, RelationshipInstance
-from app.schemas.graph import Node, Edge
+from app.schemas.graph import Node
 
 
 @pytest.fixture
@@ -90,7 +88,9 @@ class TestInMemoryStorage:
         assert result.processing_time_ms >= 0
 
     @pytest.mark.asyncio
-    async def test_store_relationships(self, storage, sample_nodes, sample_relationships):
+    async def test_store_relationships(
+        self, storage, sample_nodes, sample_relationships
+    ):
         """Test storing relationships in memory."""
         # First store nodes
         await storage.store_nodes(
@@ -135,7 +135,9 @@ class TestInMemoryStorage:
         assert len(result.warnings) > 0
 
     @pytest.mark.asyncio
-    async def test_get_transformation_data(self, storage, sample_nodes, sample_relationships):
+    async def test_get_transformation_data(
+        self, storage, sample_nodes, sample_relationships
+    ):
         """Test retrieving transformation data."""
         transform_id = "test-transform-1"
 
@@ -220,7 +222,9 @@ class TestInMemoryStorage:
         assert nodes[0].properties["name"] == "Alice"
 
     @pytest.mark.asyncio
-    async def test_get_relationships_between(self, storage, sample_nodes, sample_relationships):
+    async def test_get_relationships_between(
+        self, storage, sample_nodes, sample_relationships
+    ):
         """Test getting relationships between two nodes."""
         await storage.store_nodes(
             nodes=sample_nodes,
@@ -242,7 +246,9 @@ class TestInMemoryStorage:
         assert edges[0].type == "KNOWS"
 
     @pytest.mark.asyncio
-    async def test_get_relationships_between_with_type(self, storage, sample_nodes, sample_relationships):
+    async def test_get_relationships_between_with_type(
+        self, storage, sample_nodes, sample_relationships
+    ):
         """Test getting relationships between two nodes filtered by type."""
         await storage.store_nodes(
             nodes=sample_nodes,

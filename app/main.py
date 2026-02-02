@@ -144,6 +144,17 @@ async def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/system-info")
+@limiter.exempt  # System info should not be rate limited
+async def system_info():
+    """System information endpoint exposing configuration for frontend"""
+    return {
+        "storage_type": settings.STORAGE_TYPE.lower(),
+        "auth_bypass_enabled": settings.AUTH_BYPASS_ENABLED,
+        "version": "1.0.0",
+    }
+
+
 @app.get("/ready")
 @limiter.exempt  # Readiness checks should not be rate limited
 async def readiness_check():

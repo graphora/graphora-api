@@ -456,9 +456,13 @@ async def upload_documents_auto_schema(
                     parser = DocumentParser()
                     text_content = await parser.parse_file(str(temp_path))
                     if text_content:
-                        text_chunks.append(text_content[:10000])  # Sample first 10k chars
+                        text_chunks.append(
+                            text_content[:10000]
+                        )  # Sample first 10k chars
                 except Exception as parse_err:
-                    logger.warning(f"Failed to extract text for schema inference: {parse_err}")
+                    logger.warning(
+                        f"Failed to extract text for schema inference: {parse_err}"
+                    )
 
             # Create metadata using sanitized filename
             metadata = DocumentMetadata(
