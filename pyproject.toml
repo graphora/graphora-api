@@ -25,6 +25,7 @@ dependencies = [
     "mistralai[gcp]>=1.5.0",
     "uvicorn>=0.27.1",
     "python-multipart>=0.0.9",
+    "python-magic>=0.4.27",
     "python-dotenv>=1.0.1",
     "PyPDF2==3.0.1",
     "PyJWT[crypto]>=2.9.0",
