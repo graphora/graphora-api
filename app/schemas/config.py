@@ -45,18 +45,30 @@ class DatabaseConfigUpdate(BaseModel):
 
 
 class UserConfig(BaseModel):
-    """Schema for user configuration containing staging and production databases"""
+    """Schema for user configuration containing staging and production databases.
+
+    Staging DB is optional (system uses in-memory storage if not configured).
+    Production DB is required for merge operations but not for initial config.
+    """
 
     id: Optional[str] = None
     userId: str = Field(..., description="Authenticated user identifier")
-    stagingDb: DatabaseConfig = Field(..., description="Staging database configuration")
-    prodDb: DatabaseConfig = Field(..., description="Production database configuration")
+    stagingDb: Optional[DatabaseConfig] = Field(
+        default=None,
+        description="Staging database configuration (optional - uses in-memory if not set)",
+    )
+    prodDb: Optional[DatabaseConfig] = Field(
+        default=None,
+        description="Production database configuration (required for merge operations)",
+    )
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None
 
     @field_validator("prodDb")
     def validate_different_databases(cls, v, info):
-        """Ensure staging and production databases have different URIs"""
+        """Ensure staging and production databases have different URIs when both are provided"""
+        if v is None:
+            return v
         staging_db = info.data.get("stagingDb")
         if staging_db and v.uri == staging_db.uri:
             raise ValueError("Staging and production database URIs must be different")
@@ -64,10 +76,21 @@ class UserConfig(BaseModel):
 
 
 class ConfigRequest(BaseModel):
-    """Schema for creating user configuration"""
+    """Schema for creating user configuration.
 
-    stagingDb: DatabaseConfig = Field(..., description="Staging database configuration")
-    prodDb: DatabaseConfig = Field(..., description="Production database configuration")
+    At least one database (staging or production) must be provided.
+    Staging DB is optional (system uses in-memory storage if not configured).
+    Production DB is required for merge operations.
+    """
+
+    stagingDb: Optional[DatabaseConfig] = Field(
+        default=None,
+        description="Staging database configuration (optional - uses in-memory if not set)",
+    )
+    prodDb: Optional[DatabaseConfig] = Field(
+        default=None,
+        description="Production database configuration (required for merge operations)",
+    )
 
 
 class ConfigUpdateRequest(BaseModel):

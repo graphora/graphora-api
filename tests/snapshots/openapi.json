@@ -563,21 +563,31 @@
         "type": "object"
       },
       "ConfigRequest": {
-        "description": "Schema for creating user configuration",
+        "description": "Schema for creating user configuration.\n\nAt least one database (staging or production) must be provided.\nStaging DB is optional (system uses in-memory storage if not configured).\nProduction DB is required for merge operations.",
         "properties": {
           "prodDb": {
-            "$ref": "#/components/schemas/DatabaseConfig",
-            "description": "Production database configuration"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatabaseConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Production database configuration (required for merge operations)"
           },
           "stagingDb": {
-            "$ref": "#/components/schemas/DatabaseConfig",
-            "description": "Staging database configuration"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatabaseConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Staging database configuration (optional - uses in-memory if not set)"
           }
         },
-        "required": [
-          "stagingDb",
-          "prodDb"
-        ],
         "title": "ConfigRequest",
         "type": "object"
       },
@@ -4625,7 +4635,7 @@
         "type": "object"
       },
       "UserConfig": {
-        "description": "Schema for user configuration containing staging and production databases",
+        "description": "Schema for user configuration containing staging and production databases.\n\nStaging DB is optional (system uses in-memory storage if not configured).\nProduction DB is required for merge operations but not for initial config.",
         "properties": {
           "createdAt": {
             "anyOf": [
@@ -4651,12 +4661,26 @@
             "title": "Id"
           },
           "prodDb": {
-            "$ref": "#/components/schemas/DatabaseConfig",
-            "description": "Production database configuration"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatabaseConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Production database configuration (required for merge operations)"
           },
           "stagingDb": {
-            "$ref": "#/components/schemas/DatabaseConfig",
-            "description": "Staging database configuration"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DatabaseConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Staging database configuration (optional - uses in-memory if not set)"
           },
           "updatedAt": {
             "anyOf": [
@@ -4677,9 +4701,7 @@
           }
         },
         "required": [
-          "userId",
-          "stagingDb",
-          "prodDb"
+          "userId"
         ],
         "title": "UserConfig",
         "type": "object"

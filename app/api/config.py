@@ -39,9 +39,11 @@ async def get_user_config(user_id: str = Depends(get_current_user_id)) -> UserCo
                 status_code=404, detail=f"Configuration not found for user: {user_id}"
             )
 
-        # Mask passwords for security
-        user_config.stagingDb.password = "******"
-        user_config.prodDb.password = "******"
+        # Mask passwords for security (only if database is configured)
+        if user_config.stagingDb:
+            user_config.stagingDb.password = "******"
+        if user_config.prodDb:
+            user_config.prodDb.password = "******"
 
         return user_config
 
