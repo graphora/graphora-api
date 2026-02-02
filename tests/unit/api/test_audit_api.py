@@ -358,30 +358,47 @@ class TestConflictsSummaryEndpoint:
 class TestAuditAuthenticationRequirements:
     """Test that audit endpoints require authentication."""
 
-    def test_summary_endpoint_requires_auth(self, mock_audit_service):
+    def test_summary_endpoint_requires_auth(self, monkeypatch):
         """Summary endpoint should require authentication."""
-        client = TestClient(app)
+        # Ensure auth bypass is disabled for this test
+        monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        response = client.get("/api/v1/audit/summary")
+        # Need to reload settings after env change
+        from app.config import Settings
+        test_settings = Settings()
 
-        # Without auth, should fail
-        assert response.status_code in [401, 403, 422]
+        with patch("app.auth.dependencies.settings", test_settings):
+            client = TestClient(app)
+            response = client.get("/api/v1/audit/summary")
 
-    def test_trail_endpoint_requires_auth(self, mock_audit_service):
+        # Without auth, should fail with 401 (missing auth header)
+        assert response.status_code == 401
+
+    def test_trail_endpoint_requires_auth(self, monkeypatch):
         """Trail endpoint should require authentication."""
-        client = TestClient(app)
+        monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        response = client.get("/api/v1/audit/trail")
+        from app.config import Settings
+        test_settings = Settings()
 
-        assert response.status_code in [401, 403, 422]
+        with patch("app.auth.dependencies.settings", test_settings):
+            client = TestClient(app)
+            response = client.get("/api/v1/audit/trail")
 
-    def test_conflicts_endpoint_requires_auth(self, mock_db):
+        assert response.status_code == 401
+
+    def test_conflicts_endpoint_requires_auth(self, monkeypatch):
         """Conflicts endpoint should require authentication."""
-        client = TestClient(app)
+        monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        response = client.get("/api/v1/audit/conflicts")
+        from app.config import Settings
+        test_settings = Settings()
 
-        assert response.status_code in [401, 403, 422]
+        with patch("app.auth.dependencies.settings", test_settings):
+            client = TestClient(app)
+            response = client.get("/api/v1/audit/conflicts")
+
+        assert response.status_code == 401
 
 
 # ============================================================

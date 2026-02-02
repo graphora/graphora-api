@@ -141,6 +141,41 @@
         "title": "Body_upload_documents_api_v1_transform__ontology_id__upload_post",
         "type": "object"
       },
+      "Body_upload_documents_auto_schema_api_v1_transform_upload_post": {
+        "properties": {
+          "auto_schema": {
+            "default": true,
+            "description": "Auto-generate schema from document content",
+            "title": "Auto Schema",
+            "type": "boolean"
+          },
+          "chunking_config": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "JSON string of chunking configuration",
+            "title": "Chunking Config"
+          },
+          "files": {
+            "items": {
+              "format": "binary",
+              "type": "string"
+            },
+            "title": "Files",
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "Body_upload_documents_auto_schema_api_v1_transform_upload_post",
+        "type": "object"
+      },
       "ChangeLog": {
         "description": "Model for change logs",
         "properties": {
@@ -8377,6 +8412,53 @@
           }
         ],
         "summary": "Cleanup Transform Status",
+        "tags": [
+          "Transform"
+        ]
+      }
+    },
+    "/api/v1/transform/upload": {
+      "post": {
+        "description": "Upload documents for processing with auto-generated schema.\n\nThis endpoint enables zero-config document processing by automatically\ninferring an appropriate ontology schema from the document content.\n\nArgs:\n    request: FastAPI request object\n    background_tasks: FastAPI background tasks\n    user_id: User's ID (from header)\n    files: List of files to process\n    auto_schema: Whether to auto-generate schema (default: True)\n    chunking_config: Optional chunking configuration JSON\n\nReturns:\n    TransformInitResponse with transform_id for tracking progress",
+        "operationId": "upload_documents_auto_schema_api_v1_transform_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_documents_auto_schema_api_v1_transform_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransformInitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Documents Auto Schema",
         "tags": [
           "Transform"
         ]

@@ -2,11 +2,17 @@ from typing import Literal, TYPE_CHECKING
 from app.services.config_service import config_service
 from app.schemas.config import UserConfig, DatabaseConfig
 from app.utils.logger import logger
+from app.config import settings
 
 if TYPE_CHECKING:  # pragma: no cover - import only for typing
     from app.services.graph_service import GraphService
 
 DatabaseEnvironment = Literal["staging", "production"]
+
+
+def is_memory_storage_enabled() -> bool:
+    """Check if in-memory storage is enabled."""
+    return settings.STORAGE_TYPE.lower() == "memory"
 
 
 class UserDatabaseService:
@@ -24,8 +30,25 @@ class UserDatabaseService:
             UserConfig: User's database configuration
 
         Raises:
-            ValueError: If user configuration not found
+            ValueError: If user configuration not found (unless using memory storage)
         """
+        # In memory mode, we don't need database configuration
+        if is_memory_storage_enabled():
+            logger.info(f"Memory storage enabled, skipping database config for user {user_id}")
+            # Return a placeholder config for memory mode
+            return UserConfig(
+                stagingDb=DatabaseConfig(
+                    uri="memory://localhost",
+                    username="memory",
+                    password="memory",
+                ),
+                prodDb=DatabaseConfig(
+                    uri="memory://localhost",
+                    username="memory",
+                    password="memory",
+                ),
+            )
+
         user_config = await config_service.get_user_config(user_id)
         if not user_config:
             raise ValueError(

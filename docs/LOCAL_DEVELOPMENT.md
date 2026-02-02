@@ -155,6 +155,54 @@ When auth bypass is enabled:
 
 > **Warning:** Never enable auth bypass in production. The backend will refuse to start if `AUTH_BYPASS_ENABLED=true` and `ENVIRONMENT=production`.
 
+### In-Memory Storage Mode (No Neo4j Required)
+
+For quick demos and testing without Neo4j, enable in-memory storage:
+
+**Backend (.env):**
+```bash
+STORAGE_TYPE=memory
+```
+
+When in-memory storage is enabled:
+- Graphs are stored in memory (no Neo4j required)
+- Data is lost when the server restarts
+- No database configuration needed
+- Perfect for demos, quick tests, and prototyping
+
+**Combining Auth Bypass + Memory Storage:**
+```bash
+# Minimal .env for zero-config local development
+AUTH_BYPASS_ENABLED=true
+STORAGE_TYPE=memory
+# ... LLM provider keys still required
+```
+
+This allows running Graphora locally with just:
+1. An LLM API key (Gemini/OpenAI/Anthropic)
+2. Prefect server for workflow orchestration
+
+> **Note:** In-memory storage is not suitable for production use. Data is not persisted and performance may degrade with large graphs.
+
+### Auto-Schema Generation (Zero-Config Transforms)
+
+For quick experimentation without defining an ontology upfront, use the auto-schema endpoint:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/transform/upload \
+  -F "files=@document.pdf" \
+  -F "auto_schema=true"
+```
+
+When `auto_schema=true`, the API will:
+1. Extract text from uploaded documents
+2. Use the LLM to infer an appropriate schema from the content
+3. Create a temporary ontology and proceed with the transformation
+
+This enables zero-config document processing - upload a document and get a knowledge graph without any setup.
+
+> **Note:** Auto-schema requires a configured LLM provider (see AI config below). The inferred schema may not be as precise as a manually defined ontology.
+
 ### Minimum configuration for testing
 
 1. Insert a `database_configs` row pointing to the local Neo4j instance (use the Compose credentials).

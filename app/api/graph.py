@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 from app.schemas.graph import GraphResponse
 from app.schemas.graph_changes import SaveGraphRequest, SaveGraphResponse
-from app.services.user_db_service import UserDatabaseService
+from app.services.user_db_service import UserDatabaseService, is_memory_storage_enabled
 from app.utils.logger import logger
 import traceback
 from app.auth import AuthContext, get_current_auth
@@ -47,6 +47,31 @@ async def get_graph_by_transform_id(
 
         if limit > 10000:
             raise HTTPException(status_code=400, detail="Maximum limit is 10000 nodes")
+
+        # Use in-memory storage if enabled
+        if is_memory_storage_enabled():
+            from app.services.storage.memory import InMemoryStorage
+
+            storage = InMemoryStorage(user_id=auth.user_id)
+            response = storage.get_transformation_data(transform_id)
+
+            # Apply pagination
+            nodes = response.nodes[skip : skip + limit]
+            response = GraphResponse(
+                nodes=nodes,
+                edges=response.edges,
+                total_nodes=response.total_nodes,
+                total_edges=response.total_edges,
+                metadata=response.metadata,
+            )
+
+            logger.info(
+                "Retrieved %s nodes and %s edges for user %s from in-memory storage",
+                len(response.nodes),
+                len(response.edges),
+                auth.user_id,
+            )
+            return response
 
         # Get user's staging database (graph operations always use staging)
         graph_service = await UserDatabaseService.get_staging_graph_service(

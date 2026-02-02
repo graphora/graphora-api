@@ -356,26 +356,33 @@ class TestChunkingConfigValidation:
 class TestTransformAuthenticationRequirements:
     """Test that endpoints require authentication."""
 
-    def test_status_endpoint_requires_auth(self, mock_progress_tracker):
+    def test_status_endpoint_requires_auth(self, monkeypatch):
         """Status endpoint should require authentication."""
-        # Create client without auth override
-        client = TestClient(app)
+        # Ensure auth bypass is disabled for this test
+        monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        # Note: The actual behavior depends on how auth is configured
-        # This test documents the expected behavior
-        response = client.get("/api/v1/transform/status/transform-123")
+        from app.config import Settings
+        test_settings = Settings()
 
-        # Without proper auth, should get 401 or 403
-        # Depends on auth implementation
-        assert response.status_code in [401, 403, 422]  # 422 if header validation fails
+        with patch("app.auth.dependencies.settings", test_settings):
+            client = TestClient(app)
+            response = client.get("/api/v1/transform/status/transform-123")
 
-    def test_cleanup_endpoint_requires_auth(self, mock_progress_tracker):
+        # Without auth, should fail with 401 (missing auth header)
+        assert response.status_code == 401
+
+    def test_cleanup_endpoint_requires_auth(self, monkeypatch):
         """Cleanup endpoint should require authentication."""
-        client = TestClient(app)
+        monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        response = client.post("/api/v1/transform/status/transform-123/cleanup")
+        from app.config import Settings
+        test_settings = Settings()
 
-        assert response.status_code in [401, 403, 422]
+        with patch("app.auth.dependencies.settings", test_settings):
+            client = TestClient(app)
+            response = client.post("/api/v1/transform/status/transform-123/cleanup")
+
+        assert response.status_code == 401
 
 
 # ============================================================

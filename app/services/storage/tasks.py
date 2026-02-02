@@ -9,6 +9,7 @@ from app.services.storage.models import (
     StorageMetrics,
     StorageError,
 )
+from app.services.storage.factory import create_storage_for_user, is_memory_storage_enabled
 from app.services.transform.models import DocumentKnowledgeGraph
 from app.config import settings
 
@@ -74,20 +75,16 @@ async def store_knowledge_graph(
     """
     logger = get_run_logger()
 
-    # Get user's staging database configuration (transforms use staging)
-    from app.services.user_db_service import UserDatabaseService
-
-    user_config = await UserDatabaseService.get_user_config(user_id)
-
-    from app.services.storage.neo4j import Neo4jStorage
-
-    storage = Neo4jStorage(
-        uri=user_config.stagingDb.uri,
-        username=user_config.stagingDb.username,
-        password=user_config.stagingDb.password,
-        database="neo4j",  # Default database name
-    )
+    # Create storage using factory (supports both Neo4j and in-memory)
+    storage = await create_storage_for_user(user_id, use_staging=True)
     start_time = datetime.now()
+
+    # Log storage type being used
+    storage_type = "memory" if is_memory_storage_enabled() else "neo4j"
+    logger.info(
+        f"Using {storage_type} storage for transform {transform_id}",
+        extra={"transform_id": transform_id, "storage_type": storage_type},
+    )
 
     try:
         # Initialize result

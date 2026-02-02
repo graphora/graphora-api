@@ -68,13 +68,19 @@ def expired_token_credentials():
 class TestGetCurrentAuth:
     """Test the get_current_auth dependency."""
 
-    @pytest.mark.asyncio
-    async def test_should_raise_401_when_no_credentials_provided(self):
+    def test_should_raise_401_when_no_credentials_provided(self, monkeypatch):
         """Should raise HTTPException 401 when Authorization header missing."""
-        from app.auth.dependencies import get_current_auth
+        # Ensure auth bypass is disabled for this test
+        monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        with pytest.raises(HTTPException) as exc_info:
-            await get_current_auth(credentials=None)
+        from app.config import Settings
+        test_settings = Settings()
+
+        with patch("app.auth.dependencies.settings", test_settings):
+            from app.auth.dependencies import get_current_auth
+
+            with pytest.raises(HTTPException) as exc_info:
+                get_current_auth(credentials=None)
 
         assert exc_info.value.status_code == 401
         assert "Missing Authorization header" in exc_info.value.detail

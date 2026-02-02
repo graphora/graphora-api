@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     )
 
     # Storage Settings
+    STORAGE_TYPE: str = Field(
+        default="neo4j",
+        description="Graph storage type: 'neo4j' for production or 'memory' for local dev/demos",
+    )
     STORAGE_BATCH_SIZE: int = Field(
         default=1000, description="Batch size for storage operations"
     )

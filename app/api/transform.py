@@ -34,6 +34,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from app.services.audit_service import audit_service, OperationType
 from app.services.chunking.config import ChunkingConfig
+from app.services.schema_inference import create_auto_schema_ontology
+from app.services.document_parser import DocumentParser
 from app.auth import get_current_user_id
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
@@ -329,6 +331,256 @@ async def upload_documents(
                 file.unlink()
             temp_dir.rmdir()
         raise
+
+
+@router.post("/transform/upload", response_model=TransformInitResponse)
+async def upload_documents_auto_schema(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+    files: List[UploadFile] = File(...),
+    auto_schema: bool = Form(
+        True, description="Auto-generate schema from document content"
+    ),
+    chunking_config: Optional[str] = Form(
+        None, description="JSON string of chunking configuration"
+    ),
+) -> TransformInitResponse:
+    """
+    Upload documents for processing with auto-generated schema.
+
+    This endpoint enables zero-config document processing by automatically
+    inferring an appropriate ontology schema from the document content.
+
+    Args:
+        request: FastAPI request object
+        background_tasks: FastAPI background tasks
+        user_id: User's ID (from header)
+        files: List of files to process
+        auto_schema: Whether to auto-generate schema (default: True)
+        chunking_config: Optional chunking configuration JSON
+
+    Returns:
+        TransformInitResponse with transform_id for tracking progress
+    """
+    start_time = time.time()
+    temp_dir = Path(settings.UPLOAD_DIR)
+    transform_id = f"transform_{uuid.uuid4().hex}"
+    audit_id = ""
+
+    try:
+        logger.info(f"Starting auto-schema document upload for user: {user_id}")
+
+        # Parse chunking configuration if provided
+        parsed_chunking_config = None
+        if chunking_config:
+            try:
+                config_dict = json.loads(chunking_config)
+                parsed_chunking_config = ChunkingConfig(**config_dict)
+                logger.info(
+                    f"Using custom chunking config: {parsed_chunking_config.strategy}"
+                )
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(
+                    f"Invalid chunking config provided: {e}. Using defaults."
+                )
+
+        # Start audit trail for transform operation
+        audit_id = await audit_service.log_operation_start(
+            user_id=user_id,
+            operation_type=OperationType.TRANSFORM_STARTED,
+            operation_id=transform_id,
+            resource_name=f"Transform {transform_id[:8]}",
+            metadata={
+                "auto_schema": auto_schema,
+                "files_count": len(files),
+                "file_names": [file.filename for file in files],
+                "chunking_strategy": (
+                    parsed_chunking_config.strategy.value
+                    if parsed_chunking_config
+                    else "default"
+                ),
+            },
+        )
+
+        # Initialize progress tracking
+        await progress_tracker.initialize_transform(transform_id)
+
+        # Validate files
+        validator = FileValidator()
+        temp_dir = Path(settings.UPLOAD_DIR) / transform_id
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"Created transform TMP directory {temp_dir} for user {user_id}")
+
+        file_paths = []
+        doc_metadata = []
+        total_file_size = 0
+        text_chunks = []
+
+        for file in files:
+            # Sanitize filename to prevent path traversal attacks
+            try:
+                safe_filename = sanitize_filename(file.filename)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(e),
+                )
+
+            # Validate file
+            validation_result = await validator.validate(file)
+            logger.info(
+                f"Validated file {safe_filename} for user {user_id}: {validation_result}"
+            )
+            if not validation_result.is_valid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file {safe_filename}: {validation_result.errors}",
+                )
+
+            # Save file temporarily using sanitized filename
+            temp_path = temp_dir / safe_filename
+            async with aiofiles.open(temp_path, "wb") as f:
+                content = await file.read()
+                await file.seek(0)
+                await f.write(content)
+
+            file_paths.append(temp_path)
+            total_file_size += len(content)
+            logger.info(f"File saved to TMP directory {temp_path} for user {user_id}")
+
+            # Extract text for schema inference
+            if auto_schema:
+                try:
+                    parser = DocumentParser()
+                    text_content = await parser.parse_file(str(temp_path))
+                    if text_content:
+                        text_chunks.append(text_content[:10000])  # Sample first 10k chars
+                except Exception as parse_err:
+                    logger.warning(f"Failed to extract text for schema inference: {parse_err}")
+
+            # Create metadata using sanitized filename
+            metadata = DocumentMetadata(
+                source=safe_filename,
+                document_type=DocumentType(Path(safe_filename).suffix[1:]),
+                tags=["auto-schema", user_id],
+            )
+            doc_metadata.append(metadata)
+            logger.info(f"Created document metadata for user {user_id}: {metadata}")
+
+            # Create document info for response
+            doc_info = DocumentInfo(
+                filename=safe_filename,
+                size=len(content),
+                document_type=metadata.document_type,
+                metadata=metadata,
+            )
+
+        await progress_tracker.complete_stage(transform_id, TransformationStage.UPLOAD)
+
+        # Generate schema from text if auto_schema is enabled
+        ontology_id = None
+        if auto_schema and text_chunks:
+            logger.info(f"Inferring schema from {len(text_chunks)} text chunks")
+            await progress_tracker.update_stage_progress(
+                transform_id, TransformationStage.PARSING, 0, "Inferring schema..."
+            )
+            try:
+                ontology_id = await create_auto_schema_ontology(
+                    text_chunks=text_chunks,
+                    user_id=user_id,
+                    transform_id=transform_id,
+                )
+                logger.info(f"Auto-generated ontology: {ontology_id}")
+            except Exception as schema_err:
+                logger.error(f"Schema inference failed: {schema_err}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to generate schema: {str(schema_err)}",
+                )
+        elif auto_schema:
+            # No text extracted - use default generic schema
+            from app.services.schema_inference import get_default_generic_schema
+            from app.services.ontology_storage_service import ontology_storage_service
+
+            generic_yaml = get_default_generic_schema()
+            ontology_id = f"auto_{uuid.uuid4().hex[:12]}"
+            await ontology_storage_service.store_ontology(
+                user_id=user_id,
+                ontology_id=ontology_id,
+                yaml_content=generic_yaml,
+                name=f"Generic Schema ({transform_id[:8]})",
+                description="Default generic schema for entity extraction",
+            )
+            logger.info(f"Using default generic schema: {ontology_id}")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either provide ontology_id or enable auto_schema",
+            )
+
+        # Start Prefect flow in background with user context, audit ID, and chunking config
+        background_tasks.add_task(
+            run_transform_flow,
+            transform_id=transform_id,
+            ontology_id=ontology_id,
+            file_paths=file_paths,
+            metadata=doc_metadata,
+            user_id=user_id,
+            audit_id=audit_id,
+            chunking_config=parsed_chunking_config,
+        )
+
+        logger.info(
+            f"Started auto-schema transformation flow for user {user_id} with transform_id: {transform_id}"
+        )
+
+        # Log upload success (not the full transform completion yet)
+        upload_duration_ms = int((time.time() - start_time) * 1000)
+        if audit_id:
+            await audit_service.log_operation_success(
+                audit_id=audit_id,
+                duration_ms=upload_duration_ms,
+                metadata={
+                    "transform_id": transform_id,
+                    "ontology_id": ontology_id,
+                    "auto_schema": True,
+                    "upload_completed": True,
+                    "total_file_size_bytes": total_file_size,
+                    "temp_directory": str(temp_dir),
+                },
+            )
+
+        return TransformInitResponse(
+            id=transform_id,
+            upload_timestamp=datetime.now(timezone.utc),
+            status=TransformStatus.PENDING,
+            document_info=doc_info,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Auto-schema upload failed for user {user_id}: {str(e)}")
+        traceback.print_exc()
+
+        # Log upload failure
+        upload_duration_ms = int((time.time() - start_time) * 1000)
+        if audit_id:
+            await audit_service.log_operation_failure(
+                audit_id=audit_id, error_message=str(e), duration_ms=upload_duration_ms
+            )
+
+        # Clean up temp directory on error
+        if temp_dir.exists():
+            for file in temp_dir.glob("*"):
+                file.unlink()
+            temp_dir.rmdir()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process documents: {str(e)}",
+        )
 
 
 @router.get(

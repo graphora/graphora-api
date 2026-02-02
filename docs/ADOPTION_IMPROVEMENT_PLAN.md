@@ -98,11 +98,13 @@ export default function middleware(request: NextRequest) {
 
 ---
 
-### 1.3 In-Memory Graph Mode (No Staging DB Required)
+### 1.3 In-Memory Graph Mode (No Staging DB Required) ✅ COMPLETE
 
 **Problem:** Users must provision 2 Neo4j databases before trying the product.
 
 **Goal:** Add option to store extracted graphs in-memory for quick experimentation.
+
+**Status:** Completed. Added `STORAGE_TYPE=memory` setting, created `InMemoryStorage` class implementing `GraphStorageInterface`, updated storage tasks to use factory pattern, modified graph API to support in-memory retrieval.
 
 **Backend Changes:**
 
@@ -237,19 +239,21 @@ def get_storage() -> GraphStorageInterface:
 
 ---
 
-### 1.4 On-the-Fly Schema Generation
+### 1.4 On-the-Fly Schema Generation ✅ COMPLETE
 
 **Problem:** Users must create ontology before uploading documents.
 
 **Goal:** When no ontology provided, auto-generate schema from document content.
 
+**Status:** Completed. Added `POST /api/v1/transform/upload` endpoint that automatically infers schema from document content using LLM. Created `schema_inference.py` service for schema generation and `document_parser.py` for text extraction.
+
 **Backend Changes:**
 
 | File | Change |
 |------|--------|
-| `app/api/transform.py` | Make `ontology_id` optional |
-| `app/services/transform/graph_transformer.py` | Add schema inference |
-| `app/services/schema_inference.py` | **NEW** - Auto-schema generation |
+| `app/api/transform.py` | Added new `/transform/upload` endpoint with `auto_schema` parameter |
+| `app/services/schema_inference.py` | **NEW** - Auto-schema generation from text using LLM |
+| `app/services/document_parser.py` | **NEW** - Simple document text extraction |
 
 **New File: `app/services/schema_inference.py`**
 
