@@ -50,9 +50,7 @@ class SchemaCache:
         """Create cache key from schema ID and user ID."""
         return make_cache_key(schema_id, user_id)
 
-    async def get(
-        self, schema_id: str, user_id: str
-    ) -> Optional[Dict[str, Any]]:
+    async def get(self, schema_id: str, user_id: str) -> Optional[Dict[str, Any]]:
         """Get cached schema.
 
         Args:

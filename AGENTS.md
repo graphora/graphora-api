@@ -9,11 +9,14 @@
 
 ## Build, Test, and Development Commands
 - `uv venv && uv sync` creates the Python 3.11 environment and installs dependencies.
-- `make install` syncs dependencies with uv.
-- `make compose-up` starts local Neo4j/Redis (see `docs/LOCAL_DEVELOPMENT.md`).
-- `make test` executes the pytest suite with asyncio support.
-- `make lint` runs Ruff + Black checks; `make format` applies Black.
+- `make install` syncs dependencies with uv; `make install-dev` includes dev tools.
+- `make compose-up` starts local Postgres, Neo4j, Prefect, and Redis (see `docs/LOCAL_DEVELOPMENT.md`).
+- `make dev` starts the development server with auto-reload.
+- `make test` executes the pytest suite with asyncio support and coverage.
+- `make lint` runs Ruff + Black checks; `make lint-fix` applies auto-fixes; `make format` applies Black.
 - `make typecheck` runs mypy after model or schema changes.
+- `make migrate` runs database migrations against `DATABASE_URL`.
+- `make help` shows all available make commands.
 
 ## Coding Style & Naming Conventions
 - Follow PEP 8 with four-space indentation and keep lines under 100 characters.

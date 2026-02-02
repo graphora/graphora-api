@@ -1,9 +1,14 @@
-.PHONY: dev start test test-unit test-integration test-storage test-transform test-llm test-api test-api-unit test-audit test-chunking test-cov test-watch help lint format deadcode openapi-snapshot typecheck pre-commit dev-up dev-down dev-logs dev-shell dev-rebuild dev-reset-postgres dev-reset-neo4j dev-reset-redis
+.PHONY: install dev start test test-unit test-integration test-storage test-transform test-llm test-api test-api-unit test-audit test-chunking test-cache test-cov test-watch help lint format deadcode openapi-snapshot typecheck pre-commit compose-up compose-down compose-logs compose-status dev-up dev-down dev-logs dev-shell dev-rebuild dev-reset-postgres dev-reset-neo4j dev-reset-redis migrate clean
 
 DEV_COMPOSE ?= docker compose -f docker-compose.dev.yml
+LOCAL_COMPOSE ?= docker compose -f docker-compose.local.yml
 
 help:
 	@echo "Available commands:"
+	@echo ""
+	@echo "Setup:"
+	@echo "  make install          - Install/sync Python dependencies via uv"
+	@echo "  make install-dev      - Install with dev dependencies (Vulture, etc.)"
 	@echo ""
 	@echo "Development:"
 	@echo "  make dev              - Start development server with auto-reload"
@@ -24,6 +29,7 @@ help:
 	@echo "  make test-api-unit    - Run API unit tests only"
 	@echo "  make test-audit       - Run audit service tests"
 	@echo "  make test-chunking    - Run chunking config tests"
+	@echo "  make test-cache       - Run cache infrastructure tests"
 	@echo "  make test-entity-resolution - Run entity resolution tests"
 	@echo "  make test-quality     - Run quality validation tests"
 	@echo ""
@@ -35,24 +41,52 @@ help:
 	@echo "  make typecheck        - Run mypy type checking"
 	@echo "  make pre-commit       - Run all pre-commit checks"
 	@echo ""
-	@echo "Docker Development:"
+	@echo "Local Services (lightweight - run API on host):"
+	@echo "  make compose-up       - Start Postgres, Neo4j, Prefect, and Redis"
+	@echo "  make compose-down     - Stop local services"
+	@echo "  make compose-logs     - Tail logs from local services"
+	@echo "  make compose-status   - Show status of local services"
+	@echo ""
+	@echo "Docker Development (full stack in Docker):"
 	@echo "  make dev-up           - Build + start dockerized dev stack"
 	@echo "  make dev-down         - Stop stack, remove containers + volumes"
 	@echo "  make dev-logs         - Tail API logs from docker stack"
 	@echo "  make dev-shell        - Open a shell inside the API container"
 	@echo "  make dev-rebuild      - Rebuild and restart docker stack"
+	@echo ""
+	@echo "Database & Migrations:"
+	@echo "  make migrate          - Run database migrations"
 	@echo "  make dev-reset-postgres - Delete local Postgres data"
 	@echo "  make dev-reset-neo4j  - Delete local Neo4j data"
 	@echo "  make dev-reset-redis  - Delete local Redis data"
 	@echo ""
 	@echo "Other:"
 	@echo "  make openapi-snapshot - Generate OpenAPI schema snapshot"
+	@echo "  make clean            - Remove build artifacts and cache files"
+
+install:
+	uv sync
+
+install-dev:
+	uv sync --group dev
 
 dev:
 	LOG_LEVEL=DEBUG uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 
 start:
 	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+compose-up:
+	$(LOCAL_COMPOSE) up -d
+
+compose-down:
+	$(LOCAL_COMPOSE) down
+
+compose-logs:
+	$(LOCAL_COMPOSE) logs -f
+
+compose-status:
+	$(LOCAL_COMPOSE) ps
 
 dev-up:
 	mkdir -p .docker-data/postgres \
@@ -134,6 +168,9 @@ test-chunking:
 test-entity-resolution:
 	uv run pytest tests/unit/services/entity_resolution/ -v
 
+test-cache:
+	uv run pytest tests/unit/services/cache/ -v
+
 lint-fix:
 	uv run ruff check --fix .
 	uv run black .
@@ -159,3 +196,15 @@ pre-commit:
 # 	$(MAKE) typecheck
 	$(MAKE) test
 	$(MAKE) deadcode
+
+migrate:
+	PYTHONPATH=. uv run python scripts/run_migrations.py
+
+clean:
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	find . -type f -name ".coverage" -delete 2>/dev/null || true
+	rm -rf htmlcov/ coverage.xml .coverage 2>/dev/null || true

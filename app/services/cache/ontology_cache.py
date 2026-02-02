@@ -98,9 +98,7 @@ class OntologyCache:
             extra={"ontology_id": ontology_id, "user_id": user_id},
         )
 
-    async def invalidate(
-        self, ontology_id: str, user_id: Optional[str] = None
-    ) -> bool:
+    async def invalidate(self, ontology_id: str, user_id: Optional[str] = None) -> bool:
         """Invalidate cached ontology.
 
         Call this when an ontology is updated.

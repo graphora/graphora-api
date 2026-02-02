@@ -48,20 +48,52 @@ A sophisticated document processing backend that leverages AI-powered intelligen
 
 ### Developer Shortcuts
 
+**Setup:**
 - `make install` – sync Python dependencies via uv
-- `uv sync --group dev` – install optional dev tools (e.g. Vulture for dead-code checks)
-- `make compose-up` – start local Neo4j and Redis containers (see [Local Development Guide](docs/LOCAL_DEVELOPMENT.md))
-- `make lint`, `make test`, `make typecheck` – run quality gates before committing
-- `make test-unit`, `make test-integration` – run just unit or integration slices as needed
-- `make test` now emits coverage stats to the terminal and writes `coverage.xml` for CI tooling
-- `make deadcode` – run Vulture against the codebase to surface unused definitions
-- `make openapi-snapshot` – regenerate `tests/snapshots/openapi.json` after intentional API changes so contract tests stay green
+- `make install-dev` – install with dev dependencies (Vulture, etc.)
+
+**Development:**
+- `make dev` – start development server with auto-reload
+- `make start` – start production server
+
+**Local Services:**
+- `make compose-up` – start Postgres, Neo4j, Prefect, and Redis containers
+- `make compose-down` – stop local services
+- `make compose-logs` – tail logs from local services
+- `make compose-status` – show status of local services
+
+See [Local Development Guide](docs/LOCAL_DEVELOPMENT.md) for detailed setup instructions.
+
+**Testing:**
+- `make test` – run all tests (emits coverage stats and writes `coverage.xml`)
+- `make test-unit` – run unit tests only
+- `make test-integration` – run integration tests only
+- `make test-cov` – run tests with HTML coverage report
+
+**Code Quality:**
+- `make lint` – run Ruff + Black checks
+- `make lint-fix` – run Ruff + Black with auto-fix
+- `make format` – apply Black formatting
+- `make typecheck` – run mypy type checking
+- `make deadcode` – run Vulture to surface unused definitions
+- `make pre-commit` – run all pre-commit checks (lint, test, deadcode)
+
+**Database:**
+- `make migrate` – run database migrations
+- `make dev-reset-postgres` – delete local Postgres data
+- `make dev-reset-neo4j` – delete local Neo4j data
+- `make dev-reset-redis` – delete local Redis data
+
+**Other:**
+- `make openapi-snapshot` – regenerate `tests/snapshots/openapi.json`
+- `make clean` – remove build artifacts and cache files
+- `make help` – show all available commands
 
 
 
 ### Running the Project
 
-The project will automatically start when you run it on Replit. The FastAPI server will be available at port 8000.
+The FastAPI server will be available at port 8000.
 
 To manually start the server:
 

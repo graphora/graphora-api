@@ -58,17 +58,26 @@ and remove containers/volumes, `make dev-logs` to tail the API logs, and `make d
 bash session inside the API container. See [`LOCAL_DEV_DOCKER.md`](LOCAL_DEV_DOCKER.md) for the full
 5-minute walkthrough.
 
-### Option B — only Neo4j + Redis via lightweight Compose
+### Option B — lightweight Compose (run API on host)
 
-If you prefer to run the API on bare metal but still want containerized Neo4j/Redis, use the legacy
-Compose file:
+If you prefer to run the API on bare metal but still want containerized dependencies:
 
 ```bash
-docker compose -f docker-compose.local.yml up -d  # neo4j:5.20 + redis:7 (ports 7474, 7687, 6379)
+make compose-up   # or: docker compose -f docker-compose.local.yml up -d
 ```
 
-Tear it down with `docker compose -f docker-compose.local.yml down`. Data persists in named Docker
-volumes so subsequent runs retain your test graph.
+This starts:
+- **Postgres** (pgvector) on port 5433 (user: `graphora`, password: `graphora`, db: `graphora`)
+- **Neo4j Staging** on ports 7475 (HTTP) and 7688 (Bolt)
+- **Neo4j Production** on ports 8474 (HTTP) and 8687 (Bolt)
+- **Redis** on port 6380
+- **Prefect** on port 4200
+
+Use `make compose-down` to stop services. Data persists in named Docker volumes so subsequent runs retain your data.
+
+Other useful commands:
+- `make compose-logs` – tail logs from all services
+- `make compose-status` – show container status
 
 ### Neo4j connection strings
 
