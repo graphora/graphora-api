@@ -20,7 +20,6 @@ from app.services.quality.exceptions import (
     QualityThresholdNotMetError,
     QualityViolationError,
 )
-from app.services.marker.tasks import convert_pdf_to_markdown
 from app.services.chunking.tasks import chunk_document
 from app.services.chunking.config import ChunkingStrategy
 from app.services.chunking.models import ChunkingResult, ChunkMetadata
@@ -256,27 +255,7 @@ async def document_transformation_flow(
                         file_path, transform_id, doc_metadata
                     )
                     stored_path = storage_location.original_path
-                    processed_path = stored_path
-
-                    if (
-                        settings.PDF_PROCESSOR == "marker"
-                        and Path(stored_path).suffix.lower() == ".pdf"
-                    ):
-                        try:
-                            conversion_result = await convert_pdf_to_markdown(
-                                file_path=Path(stored_path),
-                                transform_id=transform_id,
-                            )
-                            if conversion_result:
-                                processed_path = conversion_result.markdown_path
-                        except Exception as conversion_error:
-                            logger.error(
-                                "PDF conversion failed for %s: %s",
-                                stored_path,
-                                conversion_error,
-                            )
-
-                    processed_paths.append(processed_path)
+                    processed_paths.append(stored_path)
 
                 except Exception as parse_error:
                     logger.error(

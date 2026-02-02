@@ -130,10 +130,35 @@ If you are pointing at an existing database (Supabase or self-hosted), make sure
 > `make dev-reset-redis`) to delete the git-ignored directories under `./.docker-data`, or set the
 > corresponding `*_SOURCE` env var(s) to another host path before running `make dev-down && make dev-up`.
 
+### Auth Bypass Mode (Recommended for Local Development)
+
+To skip Clerk authentication setup entirely during local development, enable auth bypass mode:
+
+**Backend (.env):**
+```bash
+AUTH_BYPASS_ENABLED=true
+AUTH_BYPASS_USER_ID=local-dev-user
+AUTH_BYPASS_EMAIL=dev@localhost
+```
+
+**Frontend (.env.local):**
+```bash
+NEXT_PUBLIC_AUTH_BYPASS=true
+AUTH_BYPASS_USER_ID=local-dev-user
+AUTH_BYPASS_EMAIL=dev@localhost
+```
+
+When auth bypass is enabled:
+- All API requests are authenticated as the bypass user (no Authorization header required)
+- The frontend skips Clerk entirely (no sign-in page)
+- Database entries should use `local-dev-user` as the user ID
+
+> **Warning:** Never enable auth bypass in production. The backend will refuse to start if `AUTH_BYPASS_ENABLED=true` and `ENVIRONMENT=production`.
+
 ### Minimum configuration for testing
 
 1. Insert a `database_configs` row pointing to the local Neo4j instance (use the Compose credentials).
-2. Insert matching `configs` entry for your Clerk user ID or email.
+2. Insert matching `configs` entry for your user ID (use `local-dev-user` if auth bypass is enabled, or your Clerk user ID otherwise).
 3. Add an AI provider config (Gemini) with a valid API key.
 
 With those entries in place, the `/api/v1/config` and `/api/v1/ai-config` endpoints will succeed for your authenticated user.

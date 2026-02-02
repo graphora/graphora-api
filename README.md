@@ -37,20 +37,15 @@ A sophisticated document processing backend that leverages AI-powered intelligen
   ````bash
   uv venv
   ````
-- Install `libmagic`
-  ````bash
-  sudo apt-get install libmagic1
-  ````
 - ```bash
    uv sync
    ```
-- [Setup BAML](https://docs.boundaryml.com/guide/installation-language/python)
 
 ### Developer Shortcuts
 
 **Setup:**
 - `make install` – sync Python dependencies via uv
-- `make install-dev` – install with dev dependencies (Vulture, etc.)
+- `make install-dev` – install with dev dependencies
 
 **Development:**
 - `make dev` – start development server with auto-reload

@@ -48,30 +48,6 @@ class Settings(BaseSettings):
         default=3, description="Number of retries for storage task"
     )
 
-    # PDF Processor Settings
-    PDF_PROCESSOR: str = Field(default="gemini", description="PDF processor to use")
-
-    # Marker API Settings
-    MARKER_API_HOST: str = Field(
-        default="http://localhost:8000", description="Marker API host URL"
-    )
-    MARKER_API_TIMEOUT: int = Field(
-        default=270,  # 4.5 minutes to allow for some buffer before task timeout
-        description="Marker API request timeout in seconds",
-    )
-    MARKER_API_MAX_RETRIES: int = Field(
-        default=3, description="Maximum retry attempts for Marker API"
-    )
-    MARKER_API_BACKOFF_FACTOR: float = Field(
-        default=0.5, description="Exponential backoff factor for retries"
-    )
-    MARKER_API_USE_LLM: bool = Field(
-        default=False, description="Whether to use LLM for PDF conversion"
-    )
-    MARKER_API_PAGINATE: bool = Field(
-        default=True, description="Whether to paginate markdown output"
-    )
-
     # Chunking Settings
     MAX_CHUNK_SIZE: int = Field(
         default=32000, description="Maximum size of a text chunk"
@@ -304,6 +280,18 @@ class Settings(BaseSettings):
     )
 
     # Auth Settings (Clerk)
+    AUTH_BYPASS_ENABLED: bool = Field(
+        default=False,
+        description="Enable auth bypass for local development (never use in production)",
+    )
+    AUTH_BYPASS_USER_ID: str = Field(
+        default="local-dev-user",
+        description="User ID to use when auth bypass is enabled",
+    )
+    AUTH_BYPASS_EMAIL: str = Field(
+        default="dev@localhost",
+        description="Email to use when auth bypass is enabled",
+    )
     CLERK_JWKS_URL: str = Field(
         default="", description="URL to Clerk JWKS for token verification"
     )

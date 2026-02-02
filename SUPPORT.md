@@ -43,7 +43,6 @@ Join our community chat for real-time discussions:
 - Make sure you have Python 3.11+ installed
 - Install `uv`: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - Run `uv sync` to install dependencies
-- Install system dependencies: `libmagic1`
 
 **Configuration Issues**
 - Copy `.env.sample` to `.env`

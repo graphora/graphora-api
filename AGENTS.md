@@ -39,4 +39,4 @@
 
 ## Environment & Secrets
 - Copy `.env.example` to `.env` and populate Clerk (`CLERK_JWKS_URL`, `CLERK_ISSUER`, `CLERK_AUDIENCE`, `CLERK_API_KEY`), Supabase, and provider keys before running services.
-- Install `libmagic` via Homebrew or apt for document inspection features, and follow BAML setup notes in `README.md`.
+- Follow BAML setup notes in `README.md` for LLM integration.

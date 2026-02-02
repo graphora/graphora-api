@@ -94,10 +94,37 @@ def _decode_token(token: str) -> dict:
     return decoded
 
 
+def _get_bypass_auth_context() -> AuthContext:
+    """Return a mock AuthContext for local development bypass mode."""
+    return AuthContext(
+        user_id=settings.AUTH_BYPASS_USER_ID,
+        session_id="local-dev-session",
+        token="bypass-token",
+        claims={
+            "sub": settings.AUTH_BYPASS_USER_ID,
+            "email": settings.AUTH_BYPASS_EMAIL,
+            "iss": "local-dev",
+            "aud": "graphora-local",
+        },
+    )
+
+
 def get_current_auth(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> AuthContext:
-    """Validate the bearer token and return the authenticated context."""
+    """Validate the bearer token and return the authenticated context.
+
+    If AUTH_BYPASS_ENABLED is set, returns a mock context for local development.
+    """
+    # Auth bypass for local development
+    if settings.AUTH_BYPASS_ENABLED:
+        if _is_production():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AUTH_BYPASS_ENABLED cannot be used in production",
+            )
+        return _get_bypass_auth_context()
+
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -66,27 +66,18 @@ This project adheres to a [Code of Conduct](CODE_OF_CONDUCT.md). By participatin
    uv sync
    ```
 
-6. **Install system dependencies**
-   ```bash
-   # On Ubuntu/Debian
-   sudo apt-get install libmagic1
-
-   # On macOS
-   brew install libmagic
-   ```
-
-7. **Set up environment variables**
+6. **Set up environment variables**
    ```bash
    cp .env.sample .env
    # Edit .env with your configuration
    ```
 
-8. **Set up BAML**
+7. **Set up BAML**
    ```bash
    # Follow instructions at https://docs.boundaryml.com/guide/installation-language/python
    ```
 
-9. **Run the server**
+8. **Run the server**
    ```bash
    python -m app.main
    ```
