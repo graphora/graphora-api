@@ -35,6 +35,15 @@ from app.services.entity_resolution.entity_store import (
     EntityStore,
     CrossDocumentResolver,
 )
+from app.services.entity_resolution.splink_embedding_comparison import (
+    EmbeddingAwareComparisonFactory,
+    create_embedding_factory,
+    _is_prop_type_text,
+)
+from app.services.entity_resolution.cross_document_service import (
+    CrossDocumentResolutionService,
+    create_cross_document_service,
+)
 
 __all__ = [
     # Models
@@ -60,4 +69,11 @@ __all__ = [
     # Entity Store
     "EntityStore",
     "CrossDocumentResolver",
+    # Splink Embedding Comparison
+    "EmbeddingAwareComparisonFactory",
+    "create_embedding_factory",
+    "_is_prop_type_text",
+    # Cross-Document Service
+    "CrossDocumentResolutionService",
+    "create_cross_document_service",
 ]

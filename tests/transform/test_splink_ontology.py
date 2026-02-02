@@ -355,7 +355,7 @@ def test_comparisons_apply_priors_from_ontology():
 
     df, columns, record_count = _prepare_df(nodes, ontology, "EntityTheta")
 
-    comparisons = _create_splink_comparisons(
+    comparisons, text_columns = _create_splink_comparisons(
         columns,
         df,
         record_count,
@@ -410,7 +410,7 @@ def test_small_groups_skip_string_comparisons_when_unique_available():
 
     df, columns, record_count = _prepare_df(nodes, ontology, "EntityKappa")
 
-    comparisons = _create_splink_comparisons(
+    comparisons, text_columns = _create_splink_comparisons(
         columns,
         df,
         record_count,

@@ -193,7 +193,7 @@ def test_splink_uses_canonical_and_unique_first():
     assert df.loc[0, "canonical__name"] == "acme"
     assert df.loc[0, "canonical__ticker"] == "acm"
 
-    comparisons = _create_splink_comparisons(
+    comparisons, text_columns = _create_splink_comparisons(
         columns,
         df,
         _row_count(df),

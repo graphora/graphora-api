@@ -26,6 +26,11 @@ class EntityLedgerEntry:
     confidence: Optional[float] = None
     first_seen_at: Optional[str] = None
     updated_at: Optional[str] = None
+    # Enhanced fields for cross-document resolution
+    embedding: Optional[List[float]] = None
+    match_count: int = 1
+    document_ids: Optional[List[str]] = None
+    last_matched_at: Optional[str] = None
 
 
 class EntityLedgerService:
@@ -157,6 +162,224 @@ class EntityLedgerService:
                         first_seen_at=timestamp,
                         updated_at=timestamp,
                     )
+
+    async def hydrate_nodes_with_similarity(
+        self,
+        user_id: Optional[str],
+        nodes: Iterable[BaseNode],
+        similarity_threshold: float = 0.85,
+    ) -> None:
+        """Populate canonical_id using two-stage lookup: exact then similarity.
+
+        Stage 1 (fast path): Exact canonical_key match
+        Stage 2 (for unmatched): Embedding similarity search
+
+        Args:
+            user_id: User ID for isolation.
+            nodes: Nodes to hydrate.
+            similarity_threshold: Minimum similarity for Stage 2 matching.
+        """
+        if not user_id or not nodes:
+            return
+
+        nodes = list(nodes)
+
+        # Stage 1: Exact key match (fast path)
+        lookup_map = await self._fetch_entries(user_id, nodes)
+        unmatched_nodes = []
+
+        for node in nodes:
+            if not node.canonical_key:
+                unmatched_nodes.append(node)
+                continue
+
+            entry = lookup_map.get((node.type, node.canonical_key))
+            if entry:
+                node.canonical_id = entry.canonical_id
+            else:
+                unmatched_nodes.append(node)
+
+        if not unmatched_nodes:
+            logger.debug("All %d nodes matched via exact key lookup", len(nodes))
+            return
+
+        # Stage 2: Similarity search for unmatched nodes
+        logger.debug(
+            "Stage 2: Similarity search for %d unmatched nodes",
+            len(unmatched_nodes),
+        )
+
+        similar_matches = await self.find_similar_entities(
+            user_id, unmatched_nodes, similarity_threshold
+        )
+
+        for node in unmatched_nodes:
+            match = similar_matches.get(node.id)
+            if match:
+                node.canonical_id = match["canonical_id"]
+                logger.debug(
+                    "Similarity match for node %s: %s (score: %.3f)",
+                    node.id,
+                    match["canonical_id"],
+                    match["similarity"],
+                )
+
+    async def find_similar_entities(
+        self,
+        user_id: str,
+        nodes: List[BaseNode],
+        threshold: float = 0.85,
+    ) -> Dict[str, Dict[str, object]]:
+        """Find similar entities using embedding similarity.
+
+        Args:
+            user_id: User ID for isolation.
+            nodes: Nodes to find matches for.
+            threshold: Minimum similarity threshold.
+
+        Returns:
+            Dictionary mapping node.id to match info
+            {node_id: {"canonical_id": ..., "similarity": ..., "entry": ...}}
+        """
+        try:
+            from app.services.entity_resolution.embedding_similarity import (
+                get_embedding_similarity,
+            )
+            from app.config import settings
+
+            embedding_similarity = get_embedding_similarity(
+                model_name=settings.ENTITY_RESOLUTION_EMBEDDING_MODEL,
+            )
+        except ImportError:
+            logger.warning("Embedding similarity not available for entity ledger")
+            return {}
+
+        matches: Dict[str, Dict[str, object]] = {}
+
+        # Group nodes by type for efficient lookup
+        nodes_by_type: Dict[str, List[BaseNode]] = {}
+        for node in nodes:
+            nodes_by_type.setdefault(node.type, []).append(node)
+
+        for entity_type, type_nodes in nodes_by_type.items():
+            # Get all entries of this type from ledger (in-memory for now)
+            existing_entries = await self._get_entries_by_type(user_id, entity_type)
+            if not existing_entries:
+                continue
+
+            # Compute embeddings for query nodes
+            node_texts = []
+            for node in type_nodes:
+                text = self._node_to_text(node)
+                node_texts.append(text)
+
+            if not node_texts:
+                continue
+
+            _query_embeddings = embedding_similarity.get_embeddings_batch(node_texts)
+
+            # Compute embeddings for existing entries
+            entry_texts = []
+            entry_list = list(existing_entries.values())
+            for entry in entry_list:
+                text = self._entry_to_text(entry)
+                entry_texts.append(text)
+
+            if not entry_texts:
+                continue
+
+            _entry_embeddings = embedding_similarity.get_embeddings_batch(entry_texts)
+
+            # Compute similarity matrix and find best matches
+            similarity_matrix = embedding_similarity.compute_similarity_matrix(
+                node_texts, entry_texts
+            )
+
+            for i, node in enumerate(type_nodes):
+                similarities = similarity_matrix[i]
+                best_idx = similarities.argmax()
+                best_similarity = float(similarities[best_idx])
+
+                if best_similarity >= threshold:
+                    best_entry = entry_list[best_idx]
+                    matches[node.id] = {
+                        "canonical_id": best_entry.canonical_id,
+                        "similarity": best_similarity,
+                        "entry": best_entry,
+                    }
+
+        return matches
+
+    async def _get_entries_by_type(
+        self, user_id: str, entity_type: str
+    ) -> Dict[str, EntityLedgerEntry]:
+        """Get all ledger entries of a specific type for a user."""
+        results: Dict[str, EntityLedgerEntry] = {}
+
+        if self._enabled:
+            try:
+                rows = await db.fetch(
+                    """
+                    SELECT canonical_key, canonical_id, features, confidence,
+                           first_seen_at, updated_at
+                    FROM entity_ledger
+                    WHERE user_id = %s AND entity_type = %s
+                    LIMIT 1000
+                    """,
+                    user_id,
+                    entity_type,
+                )
+                for row in rows or []:
+                    results[row["canonical_key"]] = EntityLedgerEntry(
+                        user_id=user_id,
+                        entity_type=entity_type,
+                        canonical_key=row["canonical_key"],
+                        canonical_id=row["canonical_id"],
+                        features=row.get("features", {}),
+                        confidence=row.get("confidence"),
+                        first_seen_at=row.get("first_seen_at"),
+                        updated_at=row.get("updated_at"),
+                    )
+            except Exception as exc:
+                logger.error("Failed to fetch entries by type: %s", exc)
+        else:
+            for key, entry in self._memory_store.items():
+                if key[0] == user_id and key[1] == entity_type:
+                    results[entry.canonical_key] = entry
+
+        return results
+
+    def _node_to_text(self, node: BaseNode) -> str:
+        """Convert node properties to text for embedding."""
+        parts = []
+        canonical_props = node.canonical_properties or {}
+        props = node.properties or {}
+
+        # Prioritize canonical properties
+        for key, value in canonical_props.items():
+            if value and isinstance(value, str) and len(value) > 1:
+                parts.append(str(value))
+
+        # Add regular properties
+        for key, value in props.items():
+            if key not in canonical_props and value:
+                if isinstance(value, str) and len(value) > 1:
+                    parts.append(str(value))
+
+        return " | ".join(parts[:5]) if parts else ""
+
+    def _entry_to_text(self, entry: EntityLedgerEntry) -> str:
+        """Convert ledger entry to text for embedding."""
+        parts = []
+        features = entry.features or {}
+        canonical_props = features.get("canonical_properties", {})
+
+        if isinstance(canonical_props, dict):
+            for key, value in canonical_props.items():
+                if value and isinstance(value, str) and len(value) > 1:
+                    parts.append(str(value))
+
+        return " | ".join(parts[:5]) if parts else entry.canonical_key
 
     # Internal helpers -----------------------------------------------------------
 

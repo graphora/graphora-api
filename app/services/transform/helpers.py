@@ -33,6 +33,50 @@ CANONICAL_COLUMN_PREFIX = "canonical__"
 
 SMALL_ENTITY_GROUP_THRESHOLD = 6
 
+BATCH_SIZE_THRESHOLD = 500
+
+
+class OntologyPropertyCache:
+    """Cache for ontology property lookups to avoid repeated dictionary traversals."""
+
+    def __init__(self, parsed_ontology: Optional[Dict[str, Any]] = None):
+        self._ontology = parsed_ontology or {}
+        self._entity_defs: Dict[str, Dict[str, Any]] = {}
+        self._property_defs: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    def get_entity_def(self, entity_type: str) -> Dict[str, Any]:
+        """Get entity definition, cached."""
+        if entity_type not in self._entity_defs:
+            self._entity_defs[entity_type] = self._ontology.get("entities", {}).get(
+                entity_type, {}
+            )
+        return self._entity_defs[entity_type]
+
+    def get_property_def(self, entity_type: str, prop_name: str) -> Dict[str, Any]:
+        """Get property definition for an entity type, cached."""
+        key = (entity_type, prop_name)
+        if key not in self._property_defs:
+            entity_def = self.get_entity_def(entity_type)
+            self._property_defs[key] = entity_def.get("properties", {}).get(
+                prop_name, {}
+            )
+        return self._property_defs[key]
+
+    def get_property_type(self, entity_type: str, prop_name: str) -> Optional[str]:
+        """Get property type for an entity type, cached."""
+        prop_def = self.get_property_def(entity_type, prop_name)
+        return prop_def.get("type") if isinstance(prop_def, dict) else None
+
+    def is_property_unique(self, entity_type: str, prop_name: str) -> bool:
+        """Check if property is marked as unique, cached."""
+        prop_def = self.get_property_def(entity_type, prop_name)
+        return bool(prop_def.get("unique")) if isinstance(prop_def, dict) else False
+
+    def is_property_indexed(self, entity_type: str, prop_name: str) -> bool:
+        """Check if property is marked as index, cached."""
+        prop_def = self.get_property_def(entity_type, prop_name)
+        return bool(prop_def.get("index")) if isinstance(prop_def, dict) else False
+
 
 @dataclass(frozen=True)
 class ComparisonPrior:
@@ -466,6 +510,7 @@ async def deduplicate_entities_with_splink(
     threshold: float = 0.95,
     parsed_ontology: Dict[str, Any] = None,
     user_id: Optional[str] = None,
+    use_embedding_similarity: bool = None,
 ) -> Tuple[List[BaseNode | Node], List[RelationshipInstance | Edge]]:
     """
     Deduplicate entities using the Splink library.
@@ -477,10 +522,15 @@ async def deduplicate_entities_with_splink(
         threshold (float, optional): Baseline match probability threshold for clustering. Default is 0.95.
         user_id (str, optional): User identifier to scope adaptive thresholds.
         parsed_ontology (dict, optional): Parsed ontology to get property types
+        use_embedding_similarity (bool, optional): Enable embedding similarity for TEXT properties.
+            Defaults to settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED.
 
     Returns:
         Tuple[List[BaseNode], List[RelationshipInstance]]: Deduplicated list of entities and updated relationships
     """
+    # Resolve embedding similarity flag from settings if not provided
+    if use_embedding_similarity is None:
+        use_embedding_similarity = settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED
     try:
         logging.info(f"Starting entity deduplication with {len(entities)} entities")
         logger.debug(f"Starting entity deduplication with {len(entities)} entities")
@@ -591,13 +641,41 @@ async def deduplicate_entities_with_splink(
                 continue
 
             # Create comparisons and blocking rules
-            comparisons = _create_splink_comparisons(
+            comparisons, text_columns = _create_splink_comparisons(
                 comparison_columns,
                 df,
                 len(df),
                 current_type,
                 parsed_ontology,
             )
+
+            # Apply embedding similarity for TEXT columns if enabled
+            if use_embedding_similarity and text_columns:
+                try:
+                    from app.services.entity_resolution.splink_embedding_comparison import (
+                        EmbeddingAwareComparisonFactory,
+                    )
+
+                    embedding_factory = EmbeddingAwareComparisonFactory()
+                    df, _ = embedding_factory.prepare_dataframe_with_embeddings(
+                        df, text_columns
+                    )
+                    logging.info(
+                        "Added embedding signatures for %d TEXT columns: %s",
+                        len(text_columns),
+                        text_columns,
+                    )
+                except ImportError as e:
+                    logging.warning(
+                        "Embedding similarity not available: %s. "
+                        "Install sentence-transformers for semantic matching.",
+                        str(e),
+                    )
+                except Exception as e:
+                    logging.warning(
+                        "Failed to compute embeddings for TEXT columns: %s",
+                        str(e),
+                    )
 
             if not comparisons:
                 logging.warning(
@@ -1552,6 +1630,8 @@ def _create_splink_dataframe(
     """
     Create a DataFrame for Splink processing from entity data.
 
+    Optimized: Uses vectorized column construction instead of row-by-row df.at[].
+
     Args:
         entities_data (List[Dict]): List of entity dictionaries
         system_properties (List[str]): List of system properties to exclude
@@ -1593,13 +1673,12 @@ def _create_splink_dataframe(
     # Get unique property columns
     properties_columns = sorted(properties_columns)
 
-    # Pre-initialize all property columns with None to avoid setting with iterables
-    for col in properties_columns:
-        if col not in df.columns:
-            df[col] = None
+    # Vectorized column construction - build all column data at once
+    columns_data: Dict[str, List[Optional[str]]] = {
+        col: [] for col in properties_columns
+    }
 
-    # Flatten properties for comparison, excluding system properties
-    for i, entity in enumerate(entities_data):
+    for entity in entities_data:
         props = (
             entity.get("properties")
             if isinstance(entity.get("properties"), dict)
@@ -1615,27 +1694,24 @@ def _create_splink_dataframe(
             **{k: v for k, v in canonical_props.items() if v is not None},
         }
 
-        for prop, value in combined_props.items():
-            if prop not in system_properties and prop in properties_columns:
-                if isinstance(value, (list, dict, tuple)):
-                    try:
-                        df.at[i, prop] = str(value)
-                    except Exception as e:
-                        logging.warning(
-                            f"Could not set property {prop} with value {value}: {str(e)}"
-                        )
-                else:
-                    df.at[i, prop] = str(value) if value is not None else None
+        for col in properties_columns:
+            if col.startswith(CANONICAL_COLUMN_PREFIX):
+                # This is a canonical column
+                base_prop = col[len(CANONICAL_COLUMN_PREFIX) :]
+                value = canonical_props.get(base_prop)
+            else:
+                value = combined_props.get(col)
 
-        # Persist canonical values in dedicated columns to favour
-        # deterministic comparisons without losing raw values.
-        for prop, value in canonical_props.items():
-            if prop in system_properties or value is None:
-                continue
-            canonical_column = f"{CANONICAL_COLUMN_PREFIX}{prop}"
-            if canonical_column not in df.columns:
-                df[canonical_column] = None
-            df.at[i, canonical_column] = str(value)
+            if value is None:
+                columns_data[col].append(None)
+            elif isinstance(value, (list, dict, tuple)):
+                columns_data[col].append(str(value))
+            else:
+                columns_data[col].append(str(value))
+
+    # Assign all columns at once (vectorized)
+    for col_name, col_values in columns_data.items():
+        df[col_name] = col_values
 
     return df, properties_columns
 
@@ -1704,6 +1780,7 @@ def _create_splink_comparisons(
     unique_columns: List[str] = []
     indexed_columns: List[str] = []
     string_columns: List[str] = []
+    text_columns: List[str] = []  # TEXT type uses embedding similarity
     numeric_columns: List[str] = []
     datetime_columns: List[str] = []
     fallback_columns: List[str] = []
@@ -1741,6 +1818,13 @@ def _create_splink_comparisons(
                 indexed_columns.append(column)
             if prop_type:
                 property_types[column] = prop_type
+            continue
+
+        # TEXT type columns - for embedding similarity
+        if prop_type and _is_prop_type_text(prop_type):
+            if primary_col not in text_columns:
+                text_columns.append(primary_col)
+                property_types[primary_col] = prop_type
             continue
 
         if prop_type and _is_prop_type_string(prop_type):
@@ -1852,14 +1936,15 @@ def _create_splink_comparisons(
                 break
 
     logging.info(
-        "Created %d comparisons for Splink (unique=%d indexed=%d string=%d numeric=%d)",
+        "Created %d comparisons for Splink (unique=%d indexed=%d string=%d text=%d numeric=%d)",
         len(comparisons),
         len(unique_columns),
         len(indexed_columns),
         len(string_columns),
+        len(text_columns),
         len(numeric_columns),
     )
-    return comparisons
+    return comparisons, text_columns
 
 
 def _is_prop_type_string(prop_type: str) -> bool:
@@ -1872,6 +1957,11 @@ def _is_prop_type_number(prop_type: str) -> bool:
 
 def _is_prop_type_datetime(prop_type: str) -> bool:
     return prop_type.lower() in ["date", "datetime", "timestamp"]
+
+
+def _is_prop_type_text(prop_type: str) -> bool:
+    """Check if property type is TEXT (uses embedding similarity)."""
+    return prop_type.lower() == "text"
 
 
 def _create_blocking_rules(
@@ -2161,12 +2251,13 @@ def _run_splink_deduplication(df, comparisons, blocking_rules, threshold):
                         f"Cluster {cluster_id}: {len(cluster_members)} members, representative: {representative}"
                     )
 
-        # Map each entity to its representative entity
-        for _, row in df_clusters.iterrows():
-            entity_id = row[id_col]
-            cluster_id = row["cluster_id"]
-            if cluster_id in cluster_to_representative:
-                id_to_representative[entity_id] = cluster_to_representative[cluster_id]
+        # Map each entity to its representative entity - vectorized O(n)
+        id_to_representative = dict(
+            zip(
+                df_clusters[id_col],
+                df_clusters["cluster_id"].map(cluster_to_representative),
+            )
+        )
 
         return id_to_representative, match_scores
 
@@ -2180,6 +2271,8 @@ def _create_deduplicated_entities(entities, id_to_representative):
     """
     Create a deduplicated list of entities based on the deduplication results.
 
+    Optimized from O(n²) to O(n) by building lookup dict once.
+
     Args:
         entities (List[BaseNode]): Original list of entities
         id_to_representative (Dict): Mapping of entity IDs to representative entity IDs
@@ -2187,27 +2280,24 @@ def _create_deduplicated_entities(entities, id_to_representative):
     Returns:
         List[BaseNode]: Deduplicated list of entities
     """
-    # Create a new deduplicated list of entities
+    # Build entity lookup once - O(n) instead of nested loop
+    entity_by_id = {entity.id: entity for entity in entities}
+    processed_reps = set()
     deduplicated_entities = []
-    processed_ids = set()
 
     for entity in entities:
         entity_id = entity.id
+        rep_id = id_to_representative.get(entity_id, entity_id)
 
-        # If this entity is not in any cluster or is the representative of its cluster
-        if (
-            entity_id not in id_to_representative
-            or id_to_representative[entity_id] == entity_id
-        ):
-            deduplicated_entities.append(entity)
-            processed_ids.add(entity_id)
-        # If this entity is in a cluster but we haven't processed the representative yet
-        elif id_to_representative[entity_id] not in processed_ids:
-            # Find the representative entity
-            for e in entities:
-                if e.id == id_to_representative[entity_id]:
-                    deduplicated_entities.append(e)
-                    processed_ids.add(e.id)
-                    break
+        # Skip if we've already added this representative
+        if rep_id in processed_reps:
+            continue
+
+        processed_reps.add(rep_id)
+
+        # Get the representative entity from lookup - O(1)
+        rep_entity = entity_by_id.get(rep_id)
+        if rep_entity:
+            deduplicated_entities.append(rep_entity)
 
     return deduplicated_entities

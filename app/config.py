@@ -152,6 +152,28 @@ class Settings(BaseSettings):
         description="Enable ontology-driven canonicalization for entity properties",
     )
 
+    # Entity Resolution Settings
+    ENTITY_RESOLUTION_EMBEDDING_ENABLED: bool = Field(
+        default=True,
+        description="Enable embedding-based semantic similarity for entity resolution",
+    )
+    ENTITY_RESOLUTION_EMBEDDING_MODEL: str = Field(
+        default="all-MiniLM-L6-v2",
+        description="Sentence-transformers model for entity resolution embeddings",
+    )
+    ENTITY_RESOLUTION_SIMILARITY_THRESHOLD: float = Field(
+        default=0.85,
+        description="Minimum similarity threshold for entity matching",
+    )
+    ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED: bool = Field(
+        default=True,
+        description="Enable cross-document entity linking via entity store",
+    )
+    ENTITY_RESOLUTION_BATCH_SIZE: int = Field(
+        default=500,
+        description="Batch size threshold for entity resolution processing",
+    )
+
     # Timing Settings
     TIMING_WINDOW_HOURS: int = Field(
         default=24, description="Hours of timing data to keep for estimation"
