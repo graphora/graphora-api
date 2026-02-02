@@ -8902,6 +8902,23 @@
         },
         "summary": "Readiness Check"
       }
+    },
+    "/system-info": {
+      "get": {
+        "description": "System information endpoint exposing configuration for frontend",
+        "operationId": "system_info_system_info_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "System Info"
+      }
     }
   }
 }
