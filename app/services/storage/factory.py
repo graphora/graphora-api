@@ -92,6 +92,13 @@ async def create_storage_for_user(
 
     Returns:
         GraphStorageInterface implementation
+
+    Raises:
+        ValueError: If use_staging=False (production) and prodDb is not configured
+
+    Notes:
+        - If use_staging=True and stagingDb is not configured, falls back to in-memory storage
+        - If use_staging=False and prodDb is not configured, raises ValueError (production required for merge)
     """
     storage_type = settings.STORAGE_TYPE.lower()
 
@@ -107,7 +114,24 @@ async def create_storage_for_user(
 
         user_config = await UserDatabaseService.get_user_config(user_id)
 
-        db_config = user_config.stagingDb if use_staging else user_config.productionDb
+        if use_staging:
+            # Staging is optional - fall back to in-memory if not configured
+            if user_config.stagingDb is None:
+                from app.services.storage.memory import InMemoryStorage
+
+                logger.info(
+                    f"No staging DB configured for user {user_id}, using in-memory storage"
+                )
+                return InMemoryStorage(user_id=user_id)
+            db_config = user_config.stagingDb
+        else:
+            # Production is required for merge operations
+            if user_config.prodDb is None:
+                raise ValueError(
+                    "Production database is required for this operation. "
+                    "Please configure a production database in Settings → Databases."
+                )
+            db_config = user_config.prodDb
 
         from app.services.storage.neo4j import Neo4jStorage
 
@@ -126,3 +150,45 @@ async def create_storage_for_user(
 def is_memory_storage_enabled() -> bool:
     """Check if in-memory storage is enabled."""
     return settings.STORAGE_TYPE.lower() == "memory"
+
+
+async def get_storage_type_for_user(user_id: str, use_staging: bool = True) -> str:
+    """Determine what storage type will be used for a user.
+
+    Args:
+        user_id: User ID for configuration lookup
+        use_staging: Whether checking staging (True) or production (False)
+
+    Returns:
+        'neo4j' if Neo4j storage will be used, 'memory' if in-memory
+    """
+    if settings.STORAGE_TYPE.lower() == "memory":
+        return "memory"
+
+    from app.services.user_db_service import UserDatabaseService
+
+    user_config = await UserDatabaseService.get_user_config(user_id)
+
+    if use_staging and (user_config.stagingDb is None):
+        return "memory"
+
+    if not use_staging and (user_config.prodDb is None):
+        return "none"  # Production not configured
+
+    return "neo4j"
+
+
+async def user_has_staging_db(user_id: str) -> bool:
+    """Check if user has a staging database configured."""
+    from app.services.user_db_service import UserDatabaseService
+
+    user_config = await UserDatabaseService.get_user_config(user_id)
+    return user_config.stagingDb is not None
+
+
+async def user_has_production_db(user_id: str) -> bool:
+    """Check if user has a production database configured."""
+    from app.services.user_db_service import UserDatabaseService
+
+    user_config = await UserDatabaseService.get_user_config(user_id)
+    return user_config.prodDb is not None

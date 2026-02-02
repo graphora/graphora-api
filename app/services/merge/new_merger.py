@@ -564,20 +564,16 @@ async def get_merge_graph(
 
 @task(name="extract_staging_graph")
 async def _extract_staging_graph(transform_id: str, user_id: str) -> GraphResponse:
-    """Extract Staging Graph"""
+    """Extract Staging Graph.
+
+    Reads from staging Neo4j if configured, otherwise from in-memory storage.
+    """
     start_time = time.time()
 
-    # Get user's staging database configuration
-    user_config = await UserDatabaseService.get_user_config(user_id)
+    # Get staging storage (Neo4j or in-memory depending on user config)
+    from app.services.storage.factory import create_storage_for_user
 
-    from app.services.storage.neo4j import Neo4jStorage
-
-    storage = Neo4jStorage(
-        uri=user_config.stagingDb.uri,
-        username=user_config.stagingDb.username,
-        password=user_config.stagingDb.password,
-        database="neo4j",  # Default database name
-    )
+    storage = await create_storage_for_user(user_id, use_staging=True)
 
     try:
         # Extract nodes with transform_id

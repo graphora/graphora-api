@@ -18,7 +18,6 @@ try:
         QualityMetrics,
     )
     from app.services.quality.service import QualityService
-    from app.services.user_db_service import UserDatabaseService
     from app.services.feedback_service import feedback_service, FeedbackType
     from app.auth import get_current_user_id
 
@@ -81,15 +80,17 @@ if QUALITY_API_AVAILABLE:
         entity_type_coverage: Dict[str, int]
 
     async def _get_quality_service(user_id: str) -> QualityService:
-        user_config = await UserDatabaseService.get_user_config(user_id)
+        """Get quality service with appropriate storage backend.
+
+        Uses staging Neo4j if configured, otherwise falls back to in-memory storage.
+        """
+        from app.services.storage.factory import create_storage_for_user
 
         try:
-            from app.services.storage.neo4j import Neo4jStorage
-        except (
-            Exception
-        ) as storage_error:  # pragma: no cover - import failure handled at runtime
+            storage = await create_storage_for_user(user_id, use_staging=True)
+        except Exception as storage_error:
             logger.error(
-                "Neo4j storage backend unavailable for quality operations: %s",
+                "Storage backend unavailable for quality operations: %s",
                 storage_error,
             )
             raise HTTPException(
@@ -97,14 +98,7 @@ if QUALITY_API_AVAILABLE:
                 detail="Graph storage backend unavailable",
             ) from storage_error
 
-        neo4j_storage = Neo4jStorage(
-            uri=user_config.stagingDb.uri,
-            username=user_config.stagingDb.username,
-            password=user_config.stagingDb.password,
-            database="neo4j",
-        )
-
-        return QualityService(neo4j_storage)
+        return QualityService(storage)
 
     @router.get("/results/{transform_id}", response_model=QualityResults)
     async def get_quality_results(

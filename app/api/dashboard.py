@@ -166,17 +166,13 @@ def _get_usage_service() -> UsageTrackingService:
 
 
 async def _get_quality_service(user_id: str) -> QualityService:
-    from app.services.storage.neo4j import Neo4jStorage
-    from app.services.user_db_service import UserDatabaseService
+    """Get quality service with appropriate storage backend.
 
-    user_config = await UserDatabaseService.get_user_config(user_id)
+    Uses staging Neo4j if configured, otherwise falls back to in-memory storage.
+    """
+    from app.services.storage.factory import create_storage_for_user
 
-    storage = Neo4jStorage(
-        uri=user_config.stagingDb.uri,
-        username=user_config.stagingDb.username,
-        password=user_config.stagingDb.password,
-        database="neo4j",
-    )
+    storage = await create_storage_for_user(user_id, use_staging=True)
     return QualityService(storage)
 
 

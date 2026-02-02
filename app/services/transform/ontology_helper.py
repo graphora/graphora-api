@@ -444,25 +444,64 @@ class OntologyParser:
     #             )
 
     async def build_full_text_indexes_for_user(self, user_id: str) -> None:
-        """Build full text indexes for all entities and relationships defined in the ontology for a specific user."""
+        """Build full text indexes for all entities and relationships defined in the ontology for a specific user.
+
+        Indexes are only created for configured Neo4j databases.
+        - Skips staging indexes if staging DB is not configured
+        - Skips production indexes if production DB is not configured
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
         # Get user's database configurations
         user_config = await UserDatabaseService.get_user_config(user_id)
 
-        # Create storage instances for user's databases
-        from app.services.storage.neo4j import Neo4jStorage
+        staging_storage = None
+        prod_storage = None
 
-        staging_storage = Neo4jStorage(
-            uri=user_config.stagingDb.uri,
-            username=user_config.stagingDb.username,
-            password=user_config.stagingDb.password,
-            database="neo4j",  # Default database name
-        )
-        prod_storage = Neo4jStorage(
-            uri=user_config.prodDb.uri,
-            username=user_config.prodDb.username,
-            password=user_config.prodDb.password,
-            database="neo4j",  # Default database name
-        )
+        # Create storage for staging if configured
+        if user_config.stagingDb is not None:
+            from app.services.storage.neo4j import Neo4jStorage
+
+            staging_storage = Neo4jStorage(
+                uri=user_config.stagingDb.uri,
+                username=user_config.stagingDb.username,
+                password=user_config.stagingDb.password,
+                database="neo4j",
+            )
+            logger.info(
+                f"Will create full-text indexes on staging DB for user {user_id}"
+            )
+        else:
+            logger.info(
+                f"No staging DB configured for user {user_id}, skipping staging indexes"
+            )
+
+        # Create storage for production if configured
+        if user_config.prodDb is not None:
+            from app.services.storage.neo4j import Neo4jStorage
+
+            prod_storage = Neo4jStorage(
+                uri=user_config.prodDb.uri,
+                username=user_config.prodDb.username,
+                password=user_config.prodDb.password,
+                database="neo4j",
+            )
+            logger.info(
+                f"Will create full-text indexes on production DB for user {user_id}"
+            )
+        else:
+            logger.info(
+                f"No production DB configured for user {user_id}, skipping production indexes"
+            )
+
+        # If neither DB is configured, nothing to do
+        if staging_storage is None and prod_storage is None:
+            logger.info(
+                f"No databases configured for user {user_id}, skipping all index creation"
+            )
+            return
 
         for entity_name, entity_def in self.parsed_ontology["entities"].items():
             # Create full text index for entity
@@ -472,28 +511,38 @@ class OntologyParser:
             ontology_props = entity_def.get("properties", {})
             ontology_prop_names = [f"{prop}" for prop in ontology_props.keys()]
 
-            # Try to get all properties from the database
-            try:
-                staging_props = await staging_storage.get_all_node_properties(
-                    entity_name
-                )
-                # Combine ontology properties with properties found in the database
-                prop_names = list(set(ontology_prop_names + staging_props))
-            except Exception:
-                # If we can't get properties from the database, use ontology properties
-                prop_names = ontology_prop_names
+            # Try to get all properties from the database (prefer staging if available)
+            prop_names = ontology_prop_names
+            if staging_storage is not None:
+                try:
+                    staging_props = await staging_storage.get_all_node_properties(
+                        entity_name
+                    )
+                    # Combine ontology properties with properties found in the database
+                    prop_names = list(set(ontology_prop_names + staging_props))
+                except Exception:
+                    # If we can't get properties from the database, use ontology properties
+                    pass
+            elif prod_storage is not None:
+                try:
+                    prod_props = await prod_storage.get_all_node_properties(entity_name)
+                    prop_names = list(set(ontology_prop_names + prod_props))
+                except Exception:
+                    pass
 
             # If we still don't have any properties, skip this entity
             if not prop_names:
                 continue
 
-            # Create indexes in both environments
-            await staging_storage.create_or_replace_ft_index_for_node(
-                index_name, entity_name, prop_names
-            )
-            await prod_storage.create_or_replace_ft_index_for_node(
-                index_name, entity_name, prop_names
-            )
+            # Create indexes only for configured databases
+            if staging_storage is not None:
+                await staging_storage.create_or_replace_ft_index_for_node(
+                    index_name, entity_name, prop_names
+                )
+            if prod_storage is not None:
+                await prod_storage.create_or_replace_ft_index_for_node(
+                    index_name, entity_name, prop_names
+                )
 
         # Create full text index for relationships
         for source_name, rels in self.parsed_ontology["entities"].items():
@@ -510,25 +559,37 @@ class OntologyParser:
                 ontology_props = rel_def.get("properties", {})
                 ontology_prop_names = [f"{prop}" for prop in ontology_props.keys()]
 
-                # Try to get all properties from the database
-                try:
-                    staging_rel_props = (
-                        await staging_storage.get_all_relationship_properties(rel_name)
-                    )
-                    # Combine ontology properties with properties found in the database
-                    prop_names = list(set(ontology_prop_names + staging_rel_props))
-                except Exception:
-                    # If we can't get properties from the database, use ontology properties
-                    prop_names = ontology_prop_names
+                # Try to get all properties from the database (prefer staging if available)
+                prop_names = ontology_prop_names
+                if staging_storage is not None:
+                    try:
+                        staging_rel_props = (
+                            await staging_storage.get_all_relationship_properties(
+                                rel_name
+                            )
+                        )
+                        prop_names = list(set(ontology_prop_names + staging_rel_props))
+                    except Exception:
+                        pass
+                elif prod_storage is not None:
+                    try:
+                        prod_rel_props = (
+                            await prod_storage.get_all_relationship_properties(rel_name)
+                        )
+                        prop_names = list(set(ontology_prop_names + prod_rel_props))
+                    except Exception:
+                        pass
 
                 # If we still don't have any properties, skip this relationship
                 if not prop_names:
                     continue
 
-                # Create indexes in both environments
-                await staging_storage.create_or_replace_ft_index_for_relationship(
-                    index_name, source_name, rel_name, target_name, prop_names
-                )
-                await prod_storage.create_or_replace_ft_index_for_relationship(
-                    index_name, source_name, rel_name, target_name, prop_names
-                )
+                # Create indexes only for configured databases
+                if staging_storage is not None:
+                    await staging_storage.create_or_replace_ft_index_for_relationship(
+                        index_name, source_name, rel_name, target_name, prop_names
+                    )
+                if prod_storage is not None:
+                    await prod_storage.create_or_replace_ft_index_for_relationship(
+                        index_name, source_name, rel_name, target_name, prop_names
+                    )
