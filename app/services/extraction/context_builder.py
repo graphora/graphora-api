@@ -1,9 +1,15 @@
-"""Enhanced context builder for multi-pass extraction."""
+"""Enhanced context builder for multi-pass extraction.
+
+This module provides rich context building for LLM extraction including:
+- Relationship schema hints for relationship-aware entity extraction
+- Chain-of-thought guidance based on ontology patterns
+- Quality indicators and validation feedback
+"""
 
 import json
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 
 from app.services.transform.models import BaseNode, RelationshipInstance
 from .models import ExtractionGap, ValidationResult, GapType
@@ -55,6 +61,11 @@ class EnhancedContextBuilder:
         self.ontology = ontology
         self.config = config or ContextConfig()
         self._entity_defs = ontology.get("entities", {})
+        self._relationship_defs = ontology.get("relationships", {})
+        # Cache relationship schema
+        self._relationship_schema_cache: Optional[Dict[str, List[Dict[str, Any]]]] = (
+            None
+        )
 
     def build_node_context(
         self,
@@ -62,6 +73,7 @@ class EnhancedContextBuilder:
         include_confidence: bool = True,
         include_validation: bool = False,
         validation_result: Optional[ValidationResult] = None,
+        include_relationship_hints: bool = False,
     ) -> ContextEnvelope:
         """Build enhanced node context with quality indicators.
 
@@ -70,6 +82,7 @@ class EnhancedContextBuilder:
             include_confidence: Whether to include confidence scores.
             include_validation: Whether to include validation feedback.
             validation_result: Validation result for feedback (if include_validation).
+            include_relationship_hints: Whether to include relationship schema hints.
 
         Returns:
             ContextEnvelope with the built context.
@@ -96,6 +109,14 @@ class EnhancedContextBuilder:
             lines.extend(self._build_validation_summary(validation_result))
             lines.append("")
 
+        # Add relationship schema hints if requested
+        if include_relationship_hints:
+            entity_types = {node.type for node in sorted_nodes}
+            hints = self._build_relationship_schema_hints(entity_types)
+            if hints:
+                lines.extend(hints)
+                lines.append("")
+
         # Build node entries
         for node in sorted_nodes:
             line = self._format_node(node, include_confidence)
@@ -110,6 +131,217 @@ class EnhancedContextBuilder:
         )
 
         return envelope
+
+    def build_relationship_aware_entity_context(
+        self,
+        nodes: List[BaseNode],
+        include_confidence: bool = True,
+    ) -> ContextEnvelope:
+        """Build entity context that includes relationship pattern hints.
+
+        This context is designed for entity extraction and includes:
+        - Existing entities with their properties
+        - Relationship patterns from ontology to guide entity extraction
+        - Expected entity types based on relationship definitions
+
+        Args:
+            nodes: List of extracted nodes.
+            include_confidence: Whether to include confidence scores.
+
+        Returns:
+            ContextEnvelope with relationship-aware entity context.
+        """
+        lines: List[str] = []
+
+        # Section 1: Relationship Schema Hints
+        entity_types = {node.type for node in nodes} if nodes else set()
+        # Also include all entity types from ontology for comprehensive hints
+        entity_types.update(self._entity_defs.keys())
+
+        schema_hints = self._build_relationship_schema_hints(entity_types)
+        if schema_hints:
+            lines.append(
+                "=== RELATIONSHIP PATTERNS (for context during entity extraction) ==="
+            )
+            lines.extend(schema_hints)
+            lines.append("")
+            lines.append(
+                "NOTE: When extracting entities, consider what relationships they might have."
+            )
+            lines.append(
+                "Missing entities may be implied by relationship patterns above."
+            )
+            lines.append("")
+
+        # Section 2: Existing Entities
+        if nodes:
+            lines.append("=== PREVIOUSLY IDENTIFIED ENTITIES ===")
+            sorted_nodes = self._sort_nodes_for_context(nodes)
+            if len(sorted_nodes) > self.config.max_entities_in_context:
+                sorted_nodes = sorted_nodes[: self.config.max_entities_in_context]
+
+            for node in sorted_nodes:
+                line = self._format_node(node, include_confidence)
+                lines.append(line)
+        else:
+            lines.append("No entities extracted yet.")
+
+        raw_context = "\n".join(lines) + "\n"
+
+        return self._apply_truncation(
+            raw_context,
+            entity_count=len(nodes) if nodes else 0,
+        )
+
+    def _build_relationship_schema_hints(self, entity_types: Set[str]) -> List[str]:
+        """Build relationship schema hints for given entity types.
+
+        Args:
+            entity_types: Set of entity types to include hints for.
+
+        Returns:
+            List of hint lines.
+        """
+        if self._relationship_schema_cache is None:
+            self._relationship_schema_cache = self._compute_relationship_schema()
+
+        hints: List[str] = []
+        seen_patterns: Set[str] = set()
+
+        for entity_type in sorted(entity_types):
+            patterns = self._relationship_schema_cache.get(entity_type, [])
+            for pattern in patterns:
+                # Create a unique key for deduplication
+                pattern_key = (
+                    f"{pattern['source']}-{pattern['type']}-{pattern['target']}"
+                )
+                if pattern_key in seen_patterns:
+                    continue
+                seen_patterns.add(pattern_key)
+
+                direction = pattern.get("direction", "outgoing")
+                if direction == "outgoing":
+                    hint = f"  ({pattern['source']}) -[:{pattern['type']}]-> ({pattern['target']})"
+                else:
+                    hint = f"  ({pattern['source']}) <-[:{pattern['type']}]- ({pattern['target']})"
+
+                # Add cardinality hint if available
+                cardinality = pattern.get("cardinality", "")
+                if cardinality:
+                    hint += f"  [{cardinality}]"
+
+                hints.append(hint)
+
+        return hints
+
+    def _compute_relationship_schema(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Compute relationship schema from ontology.
+
+        Returns:
+            Dictionary mapping entity types to their relationship patterns.
+        """
+        schema: Dict[str, List[Dict[str, Any]]] = {}
+
+        # Extract from entity definitions (relationships defined per entity)
+        for entity_type, entity_def in self._entity_defs.items():
+            if entity_type not in schema:
+                schema[entity_type] = []
+
+            relationships = entity_def.get("relationships", {})
+            for rel_name, rel_def in relationships.items():
+                if isinstance(rel_def, dict):
+                    target_type = rel_def.get("target", "Unknown")
+                    cardinality = rel_def.get("cardinality", "")
+
+                    schema[entity_type].append(
+                        {
+                            "source": entity_type,
+                            "type": rel_name,
+                            "target": target_type,
+                            "direction": "outgoing",
+                            "cardinality": cardinality,
+                        }
+                    )
+
+                    # Also add reverse mapping for target
+                    if target_type not in schema:
+                        schema[target_type] = []
+                    schema[target_type].append(
+                        {
+                            "source": entity_type,
+                            "type": rel_name,
+                            "target": target_type,
+                            "direction": "incoming",
+                            "cardinality": cardinality,
+                        }
+                    )
+
+        # Extract from standalone relationship definitions if present
+        for rel_name, rel_def in self._relationship_defs.items():
+            if not isinstance(rel_def, dict):
+                continue
+
+            source_type = rel_def.get("source", "")
+            target_type = rel_def.get("target", "")
+            cardinality = rel_def.get("cardinality", "")
+
+            if source_type and target_type:
+                if source_type not in schema:
+                    schema[source_type] = []
+                schema[source_type].append(
+                    {
+                        "source": source_type,
+                        "type": rel_name,
+                        "target": target_type,
+                        "direction": "outgoing",
+                        "cardinality": cardinality,
+                    }
+                )
+
+                if target_type not in schema:
+                    schema[target_type] = []
+                schema[target_type].append(
+                    {
+                        "source": source_type,
+                        "type": rel_name,
+                        "target": target_type,
+                        "direction": "incoming",
+                        "cardinality": cardinality,
+                    }
+                )
+
+        return schema
+
+    def get_expected_entity_types_from_relationships(
+        self, existing_nodes: List[BaseNode]
+    ) -> Set[str]:
+        """Get entity types that should exist based on relationship patterns.
+
+        Analyzes existing nodes and their expected relationships to identify
+        entity types that should be present but may be missing.
+
+        Args:
+            existing_nodes: Currently extracted nodes.
+
+        Returns:
+            Set of entity types that are expected based on relationships.
+        """
+        if self._relationship_schema_cache is None:
+            self._relationship_schema_cache = self._compute_relationship_schema()
+
+        expected_types: Set[str] = set()
+        existing_types = {node.type for node in existing_nodes}
+
+        for node in existing_nodes:
+            patterns = self._relationship_schema_cache.get(node.type, [])
+            for pattern in patterns:
+                # For outgoing relationships, expect target type
+                if pattern["direction"] == "outgoing":
+                    target_type = pattern["target"]
+                    if target_type not in existing_types:
+                        expected_types.add(target_type)
+
+        return expected_types
 
     def build_relationship_context(
         self,

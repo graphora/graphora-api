@@ -1,4 +1,5 @@
 // BAML prompts for multi-pass extraction refinement
+// Enhanced with chain-of-thought reasoning for improved refinement quality
 
 // Refine an incomplete entity by finding missing properties
 function RefineIncompleteEntity(
@@ -24,12 +25,35 @@ function RefineIncompleteEntity(
         {{chunk}}
         ---
 
-        Instructions:
+        ## Chain-of-Thought Refinement Process
+
+        Before extracting, follow these steps:
+
+        1. **SCAN FOR EXPLICIT MENTIONS**: Look for direct statements of the missing properties.
+           - Search for keywords related to each missing property
+           - Check for alternative phrasings or synonyms
+
+        2. **ANALYZE IMPLICIT INFORMATION**: Look for indirect clues:
+           - Context surrounding the entity that implies property values
+           - Related entities whose properties might inform this entity
+           - Temporal or causal relationships that suggest values
+
+        3. **CHECK FOR COREFERENCES**: The missing information might be:
+           - Stated elsewhere in the text using pronouns or references
+           - Mentioned in relation to another entity
+           - Part of a list or enumeration
+
+        4. **VERIFY CONSISTENCY**: Before including any value:
+           - Ensure it doesn't conflict with existing properties
+           - Confirm the value matches the expected property type
+           - Consider if the value makes sense in context
+
+        ## Instructions
+
         1. Focus ONLY on finding the missing properties listed above
-        2. Only extract properties that are explicitly present in the text
-        3. Look for implicit information that may provide the missing values
-        4. If a property cannot be found, do not make up values
-        5. Maintain consistency with the existing entity information
+        2. Only extract properties that are explicitly or implicitly present in the text
+        3. If a property cannot be found with reasonable confidence, do not include it
+        4. Maintain consistency with the existing entity information
 
         {{ ctx.output_format }}
     "#
@@ -142,6 +166,7 @@ function ExtractExpectedRelationships(
 }
 
 // Comprehensive entity and relationship refinement in one pass
+// Enhanced with structured chain-of-thought reasoning
 function ComprehensiveRefinement(
     chunk: string,
     gaps_context: string,
@@ -153,35 +178,74 @@ function ComprehensiveRefinement(
     prompt #"
         You are performing a comprehensive refinement pass to address extraction gaps.
 
-        GAPS TO ADDRESS:
+        ## EXTRACTION GAPS TO ADDRESS
+
         {{gaps_context}}
 
-        EXISTING ENTITIES (for reference):
+        ## EXISTING ENTITIES (for reference)
+
         {{existing_entities}}
 
-        EXISTING RELATIONSHIPS (for reference):
+        ## EXISTING RELATIONSHIPS (for reference)
+
         {{existing_relationships}}
 
-        ONTOLOGY:
+        ## ONTOLOGY DEFINITION
+
         {{ontology_yaml}}
 
-        TEXT TO RE-EXAMINE:
+        ## TEXT TO RE-EXAMINE
+
         ---
         {{chunk}}
         ---
 
-        Instructions:
-        1. Address each gap listed above systematically
-        2. For incomplete entities: find missing property values
-        3. For orphan nodes: find relationships connecting them
-        4. For low confidence: verify and correct extractions
-        5. For missing relationships: extract expected connections
+        ## Chain-of-Thought Refinement Process
 
-        Rules:
+        Work through each gap type systematically:
+
+        ### STEP 1: Incomplete Entities
+        For each incomplete entity:
+        a) Identify the specific missing properties
+        b) Search the text for explicit mentions of those properties
+        c) Look for implicit information (titles, roles, descriptions that imply values)
+        d) Check if information appears in relation to other entities
+        e) Only include values you can justify from the text
+
+        ### STEP 2: Orphan Nodes
+        For each orphan node:
+        a) Review the ontology to identify possible relationship types
+        b) Search for verbs, actions, or associations involving this entity
+        c) Check for membership/ownership/location relationships
+        d) Look for transitive relationships (A relates to B, B relates to C)
+        e) Connect to existing entities using their IDs
+
+        ### STEP 3: Low Confidence Extractions
+        For each low-confidence entity:
+        a) Re-read the relevant text sections carefully
+        b) Verify the entity type is correct
+        c) Confirm property values against the source text
+        d) Look for additional evidence that increases confidence
+        e) Correct any errors found
+
+        ### STEP 4: Missing Relationships
+        For expected but missing relationships:
+        a) Identify source and target entity types
+        b) Search for relationship indicators (verbs, prepositions, possessives)
+        c) Check for implicit connections through shared context
+        d) Verify both source and target entities exist
+        e) Use existing entity IDs for all references
+
+        ## Output Rules
+
         - Only extract information explicitly present in the text
         - Maintain consistency with existing entities and relationships
         - Do not duplicate existing entities - use their IDs for relationships
-        - Include confidence scores reflecting certainty of extraction
+        - Include confidence scores reflecting certainty:
+          * 0.9-1.0: Explicitly stated
+          * 0.7-0.9: Clearly implied
+          * 0.5-0.7: Reasonably inferred
+        - If no new information can be found, return minimal output
 
         {{ ctx.output_format }}
     "#

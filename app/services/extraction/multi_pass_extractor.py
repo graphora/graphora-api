@@ -201,7 +201,12 @@ class MultiPassExtractor:
         user_id: Optional[str],
         progress_callback: Optional[Any] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
-        """Perform initial extraction pass.
+        """Perform initial extraction pass with relationship-aware entity context.
+
+        This pass uses enhanced context building that includes:
+        - Relationship schema hints during entity extraction
+        - Expected entity types based on relationship patterns
+        - Chain-of-thought guidance in prompts
 
         Args:
             chunks: Text chunks to extract from.
@@ -214,7 +219,21 @@ class MultiPassExtractor:
         """
         nodes_only_ontology = self.ontology_parser.build_entities_only_model()
         nodes: List[BaseNode] = []
-        context_text = "None"
+
+        # Build initial relationship-aware context (includes schema hints)
+        context_envelope = self.context_builder.build_relationship_aware_entity_context(
+            nodes, include_confidence=True
+        )
+        context_text = context_envelope.text
+
+        logger.debug(
+            "Starting entity extraction with relationship-aware context",
+            extra={
+                "transform_id": transform_id,
+                "chunk_count": len(chunks),
+                "initial_context_length": len(context_text),
+            },
+        )
 
         # Extract entities from each chunk
         for chunk_index, chunk in enumerate(chunks):
@@ -245,18 +264,38 @@ class MultiPassExtractor:
                 )
                 if existing:
                     # Merge into existing
-                    existing = merge_nodes(existing, new_node)
+                    idx = nodes.index(existing)
+                    nodes[idx] = merge_nodes(existing, new_node)
                 else:
                     nodes.append(new_node)
 
-            # Update context for next chunk
-            context_envelope = self.context_builder.build_node_context(
-                nodes, include_confidence=True
+            # Update context with relationship hints for next chunk
+            context_envelope = (
+                self.context_builder.build_relationship_aware_entity_context(
+                    nodes, include_confidence=True
+                )
             )
             context_text = context_envelope.text
 
             if progress_callback:
                 progress_callback(chunk_index + 1, len(chunks) * 2)
+
+        # Check for expected entity types that may be missing
+        expected_types = (
+            self.context_builder.get_expected_entity_types_from_relationships(nodes)
+        )
+        existing_types = {node.type for node in nodes}
+        missing_types = expected_types - existing_types
+
+        if missing_types:
+            logger.info(
+                "Entity types expected from relationships but not extracted",
+                extra={
+                    "transform_id": transform_id,
+                    "missing_types": list(missing_types),
+                    "existing_types": list(existing_types),
+                },
+            )
 
         # Extract relationships
         relationships_only_ontology = (
@@ -265,7 +304,7 @@ class MultiPassExtractor:
         relationships: List[RelationshipInstance] = []
 
         rel_context = self.context_builder.build_relationship_context(
-            nodes, relationships, include_orphans=True
+            nodes, relationships, include_orphans=True, include_confidence=True
         )
 
         for chunk_index, chunk in enumerate(chunks):
@@ -292,9 +331,9 @@ class MultiPassExtractor:
                 if not is_dup:
                     relationships.append(new_rel)
 
-            # Update context
+            # Update context with orphan highlighting
             rel_context = self.context_builder.build_relationship_context(
-                nodes, relationships, include_orphans=True
+                nodes, relationships, include_orphans=True, include_confidence=True
             )
 
             if progress_callback:
