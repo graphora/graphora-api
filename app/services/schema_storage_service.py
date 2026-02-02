@@ -13,6 +13,7 @@ from app.schemas.schema import (
 )
 from app.config import settings
 from app.db import postgres as db
+from app.services.cache import get_schema_cache
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +97,19 @@ class SchemaStorageService:
             logger.error(f"Error storing generated schema {schema_id}: {str(e)}")
             return False
 
-    async def get_schema(self, schema_id: str, user_id: str) -> Optional[StoredSchema]:
+    async def get_schema(
+        self, schema_id: str, user_id: str, use_cache: bool = True
+    ) -> Optional[StoredSchema]:
         """Get a specific schema by ID"""
+
+        cache = get_schema_cache()
+
+        # Check cache first
+        if use_cache:
+            cached = await cache.get(schema_id, user_id)
+            if cached is not None:
+                logger.debug(f"Schema '{schema_id}' loaded from cache")
+                return StoredSchema(**cached)
 
         try:
             row = await db.fetchrow(
@@ -112,7 +124,11 @@ class SchemaStorageService:
             )
 
             if row:
-                return StoredSchema(**row)
+                schema = StoredSchema(**row)
+                # Cache the schema
+                if use_cache:
+                    await cache.set(schema_id, user_id, dict(row))
+                return schema
 
             return None
 
@@ -250,6 +266,9 @@ class SchemaStorageService:
             )
 
             if row:
+                # Invalidate cache on update
+                cache = get_schema_cache()
+                await cache.invalidate(schema_id, user_id)
                 return StoredSchema(**row)
 
             return None
@@ -272,7 +291,13 @@ class SchemaStorageService:
                 user_id,
             )
 
-            return bool(row)
+            if row:
+                # Invalidate cache on delete
+                cache = get_schema_cache()
+                await cache.invalidate(schema_id, user_id)
+                return True
+
+            return False
 
         except Exception as e:
             logger.error(f"Error deleting schema {schema_id}: {str(e)}")
@@ -295,7 +320,7 @@ class SchemaStorageService:
 
             if refinement_metadata:
                 # Get current context and merge with refinement metadata
-                current = await self.get_schema(schema_id, user_id)
+                current = await self.get_schema(schema_id, user_id, use_cache=False)
                 if current:
                     context = getattr(current, "context", {}) or {}
                     context.update({"refinement": refinement_metadata})
@@ -316,7 +341,13 @@ class SchemaStorageService:
                 user_id,
             )
 
-            return bool(row)
+            if row:
+                # Invalidate cache on update
+                cache = get_schema_cache()
+                await cache.invalidate(schema_id, user_id)
+                return True
+
+            return False
 
         except Exception as e:
             logger.error(f"Error updating generated schema {schema_id}: {str(e)}")

@@ -6,18 +6,20 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from app.config import settings
 from app.db import postgres as db
+from app.services.cache import get_ontology_cache
 
 logger = logging.getLogger(__name__)
 
 
 async def load_ontology(
-    ontology_id: str, user_id: Optional[str] = None
+    ontology_id: str, user_id: Optional[str] = None, use_cache: bool = True
 ) -> Dict[str, Any]:
     """Load ontology definition from file or database with fallback
 
     Args:
         ontology_id: ID of the ontology to load
         user_id: User ID for database fallback (optional)
+        use_cache: Whether to use caching (default True)
 
     Returns:
         Dictionary containing the ontology definition
@@ -25,6 +27,15 @@ async def load_ontology(
     Raises:
         ValueError: If ontology not found in file or database
     """
+    cache = get_ontology_cache()
+
+    # Check cache first
+    if use_cache:
+        cached = await cache.get(ontology_id, user_id)
+        if cached is not None:
+            logger.debug(f"Ontology '{ontology_id}' loaded from cache")
+            return cached
+
     try:
         # First try to load from local file
         ontology_path = Path(settings.ontology_dir).expanduser() / f"{ontology_id}.yaml"
@@ -38,6 +49,9 @@ async def load_ontology(
                     logger.info(
                         f"Successfully loaded ontology '{ontology_id}' from local file"
                     )
+                    # Cache the loaded ontology
+                    if use_cache:
+                        await cache.set(ontology_id, ontology_data, user_id)
                     return ontology_data
             except (IOError, yaml.YAMLError) as e:
                 logger.warning(
@@ -55,7 +69,11 @@ async def load_ontology(
                 logger.info(
                     f"Successfully loaded ontology '{ontology_id}' from database"
                 )
-                return yaml.safe_load(db_content)
+                ontology_data = yaml.safe_load(db_content)
+                # Cache the loaded ontology
+                if use_cache:
+                    await cache.set(ontology_id, ontology_data, user_id)
+                return ontology_data
             else:
                 logger.warning(
                     f"Ontology '{ontology_id}' not found in database for user {user_id}"
@@ -115,3 +133,19 @@ async def _load_from_database(ontology_id: str, user_id: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Error loading ontology '{ontology_id}' from database: {e}")
         return None
+
+
+async def invalidate_ontology_cache(
+    ontology_id: str, user_id: Optional[str] = None
+) -> bool:
+    """Invalidate cached ontology when it's updated.
+
+    Args:
+        ontology_id: ID of the ontology to invalidate
+        user_id: User ID for user-specific ontologies
+
+    Returns:
+        True if cache entry was removed, False if not found
+    """
+    cache = get_ontology_cache()
+    return await cache.invalidate(ontology_id, user_id)

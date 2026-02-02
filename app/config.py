@@ -288,8 +288,14 @@ class Settings(BaseSettings):
     POSTGRES_DB: Optional[str] = Field(default=None)
     POSTGRES_USER: Optional[str] = Field(default=None)
     POSTGRES_PASSWORD: Optional[str] = Field(default=None)
-    DB_POOL_MIN_SIZE: int = Field(default=1)
-    DB_POOL_MAX_SIZE: int = Field(default=10)
+    DB_POOL_MIN_SIZE: int = Field(
+        default=5,
+        description="Minimum number of connections in the database pool",
+    )
+    DB_POOL_MAX_SIZE: int = Field(
+        default=20,
+        description="Maximum number of connections in the database pool",
+    )
 
     # Security Settings
     ENCRYPTION_MASTER_KEY: Optional[str] = Field(
