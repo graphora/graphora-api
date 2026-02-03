@@ -1,0 +1,115 @@
+version: "1.0.0"
+name: "Financial Analysis"
+description: "Model companies, financials, risks, and investments. Ideal for SEC filings, earnings reports, and investment research."
+
+entities:
+  Company:
+    properties:
+      name:
+        type: str
+        description: "Company name"
+        canonicalization:
+          strip_punctuation: true
+          strip_suffixes: ["Inc", "Inc.", "LLC", "Ltd", "Ltd.", "Corp", "Corp."]
+      ticker:
+        type: str
+        description: "Stock ticker symbol"
+        canonicalization:
+          preserve_case: true
+      sector:
+        type: str
+        description: "Business sector"
+      market_cap:
+        type: str
+        description: "Market capitalization"
+      exchange:
+        type: str
+        description: "Stock exchange"
+    relationships:
+      HAS_RISK:
+        target: Risk
+        properties:
+          severity:
+            type: str
+            description: "Risk severity (high, medium, low)"
+      SUBSIDIARY_OF:
+        target: Company
+      INVESTS_IN:
+        target: Company
+        properties:
+          stake_percentage:
+            type: float
+            description: "Ownership percentage"
+
+  FinancialMetric:
+    properties:
+      name:
+        type: str
+        description: "Metric name (Revenue, EBITDA, Net Income, etc.)"
+      value:
+        type: str
+        description: "Metric value"
+      period:
+        type: str
+        description: "Reporting period (Q1 2024, FY 2023)"
+      currency:
+        type: str
+        description: "Currency"
+      yoy_change:
+        type: str
+        description: "Year-over-year change"
+    relationships:
+      REPORTED_BY:
+        target: Company
+      COMPARED_TO:
+        target: FinancialMetric
+        properties:
+          comparison_type:
+            type: str
+            description: "Type (prior quarter, prior year, guidance)"
+
+  Risk:
+    properties:
+      name:
+        type: str
+        description: "Risk name"
+      category:
+        type: str
+        description: "Category (market, operational, regulatory, financial)"
+      description:
+        type: str
+        description: "Risk description"
+      mitigation:
+        type: str
+        description: "Mitigation strategy"
+    relationships:
+      RELATED_TO:
+        target: Risk
+
+  Event:
+    properties:
+      name:
+        type: str
+        description: "Event name"
+      event_type:
+        type: str
+        description: "Type (acquisition, IPO, earnings, dividend)"
+      date:
+        type: str
+        description: "Event date"
+      description:
+        type: str
+        description: "Event description"
+    relationships:
+      INVOLVES:
+        target: Company
+        properties:
+          role:
+            type: str
+            description: "Company's role in event"
+      IMPACTS:
+        target: FinancialMetric
+        properties:
+          impact_type:
+            type: str
+            description: "Type of impact (positive, negative, neutral)"

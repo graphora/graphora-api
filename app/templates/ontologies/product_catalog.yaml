@@ -1,0 +1,76 @@
+version: "1.0.0"
+name: "Product Catalog"
+description: "Model products, categories, and suppliers. Perfect for e-commerce, inventory management, and product documentation."
+
+entities:
+  Product:
+    properties:
+      name:
+        type: str
+        description: "Product name"
+        canonicalization:
+          strip_punctuation: true
+      sku:
+        type: str
+        description: "Stock keeping unit"
+        canonicalization:
+          preserve_case: true
+      description:
+        type: str
+        description: "Product description"
+      price:
+        type: float
+        description: "Product price"
+      currency:
+        type: str
+        description: "Price currency (USD, EUR, etc.)"
+    relationships:
+      BELONGS_TO:
+        target: Category
+      SUPPLIED_BY:
+        target: Supplier
+        properties:
+          cost:
+            type: float
+            description: "Supplier cost"
+          lead_time_days:
+            type: int
+            description: "Lead time in days"
+      RELATED_TO:
+        target: Product
+        properties:
+          relationship_type:
+            type: str
+            description: "Type (accessory, alternative, bundle)"
+
+  Category:
+    properties:
+      name:
+        type: str
+        description: "Category name"
+      description:
+        type: str
+        description: "Category description"
+    relationships:
+      PARENT_OF:
+        target: Category
+      SUBCATEGORY_OF:
+        target: Category
+
+  Supplier:
+    properties:
+      name:
+        type: str
+        description: "Supplier name"
+        canonicalization:
+          strip_punctuation: true
+          strip_suffixes: ["Inc", "Inc.", "LLC", "Ltd", "Ltd."]
+      contact_email:
+        type: str
+        description: "Contact email"
+      location:
+        type: str
+        description: "Supplier location"
+      rating:
+        type: float
+        description: "Supplier rating (1-5)"

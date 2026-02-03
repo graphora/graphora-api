@@ -1,0 +1,106 @@
+version: "1.0.0"
+name: "Legal Contracts & Agreements"
+description: "Model contracts, parties, obligations, and terms. Perfect for contract analysis and legal document review."
+
+entities:
+  Contract:
+    properties:
+      title:
+        type: str
+        description: "Contract title or name"
+      contract_type:
+        type: str
+        description: "Type (NDA, MSA, SLA, Employment, etc.)"
+      effective_date:
+        type: str
+        description: "Date contract becomes effective"
+      expiration_date:
+        type: str
+        description: "Contract expiration date"
+      governing_law:
+        type: str
+        description: "Governing jurisdiction"
+      status:
+        type: str
+        description: "Status (draft, active, expired, terminated)"
+    relationships:
+      HAS_PARTY:
+        target: Party
+        properties:
+          role:
+            type: str
+            description: "Role in contract (buyer, seller, licensor, licensee)"
+      CONTAINS_CLAUSE:
+        target: Clause
+      AMENDS:
+        target: Contract
+        properties:
+          amendment_date:
+            type: str
+            description: "Date of amendment"
+
+  Party:
+    properties:
+      name:
+        type: str
+        description: "Party name (person or organization)"
+        canonicalization:
+          strip_punctuation: true
+          strip_suffixes: ["Inc", "Inc.", "LLC", "Ltd", "Ltd.", "Corp", "Corp."]
+      party_type:
+        type: str
+        description: "Type (individual, corporation, government)"
+      address:
+        type: str
+        description: "Legal address"
+      jurisdiction:
+        type: str
+        description: "Jurisdiction of incorporation"
+    relationships:
+      REPRESENTED_BY:
+        target: Party
+        properties:
+          representation_type:
+            type: str
+            description: "Type (legal counsel, agent, signatory)"
+
+  Clause:
+    properties:
+      title:
+        type: str
+        description: "Clause title"
+      clause_type:
+        type: str
+        description: "Type (confidentiality, termination, liability, payment)"
+      text:
+        type: str
+        description: "Full clause text"
+    relationships:
+      REFERENCES:
+        target: Clause
+        properties:
+          reference_type:
+            type: str
+            description: "Type (subject to, notwithstanding, pursuant to)"
+
+  Obligation:
+    properties:
+      description:
+        type: str
+        description: "Description of the obligation"
+      due_date:
+        type: str
+        description: "When obligation is due"
+      frequency:
+        type: str
+        description: "Frequency (one-time, monthly, annual)"
+      monetary_value:
+        type: str
+        description: "Associated monetary value"
+    relationships:
+      OWED_BY:
+        target: Party
+      OWED_TO:
+        target: Party
+      DEFINED_IN:
+        target: Clause

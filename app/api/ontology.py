@@ -12,6 +12,7 @@ from app.services.ontology_validator import (
 )
 from app.services.audit_service import audit_service, OperationType
 from app.services.ontology_storage_service import ontology_storage_service
+from app.services.ontology_template_service import ontology_template_service
 from app.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
@@ -376,4 +377,173 @@ async def get_ontology_versions(
         logger.error(f"Error getting ontology versions {ontology_id}: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Error getting ontology versions: {str(e)}"
+        )
+
+
+# =============================================================================
+# Ontology Templates
+# =============================================================================
+
+
+@router.get("/ontology-templates")
+async def list_ontology_templates():
+    """
+    List all available ontology templates.
+
+    Returns a list of templates with their metadata, including:
+    - id: Template identifier
+    - name: Human-readable name
+    - description: What the template is for
+    - entities: List of entity types in the template
+    - relationships: List of relationship types
+    - use_cases: Example document types this template works well with
+    """
+    try:
+        templates = ontology_template_service.list_templates()
+        return {
+            "templates": [t.model_dump() for t in templates],
+            "total": len(templates),
+        }
+    except Exception as e:
+        logger.error(f"Error listing ontology templates: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error listing templates: {str(e)}"
+        )
+
+
+@router.get("/ontology-templates/{template_id}")
+async def get_ontology_template(template_id: str):
+    """
+    Get a specific ontology template by ID.
+
+    Parameters:
+    - template_id: Template identifier (e.g., 'company_person', 'product_catalog')
+
+    Returns:
+    - Template metadata and full YAML content
+    """
+    try:
+        template = ontology_template_service.get_template(template_id)
+
+        if not template:
+            raise HTTPException(
+                status_code=404, detail=f"Template '{template_id}' not found"
+            )
+
+        return template.model_dump()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting template {template_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting template: {str(e)}")
+
+
+@router.post("/ontology-templates/{template_id}/use")
+async def use_ontology_template(
+    template_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Create a new ontology from a template.
+
+    This endpoint copies the template content and creates a new ontology
+    for the user, which they can then customize.
+
+    Parameters:
+    - template_id: Template identifier to use
+
+    Returns:
+    - id: New ontology ID
+    - name: Ontology name (from template)
+    """
+    start_time = time.time()
+    audit_id = ""
+
+    try:
+        # Get template
+        template = ontology_template_service.get_template(template_id)
+        if not template:
+            raise HTTPException(
+                status_code=404, detail=f"Template '{template_id}' not found"
+            )
+
+        ontology_id = str(uuid4())
+
+        # Start audit trail
+        audit_id = await audit_service.log_operation_start(
+            user_id=user_id,
+            operation_type=OperationType.ONTOLOGY_STORED,
+            operation_id=ontology_id,
+            resource_name="Ontology",
+            metadata={"template_id": template_id, "from_template": True},
+        )
+
+        # Validate the template content
+        parse_and_validate_yaml(template.content)
+
+        # Store ontology
+        success = await ontology_storage_service.store_ontology(
+            user_id=user_id,
+            ontology_id=ontology_id,
+            yaml_content=template.content,
+            name=template.name,
+            description=f"Created from template: {template.description}",
+        )
+
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to store ontology")
+
+        # Create file backup
+        await ontology_storage_service.create_file_backup(user_id, ontology_id)
+
+        # Try to create indexes (optional - may fail if no DB configured)
+        try:
+            ontology_path = (
+                Path(settings.ontology_dir).expanduser() / f"{ontology_id}.yaml"
+            )
+            await OntologyParser(
+                ontology_path, user_id
+            ).build_full_text_indexes_for_user(user_id)
+        except ValueError:
+            pass  # OK if user hasn't configured database yet
+
+        # Log success
+        duration_ms = int((time.time() - start_time) * 1000)
+        if audit_id:
+            await audit_service.log_operation_success(
+                audit_id=audit_id,
+                duration_ms=duration_ms,
+                metadata={
+                    "ontology_id": ontology_id,
+                    "template_id": template_id,
+                },
+            )
+
+        return {
+            "id": ontology_id,
+            "name": template.name,
+            "message": f"Ontology created from template '{template.name}'",
+        }
+
+    except HTTPException:
+        raise
+    except OntologyValidationError as e:
+        duration_ms = int((time.time() - start_time) * 1000)
+        if audit_id:
+            await audit_service.log_operation_failure(
+                audit_id=audit_id,
+                error_message=f"Template validation error: {str(e)}",
+                duration_ms=duration_ms,
+            )
+        raise HTTPException(
+            status_code=500, detail=f"Invalid template content: {str(e)}"
+        )
+    except Exception as e:
+        duration_ms = int((time.time() - start_time) * 1000)
+        if audit_id:
+            await audit_service.log_operation_failure(
+                audit_id=audit_id, error_message=str(e), duration_ms=duration_ms
+            )
+        raise HTTPException(
+            status_code=500, detail=f"Error creating ontology from template: {str(e)}"
         )

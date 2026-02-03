@@ -1,0 +1,101 @@
+version: "1.0.0"
+name: "Research Papers & Citations"
+description: "Model academic papers, authors, institutions, and citations. Ideal for literature reviews and research analysis."
+
+entities:
+  Paper:
+    properties:
+      title:
+        type: str
+        description: "Paper title"
+      abstract:
+        type: str
+        description: "Paper abstract"
+      doi:
+        type: str
+        description: "Digital Object Identifier"
+        canonicalization:
+          preserve_case: true
+      publication_year:
+        type: int
+        description: "Year of publication"
+      venue:
+        type: str
+        description: "Journal or conference name"
+    relationships:
+      CITES:
+        target: Paper
+        properties:
+          citation_context:
+            type: str
+            description: "Context of the citation"
+      AUTHORED_BY:
+        target: Author
+        properties:
+          author_order:
+            type: int
+            description: "Order in author list"
+          is_corresponding:
+            type: bool
+            description: "Is corresponding author"
+      COVERS_TOPIC:
+        target: Topic
+        properties:
+          relevance:
+            type: str
+            description: "How relevant (primary, secondary)"
+
+  Author:
+    properties:
+      name:
+        type: str
+        description: "Author name"
+        canonicalization:
+          strip_punctuation: true
+      orcid:
+        type: str
+        description: "ORCID identifier"
+      email:
+        type: str
+        description: "Contact email"
+    relationships:
+      AFFILIATED_WITH:
+        target: Institution
+        properties:
+          department:
+            type: str
+            description: "Department name"
+      COLLABORATES_WITH:
+        target: Author
+
+  Institution:
+    properties:
+      name:
+        type: str
+        description: "Institution name"
+        canonicalization:
+          strip_punctuation: true
+      country:
+        type: str
+        description: "Country location"
+      type:
+        type: str
+        description: "Type (university, research lab, company)"
+
+  Topic:
+    properties:
+      name:
+        type: str
+        description: "Topic or keyword"
+        canonicalization:
+          lowercase: true
+      description:
+        type: str
+        description: "Topic description"
+    relationships:
+      RELATED_TO:
+        target: Topic
+        properties:
+          relationship_type:
+            type: str
+            description: "Type (broader, narrower, related)"
