@@ -22,6 +22,7 @@ from app.services.schema_storage_service import schema_storage_service
 from app.services.audit_service import audit_service, OperationType
 from app.config import settings
 from app.auth import AuthContext, get_current_auth
+from app.exceptions import AIConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,19 @@ async def generate_schema(
         )
 
         return result
+
+    except AIConfigurationError as ai_err:
+        # Log failure
+        if audit_id:
+            duration_ms = int((time.time() - start_time) * 1000)
+            await audit_service.log_operation_failure(
+                audit_id=audit_id, error_message=str(ai_err), duration_ms=duration_ms
+            )
+
+        logger.warning(
+            "AI configuration error for user %s: %s", auth.user_id, str(ai_err)
+        )
+        raise HTTPException(status_code=400, detail=ai_err.to_dict())
 
     except Exception as e:
         # Log failure
@@ -230,6 +244,19 @@ async def refine_schema(
         )
 
         return result
+
+    except AIConfigurationError as ai_err:
+        # Log failure
+        if audit_id:
+            duration_ms = int((time.time() - start_time) * 1000)
+            await audit_service.log_operation_failure(
+                audit_id=audit_id, error_message=str(ai_err), duration_ms=duration_ms
+            )
+
+        logger.warning(
+            "AI configuration error for user %s: %s", auth.user_id, str(ai_err)
+        )
+        raise HTTPException(status_code=400, detail=ai_err.to_dict())
 
     except Exception as e:
         # Log failure

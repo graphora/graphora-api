@@ -1,0 +1,75 @@
+version: "1.0.0"
+name: "Company & Person Network"
+description: "Track companies, people, and their relationships. Ideal for organizational analysis, corporate filings, and business documents."
+
+entities:
+  Company:
+    properties:
+      name:
+        type: str
+        description: "Company name"
+        canonicalization:
+          strip_punctuation: true
+          strip_suffixes: ["Inc", "Inc.", "LLC", "Ltd", "Ltd.", "Corp", "Corp.", "Corporation", "Company", "Co", "Co."]
+      industry:
+        type: str
+        description: "Industry sector"
+      founded_year:
+        type: int
+        description: "Year the company was founded"
+      headquarters:
+        type: str
+        description: "Location of headquarters"
+      website:
+        type: str
+        description: "Company website URL"
+    relationships:
+      ACQUIRED:
+        target: Company
+        properties:
+          date:
+            type: str
+            description: "Acquisition date"
+          amount:
+            type: str
+            description: "Acquisition amount"
+      PARTNERED_WITH:
+        target: Company
+        properties:
+          partnership_type:
+            type: str
+            description: "Type of partnership"
+      COMPETES_WITH:
+        target: Company
+
+  Person:
+    properties:
+      name:
+        type: str
+        description: "Person's full name"
+        canonicalization:
+          strip_punctuation: true
+      title:
+        type: str
+        description: "Job title or position"
+      email:
+        type: str
+        description: "Email address"
+    relationships:
+      WORKS_AT:
+        target: Company
+        properties:
+          role:
+            type: str
+            description: "Role at the company"
+          start_date:
+            type: str
+            description: "Employment start date"
+      REPORTS_TO:
+        target: Person
+      KNOWS:
+        target: Person
+        properties:
+          relationship_type:
+            type: str
+            description: "Type of relationship (colleague, mentor, etc.)"

@@ -37,6 +37,7 @@ from app.services.chunking.config import ChunkingConfig
 from app.services.schema_inference import create_auto_schema_ontology
 from app.services.document_parser import DocumentParser
 from app.auth import get_current_user_id
+from app.exceptions import AIConfigurationError
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["Transform"])
 
@@ -497,6 +498,12 @@ async def upload_documents_auto_schema(
                     transform_id=transform_id,
                 )
                 logger.info(f"Auto-generated ontology: {ontology_id}")
+            except AIConfigurationError as ai_err:
+                logger.warning(f"AI configuration error for user {user_id}: {ai_err}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=ai_err.to_dict(),
+                )
             except Exception as schema_err:
                 logger.error(f"Schema inference failed: {schema_err}")
                 raise HTTPException(

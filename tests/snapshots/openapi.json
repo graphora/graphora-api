@@ -7014,6 +7014,113 @@
         ]
       }
     },
+    "/api/v1/ontology-templates": {
+      "get": {
+        "description": "List all available ontology templates.\n\nReturns a list of templates with their metadata, including:\n- id: Template identifier\n- name: Human-readable name\n- description: What the template is for\n- entities: List of entity types in the template\n- relationships: List of relationship types\n- use_cases: Example document types this template works well with",
+        "operationId": "list_ontology_templates_api_v1_ontology_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Ontology Templates",
+        "tags": [
+          "Ontology"
+        ]
+      }
+    },
+    "/api/v1/ontology-templates/{template_id}": {
+      "get": {
+        "description": "Get a specific ontology template by ID.\n\nParameters:\n- template_id: Template identifier (e.g., 'company_person', 'product_catalog')\n\nReturns:\n- Template metadata and full YAML content",
+        "operationId": "get_ontology_template_api_v1_ontology_templates__template_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Ontology Template",
+        "tags": [
+          "Ontology"
+        ]
+      }
+    },
+    "/api/v1/ontology-templates/{template_id}/use": {
+      "post": {
+        "description": "Create a new ontology from a template.\n\nThis endpoint copies the template content and creates a new ontology\nfor the user, which they can then customize.\n\nParameters:\n- template_id: Template identifier to use\n\nReturns:\n- id: New ontology ID\n- name: Ontology name (from template)",
+        "operationId": "use_ontology_template_api_v1_ontology_templates__template_id__use_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Use Ontology Template",
+        "tags": [
+          "Ontology"
+        ]
+      }
+    },
     "/api/v1/ontology/{ontology_id}": {
       "delete": {
         "description": "Delete an ontology\n\nParameters:\n- ontology_id: ID of the ontology to delete\n- user_id: User's ID (from header)",

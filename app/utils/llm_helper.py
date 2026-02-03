@@ -2,6 +2,11 @@ from typing import Tuple
 from google import genai
 import baml_py
 from app.services.ai_config_service import AIConfigService
+from app.exceptions import (
+    NoAIConfigurationError,
+    InvalidAPIKeyError,
+    UnsupportedProviderError,
+)
 
 
 async def get_user_llm_credentials(user_id: str) -> Tuple[str, str]:
@@ -15,26 +20,24 @@ async def get_user_llm_credentials(user_id: str) -> Tuple[str, str]:
         Tuple of (api_key, model_name)
 
     Raises:
-        ValueError: If user has no LLM configuration
+        NoAIConfigurationError: If user has no LLM configuration
+        InvalidAPIKeyError: If API key retrieval fails
+        UnsupportedProviderError: If provider is not supported
     """
     ai_config_service = AIConfigService()
     user_config = await ai_config_service.get_user_ai_config(user_id)
 
     if not user_config:
-        raise ValueError(
-            f"No LLM configuration found for user: {user_id}. Please configure your LLM provider first."
-        )
+        raise NoAIConfigurationError(user_id)
 
     provider_name, api_key, model_name = (
         await ai_config_service.get_user_provider_secret(user_id)
     )
     if not provider_name:
-        raise ValueError(f"Failed to retrieve API key for user: {user_id}")
+        raise InvalidAPIKeyError(provider="Unknown", user_id=user_id)
 
     if provider_name != "gemini":
-        raise ValueError(
-            f"Unsupported LLM provider: {provider_name}. Currently only Gemini is supported."
-        )
+        raise UnsupportedProviderError(provider_name)
 
     return api_key, model_name
 
