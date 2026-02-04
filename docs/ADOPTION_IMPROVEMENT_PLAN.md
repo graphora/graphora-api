@@ -362,9 +362,15 @@ async def upload_documents(
 
 ## Phase 2: Improve Schema Copilot (Week 2-3)
 
-### 2.1 Convert Q&A Template to Freeflow Chat
+### 2.1 Convert Q&A Template to Freeflow Chat ✅ COMPLETE
 
 **Problem:** Current schema copilot is rigid Q&A template - users can't have natural conversation.
+
+**Status:** Completed. Implemented freeflow conversational schema generation with streaming responses:
+- Backend: `app/services/schema_chat_service.py` with streaming support
+- Backend: API endpoints in `app/api/chat.py` (`/schema-chat/start`, `/schema-chat/{id}/stream`, `/schema-chat/{id}`)
+- Frontend: `app/src/lib/store/schema-freeflow-store.ts` with SSE streaming
+- Frontend: `app/src/app/schema-chat/page.tsx` with split view (chat + live schema preview)
 
 **Current Flow:**
 ```
@@ -562,11 +568,27 @@ export function ChatInterface() {
 
 ## Phase 3: Developer Experience (Week 3-4)
 
-### 3.1 CLI Tool
+### 3.1 CLI Tool ✅ COMPLETE
 
 **Goal:** `graphora extract document.pdf --output graph.json`
 
-**New Package: `graphora-cli`**
+**Status:** Completed. CLI integrated into existing `graphora-client` package (`pip install graphora[cli]`):
+- Config stored in `~/.graphora/config.yaml` (like Claude Code pattern)
+- Two modes: embedded (uses graphora-api services directly) and remote (uses API)
+- Commands: `graphora extract`, `graphora schema infer`, `graphora schema validate`, `graphora config`, `graphora status`
+- Rich terminal UI with progress bars and colored output
+
+**Files created in `graphora-client/graphora/cli/`:**
+- `main.py` - Typer entry point
+- `config.py` - Config management (`~/.graphora/config.yaml`)
+- `runtime.py` - Environment initialization
+- `commands/extract.py` - Extract command (embedded + remote modes)
+- `commands/config_cmd.py` - Config management commands
+- `commands/schema.py` - Schema inference and validation
+
+**Updated:** `setup.py` with `[cli]` extras and `graphora` console script entry point.
+
+**Original Design: `graphora-cli`**
 
 ```
 graphora-cli/
