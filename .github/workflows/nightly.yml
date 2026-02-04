@@ -1,0 +1,127 @@
+name: Nightly Build
+
+on:
+  schedule:
+    # Run at 2 AM UTC every day
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes since last nightly
+        id: check
+        run: |
+          # Get the last nightly tag
+          LAST_NIGHTLY=$(git tag -l "nightly-*" --sort=-creatordate | head -n 1)
+
+          if [ -z "$LAST_NIGHTLY" ]; then
+            echo "No previous nightly found, will create first nightly"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            # Check if there are commits since last nightly
+            COMMITS=$(git log ${LAST_NIGHTLY}..HEAD --oneline | wc -l)
+            if [ "$COMMITS" -gt 0 ]; then
+              echo "Found $COMMITS new commits since $LAST_NIGHTLY"
+              echo "has_changes=true" >> $GITHUB_OUTPUT
+            else
+              echo "No changes since last nightly"
+              echo "has_changes=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+  nightly:
+    needs: check-changes
+    if: needs.check-changes.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run tests
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+          pytest tests/ -v --tb=short || true
+
+      - name: Generate nightly tag
+        id: tag
+        run: |
+          DATE=$(date +%Y%m%d)
+          TAG="nightly-${DATE}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+
+      - name: Get base version
+        id: version
+        run: |
+          BASE_VERSION=$(cat VERSION | tr -d '\n')
+          echo "version=${BASE_VERSION}-nightly.${{ steps.tag.outputs.date }}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          LAST_NIGHTLY=$(git tag -l "nightly-*" --sort=-creatordate | head -n 1)
+
+          if [ -z "$LAST_NIGHTLY" ]; then
+            LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -z "$LAST_TAG" ]; then
+              COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges -20)
+            else
+              COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+            fi
+          else
+            COMMITS=$(git log ${LAST_NIGHTLY}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          echo "## Changes in this nightly build" > NIGHTLY_NOTES.md
+          echo "" >> NIGHTLY_NOTES.md
+          echo "$COMMITS" >> NIGHTLY_NOTES.md
+          echo "" >> NIGHTLY_NOTES.md
+          echo "---" >> NIGHTLY_NOTES.md
+          echo "*This is an automated nightly build. Use stable releases for production.*" >> NIGHTLY_NOTES.md
+
+      - name: Delete old nightly releases
+        run: |
+          # Keep only the last 7 nightly releases
+          NIGHTLIES=$(gh release list --limit 100 | grep "nightly-" | tail -n +8 | awk '{print $1}')
+          for tag in $NIGHTLIES; do
+            echo "Deleting old nightly: $tag"
+            gh release delete "$tag" --yes --cleanup-tag || true
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create nightly release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Nightly Build ${{ steps.tag.outputs.date }}"
+          body_path: NIGHTLY_NOTES.md
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update nightly tag
+        run: |
+          git tag -f nightly
+          git push origin nightly --force
