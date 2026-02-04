@@ -700,7 +700,7 @@ async def deduplicate_entities_with_splink(
                 all_deduplicated_entities.extend(type_entities)
                 continue
 
-            # Run Splink deduplication
+            # Run Splink deduplication (batched for large datasets)
             logging.info(
                 "Running Splink deduplication for type '%s' with threshold %.3f...",
                 current_type,
@@ -711,8 +711,8 @@ async def deduplicate_entities_with_splink(
                 current_type,
                 effective_threshold,
             )
-            id_to_representative, match_scores = _run_splink_deduplication(
-                df, comparisons, blocking_rules, effective_threshold
+            id_to_representative, match_scores = _run_splink_deduplication_batched(
+                entities_data, df, comparisons, blocking_rules, effective_threshold
             )
 
             if match_scores:
@@ -2301,3 +2301,147 @@ def _create_deduplicated_entities(entities, id_to_representative):
             deduplicated_entities.append(rep_entity)
 
     return deduplicated_entities
+
+
+def _run_splink_deduplication_batched(
+    entities_data: List[Dict[str, Any]],
+    df: pd.DataFrame,
+    comparisons: List,
+    blocking_rules: List,
+    threshold: float,
+    batch_size: int = BATCH_SIZE_THRESHOLD,
+    overlap_ratio: float = 0.1,
+) -> Tuple[Dict[str, str], List[float]]:
+    """
+    Run Splink deduplication in batches for large datasets.
+
+    Uses overlapping batches to ensure cross-batch matching at boundaries.
+    Applies transitive closure to merge clusters across batches.
+
+    Args:
+        entities_data: List of entity dictionaries.
+        df: DataFrame with entity data.
+        comparisons: Splink comparison objects.
+        blocking_rules: Splink blocking rules.
+        threshold: Match probability threshold.
+        batch_size: Maximum entities per batch.
+        overlap_ratio: Fraction of batch to overlap with next batch.
+
+    Returns:
+        Tuple of (id_to_representative mapping, list of match scores).
+    """
+    record_count = len(df)
+
+    # If below threshold, use standard processing
+    if record_count <= batch_size:
+        return _run_splink_deduplication(df, comparisons, blocking_rules, threshold)
+
+    logging.info(
+        "Large dataset detected (%d entities). Using batched processing with batch_size=%d",
+        record_count,
+        batch_size,
+    )
+
+    # Calculate overlap size
+    overlap_size = max(10, int(batch_size * overlap_ratio))
+
+    # Split into batches with overlap
+    batches = []
+    start = 0
+    while start < record_count:
+        end = min(start + batch_size, record_count)
+        batches.append((start, end))
+        # Move start forward by (batch_size - overlap) for next batch
+        start = end - overlap_size if end < record_count else record_count
+
+    logging.info(
+        "Processing %d batches with %d entity overlap",
+        len(batches),
+        overlap_size,
+    )
+
+    # Process each batch and collect mappings
+    all_mappings: Dict[str, str] = {}
+    all_match_scores: List[float] = []
+
+    for batch_idx, (start, end) in enumerate(batches):
+        batch_df = df.iloc[start:end].copy().reset_index(drop=True)
+
+        if len(batch_df) < 3:
+            continue
+
+        logging.debug(
+            "Processing batch %d/%d: entities %d-%d (%d total)",
+            batch_idx + 1,
+            len(batches),
+            start,
+            end,
+            len(batch_df),
+        )
+
+        batch_mappings, batch_scores = _run_splink_deduplication(
+            batch_df, comparisons, blocking_rules, threshold
+        )
+
+        if batch_mappings:
+            all_mappings.update(batch_mappings)
+        if batch_scores:
+            all_match_scores.extend(batch_scores)
+
+    # Apply transitive closure to merge clusters across batches
+    if all_mappings:
+        all_mappings = _apply_transitive_closure(all_mappings)
+        logging.info(
+            "Applied transitive closure: %d final representative mappings",
+            len(set(all_mappings.values())),
+        )
+
+    return all_mappings, all_match_scores
+
+
+def _apply_transitive_closure(mappings: Dict[str, str]) -> Dict[str, str]:
+    """
+    Apply transitive closure to resolve chains of mappings.
+
+    If A -> B and B -> C, this ensures A -> C (the ultimate representative).
+    Uses Union-Find algorithm for efficient clustering.
+
+    Args:
+        mappings: Initial id -> representative mappings.
+
+    Returns:
+        Updated mappings with transitive closure applied.
+    """
+    if not mappings:
+        return mappings
+
+    # Build Union-Find structure
+    parent: Dict[str, str] = {}
+
+    def find(x: str) -> str:
+        """Find root with path compression."""
+        if x not in parent:
+            parent[x] = x
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return parent[x]
+
+    def union(x: str, y: str) -> None:
+        """Union two elements."""
+        root_x, root_y = find(x), find(y)
+        if root_x != root_y:
+            # Prefer the representative (value) as the root
+            parent[root_x] = root_y
+
+    # Process all mappings
+    for entity_id, rep_id in mappings.items():
+        union(entity_id, rep_id)
+
+    # Build final mappings with true representatives
+    final_mappings: Dict[str, str] = {}
+    for entity_id in mappings:
+        root = find(entity_id)
+        if entity_id != root:
+            final_mappings[entity_id] = root
+
+    return final_mappings

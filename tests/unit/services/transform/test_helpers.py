@@ -706,6 +706,79 @@ class TestSmallGroupDeduplication:
 
 
 # ============================================================
+# Transitive Closure Tests
+# ============================================================
+
+
+class TestTransitiveClosure:
+    """Test transitive closure for batch deduplication merging."""
+
+    def test_apply_transitive_closure_should_handle_empty_mappings(self):
+        """Should handle empty mappings."""
+        from app.services.transform.helpers import _apply_transitive_closure
+
+        result = _apply_transitive_closure({})
+        assert result == {}
+
+    def test_apply_transitive_closure_should_handle_simple_mapping(self):
+        """Should handle direct A -> B mapping."""
+        from app.services.transform.helpers import _apply_transitive_closure
+
+        mappings = {"a": "b"}
+        result = _apply_transitive_closure(mappings)
+
+        assert result["a"] == "b"
+
+    def test_apply_transitive_closure_should_resolve_chains(self):
+        """Should resolve A -> B -> C to A -> C, B -> C."""
+        from app.services.transform.helpers import _apply_transitive_closure
+
+        mappings = {"a": "b", "b": "c"}
+        result = _apply_transitive_closure(mappings)
+
+        # Both should point to the ultimate representative
+        assert result["a"] == "c"
+        assert result["b"] == "c"
+
+    def test_apply_transitive_closure_should_handle_multiple_clusters(self):
+        """Should handle multiple independent clusters."""
+        from app.services.transform.helpers import _apply_transitive_closure
+
+        mappings = {
+            "a1": "a_rep",
+            "a2": "a_rep",
+            "b1": "b_rep",
+            "b2": "b1",  # Chain: b2 -> b1 -> b_rep
+        }
+        result = _apply_transitive_closure(mappings)
+
+        # a cluster
+        assert result["a1"] == "a_rep"
+        assert result["a2"] == "a_rep"
+        # b cluster - all should point to b_rep
+        assert result["b1"] == "b_rep"
+        assert result["b2"] == "b_rep"
+
+    def test_apply_transitive_closure_should_handle_long_chains(self):
+        """Should handle long chains efficiently."""
+        from app.services.transform.helpers import _apply_transitive_closure
+
+        # Create chain: e1 -> e2 -> e3 -> e4 -> e5 -> rep
+        mappings = {
+            "e1": "e2",
+            "e2": "e3",
+            "e3": "e4",
+            "e4": "e5",
+            "e5": "rep",
+        }
+        result = _apply_transitive_closure(mappings)
+
+        # All should point to 'rep'
+        for key in ["e1", "e2", "e3", "e4", "e5"]:
+            assert result[key] == "rep"
+
+
+# ============================================================
 # Extract Properties Tests
 # ============================================================
 
