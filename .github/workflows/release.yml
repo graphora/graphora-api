@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - '20*-v*'  # Matches YYYY-MM-vX.Y.Z format
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 1.0.0)'
+        description: 'Semantic version (e.g., 1.1.0) - will be prefixed with YYYY-MM-'
         required: true
       prerelease:
         description: 'Mark as pre-release'
@@ -34,13 +34,20 @@ jobs:
       - name: Get version
         id: version
         run: |
+          YEAR_MONTH=$(date +%Y-%m)
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+            SEMVER="${{ github.event.inputs.version }}"
+            # Add v prefix if not present
+            if [[ ! "$SEMVER" =~ ^v ]]; then
+              SEMVER="v${SEMVER}"
+            fi
+            VERSION="${YEAR_MONTH}-${SEMVER}"
           else
-            VERSION="${GITHUB_REF#refs/tags/v}"
+            # Extract from tag (already in YYYY-MM-vX.Y.Z format)
+            VERSION="${GITHUB_REF#refs/tags/}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Update VERSION file
         if: github.event_name == 'workflow_dispatch'

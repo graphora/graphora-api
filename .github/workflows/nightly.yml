@@ -65,8 +65,9 @@ jobs:
       - name: Generate nightly tag
         id: tag
         run: |
-          DATE=$(date +%Y%m%d)
-          TAG="nightly-${DATE}"
+          DATE=$(date +%Y-%m-%d)
+          DATE_COMPACT=$(date +%Y%m%d)
+          TAG="nightly-${DATE_COMPACT}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "date=$DATE" >> $GITHUB_OUTPUT
 
@@ -74,7 +75,7 @@ jobs:
         id: version
         run: |
           BASE_VERSION=$(cat VERSION | tr -d '\n')
-          echo "version=${BASE_VERSION}-nightly.${{ steps.tag.outputs.date }}" >> $GITHUB_OUTPUT
+          echo "base=$BASE_VERSION" >> $GITHUB_OUTPUT
 
       - name: Generate changelog
         id: changelog
