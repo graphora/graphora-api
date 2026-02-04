@@ -5388,6 +5388,192 @@
         ]
       }
     },
+    "/api/v1/chat/schema-chat/start": {
+      "post": {
+        "description": "Start a new freeflow schema chat session.\n\nThis endpoint creates a conversational session for designing knowledge graph\nschemas through natural language. Unlike the guided Q&A flow, this allows\nfreeform conversation from the start.\n\nArgs:\n    initial_schema: Optional existing schema to start with\n    title: Optional session title\n    user_id: User identifier from header\n\nReturns:\n    Session info with ID and welcome message",
+        "operationId": "start_schema_chat_api_v1_chat_schema_chat_start_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "initial_schema",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Initial Schema"
+            }
+          },
+          {
+            "in": "query",
+            "name": "title",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Schema Chat",
+        "tags": [
+          "Chat Sessions"
+        ]
+      }
+    },
+    "/api/v1/chat/schema-chat/{session_id}": {
+      "get": {
+        "description": "Get the current state of a schema chat session.\n\nArgs:\n    session_id: Chat session ID\n    user_id: User identifier from header\n\nReturns:\n    Session state with messages and current schema",
+        "operationId": "get_schema_chat_state_api_v1_chat_schema_chat__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Schema Chat State",
+        "tags": [
+          "Chat Sessions"
+        ]
+      }
+    },
+    "/api/v1/chat/schema-chat/{session_id}/stream": {
+      "post": {
+        "description": "Stream a chat response for schema generation/refinement.\n\nThis endpoint streams the AI response in real-time using Server-Sent Events (SSE).\nSchema updates are sent as separate events when the AI generates or modifies a schema.\n\nEvent types:\n- text: Regular text content\n- schema_update: New or updated schema YAML\n- done: Stream complete with final metadata\n- error: Error occurred\n\nArgs:\n    session_id: Chat session ID\n    message: User's message\n    current_schema: Current schema state (optional)\n    user_id: User identifier from header\n\nReturns:\n    StreamingResponse with SSE events",
+        "operationId": "stream_schema_chat_api_v1_chat_schema_chat__session_id__stream_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "message",
+            "required": true,
+            "schema": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "current_schema",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Current Schema"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stream Schema Chat",
+        "tags": [
+          "Chat Sessions"
+        ]
+      }
+    },
     "/api/v1/chat/schema-refinement": {
       "post": {
         "description": "Refine a schema through conversational AI with multi-turn support.\n\nThis endpoint supports both starting new refinement sessions and continuing\nexisting conversations. The AI maintains context across interactions.\n\nArgs:\n    request: Schema refinement parameters and user request\n    user_id: User identifier from header\n\nReturns:\n    Refinement result with updated schema and explanation\n\nRaises:\n    HTTPException: If refinement fails or invalid parameters",

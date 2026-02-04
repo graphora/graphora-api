@@ -4,8 +4,10 @@ This module provides REST API endpoints for managing chat sessions and schema re
 Supports multi-turn conversations with persistent session state and context management.
 """
 
+import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from typing import Optional
 
 from app.schemas.chat import (
@@ -398,3 +400,135 @@ async def get_current_schema(
             f"Error retrieving current schema for session {session_id} and user {user_id}: {str(e)}"
         )
         raise HTTPException(status_code=500, detail="Failed to retrieve current schema")
+
+
+# Freeflow Schema Chat Endpoints (Streaming)
+
+
+@router.post("/schema-chat/start")
+async def start_schema_chat(
+    initial_schema: Optional[str] = None,
+    title: Optional[str] = None,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Start a new freeflow schema chat session.
+
+    This endpoint creates a conversational session for designing knowledge graph
+    schemas through natural language. Unlike the guided Q&A flow, this allows
+    freeform conversation from the start.
+
+    Args:
+        initial_schema: Optional existing schema to start with
+        title: Optional session title
+        user_id: User identifier from header
+
+    Returns:
+        Session info with ID and welcome message
+    """
+    from app.services.schema_chat_service import schema_chat_service
+
+    try:
+        result = await schema_chat_service.start_chat_session(
+            user_id=user_id,
+            initial_schema=initial_schema,
+            title=title,
+        )
+
+        logger.info(
+            f"Started schema chat session {result['session_id']} for user {user_id}"
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error starting schema chat for user {user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail="Failed to start schema chat session"
+        )
+
+
+@router.post("/schema-chat/{session_id}/stream")
+async def stream_schema_chat(
+    session_id: str,
+    message: str,
+    current_schema: Optional[str] = None,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Stream a chat response for schema generation/refinement.
+
+    This endpoint streams the AI response in real-time using Server-Sent Events (SSE).
+    Schema updates are sent as separate events when the AI generates or modifies a schema.
+
+    Event types:
+    - text: Regular text content
+    - schema_update: New or updated schema YAML
+    - done: Stream complete with final metadata
+    - error: Error occurred
+
+    Args:
+        session_id: Chat session ID
+        message: User's message
+        current_schema: Current schema state (optional)
+        user_id: User identifier from header
+
+    Returns:
+        StreamingResponse with SSE events
+    """
+    from app.services.schema_chat_service import schema_chat_service
+
+    async def generate():
+        try:
+            async for chunk in schema_chat_service.stream_chat_response(
+                user_id=user_id,
+                session_id=session_id,
+                message=message,
+                current_schema=current_schema,
+            ):
+                yield f"data: {json.dumps(chunk)}\n\n"
+        except Exception as e:
+            logger.error(f"Error in schema chat stream: {str(e)}")
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/schema-chat/{session_id}")
+async def get_schema_chat_state(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Get the current state of a schema chat session.
+
+    Args:
+        session_id: Chat session ID
+        user_id: User identifier from header
+
+    Returns:
+        Session state with messages and current schema
+    """
+    from app.services.schema_chat_service import schema_chat_service
+
+    try:
+        result = await schema_chat_service.get_session_state(
+            user_id=user_id,
+            session_id=session_id,
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(
+            f"Error getting schema chat state for session {session_id}: {str(e)}"
+        )
+        raise HTTPException(status_code=500, detail="Failed to get session state")
