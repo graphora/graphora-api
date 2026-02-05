@@ -330,9 +330,12 @@ async def upload_documents(
         try:
             if temp_dir.exists():
                 import shutil
+
                 shutil.rmtree(temp_dir, ignore_errors=True)
         except Exception as cleanup_err:
-            logger.warning(f"Failed to cleanup temp directory {temp_dir}: {cleanup_err}")
+            logger.warning(
+                f"Failed to cleanup temp directory {temp_dir}: {cleanup_err}"
+            )
         raise
 
 
@@ -589,9 +592,12 @@ async def upload_documents_auto_schema(
         try:
             if temp_dir.exists():
                 import shutil
+
                 shutil.rmtree(temp_dir, ignore_errors=True)
         except Exception as cleanup_err:
-            logger.warning(f"Failed to cleanup temp directory {temp_dir}: {cleanup_err}")
+            logger.warning(
+                f"Failed to cleanup temp directory {temp_dir}: {cleanup_err}"
+            )
         raise HTTPException(
             status_code=500,
             detail=f"Failed to process documents: {str(e)}",
