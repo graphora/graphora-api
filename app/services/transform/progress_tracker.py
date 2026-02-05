@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 import json
 import platform
@@ -23,6 +23,27 @@ from app.config import settings
 from app.utils.logger import logger
 
 
+class InMemoryStore:
+    """Simple in-memory key-value store as Redis fallback"""
+
+    def __init__(self):
+        self._data: Dict[str, Any] = {}
+
+    def get(self, key: str) -> Optional[bytes]:
+        value = self._data.get(key)
+        return value.encode() if isinstance(value, str) else value
+
+    def set(self, key: str, value: Any, ex: Optional[int] = None) -> bool:
+        self._data[key] = value if isinstance(value, bytes) else str(value)
+        return True
+
+    def delete(self, key: str) -> int:
+        if key in self._data:
+            del self._data[key]
+            return 1
+        return 0
+
+
 class ProgressTracker:
     """Track transformation progress and resource usage"""
 
@@ -31,9 +52,19 @@ class ProgressTracker:
         redis_url: str = settings.REDIS_URL,
         timing_window: int = settings.TIMING_WINDOW_HOURS,
     ):
-        """Initialize tracker with Redis connection"""
-        self.redis = redis.from_url(redis_url)
+        """Initialize tracker with Redis connection, falling back to in-memory if unavailable"""
         self.timing_window = timing_window
+        self._using_memory = False
+
+        # Try to connect to Redis, fall back to in-memory if unavailable
+        try:
+            self.redis = redis.from_url(redis_url)
+            self.redis.ping()  # Test connection
+            logger.info("Progress tracker using Redis")
+        except (redis.exceptions.ConnectionError, redis.exceptions.RedisError) as e:
+            logger.warning(f"Redis unavailable ({e}), using in-memory progress tracking")
+            self.redis = InMemoryStore()
+            self._using_memory = True
 
         # Initialize stages in order
         self.stages = [
