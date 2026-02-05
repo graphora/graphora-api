@@ -61,10 +61,8 @@ class ProgressTracker:
             self.redis = redis.from_url(redis_url)
             self.redis.ping()  # Test connection
             logger.info("Progress tracker using Redis")
-        except (redis.exceptions.ConnectionError, redis.exceptions.RedisError) as e:
-            logger.warning(
-                f"Redis unavailable ({e}), using in-memory progress tracking"
-            )
+        except Exception as e:
+            logger.warning(f"Redis unavailable ({e}), using in-memory progress tracking")
             self.redis = InMemoryStore()
             self._using_memory = True
 
