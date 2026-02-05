@@ -286,11 +286,26 @@ class LLMClient:
             output_perc = (
                 response.usage_metadata.candidates_token_count * 100
             ) / response.usage_metadata.total_token_count
+
+        # Handle empty responses gracefully
         if response.parsed is None:
-            raise ValueError("Incorrect response parsed")
+            logger.warning(
+                "Gemini PDF entity extraction returned no parseable response, "
+                "returning empty model. This may indicate ontology-document mismatch.",
+                extra={
+                    "transform_id": transform_id,
+                    "file": filepath.name,
+                    "output_percentage": output_perc,
+                },
+            )
+            empty_result = response_model()
+            await _PDF_NODE_CACHE.set(cache_key, empty_result.model_dump(mode="json"))
+            return empty_result
+
         if output_perc < 4:
             logger.warning(
-                "Gemini PDF relationship response very small compared to prompt",
+                "Gemini PDF entity response very small compared to prompt. "
+                "This may indicate the ontology doesn't match the document content.",
                 extra={
                     "transform_id": transform_id,
                     "file": filepath.name,
@@ -450,8 +465,33 @@ class LLMClient:
             output_perc = (
                 response.usage_metadata.candidates_token_count * 100
             ) / response.usage_metadata.total_token_count
-        if response.parsed is None or output_perc < 4:
-            raise ValueError("Incorrect response parsed")
+
+        # For relationship extraction, empty responses are valid - ontology may not match document
+        if response.parsed is None:
+            logger.warning(
+                "Gemini PDF relationship extraction returned no parseable response, "
+                "returning empty model. This may indicate ontology-document mismatch.",
+                extra={
+                    "transform_id": transform_id,
+                    "file": filepath.name,
+                    "output_percentage": output_perc,
+                },
+            )
+            # Return empty model instance instead of failing
+            empty_result = response_model()
+            await _PDF_REL_CACHE.set(cache_key, empty_result.model_dump(mode="json"))
+            return empty_result
+
+        if output_perc < 4:
+            logger.warning(
+                "Gemini PDF relationship response very small compared to prompt. "
+                "This may indicate the ontology doesn't match the document content.",
+                extra={
+                    "transform_id": transform_id,
+                    "file": filepath.name,
+                    "output_percentage": output_perc,
+                },
+            )
         result_model = response.parsed
         await _PDF_REL_CACHE.set(cache_key, result_model.model_dump(mode="json"))
         logger.debug(

@@ -981,6 +981,30 @@ def prune_orphaned_nodes(
     # Build set of node IDs used in relationships (both source and target)
     nodes_in_relationships = set()
 
+    # If there are no relationships at all, don't prune any nodes.
+    # This preserves entities when relationship extraction returns empty results
+    # (e.g., when the ontology doesn't match the document content well).
+    has_any_relationships = bool(graph.relationships)
+    if not has_any_relationships:
+        # Also check dynamic relationship fields for KnowledgeGraph
+        for field_name in dir(graph):
+            if (
+                field_name.endswith("_list")
+                or "_" not in field_name
+                or field_name.startswith("_")
+            ):
+                continue
+            rel_list = getattr(graph, field_name, None)
+            if isinstance(rel_list, list) and len(rel_list) > 0:
+                has_any_relationships = True
+                break
+
+    if not has_any_relationships:
+        logger.info(
+            "No relationships found - skipping node pruning to preserve extracted entities"
+        )
+        return
+
     # Check relationships list for DocumentKnowledgeGraph
     if graph.relationships:
         for rel in graph.relationships:
