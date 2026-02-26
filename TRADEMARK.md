@@ -84,22 +84,20 @@ If you fork or create a derivative of Graphora:
 - **MUST** use a different name that doesn't include "Graphora"
 - **SHOULD** clearly state it's based on or derived from Graphora
 - **MAY** state "Based on Graphora by Arivan Labs" in documentation
-- **MUST** comply with the AGPL v3 license terms
+- **MUST** comply with the MIT license terms
 
 Example: "GraphWeaver - a knowledge graph tool based on Graphora"
 
 ### Commercial Services
 
-If you want to offer Graphora as a commercial service:
-- **Contact Arivan Labs** for a commercial license agreement
-- Commercial licenses allow use of the Graphora name for your service
+Graphora is MIT-licensed — you are free to use it in commercial products and services without a separate license agreement. The MIT license permits unrestricted commercial use.
+
+If you want to **use the Graphora trademark** (name/logo) for your commercial service, contact us to discuss branding guidelines:
 - Email: `support@graphora.io`
 
 ### Database Vendors and OEMs
 
-If you want to integrate Graphora into your product:
-- **Contact Arivan Labs** for an OEM license agreement
-- We offer special licensing for database vendors and platform providers
+If you want to integrate Graphora into your product, the MIT license permits this freely. If you'd like to co-market with the Graphora brand or discuss OEM arrangements:
 - Email: `sales@graphora.io`
 
 ## When in Doubt

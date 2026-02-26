@@ -380,7 +380,7 @@ If you make database schema changes:
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the AGPL v3 License and that you have read and agreed to the [Contributor License Agreement](CLA.md).
+By contributing, you agree that your contributions will be licensed under the MIT License.
 
 ---
 

@@ -5,10 +5,9 @@ Thank you for your interest in contributing to Graphora (the "Project"). This Co
 ## Why Do We Need a CLA?
 
 This CLA allows us to:
-- Offer Graphora under both open source (AGPL v3) and commercial licenses
 - Protect the project and all its users from legal issues
 - Ensure we have the rights to distribute your contributions
-- Maintain the ability to change the license if necessary for the project's health
+- Maintain the integrity of the MIT-licensed project
 
 ## Agreement
 
@@ -24,10 +23,7 @@ By submitting a contribution to this project, you agree to the following terms a
 
 ### 2. Grant of Copyright License
 
-You hereby grant to Arivan Labs and to recipients of software distributed by Arivan Labs a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute Your Contributions and such derivative works under any license, including without limitation:
-- The GNU Affero General Public License v3 (AGPL v3)
-- Any future version of the AGPL
-- A proprietary commercial license
+You hereby grant to Arivan Labs and to recipients of software distributed by Arivan Labs a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute Your Contributions and such derivative works under the MIT License.
 
 ### 3. Grant of Patent License
 

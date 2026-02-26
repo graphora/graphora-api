@@ -1,6 +1,6 @@
 # Graphora API
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green)](https://fastapi.tiangolo.com/)
 [![Neo4j](https://img.shields.io/badge/Neo4j-5.0+-008CC1)](https://neo4j.com/)
@@ -278,13 +278,11 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+This project is licensed under the **MIT License**.
 
-- ✅ Use for free under AGPL v3 terms
-- ✅ Modify and distribute with source code
-- ❌ Cannot use as closed-source SaaS without commercial license
-
-For commercial licensing (closed-source SaaS, enterprise deployments, OEM), contact: **sales@graphora.io**
+- ✅ Use freely in personal and commercial projects
+- ✅ Modify and distribute with or without source code
+- ✅ Use in closed-source and SaaS products
 
 See [LICENSE](LICENSE) for full terms.
 
