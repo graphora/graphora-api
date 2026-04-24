@@ -87,22 +87,23 @@ def _patch_credentials(
 
 
 @pytest.fixture(autouse=True)
-def _stub_usage_trackers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No-op the usage trackers so CI without Postgres doesn't block.
+def _stub_postgres_sinks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No-op every Postgres-writing side-effect invoked by extraction.
 
-    The usage trackers write to Postgres on every LLM call. In CI
-    there's no database, so psycopg's pool hits a 30s connection
-    timeout per call — enough to blow past the test's 300s budget.
-    Patching the tracker methods keeps the extraction path untouched
-    while neutralizing the persistence calls.
+    CI has no database. Every service that writes to Postgres (usage
+    trackers, entity ledger) hits a 30-second psycopg pool timeout
+    per call. Without stubbing, a single extraction accumulates
+    enough 30s stalls to blow past the 300s test budget.
 
-    Real tracking happens in production; this only silences the
-    harness's side-effects.
+    Patching these methods leaves the BAML extraction + graph
+    construction path untouched. Real persistence runs in production;
+    the harness only needs the in-memory graph object.
     """
 
     async def noop(*args, **kwargs):
         return None
 
+    # Usage trackers
     monkeypatch.setattr(
         "graphora_server.services.usage_tracking.usage_tracking_service.track_llm_usage",
         noop,
@@ -113,6 +114,19 @@ def _stub_usage_trackers(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         "graphora_server.services.usage_tracking.usage_tracking_service.update_document_processing",
+        noop,
+    )
+    # Entity ledger — also writes to Postgres on every chunk
+    monkeypatch.setattr(
+        "graphora_server.services.entity_ledger_service.entity_ledger_service.record_nodes",
+        noop,
+    )
+    monkeypatch.setattr(
+        "graphora_server.services.entity_ledger_service.entity_ledger_service.hydrate_nodes",
+        noop,
+    )
+    monkeypatch.setattr(
+        "graphora_server.services.entity_ledger_service.entity_ledger_service.hydrate_nodes_with_similarity",
         noop,
     )
 
@@ -165,13 +179,13 @@ class TestGeminiProvider:
         assert graph is not None
         assert len(graph.nodes) >= 2, (
             f"expected at least 2 entities, got {len(graph.nodes)}: "
-            f"{[n.entity_type for n in graph.nodes]}"
+            f"{[n.type for n in graph.nodes]}"
         )
         assert len(graph.relationships) >= 1, (
             f"expected at least 1 relationship, got " f"{len(graph.relationships)}"
         )
 
-        node_types = {n.entity_type for n in graph.nodes}
+        node_types = {n.type for n in graph.nodes}
         assert (
             "Company" in node_types
         ), f"no Company nodes extracted; types were {node_types}"
