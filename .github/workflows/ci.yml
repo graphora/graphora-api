@@ -71,7 +71,15 @@ jobs:
       # This catches the exact regression from the PR4-a review:
       # `serve --help` passing while a real `serve` blows up on
       # eager imports of psycopg / neo4j / pypdf in the app chain.
+      #
+      # TEST_MODE=true suppresses the DATABASE_URL check in
+      # ai_config_service.__init__, which would otherwise fail at
+      # module load because CI has no live Postgres. The import
+      # check proves the module graph *resolves*; it doesn't prove
+      # the app can answer requests.
       - name: Server extra import smoke test
+        env:
+          TEST_MODE: "true"
         run: |
           python -m venv /tmp/server
           /tmp/server/bin/pip install --quiet --upgrade pip
