@@ -84,9 +84,24 @@ postgres = [
     "psycopg[binary]>=3.2.0",
     "psycopg-pool>=3.2.0",
 ]
+# Kuzu: embedded graph DB for [local] mode. Declared as its own extra
+# so the client-side [local] meta-extra can depend on graphora-server
+# [kuzu] transitively once graphora-server is published to PyPI.
+# The storage/factory dispatch to Kuzu is not wired yet (Gate 5 work);
+# for now this extra installs the driver only.
+kuzu = [
+    "kuzu>=0.6.0",
+]
 # Cache / progress backend.
 redis = [
     "redis>=5.0.11",
+]
+# Ollama client. When this is installed AND Ollama is reachable on
+# localhost:11434, the server can route to a local model instead of
+# a cloud LLM. Server-side BAML Ollama provider wiring is upstream
+# work (tracked in the Gate 2 "no-key local" exit criterion).
+ollama = [
+    "ollama>=0.4.0",
 ]
 
 # Per-provider LLM extras. Parallel to graphora-client's [openai] /
@@ -116,7 +131,26 @@ vertexai = [
 
 # Convenience union. Use this for a runnable server with all features.
 all = [
-    "graphora-server[server,chunking,embeddings,er,pdf,neo4j,postgres,redis,openai,anthropic,gemini,vertexai]",
+    "graphora-server[server,chunking,embeddings,er,pdf,neo4j,postgres,kuzu,redis,ollama,openai,anthropic,gemini,vertexai]",
+]
+
+# Developer tooling. Named `dev` to mirror the locked taxonomy; kept
+# as a [project.optional-dependencies] entry (pip-installable) rather
+# than a [dependency-groups] entry (uv-only) so contributors using
+# pip/poetry/hatch can also access it via `pip install -e '.[dev]'`.
+# The [dependency-groups] dev block below is kept in sync as uv's
+# preferred shape.
+dev = [
+    "ruff>=0.7.0",
+    "black>=24.4.0",
+    "mypy>=1.10.0",
+    "vulture>=2.11",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.5",
+    "pytest-benchmark>=4.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "sqlparse>=0.5.1",
 ]
 
 [project.scripts]
