@@ -29,11 +29,13 @@ Extract knowledge graphs from the command line:
 # Install
 pip install graphora[cli]
 
-# Extract
+# Extract (uses the hosted demo at demo.graphora.io — no database or API key needed)
 graphora extract document.pdf --output graph.json
 ```
 
-That's it! No database setup, no LLM keys required to get started.
+That's it! No database setup, and no LLM keys of your own required to try the hosted demo.
+
+> **Want to self-host?** Then you will need an LLM key. Jump to [Self-Hosting](#self-hosting) below — the [Zero-Config Mode](#zero-config-mode) section is explicit about which key to set (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`). Work is underway to add an Ollama-auto-detect path that removes this requirement for local runs — see [[product-strategy]] in the work vault.
 
 ## Why Graphora?
 
@@ -50,7 +52,7 @@ That's it! No database setup, no LLM keys required to get started.
 ## Features
 
 - **AI-powered extraction**: Advanced LLM-driven entity and relationship extraction from unstructured documents
-- **Multi-format support**: Process PDFs, Word docs, text files, and more
+- **Multi-format support**: Process PDFs and plain text today (`.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html`). Office formats (`.docx`, `.xlsx`, `.pptx`) land with the upcoming MarkItDown adapter
 - **Visual schema builder**: Design your ontology with an intuitive drag-and-drop interface
 - **Schema chat copilot**: Natural language conversations with streaming responses to refine your schema
 - **Auto schema inference**: Let AI suggest schemas from your documents
