@@ -52,7 +52,7 @@ That's it! No database setup, and no LLM keys of your own required to try the ho
 ## Features
 
 - **AI-powered extraction**: Advanced LLM-driven entity and relationship extraction from unstructured documents
-- **Multi-format support**: Process PDFs and plain text today (`.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html`). Office formats (`.docx`, `.xlsx`, `.pptx`) land with the upcoming MarkItDown adapter
+- **Multi-format support**: Process PDFs, plain text (`.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html`), Office formats (`.docx`, `.xlsx`, `.pptx`) via MarkItDown, and URLs via trafilatura. Install extras `graphora-server[pdf,docling,url]` for the full document-type surface
 - **Visual schema builder**: Design your ontology with an intuitive drag-and-drop interface
 - **Schema chat copilot**: Natural language conversations with streaming responses to refine your schema
 - **Auto schema inference**: Let AI suggest schemas from your documents

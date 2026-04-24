@@ -41,12 +41,19 @@ def _detect_mime_from_buffer(buf: bytes, filename: str | None) -> str:
 class FileValidator:
     """Validator for uploaded files"""
 
-    # Allowed MIME types
+    # Allowed MIME types. Kept in sync with MIME_TO_EXTENSIONS below.
+    # All Office formats routed through DocumentParser's [docling]
+    # backend (MarkItDown). Adding a new format here requires adding
+    # the corresponding extension mapping AND ensuring
+    # DocumentParser._parse_office_file's SUPPORTED_OFFICE_EXTENSIONS
+    # includes it.
     ALLOWED_MIME_TYPES: Set[str] = {
         "application/pdf",
         "text/plain",
         "text/markdown",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }
 
     # Maximum file size (100MB)
@@ -65,6 +72,10 @@ class FileValidator:
         "text/markdown": {".md", ".markdown"},
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
             ".docx"
+        },
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {".xlsx"},
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": {
+            ".pptx"
         },
     }
 

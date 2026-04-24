@@ -89,8 +89,30 @@ er = [
     "numpy>=1.26.4",
 ]
 # PDF parsing.
+#
+# pypdf is the default lightweight backend (tiny, pure-Python).
+# pymupdf (AGPL / commercial) is added as the preferred layout-aware
+# extractor — the parser tries it first and falls back to pypdf when
+# pymupdf isn't installed. Both are ~small enough to include together
+# in [pdf]; the parser handles either alone.
 pdf = [
     "pypdf>=4.0.0",
+    "pymupdf>=1.24.0",
+]
+
+# Office / "broad document" parsing via Microsoft's MarkItDown.
+# Covers docx/xlsx/pptx/epub/rtf/odt and normalizes everything to
+# Markdown — matches the README's "Word docs" promise.
+docling = [
+    "markitdown[docx,xlsx,pptx]>=0.1.0",
+]
+
+# URL content extraction for "give me the text of this article".
+# trafilatura handles boilerplate removal and is the cheapest /
+# most-accurate open-source option we tested. Only installed when
+# the URL path is needed.
+url = [
+    "trafilatura>=1.12.0",
 ]
 # Graph backends.
 neo4j = [
@@ -147,7 +169,7 @@ vertexai = [
 
 # Convenience union. Use this for a runnable server with all features.
 all = [
-    "graphora-server[server,chunking,embeddings,er,pdf,neo4j,postgres,kuzu,redis,ollama,openai,anthropic,gemini,vertexai]",
+    "graphora-server[server,chunking,embeddings,er,pdf,docling,url,neo4j,postgres,kuzu,redis,ollama,openai,anthropic,gemini,vertexai]",
 ]
 
 # Developer tooling. Named `dev` to mirror the locked taxonomy; kept
