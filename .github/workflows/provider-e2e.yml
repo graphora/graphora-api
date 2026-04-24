@@ -104,6 +104,12 @@ jobs:
       - name: Run provider E2E
         env:
           TEST_MODE: "true"
+          # The root tests/conftest.py installs lightweight stubs for
+          # splink, langchain, redis, and pandas so unit tests don't
+          # need native deps. The E2E harness exercises the REAL
+          # extraction path including splink entity resolution, so it
+          # must skip those stubs.
+          GRAPHORA_TEST_REAL_DEPS: "1"
         run: |
           pytest \
             "tests/e2e/providers/test_${PROVIDER}.py" \

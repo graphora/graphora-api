@@ -92,9 +92,21 @@ settings.test_mode = True
 
 
 def _install_langchain_and_splink_stubs() -> None:
-    """Install lightweight langchain/splink stubs for tests without native deps."""
+    """Install lightweight langchain/splink stubs for tests without native deps.
 
-    if os.environ.get("GRAPHORA_TEST_REAL_LANGCHAIN") == "1":
+    The E2E provider harness (tests/e2e/providers/**) needs the real
+    modules — it exercises the live BAML extraction + splink ER path.
+    Set GRAPHORA_TEST_REAL_DEPS=1 to skip ALL stubbing (langchain,
+    splink, redis, pandas). The provider-e2e workflow sets this.
+
+    GRAPHORA_TEST_REAL_LANGCHAIN=1 is retained as a legacy/narrower
+    opt-out that only skips the langchain subset.
+    """
+
+    if (
+        os.environ.get("GRAPHORA_TEST_REAL_DEPS") == "1"
+        or os.environ.get("GRAPHORA_TEST_REAL_LANGCHAIN") == "1"
+    ):
         return
 
     # LangChain semantic chunker stub

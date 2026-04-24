@@ -86,6 +86,37 @@ def _patch_credentials(
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_usage_trackers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No-op the usage trackers so CI without Postgres doesn't block.
+
+    The usage trackers write to Postgres on every LLM call. In CI
+    there's no database, so psycopg's pool hits a 30s connection
+    timeout per call — enough to blow past the test's 300s budget.
+    Patching the tracker methods keeps the extraction path untouched
+    while neutralizing the persistence calls.
+
+    Real tracking happens in production; this only silences the
+    harness's side-effects.
+    """
+
+    async def noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "graphora_server.services.usage_tracking.usage_tracking_service.track_llm_usage",
+        noop,
+    )
+    monkeypatch.setattr(
+        "graphora_server.services.usage_tracking.usage_tracking_service.track_document_processing",
+        noop,
+    )
+    monkeypatch.setattr(
+        "graphora_server.services.usage_tracking.usage_tracking_service.update_document_processing",
+        noop,
+    )
+
+
 class TestGeminiProvider:
     """Exercises the Gemini extraction path end-to-end."""
 
