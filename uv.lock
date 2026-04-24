@@ -1443,6 +1443,7 @@ all = [
     { name = "langchain-huggingface" },
     { name = "langchain-text-splitters" },
     { name = "markitdown", extra = ["docx", "pptx", "xlsx"] },
+    { name = "mcp" },
     { name = "neo4j" },
     { name = "numpy" },
     { name = "ollama" },
@@ -1501,6 +1502,10 @@ gemini = [
 ]
 kuzu = [
     { name = "kuzu" },
+]
+mcp = [
+    { name = "httpx" },
+    { name = "mcp" },
 ]
 neo4j = [
     { name = "neo4j" },
@@ -1574,13 +1579,15 @@ requires-dist = [
     { name = "google-genai", specifier = ">=1.2.0" },
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.2.0" },
     { name = "graphora-server", extras = ["pdf", "neo4j", "postgres"], marker = "extra == 'server'" },
-    { name = "graphora-server", extras = ["server", "chunking", "embeddings", "er", "pdf", "docling", "url", "neo4j", "postgres", "kuzu", "redis", "ollama", "openai", "anthropic", "gemini", "vertexai"], marker = "extra == 'all'" },
+    { name = "graphora-server", extras = ["server", "chunking", "embeddings", "er", "pdf", "docling", "url", "neo4j", "postgres", "kuzu", "redis", "ollama", "mcp", "openai", "anthropic", "gemini", "vertexai"], marker = "extra == 'all'" },
+    { name = "httpx", marker = "extra == 'mcp'", specifier = ">=0.28.0" },
     { name = "httpx", marker = "extra == 'server'", specifier = ">=0.28.0" },
     { name = "kuzu", marker = "extra == 'kuzu'", specifier = ">=0.6.0" },
     { name = "langchain-experimental", marker = "extra == 'chunking'", specifier = ">=0.3.4" },
     { name = "langchain-huggingface", marker = "extra == 'embeddings'", specifier = ">=0.1.2" },
     { name = "langchain-text-splitters", marker = "extra == 'chunking'", specifier = ">=0.3.0" },
     { name = "markitdown", extras = ["docx", "xlsx", "pptx"], marker = "extra == 'docling'", specifier = ">=0.1.0" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
     { name = "neo4j", marker = "extra == 'neo4j'", specifier = ">=5.27.0" },
     { name = "numpy", marker = "extra == 'er'", specifier = ">=1.26.4" },
@@ -2748,6 +2755,31 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/55/79/de6c16cc902f4fc372236926b0ce2ab7845268dcc30fb2fbb7f71b418631/marshmallow-3.26.2.tar.gz", hash = "sha256:bbe2adb5a03e6e3571b573f42527c6fe926e17467833660bebd11593ab8dfd57", size = 222095 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/be/2f/5108cb3ee4ba6501748c4908b908e55f42a5b66245b4cfe0c99326e1ef6e/marshmallow-3.26.2-py3-none-any.whl", hash = "sha256:013fa8a3c4c276c24d26d84ce934dc964e2aa794345a0f8c7e5a7191482c8a73", size = 50964 },
+]
+
+[[package]]
+name = "mcp"
+version = "1.27.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx" },
+    { name = "httpx-sse" },
+    { name = "jsonschema" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "python-multipart" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "sse-starlette" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+    { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/eb/c0cfc62075dc6e1ec1c64d352ae09ac051d9334311ed226f1f425312848a/mcp-1.27.0.tar.gz", hash = "sha256:d3dc35a7eec0d458c1da4976a48f982097ddaab87e278c5511d5a4a56e852b83", size = 607509 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9c/46/f6b4ad632c67ef35209a66127e4bddc95759649dd595f71f13fba11bdf9a/mcp-1.27.0-py3-none-any.whl", hash = "sha256:5ce1fa81614958e267b21fb2aa34e0aea8e2c6ede60d52aba45fd47246b4d741", size = 215967 },
 ]
 
 [[package]]
@@ -5206,6 +5238,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e5/40/edede8dd6977b0d3da179a342c198ed100dd2aba4be081861ee5911e4da4/sqlparse-0.5.3.tar.gz", hash = "sha256:09f67787f56a0b16ecdbde1bfc7f5d9c3371ca683cfeaa8e6ff60b4807ec9272", size = 84999 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/5c/bfd6bd0bf979426d405cc6e71eceb8701b148b16c21d2dc3c261efc61c7b/sqlparse-0.5.3-py3-none-any.whl", hash = "sha256:cf2196ed3418f3ba5de6af7e82c694a9fbdbfecccdfc72e281548517081f16ca", size = 44415 },
+]
+
+[[package]]
+name = "sse-starlette"
+version = "3.3.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "starlette" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/26/8c/f9290339ef6d79badbc010f067cd769d6601ec11a57d78569c683fb4dd87/sse_starlette-3.3.4.tar.gz", hash = "sha256:aaf92fc067af8a5427192895ac028e947b484ac01edbc3caf00e7e7137c7bef1", size = 32427 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/7f/3de5402f39890ac5660b86bcf5c03f9d855dad5c4ed764866d7b592b46fd/sse_starlette-3.3.4-py3-none-any.whl", hash = "sha256:84bb06e58939a8b38d8341f1bc9792f06c2b53f48c608dd207582b664fc8f3c1", size = 14330 },
 ]
 
 [[package]]

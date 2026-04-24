@@ -142,6 +142,18 @@ ollama = [
     "ollama>=0.4.0",
 ]
 
+# MCP (Model Context Protocol) server surface. Ships the
+# `graphora-mcp` console script, which exposes the extraction API
+# as MCP tools for agent clients (Claude Desktop, Cursor, etc.).
+# The server talks HTTP to a running Graphora deployment rather
+# than importing the service modules in-process — keeps the MCP
+# bootstrap light (no Postgres/Neo4j startup) and matches how
+# real users deploy it (local MCP → hosted or local Graphora URL).
+mcp = [
+    "mcp>=1.0.0",
+    "httpx>=0.28.0",
+]
+
 # Per-provider LLM extras. Parallel to graphora-client's [openai] /
 # [anthropic] / [gemini] naming.
 #
@@ -169,7 +181,7 @@ vertexai = [
 
 # Convenience union. Use this for a runnable server with all features.
 all = [
-    "graphora-server[server,chunking,embeddings,er,pdf,docling,url,neo4j,postgres,kuzu,redis,ollama,openai,anthropic,gemini,vertexai]",
+    "graphora-server[server,chunking,embeddings,er,pdf,docling,url,neo4j,postgres,kuzu,redis,ollama,mcp,openai,anthropic,gemini,vertexai]",
 ]
 
 # Developer tooling. Named `dev` to mirror the locked taxonomy; kept
@@ -193,6 +205,7 @@ dev = [
 
 [project.scripts]
 graphora-server = "graphora_server.__main__:main"
+graphora-mcp = "graphora_server.mcp.__main__:main"
 
 [dependency-groups]
 dev = [

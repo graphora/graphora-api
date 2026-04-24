@@ -207,6 +207,54 @@ Call the API from CI jobs or data pipelines without extra backend code. Mint sho
 
 The `graphora` Python package automatically reads `GRAPHORA_AUTH_TOKEN`, so no application changes are required.
 
+## MCP Server (agent access)
+
+Expose Graphora as an MCP (Model Context Protocol) server so agent clients — Claude Desktop, Cursor, custom LLM apps — can extract, query, and inspect knowledge graphs via tool calls.
+
+### Install
+
+```bash
+pip install 'graphora-server[mcp]'
+```
+
+This adds the `graphora-mcp` console script.
+
+### Run
+
+```bash
+export GRAPHORA_API_URL=http://localhost:8000        # or your deployment
+export GRAPHORA_AUTH_TOKEN=<clerk-jwt>               # required unless server has auth bypass
+graphora-mcp
+```
+
+The server speaks MCP over stdio — agent clients launch it on demand.
+
+### Claude Desktop config
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "graphora": {
+      "command": "graphora-mcp",
+      "env": {
+        "GRAPHORA_API_URL": "http://localhost:8000",
+        "GRAPHORA_AUTH_TOKEN": "<clerk-jwt>"
+      }
+    }
+  }
+}
+```
+
+### Tools exposed
+
+| Tool | Purpose |
+|------|---------|
+| `extract_document(file_path \| url, ontology_id?)` | Run extraction on a local file or URL. Auto-infers schema if `ontology_id` is omitted. Returns a `transform_id`. |
+| `query_graph(transform_id, filter_type?, limit?)` | Fetch nodes + edges. Filter by entity type (case-insensitive), limit capped at 200 to keep agent context usable. |
+| `get_evidence(transform_id, node_id)` | Return a node's full properties, its incoming/outgoing edges, and the provenance fields (source chunk, document id, offsets) that justify it being in the graph. |
+
 ## Project Structure
 
 ```
