@@ -71,10 +71,10 @@ install-dev:
 	uv sync --group dev
 
 dev:
-	LOG_LEVEL=DEBUG uv run uvicorn graphora_server.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir graphora_server
+	LOG_LEVEL=DEBUG uv run graphora-server serve --host 0.0.0.0 --port 8000 --reload
 
 start:
-	uv run uvicorn graphora_server.main:app --host 0.0.0.0 --port 8000
+	uv run graphora-server serve --host 0.0.0.0 --port 8000
 
 compose-up:
 	$(LOCAL_COMPOSE) up -d

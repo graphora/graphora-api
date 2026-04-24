@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "graphora-server"
 version = "0.1.0"
@@ -40,6 +44,9 @@ dependencies = [
     "baml-py==0.89.0",
 ]
 
+[project.scripts]
+graphora-server = "graphora_server.__main__:main"
+
 [dependency-groups]
 dev = [
     "ruff>=0.7.0",
@@ -54,8 +61,15 @@ dev = [
     "sqlparse>=0.5.1",
 ]
 
-[tool.setuptools]
-packages = ["graphora_server"]
+[tool.setuptools.packages.find]
+include = ["graphora_server*"]
+exclude = ["tests*", "scripts*", "migrations*", "docs*", "prototyping*"]
+
+[tool.setuptools.package-data]
+graphora_server = [
+    "baml_src/*.baml",
+    "templates/ontologies/*.yaml",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

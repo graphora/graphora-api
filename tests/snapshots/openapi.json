@@ -128,7 +128,7 @@
           },
           "files": {
             "items": {
-              "format": "binary",
+              "contentMediaType": "application/octet-stream",
               "type": "string"
             },
             "title": "Files",
@@ -163,7 +163,7 @@
           },
           "files": {
             "items": {
-              "format": "binary",
+              "contentMediaType": "application/octet-stream",
               "type": "string"
             },
             "title": "Files",
@@ -259,6 +259,7 @@
           "metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -300,6 +301,7 @@
             "type": "array"
           },
           "session_context": {
+            "additionalProperties": true,
             "description": "Session context",
             "title": "Session Context",
             "type": "object"
@@ -335,6 +337,7 @@
             "type": "object"
           },
           "chunking_estimate": {
+            "additionalProperties": true,
             "title": "Chunking Estimate",
             "type": "object"
           },
@@ -343,6 +346,7 @@
             "type": "number"
           },
           "document_stats": {
+            "additionalProperties": true,
             "title": "Document Stats",
             "type": "object"
           },
@@ -1176,6 +1180,7 @@
             "title": "Failure Code"
           },
           "failure_details": {
+            "additionalProperties": true,
             "title": "Failure Details",
             "type": "object"
           },
@@ -1334,6 +1339,7 @@
             "type": "string"
           },
           "properties": {
+            "additionalProperties": true,
             "description": "Properties of the relationship",
             "title": "Properties",
             "type": "object"
@@ -1411,6 +1417,7 @@
             "type": "string"
           },
           "properties": {
+            "additionalProperties": true,
             "description": "Edge properties",
             "title": "Properties",
             "type": "object"
@@ -1536,6 +1543,7 @@
             "type": "array"
           },
           "details": {
+            "additionalProperties": true,
             "title": "Details",
             "type": "object"
           },
@@ -1673,6 +1681,7 @@
             "type": "array"
           },
           "metadata": {
+            "additionalProperties": true,
             "description": "Metadata about the graph",
             "title": "Metadata",
             "type": "object"
@@ -1785,6 +1794,7 @@
           "cost_limit_usd": {
             "anyOf": [
               {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
                 "type": "string"
               },
               {
@@ -1796,6 +1806,7 @@
           },
           "current_cost_usd": {
             "description": "Current cost",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Current Cost Usd",
             "type": "string"
           },
@@ -1841,6 +1852,7 @@
           "remaining_cost_usd": {
             "anyOf": [
               {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
                 "type": "string"
               },
               {
@@ -2026,6 +2038,7 @@
           },
           "input_price_per_1k_tokens": {
             "description": "Input token price per 1K",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Input Price Per 1K Tokens",
             "type": "string"
           },
@@ -2078,6 +2091,7 @@
           },
           "output_price_per_1k_tokens": {
             "description": "Output token price per 1K",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Output Price Per 1K Tokens",
             "type": "string"
           },
@@ -2217,6 +2231,7 @@
             "title": "Labels"
           },
           "properties": {
+            "additionalProperties": true,
             "description": "Properties of the node",
             "title": "Properties",
             "type": "object"
@@ -2283,6 +2298,7 @@
             "type": "string"
           },
           "properties": {
+            "additionalProperties": true,
             "description": "Node properties",
             "title": "Properties",
             "type": "object"
@@ -2378,6 +2394,7 @@
           "data": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2720,6 +2737,7 @@
             "type": "string"
           },
           "validation_config": {
+            "additionalProperties": true,
             "description": "Configuration used for validation",
             "title": "Validation Config",
             "type": "object"
@@ -2980,6 +2998,7 @@
             "type": "number"
           },
           "context": {
+            "additionalProperties": true,
             "description": "Additional context for the violation",
             "title": "Context",
             "type": "object"
@@ -3196,6 +3215,7 @@
           "validation": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3219,6 +3239,7 @@
           "metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3495,6 +3516,7 @@
           "data": {
             "additionalProperties": {
               "items": {
+                "additionalProperties": true,
                 "type": "object"
               },
               "type": "array"
@@ -3622,6 +3644,7 @@
           "options": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3669,6 +3692,7 @@
           "metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3937,6 +3961,7 @@
           "error_details": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4041,6 +4066,7 @@
           "initial_context": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4463,6 +4489,7 @@
           "daily_usage": {
             "description": "Daily usage breakdown",
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Daily Usage",
@@ -4478,11 +4505,13 @@
           },
           "estimated_total_cost_usd": {
             "description": "Estimated total cost",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Estimated Total Cost Usd",
             "type": "string"
           },
           "model_usage": {
             "additionalProperties": {
+              "additionalProperties": true,
               "type": "object"
             },
             "description": "Usage by model",
@@ -4504,6 +4533,7 @@
           "success_rate": {
             "anyOf": [
               {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
                 "type": "string"
               },
               {
@@ -4711,6 +4741,7 @@
           "metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4754,6 +4785,7 @@
           "sessions": {
             "description": "User's chat sessions",
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Sessions",
@@ -4768,6 +4800,13 @@
       },
       "ValidationError": {
         "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
           "loc": {
             "items": {
               "anyOf": [
@@ -4812,6 +4851,7 @@
           "context": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4964,6 +5004,7 @@
           "context": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -6049,6 +6090,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Available Strategies Api V1 Chunking Strategies Get",
                   "type": "object"
                 }
@@ -6124,6 +6166,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Validate Chunking Config Api V1 Chunking Validate Post",
                   "type": "object"
                 }
@@ -6794,6 +6837,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Merge Statistics Api Api V1 Merge Statistics  Merge Id  Get",
                   "type": "object"
                 }
@@ -6920,6 +6964,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Changed Props",
                 "type": "object"
               }
@@ -8349,6 +8394,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Delete Schema Api V1 Schema  Schema Id  Delete",
                   "type": "object"
                 }

@@ -32,4 +32,4 @@ RUN addgroup --system appuser \
 USER appuser
 
 ENTRYPOINT ["/entrypoint.dev.sh"]
-CMD ["uv", "run", "uvicorn", "graphora_server.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uv", "run", "graphora-server", "serve", "--host", "0.0.0.0", "--port", "8000", "--reload"]
