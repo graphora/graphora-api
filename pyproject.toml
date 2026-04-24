@@ -28,7 +28,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "python-magic>=0.4.27",
     "python-dotenv>=1.0.1",
-    "PyPDF2==3.0.1",
+    "pypdf>=4.0.0",
     "PyJWT[crypto]>=2.9.0",
     "cryptography>=42.0.0",
     "pydantic>=2.6.1",

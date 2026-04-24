@@ -35,7 +35,7 @@ from graphora_server.services.transform.status_models import (
 )
 from graphora_server.services.usage_tracking import usage_tracking_service
 from graphora_server.schemas.usage import DocumentUsageRequest, ProcessingStatus
-from PyPDF2 import PdfReader, PdfWriter
+from pypdf import PdfReader, PdfWriter
 
 progress_tracker = ProgressTracker()
 
@@ -199,7 +199,7 @@ async def document_transformation_flow(
                 page_count = 1  # Default
                 if path.suffix.lower() == ".pdf":
                     try:
-                        from PyPDF2 import PdfReader
+                        from pypdf import PdfReader
 
                         reader = PdfReader(file_path)
                         page_count = len(reader.pages)
