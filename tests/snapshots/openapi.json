@@ -176,6 +176,35 @@
         "title": "Body_upload_documents_auto_schema_api_v1_transform_upload_post",
         "type": "object"
       },
+      "Body_upload_documents_schemaless_api_v1_transform_schemaless_upload_post": {
+        "properties": {
+          "chunking_config": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "JSON string of chunking configuration",
+            "title": "Chunking Config"
+          },
+          "files": {
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Files",
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "Body_upload_documents_schemaless_api_v1_transform_schemaless_upload_post",
+        "type": "object"
+      },
       "ChangeLog": {
         "description": "Model for change logs",
         "properties": {
@@ -8674,6 +8703,53 @@
         ]
       }
     },
+    "/api/v1/transform/schemaless/upload": {
+      "post": {
+        "description": "Start an extraction without pre-committing to a schema.\n\nUnlike ``/transform/upload`` (which peeks at the document text\nto infer an ontology BEFORE extraction) this endpoint uses the\ndefault generic schema to run extraction, then leaves post-hoc\nontology refinement to the agent/user via:\n\n    GET  /transform/{id}/inferred-ontology   (preview)\n    POST /transform/{id}/finalize-ontology   (save the refinement)\n\nEffect on the pipeline: the LLM is not biased by a pre-inferred\ncategory list \u2014 it extracts into broad buckets (Person,\nOrganization, Concept, Entity) and the specific refined types\nemerge from what was actually surfaced.",
+        "operationId": "upload_documents_schemaless_api_v1_transform_schemaless_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_documents_schemaless_api_v1_transform_schemaless_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransformInitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Documents Schemaless",
+        "tags": [
+          "Transform"
+        ]
+      }
+    },
     "/api/v1/transform/status/{transform_id}": {
       "get": {
         "description": "Get detailed transformation status\n\nArgs:\n    transform_id: Transformation ID to get status for\n    user_id: User's ID (from header)\n    include_metrics: Whether to include resource metrics\n\nReturns:\n    DetailedTransformStatus with current progress\n\nRaises:\n    HTTPException: If transform not found or other error",
@@ -8878,6 +8954,98 @@
           }
         ],
         "summary": "Upload Documents",
+        "tags": [
+          "Transform"
+        ]
+      }
+    },
+    "/api/v1/transform/{transform_id}/finalize-ontology": {
+      "post": {
+        "description": "Run post-hoc ontology inference and persist the result.\n\nCompanion to ``GET /transform/{id}/inferred-ontology`` \u2014 same\ninference, but creates an ontology row so the user can reference\nit by id, edit it via the ontology endpoints, or re-extract\nagainst it.\n\nReturns the new ``ontology_id`` + full YAML + stats.",
+        "operationId": "finalize_inferred_ontology_api_v1_transform__transform_id__finalize_ontology_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transform_id",
+            "required": true,
+            "schema": {
+              "title": "Transform Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Finalize Inferred Ontology",
+        "tags": [
+          "Transform"
+        ]
+      }
+    },
+    "/api/v1/transform/{transform_id}/inferred-ontology": {
+      "get": {
+        "description": "Run post-hoc ontology inference on a completed extraction.\n\nUnlike the pre-extraction auto-schema path, this endpoint runs\nAFTER extraction and refines the ontology from emerged types.\nSide-effect-free: the response carries the YAML inline but the\nontology is not persisted. Callers that want to save it should\nPOST the YAML to the ontology endpoint explicitly.\n\nArgs:\n    transform_id: Completed transform to analyze.\n\nReturns:\n    JSON: {ontology_yaml: str, ontology: dict, stats: {...}}",
+        "operationId": "get_inferred_ontology_api_v1_transform__transform_id__inferred_ontology_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transform_id",
+            "required": true,
+            "schema": {
+              "title": "Transform Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Inferred Ontology",
         "tags": [
           "Transform"
         ]
