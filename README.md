@@ -217,7 +217,7 @@ Expose Graphora as an MCP (Model Context Protocol) server so agent clients — C
 pip install 'graphora-server[mcp]'
 ```
 
-This adds the `graphora-mcp` console script.
+This adds the `graphora-mcp` console script and pulls in URL support (`[url]`) transitively so `extract_document(url=...)` works out of the box.
 
 ### Run
 

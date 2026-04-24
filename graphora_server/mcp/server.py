@@ -82,12 +82,23 @@ async def _tool_impl_get_evidence(
     transform_id: str,
     node_id: str,
 ) -> Dict[str, Any]:
-    data = await api.get_graph(transform_id, limit=_MAX_NODES_RETURNED)
+    # Paginate through the graph rather than hard-capping at 200 — a
+    # valid node_id may live on any page of a large extraction, and
+    # "not on the first page" must not look like "does not exist".
+    data = await api.find_node(transform_id, node_id)
+    if data is None:
+        return {
+            "node": None,
+            "incoming_edges": [],
+            "outgoing_edges": [],
+            "evidence": {},
+        }
+
     nodes = data.get("nodes", []) or []
     edges = data.get("edges", []) or []
 
     node = next((n for n in nodes if n.get("id") == node_id), None)
-    if node is None:
+    if node is None:  # pragma: no cover — find_node contract guarantees node presence
         return {
             "node": None,
             "incoming_edges": [],

@@ -144,6 +144,82 @@ class TestGraphEndpoints:
         await client.aclose()
 
     @pytest.mark.asyncio
+    async def test_find_node_finds_on_first_page(self) -> None:
+        # Short-circuit on the first page when the node is there.
+        call_count = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            call_count["n"] += 1
+            return httpx.Response(
+                200,
+                json={
+                    "nodes": [{"id": "n42", "label": "x", "type": "T"}],
+                    "edges": [],
+                    "total_nodes": 1,
+                    "total_edges": 0,
+                },
+            )
+
+        client = _make_client(handler)
+        result = await client.find_node("tx1", "n42")
+        assert result is not None
+        assert call_count["n"] == 1
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_find_node_paginates_until_found(self) -> None:
+        """Regression test for the 200-node cap bug.
+
+        A node living beyond the first page must still be found.
+        Simulates a graph where page 1 is full (1000 nodes, none
+        matching) and page 2 holds the target.
+        """
+        pages_served: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            skip = int(request.url.params.get("skip", "0"))
+            pages_served.append(skip)
+            if skip == 0:
+                # Full first page, target not present.
+                nodes = [
+                    {"id": f"n{i}", "label": "x", "type": "T"} for i in range(1000)
+                ]
+            elif skip == 1000:
+                nodes = [{"id": "target", "label": "hit", "type": "T"}]
+            else:
+                nodes = []
+            return httpx.Response(
+                200,
+                json={
+                    "nodes": nodes,
+                    "edges": [],
+                    "total_nodes": 1001,
+                    "total_edges": 0,
+                },
+            )
+
+        client = _make_client(handler)
+        result = await client.find_node("tx1", "target", page_size=1000)
+        assert result is not None
+        assert any(n["id"] == "target" for n in result["nodes"])
+        assert pages_served == [0, 1000]
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_find_node_returns_none_when_exhausted(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            # Always return an empty page — find_node should stop.
+            return httpx.Response(
+                200,
+                json={"nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0},
+            )
+
+        client = _make_client(handler)
+        result = await client.find_node("tx1", "missing", page_size=1000)
+        assert result is None
+        await client.aclose()
+
+    @pytest.mark.asyncio
     async def test_get_status_hits_status_endpoint(self) -> None:
         seen_paths = []
 

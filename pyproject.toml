@@ -149,9 +149,14 @@ ollama = [
 # than importing the service modules in-process — keeps the MCP
 # bootstrap light (no Postgres/Neo4j startup) and matches how
 # real users deploy it (local MCP → hosted or local Graphora URL).
+# [url] is folded in because the MCP extract_document tool
+# advertises URL input — installing [mcp] alone without it would
+# leave one of the three documented entry points broken at
+# runtime.
 mcp = [
     "mcp>=1.0.0",
     "httpx>=0.28.0",
+    "graphora-server[url]",
 ]
 
 # Per-provider LLM extras. Parallel to graphora-client's [openai] /

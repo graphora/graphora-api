@@ -15,13 +15,34 @@ import sys
 from typing import Optional, Sequence
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    # Avoid eager FastMCP import at module load — gives `--help`
-    # a chance to run (and a cleaner error) without pulling the
-    # whole mcp SDK when [mcp] isn't installed.
-    from graphora_server.mcp.server import build_server
+_INSTALL_HINT = (
+    "graphora-mcp requires the [mcp] extra. "
+    "Install with: pip install 'graphora-server[mcp]'"
+)
 
-    server = build_server()
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    # The script is registered unconditionally by
+    # [project.scripts] (so `graphora-mcp --help` is discoverable
+    # on any install) but its dependencies — httpx, mcp SDK,
+    # trafilatura — only ship with [mcp]. Deferring every import
+    # into main() lets us translate a bare ModuleNotFoundError
+    # into the same "install [mcp]" message users see everywhere
+    # else in the codebase.
+    try:
+        from graphora_server.mcp.server import build_server
+    except ImportError as exc:
+        print(f"{_INSTALL_HINT}\nUnderlying error: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        server = build_server()
+    except ImportError as exc:
+        # build_server itself imports FastMCP lazily and re-raises
+        # ImportError with its own install-hint. Surface it as-is.
+        print(str(exc), file=sys.stderr)
+        return 1
+
     server.run()
     return 0
 

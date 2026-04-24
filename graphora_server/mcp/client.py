@@ -164,6 +164,33 @@ class GraphoraClient:
         )
         return _ok(resp)
 
+    async def find_node(
+        self,
+        transform_id: str,
+        node_id: str,
+        *,
+        page_size: int = 1000,
+        max_pages: int = 10,
+    ) -> Optional[Dict[str, Any]]:
+        """Locate a node by id, paginating until found or exhausted.
+
+        The REST API has no "fetch one node" endpoint, so evidence
+        lookup has to scan. Pages are the API's natural chunk size
+        (1000), and the ceiling of ``max_pages`` covers the server's
+        hard cap of 10,000 nodes per graph. Returns the full graph
+        slice containing the node so callers can also grab its
+        edges — avoids a second roundtrip for get_evidence.
+        """
+        for page in range(max_pages):
+            skip = page * page_size
+            data = await self.get_graph(transform_id, limit=page_size, skip=skip)
+            nodes = data.get("nodes", []) or []
+            if any(n.get("id") == node_id for n in nodes):
+                return data
+            if len(nodes) < page_size:
+                break
+        return None
+
 
 def _ok(resp: httpx.Response) -> Dict[str, Any]:
     if resp.status_code >= 400:

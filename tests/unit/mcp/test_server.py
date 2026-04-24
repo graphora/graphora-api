@@ -70,6 +70,23 @@ class FakeAPIClient:
         self.calls.append(("get_graph", transform_id, limit, skip))
         return self.graph_return
 
+    async def find_node(
+        self,
+        transform_id: str,
+        node_id: str,
+        *,
+        page_size: int = 1000,
+        max_pages: int = 10,
+    ) -> Optional[Dict[str, Any]]:
+        # Walk the same data get_graph would hand out but pretend
+        # it lives across pages — lets us test get_evidence hits
+        # the pagination path without a real HTTP client.
+        self.calls.append(("find_node", transform_id, node_id))
+        nodes = self.graph_return.get("nodes", []) or []
+        if any(n.get("id") == node_id for n in nodes):
+            return self.graph_return
+        return None
+
 
 # ---- extract_document ------------------------------------------------------
 
