@@ -16,7 +16,13 @@ from typing import Optional, Sequence
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
-    import uvicorn
+    try:
+        import uvicorn
+    except ImportError as exc:  # pragma: no cover — exercised without [server]
+        raise ImportError(
+            "Running `graphora-server serve` requires the [server] extra. "
+            "Install with: pip install 'graphora-server[server]'"
+        ) from exc
 
     from graphora_server.config import settings
     from graphora_server.utils.logger import logger

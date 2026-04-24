@@ -9,39 +9,76 @@ description = "Graphora server: the extraction pipeline and HTTP API behind the 
 license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.109.2",
+    # Foundational — always installed.
+    "baml-py==0.89.0",
+    "pydantic>=2.6.1",
+    "pydantic-settings>=2.0.0",
+    "pyyaml>=6.0.1",
+    "aiofiles>=23.2.1",
+    # MIME validation. The Python package is tiny, but the underlying
+    # libmagic1 C library is opt-in; validators.py falls back to
+    # mimetypes gracefully when python-magic or libmagic is missing.
+    "python-magic>=0.4.27",
+    # LLM providers. Still in base until the PR1c harness can prove
+    # each provider is safe to move behind its own extra.
     "instructor>=1.7.0",
     "instructor[vertexai]>=1.7.0",
     "openai>=1.52.0",
-    "langchain-experimental>=0.3.4",
-    "langchain-huggingface>=0.1.2",
-    "sentence-transformers>=3.4.1",
-    "psutil>=5.9.8",
-    "neo4j>=5.27.0",
-    "pandas>=2.2.2",
-    "numpy>=1.26.4",
-    "google-cloud-aiplatform>=1.43.0",
-    "vertexai>=0.0.1",
-    "prefect>=3.2.7",
-    "pyyaml>=6.0.1",
-    "uvicorn>=0.27.1",
-    "python-multipart>=0.0.9",
-    "python-magic>=0.4.27",
-    "python-dotenv>=1.0.1",
-    "pypdf>=4.0.0",
-    "PyJWT[crypto]>=2.9.0",
-    "cryptography>=42.0.0",
-    "pydantic>=2.6.1",
-    "psycopg[binary]>=3.2.0",
-    "psycopg-pool>=3.2.0",
-    "splink==4.0.7",
     "anthropic[vertex]>=0.43.1",
     "google-genai>=1.2.0",
-    "aiofiles>=23.2.1",
-    "redis>=5.0.11",
-    "httpx>=0.28.0",
+    "google-cloud-aiplatform>=1.43.0",
+    "vertexai>=0.0.1",
+]
+
+[project.optional-dependencies]
+# HTTP server runtime. Required to run `graphora-server serve`.
+server = [
+    "fastapi>=0.109.2",
+    "uvicorn>=0.27.1",
+    "python-multipart>=0.0.9",
     "slowapi>=0.1.9",
-    "baml-py==0.89.0",
+    "prefect>=3.2.7",
+    "psutil>=5.9.8",
+    "PyJWT[crypto]>=2.9.0",
+    "cryptography>=42.0.0",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.0.1",
+]
+# Semantic chunking.
+chunking = [
+    "langchain-experimental>=0.3.4",
+    "langchain-text-splitters>=0.3.0",
+]
+# Local embeddings via HuggingFace. Pulls torch; heavy.
+embeddings = [
+    "sentence-transformers>=3.4.1",
+    "langchain-huggingface>=0.1.2",
+]
+# Entity resolution pipeline (Splink + DuckDB). Heavy.
+er = [
+    "splink==4.0.7",
+    "pandas>=2.2.2",
+    "numpy>=1.26.4",
+]
+# PDF parsing.
+pdf = [
+    "pypdf>=4.0.0",
+]
+# Graph backends.
+neo4j = [
+    "neo4j>=5.27.0",
+]
+postgres = [
+    "psycopg[binary]>=3.2.0",
+    "psycopg-pool>=3.2.0",
+]
+# Cache / progress backend.
+redis = [
+    "redis>=5.0.11",
+]
+# Convenience union. Use this for a runnable server with all features.
+all = [
+    "graphora-server[server,chunking,embeddings,er,pdf,neo4j,postgres,redis]",
 ]
 
 [project.scripts]

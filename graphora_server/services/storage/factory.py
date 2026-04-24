@@ -60,7 +60,13 @@ async def create_storage(config: StorageConfig) -> GraphStorageInterface:
                 "Neo4j storage requires uri, username, and password configuration"
             )
 
-        from graphora_server.services.storage.neo4j import Neo4jStorage
+        try:
+            from graphora_server.services.storage.neo4j import Neo4jStorage
+        except ImportError as exc:  # pragma: no cover — exercised without [neo4j]
+            raise ImportError(
+                "Neo4j storage requires the [neo4j] extra. "
+                "Install with: pip install 'graphora-server[neo4j]'"
+            ) from exc
 
         logger.info(f"Creating Neo4j storage for {config.uri}")
         return Neo4jStorage(
@@ -133,7 +139,13 @@ async def create_storage_for_user(
                 )
             db_config = user_config.prodDb
 
-        from graphora_server.services.storage.neo4j import Neo4jStorage
+        try:
+            from graphora_server.services.storage.neo4j import Neo4jStorage
+        except ImportError as exc:  # pragma: no cover — exercised without [neo4j]
+            raise ImportError(
+                "Neo4j storage requires the [neo4j] extra. "
+                "Install with: pip install 'graphora-server[neo4j]'"
+            ) from exc
 
         logger.info(f"Using Neo4j storage at {db_config.uri} for user {user_id}")
         return Neo4jStorage(

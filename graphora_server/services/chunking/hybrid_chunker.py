@@ -6,8 +6,24 @@ from enum import Enum
 import traceback
 import math
 
-from langchain_experimental.text_splitter import SemanticChunker
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# Heavy extras — lazy-imported on first use. Both symbols are used only
+# inside HybridDocumentChunker methods and as a type in a signature.
+# Install with: pip install 'graphora-server[chunking]'.
+try:
+    from langchain_experimental.text_splitter import SemanticChunker
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+except ImportError:  # pragma: no cover — exercised when [chunking] missing
+    SemanticChunker = None  # type: ignore
+    RecursiveCharacterTextSplitter = None  # type: ignore
+
+
+def _require_chunking_extras() -> None:
+    if RecursiveCharacterTextSplitter is None or SemanticChunker is None:
+        raise ImportError(
+            "Hybrid chunking requires the [chunking] extra. "
+            "Install with: pip install 'graphora-server[chunking]'"
+        )
+
 
 from graphora_server.services.chunking.models import (
     ChunkingResult,
@@ -206,10 +222,11 @@ class HybridDocumentChunker:
 
     def __init__(
         self,
-        semantic_chunker: Optional[SemanticChunker] = None,
+        semantic_chunker=None,  # type: Optional["SemanticChunker"]  — lazy import
         strategy: ChunkingStrategy = ChunkingStrategy.HYBRID,
         config: Optional[ChunkingConfig] = None,
     ):
+        _require_chunking_extras()
         self.strategy = strategy
         self.config = config
         self.classifier = DocumentClassifier()

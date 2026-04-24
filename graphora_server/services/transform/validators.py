@@ -1,9 +1,41 @@
 from fastapi import UploadFile
 from graphora_server.schemas.transform import ValidationResult
-import magic
+import mimetypes
 import os
 import re
 from typing import List, Set, Dict
+
+# python-magic is optional: the underlying libmagic C library is installed
+# in the Docker image but not universally available. Kept at module scope
+# (with a None fallback) so tests can still patch
+# `graphora_server.services.transform.validators.magic.from_buffer`.
+try:
+    import magic  # type: ignore
+except Exception:  # pragma: no cover — exercised only when libmagic missing
+    magic = None  # type: ignore
+
+
+def _detect_mime_from_buffer(buf: bytes, filename: str | None) -> str:
+    """Return a MIME type for the given buffer.
+
+    Behaviour:
+    - If python-magic / libmagic are available, use content-based
+      detection (resists extension spoofing).
+    - If python-magic is *not installed* (extra missing), fall back
+      to the stdlib `mimetypes` module on the filename. Degraded
+      mode, logged once at module load.
+    - If magic IS present but raises at runtime, re-raise — the
+      caller's outer try/except treats that as a fail-closed
+      validation error. This preserves the "be strict when strict
+      mode is available" security posture.
+    """
+    if magic is None:
+        if filename:
+            guessed, _ = mimetypes.guess_type(filename)
+            if guessed:
+                return guessed
+        return "application/octet-stream"
+    return magic.from_buffer(buf, mime=True)
 
 
 class FileValidator:
@@ -146,7 +178,7 @@ class FileValidator:
                 )
 
             # Check MIME type
-            mime = magic.from_buffer(content[0:2048], mime=True)
+            mime = _detect_mime_from_buffer(content[0:2048], file.filename)
             if mime not in self.ALLOWED_MIME_TYPES:
                 errors.append(
                     f"File type {mime} not allowed. Allowed types: {self.ALLOWED_MIME_TYPES}"

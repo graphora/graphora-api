@@ -18,10 +18,36 @@ from graphora_server.utils.logger import logger
 from graphora_server.services.llm.client import LLMClient
 from graphora_server.utils.constants import SYSTEM_PROPERTIES
 from graphora_server.config import settings
-from splink import block_on
-import splink.comparison_library as cl
-import pandas as pd
-from splink import DuckDBAPI, Linker, SettingsCreator
+
+# Entity resolution via Splink is a [er] extra: splink + pandas pull
+# duckdb and numpy; heavy for installs that don't use ER. Module scope
+# imports are retained but guarded so module load succeeds without [er];
+# any code path that actually touches Splink will call
+# _require_er_extras() first.
+try:
+    from splink import block_on, DuckDBAPI, Linker, SettingsCreator
+    import splink.comparison_library as cl
+    import pandas as pd
+except ImportError:  # pragma: no cover — exercised when [er] missing
+    block_on = None  # type: ignore
+    DuckDBAPI = None  # type: ignore
+    Linker = None  # type: ignore
+    SettingsCreator = None  # type: ignore
+    cl = None  # type: ignore
+    pd = None  # type: ignore
+
+
+def _require_er_extras() -> None:
+    if any(
+        symbol is None
+        for symbol in (block_on, DuckDBAPI, Linker, SettingsCreator, cl, pd)
+    ):
+        raise ImportError(
+            "Entity resolution requires the [er] extra. "
+            "Install with: pip install 'graphora-server[er]'"
+        )
+
+
 import logging
 import copy
 import traceback
@@ -1995,6 +2021,7 @@ def _create_blocking_rules(
     entity_type=None,
     parsed_ontology=None,
 ):
+    _require_er_extras()
     """
     Create blocking rules for Splink based on property columns.
 
@@ -2133,6 +2160,7 @@ def _create_blocking_rules(
 
 
 def _run_splink_deduplication(df, comparisons, blocking_rules, threshold):
+    _require_er_extras()
     """
     Run Splink deduplication on the prepared DataFrame.
 

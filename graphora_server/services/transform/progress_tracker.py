@@ -7,7 +7,10 @@ import shutil
 from pathlib import Path
 
 import psutil
-import redis
+try:
+    import redis
+except ImportError:  # pragma: no cover — exercised without [redis] extra
+    redis = None  # type: ignore
 from prefect import get_client
 
 from graphora_server.services.transform.status_models import (

@@ -1,7 +1,10 @@
 from contextlib import asynccontextmanager
 
 import httpx
-import redis.asyncio as redis_async
+try:
+    import redis.asyncio as redis_async
+except ImportError:  # pragma: no cover — exercised without [redis] extra
+    redis_async = None  # type: ignore
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -163,15 +166,18 @@ async def readiness_check():
     checks = {}
 
     # Redis probe
-    try:
-        redis_client = redis_async.from_url(
-            settings.REDIS_URL, encoding="utf-8", decode_responses=True
-        )
-        await redis_client.ping()
-        checks["redis"] = {"status": "ok"}
-        await redis_client.close()
-    except Exception as exc:  # pragma: no cover - best-effort probing
-        checks["redis"] = {"status": "error", "detail": str(exc)}
+    if redis_async is None:
+        checks["redis"] = {"status": "skipped", "detail": "redis extra not installed"}
+    else:
+        try:
+            redis_client = redis_async.from_url(
+                settings.REDIS_URL, encoding="utf-8", decode_responses=True
+            )
+            await redis_client.ping()
+            checks["redis"] = {"status": "ok"}
+            await redis_client.close()
+        except Exception as exc:  # pragma: no cover - best-effort probing
+            checks["redis"] = {"status": "error", "detail": str(exc)}
 
     # Prefect API probe (best-effort)
     try:

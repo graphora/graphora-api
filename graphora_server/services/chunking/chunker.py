@@ -7,8 +7,35 @@ try:  # Optional dependency; seed when available
 except Exception:  # pragma: no cover - numpy optional for deterministic seeding
     np = None
 
-from langchain_experimental.text_splitter import SemanticChunker
-from langchain_huggingface.embeddings import HuggingFaceEmbeddings
+# langchain_experimental + langchain_huggingface are heavy (pull torch
+# transitively via sentence-transformers). Lazy-imported on first use
+# in _get_cached_embeddings / the chunker entry point so module import
+# stays cheap and graphora-server[chunking,embeddings] are honest extras.
+SemanticChunker = None  # type: ignore  # populated lazily
+HuggingFaceEmbeddings = None  # type: ignore  # populated lazily
+
+
+def _require_chunking_extras() -> None:
+    """Import chunking heavy deps on first use, or raise an install hint."""
+    global SemanticChunker, HuggingFaceEmbeddings
+    if SemanticChunker is not None and HuggingFaceEmbeddings is not None:
+        return
+    try:
+        from langchain_experimental.text_splitter import (
+            SemanticChunker as _SemanticChunker,
+        )
+        from langchain_huggingface.embeddings import (
+            HuggingFaceEmbeddings as _HuggingFaceEmbeddings,
+        )
+    except ImportError as exc:  # pragma: no cover — exercised when extras missing
+        raise ImportError(
+            "Chunking requires the [chunking] and [embeddings] extras. "
+            "Install with: pip install 'graphora-server[chunking,embeddings]'"
+        ) from exc
+    SemanticChunker = _SemanticChunker
+    HuggingFaceEmbeddings = _HuggingFaceEmbeddings
+
+
 from graphora_server.services.chunking.models import (
     ChunkingResult,
     ChunkMetadata,
@@ -42,6 +69,7 @@ def _get_cached_embeddings():
     """Get or create cached embedding model"""
     global _embedding_cache
     if _embedding_cache is None:
+        _require_chunking_extras()
         logger.info(f"Initializing embedding model cache: {settings.EMBEDDING_MODEL}")
         _embedding_cache = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
         logger.info("Embedding model cached successfully")
@@ -54,6 +82,7 @@ def _get_cached_text_splitter():
     if _text_splitter_cache is None:
         logger.info("Initializing semantic text splitter cache")
         embeddings = _get_cached_embeddings()
+        _require_chunking_extras()
         _text_splitter_cache = SemanticChunker(
             embeddings=embeddings,
             breakpoint_threshold_type="gradient",
@@ -66,6 +95,7 @@ def _get_cached_text_splitter():
 def _create_semantic_chunker_with_config(config: ChunkingConfig):
     """Create a semantic chunker with specific configuration"""
     embeddings = _get_cached_embeddings()
+    _require_chunking_extras()
 
     # Create semantic chunker with configuration
     semantic_chunker = SemanticChunker(
