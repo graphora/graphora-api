@@ -235,8 +235,19 @@ async def track_gemini_usage(
     operation_context: Optional[str] = None,
     request_timestamp: Optional[datetime] = None,
     response_timestamp: Optional[datetime] = None,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
 ):
-    """Track Gemini API usage after a call is made"""
+    """Track Gemini API usage after a call is made.
+
+    Usage resolution order:
+    1. If `response` is a Gemini/OpenAI-shaped object with usage metadata,
+       extract tokens from it (the common synchronous case).
+    2. Otherwise, use the explicit `input_tokens` / `output_tokens` kwargs.
+       Streaming callers typically pass `response=None` and provide
+       manual token estimates because the streamed chunks don't expose a
+       consolidated `usage_metadata`.
+    """
     tracker = LLMUsageTracker(
         user_id=user_id,
         model_provider=ModelProvider.GEMINI,
@@ -249,7 +260,16 @@ async def track_gemini_usage(
 
     tracker.request_timestamp = request_timestamp or datetime.now(timezone.utc)
     tracker.response_timestamp = response_timestamp or datetime.now(timezone.utc)
-    tracker.set_usage_from_response(response)
+
+    if response is not None:
+        tracker.set_usage_from_response(response)
+
+    # Apply explicit token overrides if the response didn't carry usage
+    # metadata (streaming path).
+    if (tracker.input_tokens == 0 and tracker.output_tokens == 0) and (
+        input_tokens is not None or output_tokens is not None
+    ):
+        tracker.set_token_usage(int(input_tokens or 0), int(output_tokens or 0))
 
     await tracker._record_usage()
 
