@@ -1351,14 +1351,18 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "anthropic", extra = ["vertex"] },
     { name = "cryptography" },
     { name = "fastapi" },
+    { name = "google-cloud-aiplatform" },
+    { name = "google-genai" },
     { name = "httpx" },
     { name = "langchain-experimental" },
     { name = "langchain-huggingface" },
     { name = "langchain-text-splitters" },
     { name = "neo4j" },
     { name = "numpy" },
+    { name = "openai" },
     { name = "pandas" },
     { name = "prefect" },
     { name = "psutil" },
@@ -1373,6 +1377,10 @@ all = [
     { name = "slowapi" },
     { name = "splink" },
     { name = "uvicorn" },
+    { name = "vertexai" },
+]
+anthropic = [
+    { name = "anthropic", extra = ["vertex"] },
 ]
 chunking = [
     { name = "langchain-experimental" },
@@ -1387,8 +1395,14 @@ er = [
     { name = "pandas" },
     { name = "splink" },
 ]
+gemini = [
+    { name = "google-genai" },
+]
 neo4j = [
     { name = "neo4j" },
+]
+openai = [
+    { name = "openai" },
 ]
 pdf = [
     { name = "pypdf" },
@@ -1416,6 +1430,10 @@ server = [
     { name = "slowapi" },
     { name = "uvicorn" },
 ]
+vertexai = [
+    { name = "google-cloud-aiplatform" },
+    { name = "vertexai" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1435,13 +1453,16 @@ dev = [
 requires-dist = [
     { name = "aiofiles", specifier = ">=23.2.1" },
     { name = "anthropic", extras = ["vertex"], specifier = ">=0.43.1" },
+    { name = "anthropic", extras = ["vertex"], marker = "extra == 'anthropic'", specifier = ">=0.43.1" },
     { name = "baml-py", specifier = "==0.89.0" },
     { name = "cryptography", marker = "extra == 'server'", specifier = ">=42.0.0" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.109.2" },
     { name = "google-cloud-aiplatform", specifier = ">=1.43.0" },
+    { name = "google-cloud-aiplatform", marker = "extra == 'vertexai'", specifier = ">=1.43.0" },
     { name = "google-genai", specifier = ">=1.2.0" },
+    { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.2.0" },
     { name = "graphora-server", extras = ["pdf", "neo4j", "postgres"], marker = "extra == 'server'" },
-    { name = "graphora-server", extras = ["server", "chunking", "embeddings", "er", "pdf", "neo4j", "postgres", "redis"], marker = "extra == 'all'" },
+    { name = "graphora-server", extras = ["server", "chunking", "embeddings", "er", "pdf", "neo4j", "postgres", "redis", "openai", "anthropic", "gemini", "vertexai"], marker = "extra == 'all'" },
     { name = "httpx", marker = "extra == 'server'", specifier = ">=0.28.0" },
     { name = "instructor", specifier = ">=1.7.0" },
     { name = "instructor", extras = ["vertexai"], specifier = ">=1.7.0" },
@@ -1451,6 +1472,7 @@ requires-dist = [
     { name = "neo4j", marker = "extra == 'neo4j'", specifier = ">=5.27.0" },
     { name = "numpy", marker = "extra == 'er'", specifier = ">=1.26.4" },
     { name = "openai", specifier = ">=1.52.0" },
+    { name = "openai", marker = "extra == 'openai'", specifier = ">=1.52.0" },
     { name = "pandas", marker = "extra == 'er'", specifier = ">=2.2.2" },
     { name = "prefect", marker = "extra == 'server'", specifier = ">=3.2.7" },
     { name = "psutil", marker = "extra == 'server'", specifier = ">=5.9.8" },
@@ -1470,6 +1492,7 @@ requires-dist = [
     { name = "splink", marker = "extra == 'er'", specifier = "==4.0.7" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.27.1" },
     { name = "vertexai", specifier = ">=0.0.1" },
+    { name = "vertexai", marker = "extra == 'vertexai'", specifier = ">=0.0.1" },
 ]
 
 [package.metadata.requires-dev]

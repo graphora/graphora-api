@@ -88,9 +88,35 @@ postgres = [
 redis = [
     "redis>=5.0.11",
 ]
+
+# Per-provider LLM extras. Parallel to graphora-client's [openai] /
+# [anthropic] / [gemini] naming.
+#
+# The underlying SDK packages are ALSO still in base dependencies
+# today: BAML may dynamically import provider clients at runtime
+# based on config, and `rg` can't see those imports. Once PR1c's
+# provider E2E harness lands, we move these packages out of base
+# one-at-a-time (each gated by the harness) so the provider extras
+# become the only place they're declared. Until then, installing
+# `graphora-server[openai]` is a no-op beyond making the intent
+# explicit — openai is already installed via base.
+openai = [
+    "openai>=1.52.0",
+]
+anthropic = [
+    "anthropic[vertex]>=0.43.1",
+]
+gemini = [
+    "google-genai>=1.2.0",
+]
+vertexai = [
+    "vertexai>=0.0.1",
+    "google-cloud-aiplatform>=1.43.0",
+]
+
 # Convenience union. Use this for a runnable server with all features.
 all = [
-    "graphora-server[server,chunking,embeddings,er,pdf,neo4j,postgres,redis]",
+    "graphora-server[server,chunking,embeddings,er,pdf,neo4j,postgres,redis,openai,anthropic,gemini,vertexai]",
 ]
 
 [project.scripts]
