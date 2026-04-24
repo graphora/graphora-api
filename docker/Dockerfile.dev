@@ -13,6 +13,7 @@ RUN apt-get update \
         build-essential \
         curl \
         git \
+        libmagic1 \
         libpq-dev \
         pkg-config \
     && pip install --no-cache-dir --upgrade pip \
