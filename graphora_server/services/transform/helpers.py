@@ -2357,7 +2357,7 @@ def _create_deduplicated_entities(entities, id_to_representative):
 
 def _run_splink_deduplication_batched(
     entities_data: List[Dict[str, Any]],
-    df: pd.DataFrame,
+    df: "pd.DataFrame",  # quoted: pd is lazy-imported and may be None until [er] is installed
     comparisons: List,
     blocking_rules: List,
     threshold: float,
