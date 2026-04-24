@@ -19,12 +19,28 @@ dependencies = [
     # libmagic1 C library is opt-in; validators.py falls back to
     # mimetypes gracefully when python-magic or libmagic is missing.
     "python-magic>=0.4.27",
-    # LLM providers. Still in base until the PR1c harness can prove
-    # each provider is safe to move behind its own extra.
-    "instructor>=1.7.0",
-    "instructor[vertexai]>=1.7.0",
+    # LLM providers: only google-genai and openai stay in base today.
+    # google-genai is the active BAML path (utils/baml_helper.py only
+    # constructs google-ai clients) and graphora_server.services.llm.client
+    # imports from google.genai directly. openai is still here because
+    # the ai_config_service references the provider by string and we
+    # haven't yet proved no fallback path touches the SDK — a future
+    # pass with the provider E2E harness gating will move it to
+    # [openai] alongside a test_openai.py that exercises BAML.
+    #
+    # Removed from base (no Python imports, no BAML client):
+    #   anthropic[vertex]       → now only in [anthropic]
+    #   instructor              → dead (BAML replaces it)
+    #   instructor[vertexai]    → dead
+    #
+    # Still in base pending a paired BAML-cleanup pass:
+    #   vertexai                → clients.baml declares a legacy
+    #                             VertexAI client; removing the SDK
+    #                             without removing the BAML client
+    #                             would break anyone who flips the
+    #                             client_registry.set_primary switch.
+    #   google-cloud-aiplatform → transitive of vertexai
     "openai>=1.52.0",
-    "anthropic[vertex]>=0.43.1",
     "google-genai>=1.2.0",
     "google-cloud-aiplatform>=1.43.0",
     "vertexai>=0.0.1",
