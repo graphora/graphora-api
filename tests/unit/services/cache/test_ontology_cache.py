@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.services.cache import OntologyCache
+from graphora_server.services.cache import OntologyCache
 
 
 class TestOntologyCache:

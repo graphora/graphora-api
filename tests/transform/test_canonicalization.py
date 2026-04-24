@@ -1,8 +1,8 @@
 import pytest
 from types import SimpleNamespace
 
-from app.services.transform.models import BaseNode
-from app.services.transform.helpers import (
+from graphora_server.services.transform.models import BaseNode
+from graphora_server.services.transform.helpers import (
     _build_canonical_properties,
     _prepare_entities_for_deduplication,
     _create_splink_dataframe,
@@ -10,13 +10,13 @@ from app.services.transform.helpers import (
     _create_blocking_rules,
     transform_as_relationships,
 )
-from app.utils.constants import SYSTEM_PROPERTIES
-from app.config import settings
+from graphora_server.utils.constants import SYSTEM_PROPERTIES
+from graphora_server.config import settings
 
 
 @pytest.fixture(autouse=True)
 def stub_splink(monkeypatch):
-    import app.services.transform.helpers as helpers
+    import graphora_server.services.transform.helpers as helpers
 
     class DummyComparison:
         def __init__(self, column: str, kind: str, levels: int):

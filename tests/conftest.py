@@ -24,7 +24,7 @@ def _ensure_project_on_path() -> None:
 
 
 def _load_settings():
-    from app.config import settings as app_settings
+    from graphora_server.config import settings as app_settings
 
     return app_settings
 
@@ -334,7 +334,7 @@ _install_langchain_and_splink_stubs()
 
 @pytest.fixture(autouse=True)
 def _reset_merge_learning_service():
-    from app.services.merge.learning import merge_learning_service
+    from graphora_server.services.merge.learning import merge_learning_service
 
     merge_learning_service.reset()
     yield

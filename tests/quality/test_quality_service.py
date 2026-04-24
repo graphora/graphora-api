@@ -2,14 +2,14 @@ from datetime import datetime
 
 import pytest
 
-from app.services.quality.models import (
+from graphora_server.services.quality.models import (
     QualityMetrics,
     QualityResults,
     QualitySeverity,
     QualityRuleType,
     QualityViolation,
 )
-from app.services.quality.service import QualityService
+from graphora_server.services.quality.service import QualityService
 
 
 class DummyNeo4jStorage:

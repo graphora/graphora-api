@@ -11,7 +11,7 @@ import pytest
 @pytest.fixture
 def sample_company_node():
     """Standard Company node for testing."""
-    from app.services.transform.models import BaseNode, NodeProvenance
+    from graphora_server.services.transform.models import BaseNode, NodeProvenance
 
     return BaseNode(
         id="company-123",
@@ -39,7 +39,7 @@ def sample_company_node():
 @pytest.fixture
 def sample_person_node():
     """Standard Person node for testing."""
-    from app.services.transform.models import BaseNode, NodeProvenance
+    from graphora_server.services.transform.models import BaseNode, NodeProvenance
 
     return BaseNode(
         id="person-456",
@@ -67,7 +67,7 @@ def sample_person_node():
 @pytest.fixture
 def sample_base_node():
     """Minimal BaseNode for generic testing."""
-    from app.services.transform.models import BaseNode
+    from graphora_server.services.transform.models import BaseNode
 
     return BaseNode(
         id="node-789",
@@ -79,7 +79,7 @@ def sample_base_node():
 @pytest.fixture
 def node_factory():
     """Factory fixture for creating custom nodes."""
-    from app.services.transform.models import BaseNode, NodeProvenance
+    from graphora_server.services.transform.models import BaseNode, NodeProvenance
     import uuid
 
     def create_node(
@@ -128,7 +128,7 @@ def create_test_node(
     confidence: float = 0.9,
 ):
     """Create a test node outside of pytest fixtures."""
-    from app.services.transform.models import BaseNode, NodeProvenance
+    from graphora_server.services.transform.models import BaseNode, NodeProvenance
 
     canonical_props = {}
     for key, value in properties.items():

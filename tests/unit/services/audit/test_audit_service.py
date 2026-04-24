@@ -13,7 +13,7 @@ import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
-from app.services.audit_service import (
+from graphora_server.services.audit_service import (
     AuditService,
     OperationType,
     OperationStatus,
@@ -28,7 +28,7 @@ from app.services.audit_service import (
 @pytest.fixture
 def mock_db():
     """Mock the database module."""
-    with patch("app.services.audit_service.db") as mock:
+    with patch("graphora_server.services.audit_service.db") as mock:
         mock.fetchrow = AsyncMock()
         mock.fetch = AsyncMock()
         yield mock
@@ -37,7 +37,7 @@ def mock_db():
 @pytest.fixture
 def mock_settings():
     """Mock settings for audit service."""
-    with patch("app.services.audit_service.settings") as mock:
+    with patch("graphora_server.services.audit_service.settings") as mock:
         mock.DATABASE_URL = "postgresql://test:test@localhost/test"
         mock.resolved_database_url = None
         mock.test_mode = False
@@ -100,7 +100,7 @@ class TestAuditServiceInitialization:
 
     def test_should_raise_error_when_no_database_configured_in_production(self):
         """Should raise ValueError when no database URL in non-test mode."""
-        with patch("app.services.audit_service.settings") as mock_settings:
+        with patch("graphora_server.services.audit_service.settings") as mock_settings:
             mock_settings.DATABASE_URL = None
             mock_settings.resolved_database_url = None
             mock_settings.test_mode = False
@@ -110,7 +110,7 @@ class TestAuditServiceInitialization:
 
     def test_should_allow_no_database_in_test_mode(self):
         """Should allow initialization without database in test mode."""
-        with patch("app.services.audit_service.settings") as mock_settings:
+        with patch("graphora_server.services.audit_service.settings") as mock_settings:
             mock_settings.DATABASE_URL = None
             mock_settings.resolved_database_url = None
             mock_settings.test_mode = True

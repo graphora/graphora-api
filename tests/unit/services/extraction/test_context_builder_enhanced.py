@@ -2,9 +2,9 @@
 
 import pytest
 
-from app.services.extraction.context_builder import EnhancedContextBuilder
-from app.services.extraction.config import ContextConfig
-from app.services.transform.models import BaseNode
+from graphora_server.services.extraction.context_builder import EnhancedContextBuilder
+from graphora_server.services.extraction.config import ContextConfig
+from graphora_server.services.transform.models import BaseNode
 
 
 @pytest.fixture

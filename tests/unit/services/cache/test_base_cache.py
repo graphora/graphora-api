@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.services.cache import (
+from graphora_server.services.cache import (
     CacheConfig,
     CacheStats,
     InMemoryCache,

@@ -6,12 +6,12 @@ Ensures domain-agnostic behavior - rules derived from ontology metadata.
 
 import pytest
 
-from app.services.entity_resolution.blocking import (
+from graphora_server.services.entity_resolution.blocking import (
     BlockingRuleGenerator,
     LSHBlocker,
     generate_blocking_rules_from_ontology,
 )
-from app.services.entity_resolution.models import BlockingRule
+from graphora_server.services.entity_resolution.models import BlockingRule
 
 
 # ============================================================

@@ -1,8 +1,8 @@
 [run]
 branch = True
-source = app
+source = graphora_server
 omit =
-    app/__main__.py
+    graphora_server/__main__.py
     **/__init__.py
 
 [report]

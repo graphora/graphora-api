@@ -70,7 +70,7 @@ class RelationshipFactory:
         Returns:
             RelationshipInstance.
         """
-        from app.services.transform.models import RelationshipInstance, NodeProvenance
+        from graphora_server.services.transform.models import RelationshipInstance, NodeProvenance
 
         rel_id = rel_id or cls._next_id()
         source_id = source_id or f"source-{cls._counter}"

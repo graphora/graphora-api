@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app.auth import get_current_user_id
-from app.services.audit_service import OperationType
+from graphora_server.main import app
+from graphora_server.auth import get_current_user_id
+from graphora_server.services.audit_service import OperationType
 
 
 # ============================================================
@@ -34,7 +34,7 @@ def test_client():
 @pytest.fixture
 def mock_audit_service():
     """Mock audit service."""
-    with patch("app.api.audit.audit_service") as mock:
+    with patch("graphora_server.api.audit.audit_service") as mock:
         mock.get_audit_summary = AsyncMock()
         mock.get_user_audit_trail = AsyncMock()
         yield mock
@@ -43,7 +43,7 @@ def mock_audit_service():
 @pytest.fixture
 def mock_db():
     """Mock database module."""
-    with patch("app.api.audit.db") as mock:
+    with patch("graphora_server.api.audit.db") as mock:
         mock.fetch = AsyncMock()
         yield mock
 
@@ -364,11 +364,11 @@ class TestAuditAuthenticationRequirements:
         monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
         # Need to reload settings after env change
-        from app.config import Settings
+        from graphora_server.config import Settings
 
         test_settings = Settings()
 
-        with patch("app.auth.dependencies.settings", test_settings):
+        with patch("graphora_server.auth.dependencies.settings", test_settings):
             client = TestClient(app)
             response = client.get("/api/v1/audit/summary")
 
@@ -379,11 +379,11 @@ class TestAuditAuthenticationRequirements:
         """Trail endpoint should require authentication."""
         monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        from app.config import Settings
+        from graphora_server.config import Settings
 
         test_settings = Settings()
 
-        with patch("app.auth.dependencies.settings", test_settings):
+        with patch("graphora_server.auth.dependencies.settings", test_settings):
             client = TestClient(app)
             response = client.get("/api/v1/audit/trail")
 
@@ -393,11 +393,11 @@ class TestAuditAuthenticationRequirements:
         """Conflicts endpoint should require authentication."""
         monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        from app.config import Settings
+        from graphora_server.config import Settings
 
         test_settings = Settings()
 
-        with patch("app.auth.dependencies.settings", test_settings):
+        with patch("graphora_server.auth.dependencies.settings", test_settings):
             client = TestClient(app)
             response = client.get("/api/v1/audit/conflicts")
 

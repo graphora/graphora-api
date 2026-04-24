@@ -22,17 +22,17 @@ _splink_stub = _SplinkStub()
 sys.modules.setdefault("splink", _splink_stub)
 sys.modules.setdefault("splink.comparison_library", _splink_stub.comparison_library)
 
-from app.config import settings  # noqa: E402
-from app.services.transform.helpers import (  # noqa: E402
+from graphora_server.config import settings  # noqa: E402
+from graphora_server.services.transform.helpers import (  # noqa: E402
     transform_as_nodes,
     _generate_node_key,
     _make_deterministic_node_id,
 )
-from app.services.transform.graph_transformer import (  # noqa: E402
+from graphora_server.services.transform.graph_transformer import (  # noqa: E402
     _build_nodes_context,
     _build_relationships_context,
 )
-from app.services.transform.models import BaseNode, RelationshipInstance  # noqa: E402
+from graphora_server.services.transform.models import BaseNode, RelationshipInstance  # noqa: E402
 
 
 class CompanyModel(BaseModel):

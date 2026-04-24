@@ -1,9 +1,9 @@
 import pytest
 
-from app.config import settings
-from app.services.entity_ledger_service import EntityLedgerService
-from app.services.transform.models import BaseNode
-from app.services.transform.helpers import _make_canonical_node_id
+from graphora_server.config import settings
+from graphora_server.services.entity_ledger_service import EntityLedgerService
+from graphora_server.services.transform.models import BaseNode
+from graphora_server.services.transform.helpers import _make_canonical_node_id
 
 
 @pytest.fixture(autouse=True)

@@ -937,7 +937,7 @@ grpc = [
 ]
 
 [[package]]
-name = "graphora-api"
+name = "graphora-server"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

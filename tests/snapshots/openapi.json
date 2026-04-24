@@ -1190,7 +1190,7 @@
             ]
           },
           "overall_status": {
-            "$ref": "#/components/schemas/app__services__transform__status_models__TransformStatus"
+            "$ref": "#/components/schemas/graphora_server__services__transform__status_models__TransformStatus"
           },
           "resource_metrics": {
             "$ref": "#/components/schemas/ResourceMetrics"
@@ -4191,7 +4191,7 @@
             "type": "string"
           },
           "status": {
-            "$ref": "#/components/schemas/app__schemas__transform__TransformStatus"
+            "$ref": "#/components/schemas/graphora_server__schemas__transform__TransformStatus"
           },
           "upload_timestamp": {
             "format": "date-time",
@@ -4799,7 +4799,7 @@
         "title": "ValidationError",
         "type": "object"
       },
-      "app__schemas__chat__SchemaRefinementRequest": {
+      "graphora_server__schemas__chat__SchemaRefinementRequest": {
         "description": "Request model for schema refinement",
         "example": {
           "context": {
@@ -4869,7 +4869,7 @@
         "title": "SchemaRefinementRequest",
         "type": "object"
       },
-      "app__schemas__chat__SchemaRefinementResponse": {
+      "graphora_server__schemas__chat__SchemaRefinementResponse": {
         "description": "Response model for schema refinement",
         "properties": {
           "changes_made": {
@@ -4959,7 +4959,7 @@
         "title": "SchemaRefinementResponse",
         "type": "object"
       },
-      "app__schemas__schema__SchemaRefinementRequest": {
+      "graphora_server__schemas__schema__SchemaRefinementRequest": {
         "properties": {
           "context": {
             "anyOf": [
@@ -4998,7 +4998,7 @@
         "title": "SchemaRefinementRequest",
         "type": "object"
       },
-      "app__schemas__schema__SchemaRefinementResponse": {
+      "graphora_server__schemas__schema__SchemaRefinementResponse": {
         "properties": {
           "changes_made": {
             "description": "List of changes made",
@@ -5035,7 +5035,7 @@
         "title": "SchemaRefinementResponse",
         "type": "object"
       },
-      "app__schemas__transform__TransformStatus": {
+      "graphora_server__schemas__transform__TransformStatus": {
         "enum": [
           "pending",
           "validating",
@@ -5047,7 +5047,7 @@
         "title": "TransformStatus",
         "type": "string"
       },
-      "app__services__transform__status_models__TransformStatus": {
+      "graphora_server__services__transform__status_models__TransformStatus": {
         "description": "Overall status of the transformation",
         "enum": [
           "initializing",
@@ -5582,7 +5582,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/app__schemas__chat__SchemaRefinementRequest"
+                "$ref": "#/components/schemas/graphora_server__schemas__chat__SchemaRefinementRequest"
               }
             }
           },
@@ -5593,7 +5593,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/app__schemas__chat__SchemaRefinementResponse"
+                  "$ref": "#/components/schemas/graphora_server__schemas__chat__SchemaRefinementResponse"
                 }
               }
             },
@@ -8174,7 +8174,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/app__schemas__schema__SchemaRefinementRequest"
+                "$ref": "#/components/schemas/graphora_server__schemas__schema__SchemaRefinementRequest"
               }
             }
           },
@@ -8185,7 +8185,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/app__schemas__schema__SchemaRefinementResponse"
+                  "$ref": "#/components/schemas/graphora_server__schemas__schema__SchemaRefinementResponse"
                 }
               }
             },

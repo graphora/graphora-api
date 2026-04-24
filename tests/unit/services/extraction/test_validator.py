@@ -1,10 +1,10 @@
 """Unit tests for ExtractionValidator."""
 
 import pytest
-from app.services.extraction.validator import ExtractionValidator
-from app.services.extraction.config import ValidationConfig
-from app.services.extraction.models import GapType
-from app.services.transform.models import BaseNode, RelationshipInstance
+from graphora_server.services.extraction.validator import ExtractionValidator
+from graphora_server.services.extraction.config import ValidationConfig
+from graphora_server.services.extraction.models import GapType
+from graphora_server.services.transform.models import BaseNode, RelationshipInstance
 
 
 @pytest.fixture

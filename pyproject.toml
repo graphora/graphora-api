@@ -1,7 +1,7 @@
 [project]
-name = "graphora-api"
+name = "graphora-server"
 version = "0.1.0"
-description = "FastAPI-based document processing backend with knowledge graph construction"
+description = "Graphora server: the extraction pipeline and HTTP API behind the Graphora CLI + MCP client"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
@@ -55,7 +55,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["app"]
+packages = ["graphora_server"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

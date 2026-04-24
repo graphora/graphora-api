@@ -1,13 +1,13 @@
 import pytest
 
-from app.config import settings
-from app.services.chunking.config import (
+from graphora_server.config import settings
+from graphora_server.services.chunking.config import (
     ChunkingConfig,
     ChunkingStrategy as ConfigChunkingStrategy,
 )
-from app.services.chunking.hybrid_chunker import HybridDocumentChunker, ChunkingStrategy
-from app.services.transform.graph_transformer import _build_nodes_context
-from app.services.transform.models import BaseNode
+from graphora_server.services.chunking.hybrid_chunker import HybridDocumentChunker, ChunkingStrategy
+from graphora_server.services.transform.graph_transformer import _build_nodes_context
+from graphora_server.services.transform.models import BaseNode
 
 
 def _make_config(max_chunk_size: int) -> ChunkingConfig:

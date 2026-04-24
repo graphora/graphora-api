@@ -4,9 +4,9 @@ from typing import List
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.dashboard import get_current_user_id
-from app.main import app
-from app.services.quality.models import (
+from graphora_server.api.dashboard import get_current_user_id
+from graphora_server.main import app
+from graphora_server.services.quality.models import (
     QualityMetrics,
     QualityResults,
     QualityRuleType,
@@ -153,8 +153,8 @@ def dashboard_client(monkeypatch):
             return list(document_rows)
         raise AssertionError(f"Unexpected sync query: {query}")
 
-    monkeypatch.setattr("app.api.dashboard.db.fetch", fake_fetch)
-    monkeypatch.setattr("app.api.dashboard.db.sync_fetch", fake_sync_fetch)
+    monkeypatch.setattr("graphora_server.api.dashboard.db.fetch", fake_fetch)
+    monkeypatch.setattr("graphora_server.api.dashboard.db.sync_fetch", fake_sync_fetch)
 
     violation = QualityViolation(
         rule_id="Company.name.missing",
@@ -196,7 +196,7 @@ def dashboard_client(monkeypatch):
     async def _fake_quality_service(_user_id: str):
         return FakeQualityService()
 
-    monkeypatch.setattr("app.api.dashboard._get_quality_service", _fake_quality_service)
+    monkeypatch.setattr("graphora_server.api.dashboard._get_quality_service", _fake_quality_service)
 
     app.dependency_overrides[get_current_user_id] = lambda: "user-1"
     client = TestClient(app)
@@ -204,7 +204,7 @@ def dashboard_client(monkeypatch):
         yield client
     finally:
         app.dependency_overrides.pop(get_current_user_id, None)
-        import app.api.dashboard as dashboard_module
+        import graphora_server.api.dashboard as dashboard_module
 
         dashboard_module.usage_tracking_service = None
 

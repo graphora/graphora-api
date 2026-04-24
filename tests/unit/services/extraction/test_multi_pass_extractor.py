@@ -2,10 +2,10 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.services.extraction.multi_pass_extractor import MultiPassExtractor
-from app.services.extraction.config import MultiPassConfig
-from app.services.extraction.models import ExtractionGap, GapType
-from app.services.transform.models import BaseNode, RelationshipInstance
+from graphora_server.services.extraction.multi_pass_extractor import MultiPassExtractor
+from graphora_server.services.extraction.config import MultiPassConfig
+from graphora_server.services.extraction.models import ExtractionGap, GapType
+from graphora_server.services.transform.models import BaseNode, RelationshipInstance
 
 
 @pytest.fixture
@@ -347,11 +347,11 @@ class TestExtractAsync:
         # Patch transform_as_nodes and transform_as_relationships
         with (
             patch(
-                "app.services.extraction.multi_pass_extractor.transform_as_nodes",
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_nodes",
                 return_value=[],
             ),
             patch(
-                "app.services.extraction.multi_pass_extractor.transform_as_relationships",
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_relationships",
                 return_value=[],
             ),
         ):
@@ -382,11 +382,11 @@ class TestExtractAsync:
 
         with (
             patch(
-                "app.services.extraction.multi_pass_extractor.transform_as_nodes",
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_nodes",
                 return_value=[],
             ),
             patch(
-                "app.services.extraction.multi_pass_extractor.transform_as_relationships",
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_relationships",
                 return_value=[],
             ),
         ):

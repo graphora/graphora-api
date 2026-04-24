@@ -250,7 +250,7 @@ def write_openapi_snapshot(output_path: Path) -> None:
     stub_dependencies()
     _prepare_environment()
 
-    from app.main import app
+    from graphora_server.main import app
 
     schema = app.openapi()
     output_path.parent.mkdir(parents=True, exist_ok=True)

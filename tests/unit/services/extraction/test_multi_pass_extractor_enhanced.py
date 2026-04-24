@@ -3,9 +3,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.extraction.multi_pass_extractor import MultiPassExtractor
-from app.services.extraction.config import MultiPassConfig
-from app.services.transform.models import BaseNode, RelationshipInstance
+from graphora_server.services.extraction.multi_pass_extractor import MultiPassExtractor
+from graphora_server.services.extraction.config import MultiPassConfig
+from graphora_server.services.transform.models import BaseNode, RelationshipInstance
 
 
 @pytest.fixture
@@ -100,11 +100,11 @@ class TestRelationshipAwareContext:
 
         # Mock transform_as_nodes to return empty list
         with patch(
-            "app.services.extraction.multi_pass_extractor.transform_as_nodes",
+            "graphora_server.services.extraction.multi_pass_extractor.transform_as_nodes",
             return_value=[],
         ):
             with patch(
-                "app.services.extraction.multi_pass_extractor.transform_as_relationships",
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_relationships",
                 return_value=[],
             ):
                 await extractor._initial_extraction_pass(
@@ -165,15 +165,15 @@ class TestExpectedEntityTypeDetection:
 
         # Mock transform_as_nodes to return person
         with patch(
-            "app.services.extraction.multi_pass_extractor.transform_as_nodes",
+            "graphora_server.services.extraction.multi_pass_extractor.transform_as_nodes",
             return_value=[person_node],
         ):
             with patch(
-                "app.services.extraction.multi_pass_extractor.transform_as_relationships",
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_relationships",
                 return_value=[],
             ):
                 with patch(
-                    "app.services.extraction.multi_pass_extractor.logger"
+                    "graphora_server.services.extraction.multi_pass_extractor.logger"
                 ) as mock_logger:
                     await extractor._initial_extraction_pass(
                         chunks=["test chunk"],
@@ -214,11 +214,11 @@ class TestContextUpdating:
         mock_llm_client.extract_nodes_from_chunk = capture_context
 
         with patch(
-            "app.services.extraction.multi_pass_extractor.transform_as_nodes",
+            "graphora_server.services.extraction.multi_pass_extractor.transform_as_nodes",
             return_value=[],
         ):
             with patch(
-                "app.services.extraction.multi_pass_extractor.transform_as_relationships",
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_relationships",
                 return_value=[],
             ):
                 await extractor._initial_extraction_pass(
@@ -250,11 +250,11 @@ class TestProgressCallback:
             progress_calls.append((current, total))
 
         with patch(
-            "app.services.extraction.multi_pass_extractor.transform_as_nodes",
+            "graphora_server.services.extraction.multi_pass_extractor.transform_as_nodes",
             return_value=[],
         ):
             with patch(
-                "app.services.extraction.multi_pass_extractor.transform_as_relationships",
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_relationships",
                 return_value=[],
             ):
                 await extractor._initial_extraction_pass(
@@ -303,15 +303,15 @@ class TestNodeMerging:
             return [node2]
 
         with patch(
-            "app.services.extraction.multi_pass_extractor.transform_as_nodes",
+            "graphora_server.services.extraction.multi_pass_extractor.transform_as_nodes",
             side_effect=get_nodes,
         ):
             with patch(
-                "app.services.extraction.multi_pass_extractor.transform_as_relationships",
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_relationships",
                 return_value=[],
             ):
                 with patch(
-                    "app.services.extraction.multi_pass_extractor.merge_nodes",
+                    "graphora_server.services.extraction.multi_pass_extractor.merge_nodes",
                     return_value=BaseNode(
                         id="person-1",
                         type="Person",

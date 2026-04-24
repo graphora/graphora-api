@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.schema_inference import (
+from graphora_server.services.schema_inference import (
     infer_schema_from_text,
     _parse_yaml_response,
     create_auto_schema_ontology,
@@ -145,12 +145,12 @@ relationships: {}
         mock_client.models.generate_content.return_value = mock_response
 
         with patch(
-            "app.services.schema_inference.get_user_llm_credentials",
+            "graphora_server.services.schema_inference.get_user_llm_credentials",
             new_callable=AsyncMock,
             return_value=("api-key", "model-name"),
         ):
             with patch(
-                "app.services.schema_inference.create_gemini_client",
+                "graphora_server.services.schema_inference.create_gemini_client",
                 return_value=mock_client,
             ):
                 result = await infer_schema_from_text(
@@ -176,12 +176,12 @@ relationships: {}
         mock_client.models.generate_content.return_value = mock_response
 
         with patch(
-            "app.services.schema_inference.get_user_llm_credentials",
+            "graphora_server.services.schema_inference.get_user_llm_credentials",
             new_callable=AsyncMock,
             return_value=("api-key", "model-name"),
         ):
             with patch(
-                "app.services.schema_inference.create_gemini_client",
+                "graphora_server.services.schema_inference.create_gemini_client",
                 return_value=mock_client,
             ):
                 result = await infer_schema_from_text(["Sample text"], "test-user")
@@ -203,12 +203,12 @@ entities:
         mock_client.models.generate_content.return_value = mock_response
 
         with patch(
-            "app.services.schema_inference.get_user_llm_credentials",
+            "graphora_server.services.schema_inference.get_user_llm_credentials",
             new_callable=AsyncMock,
             return_value=("api-key", "model-name"),
         ):
             with patch(
-                "app.services.schema_inference.create_gemini_client",
+                "graphora_server.services.schema_inference.create_gemini_client",
                 return_value=mock_client,
             ):
                 result = await infer_schema_from_text(["Sample text"], "test-user")
@@ -236,16 +236,16 @@ relationships: {}
         mock_client.models.generate_content.return_value = mock_response
 
         with patch(
-            "app.services.schema_inference.get_user_llm_credentials",
+            "graphora_server.services.schema_inference.get_user_llm_credentials",
             new_callable=AsyncMock,
             return_value=("api-key", "model-name"),
         ):
             with patch(
-                "app.services.schema_inference.create_gemini_client",
+                "graphora_server.services.schema_inference.create_gemini_client",
                 return_value=mock_client,
             ):
                 with patch(
-                    "app.services.schema_inference.ontology_storage_service.store_ontology",
+                    "graphora_server.services.schema_inference.ontology_storage_service.store_ontology",
                     new_callable=AsyncMock,
                     return_value=True,
                 ) as mock_store:
@@ -277,16 +277,16 @@ relationships: {}
         mock_client.models.generate_content.return_value = mock_response
 
         with patch(
-            "app.services.schema_inference.get_user_llm_credentials",
+            "graphora_server.services.schema_inference.get_user_llm_credentials",
             new_callable=AsyncMock,
             return_value=("api-key", "model-name"),
         ):
             with patch(
-                "app.services.schema_inference.create_gemini_client",
+                "graphora_server.services.schema_inference.create_gemini_client",
                 return_value=mock_client,
             ):
                 with patch(
-                    "app.services.schema_inference.ontology_storage_service.store_ontology",
+                    "graphora_server.services.schema_inference.ontology_storage_service.store_ontology",
                     new_callable=AsyncMock,
                     return_value=False,
                 ):

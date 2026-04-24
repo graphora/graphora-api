@@ -1,5 +1,5 @@
 def test_create_cache_in_memory_without_redis(monkeypatch):
-    from app.services.llm import client as llm_client
+    from graphora_server.services.llm import client as llm_client
 
     monkeypatch.setattr(llm_client.settings, "LLM_CACHE_URL", None)
     cache = llm_client._create_cache("test-scope")
@@ -8,7 +8,7 @@ def test_create_cache_in_memory_without_redis(monkeypatch):
 
 
 def test_create_cache_falls_back_when_redis_initialisation_fails(monkeypatch):
-    from app.services.llm import client as llm_client
+    from graphora_server.services.llm import client as llm_client
 
     monkeypatch.setattr(llm_client.settings, "LLM_CACHE_URL", "redis://example")
 
@@ -26,7 +26,7 @@ def test_create_cache_falls_back_when_redis_initialisation_fails(monkeypatch):
 
 
 def test_create_cache_uses_redis_when_available(monkeypatch):
-    from app.services.llm import client as llm_client
+    from graphora_server.services.llm import client as llm_client
 
     sentinel = object()
 
