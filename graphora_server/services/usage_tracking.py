@@ -639,25 +639,22 @@ class UsageTrackingService:
                 model["estimated_cost_usd"] = str(model["estimated_cost_usd"])
 
             # Daily usage breakdown (simplified)
+            # `created_at` may come back as a `datetime` (Postgres TIMESTAMP)
+            # or a string (legacy paths / cached payloads). Normalize to
+            # `datetime` before comparing dates.
+            def _row_date(row: dict):
+                value = row.get("created_at")
+                if value is None:
+                    return None
+                if isinstance(value, datetime):
+                    return value.date()
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+
             daily_usage = []
             current_date = period_start.date()
             while current_date <= period_end.date():
-                day_docs = [
-                    doc
-                    for doc in doc_data
-                    if datetime.fromisoformat(
-                        doc["created_at"].replace("Z", "+00:00")
-                    ).date()
-                    == current_date
-                ]
-                day_llm = [
-                    llm
-                    for llm in llm_data
-                    if datetime.fromisoformat(
-                        llm["created_at"].replace("Z", "+00:00")
-                    ).date()
-                    == current_date
-                ]
+                day_docs = [doc for doc in doc_data if _row_date(doc) == current_date]
+                day_llm = [llm for llm in llm_data if _row_date(llm) == current_date]
 
                 daily_usage.append(
                     {
