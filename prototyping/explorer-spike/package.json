@@ -11,13 +11,13 @@
     "analyze": "vite build --mode analyze"
   },
   "dependencies": {
-    "cytoscape": "^3.30.2",
+    "@neo4j-nvl/base": "^0.3.8",
+    "@neo4j-nvl/react": "^0.3.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
-    "@types/cytoscape": "^3.21.8",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",

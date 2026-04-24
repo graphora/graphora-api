@@ -1,80 +1,80 @@
-import { useEffect, useRef } from "react";
-import cytoscape, { Core, ElementDefinition } from "cytoscape";
+import { useMemo, useRef } from "react";
+import { InteractiveNvlWrapper } from "@neo4j-nvl/react";
 import { SpikeGraph } from "./fixture";
 
 interface Props {
   graph: SpikeGraph;
+  width: number;
+  height: number;
 }
 
-// Mount Cytoscape once per graph. `data` updates that don't swap the
-// graph shape go through cy.data / cy.json; full-graph swaps rebuild
-// the elements. Layout is cose (force-directed) — switch to preset
-// if initial-layout cost dominates measured render time.
-export function GraphView({ graph }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const cyRef = useRef<Core | null>(null);
+const COLOUR_BY_TYPE: Record<string, string> = {
+  Company: "#3b82f6",
+  Person: "#10b981",
+  Transaction: "#f59e0b",
+};
 
-  useEffect(() => {
-    if (!containerRef.current) return;
+// Renders the spike fixture via NVL. Converts our abstract SpikeGraph
+// shape into the NVL (nodes, rels) tuple — NVL rels use from/to, not
+// source/target like Cytoscape. Options mirror graphora-fe's graph-viz
+// component so any perf conclusion here carries over to the real
+// product install.
+export function GraphView({ graph, width, height }: Props) {
+  const nvlRef = useRef<unknown>(null);
 
-    const elements: ElementDefinition[] = [
-      ...graph.nodes.map((n) => ({
-        data: { id: n.id, label: n.label, type: n.type },
-      })),
-      ...graph.edges.map((e) => ({
-        data: { id: e.id, source: e.source, target: e.target, label: e.label },
-      })),
-    ];
-
-    const cy = cytoscape({
-      container: containerRef.current,
-      elements,
-      // Large fixtures collapse cose almost instantly into a hairball;
-      // use a grid initial layout to keep startup cost bounded.
-      // Real Explorer will use cose-bilkent or a worker-based layout;
-      // the spike only cares about render+interaction, not beauty.
-      layout: {
-        name: graph.nodes.length > 2000 ? "grid" : "cose",
-        fit: true,
-      },
-      style: [
-        {
-          selector: "node",
-          style: {
-            "background-color": "#3b82f6",
-            "width": 8,
-            "height": 8,
-            "label": "data(label)",
-            "font-size": 6,
-            "color": "#64748b",
-            "text-opacity": 0.6,
-          },
-        },
-        {
-          selector: "edge",
-          style: {
-            "width": 0.5,
-            "line-color": "#cbd5e1",
-            "curve-style": "haystack", // cheapest edge renderer
-            "opacity": 0.5,
-          },
-        },
-      ],
-      // Perf knobs — these mirror what the real Explorer will set.
-      hideEdgesOnViewport: true,
-      textureOnViewport: true,
-      motionBlur: false,
-      pixelRatio: 1,
-      wheelSensitivity: 0.2,
-    });
-
-    cyRef.current = cy;
-
-    return () => {
-      cy.destroy();
-      cyRef.current = null;
-    };
+  const { nodes, rels } = useMemo(() => {
+    const nvlNodes = graph.nodes.map((n) => ({
+      id: n.id,
+      caption: n.label,
+      color: COLOUR_BY_TYPE[n.type] ?? "#64748b",
+    }));
+    const nvlRels = graph.edges.map((e) => ({
+      id: e.id,
+      from: e.source,
+      to: e.target,
+      caption: e.label,
+    }));
+    return { nodes: nvlNodes, rels: nvlRels };
   }, [graph]);
 
-  return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
+  // Dev-only: expose the NVL wrapper ref so the perf harness can
+  // trigger pan/zoom programmatically from Playwright without
+  // synthesising mouse events.
+  const captureRef = (ref: unknown) => {
+    nvlRef.current = ref;
+    (window as unknown as { __nvl?: unknown }).__nvl = ref;
+  };
+
+  return (
+    <InteractiveNvlWrapper
+      ref={captureRef as never}
+      nodes={nodes}
+      rels={rels}
+      nvlOptions={{
+        initialZoom: 0.8,
+        // Grid layout is O(n) placement — isolates the pure
+        // render/interaction cost of NVL from the layout algorithm.
+        // forceDirected iterates for many frames on random-edge
+        // graphs; grid answers "what's the steady-state fps?"
+        layout: graph.nodes.length > 500 ? "grid" : "forceDirected",
+        layoutSettings: {
+          nodeDistance: 100,
+          nodeRepulsion: 5000,
+        },
+        renderer: "canvas",
+        useWebGL: true,
+        nodeLabelsVisible: false,
+        relationshipLabelsVisible: false,
+        nodeSize: 8,
+        backgroundColor: "#ffffff",
+      }}
+      interactionOptions={{
+        zoom: { enabled: true, minZoom: 0.05, maxZoom: 10 },
+        drag: { enabled: true },
+        pan: { enabled: true },
+        hover: { enabled: true },
+      }}
+      style={{ width, height }}
+    />
+  );
 }

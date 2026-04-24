@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GraphView } from "./GraphView";
 import { createFpsMeter } from "./fps";
 import { useSpikeStore } from "./store";
@@ -7,12 +7,29 @@ const FIXTURE_SIZES = [100, 500, 1000, 5000, 10000];
 
 export function App() {
   const { nodeCount, fps, graph, setNodeCount, setFps } = useSpikeStore();
+  const mainRef = useRef<HTMLElement>(null);
+  // NVL needs explicit pixel dimensions rather than percentage/flex
+  // sizing — without this the canvas renders at its default 300x150.
+  const [dims, setDims] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     const meter = createFpsMeter(60, setFps);
     meter.start();
     return () => meter.stop();
   }, [setFps]);
+
+  useEffect(() => {
+    if (!mainRef.current) return;
+    const el = mainRef.current;
+    const update = () => {
+      const rect = el.getBoundingClientRect();
+      setDims({ width: rect.width, height: rect.height });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -53,8 +70,10 @@ export function App() {
           ))}
         </div>
       </header>
-      <main style={{ flex: 1, minHeight: 0 }}>
-        <GraphView graph={graph} />
+      <main ref={mainRef} style={{ flex: 1, minHeight: 0, position: "relative" }}>
+        {dims.width > 0 && dims.height > 0 && (
+          <GraphView graph={graph} width={dims.width} height={dims.height} />
+        )}
       </main>
     </div>
   );

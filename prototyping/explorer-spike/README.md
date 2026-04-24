@@ -16,19 +16,31 @@ build:
 ## Stack under test
 
 - **Vite 5 + React 18** (build + shell)
-- **Cytoscape.js** with the WebGL renderer (graph layout + interaction)
-- **Tailwind** + **shadcn/ui primitives** (layout chrome)
+- **`@neo4j-nvl/react`** v0.3.8 (graph rendering — matches the version
+  already used by `graphora-fe/app`, so a successful spike ports 1:1
+  to the real Explorer)
 - **Zustand** (state)
+
+NVL was chosen over Cytoscape.js explicitly so the Explorer uses the
+same rendering library as the existing graphora-fe components (see
+`graphora-fe/app/src/components/graph-viz.tsx` for the real-product
+usage — `nvlOptions` in the spike mirror it).
 
 If the stack blows the size budget, options in order of preference:
 
-1. Drop shadcn; use unstyled Radix primitives + Tailwind directly
+1. Lazy-load NVL via `React.lazy` / dynamic import so the Evidence
+   tab loads fast and the graph canvas streams in after
 2. Swap React 18 → Preact-compat
 3. Swap Vite → esbuild alone (no HMR, tiny runtime)
 
-If the stack blows the perf budget, fall back to Cytoscape's canvas
-renderer (simpler but CPU-bound above ~3k nodes) or switch to
-`sigma.js` for larger graphs.
+If the stack blows the perf budget, options:
+
+1. Set `useWebGL: true` (already on in the spike) and audit that
+   WebGL is actually active in the devtools
+2. Drop `hover: { enabled: true }` — hover testing every frame is
+   expensive at large fixtures
+3. Swap `layout: 'forceDirected'` for `'grid'` at > 5k nodes — NVL's
+   layout algorithms dominate first-paint at scale
 
 ## Running it
 

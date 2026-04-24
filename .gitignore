@@ -198,3 +198,4 @@ hive-mind-prompt-*.txt
 node_modules/
 # macOS
 .DS_Store
+.playwright-mcp/
