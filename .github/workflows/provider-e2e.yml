@@ -1,9 +1,9 @@
 name: Provider E2E
 
-# The main CI workflow ignores tests/e2e/** via
-# [tool.pytest.ini_options].addopts. This workflow runs the provider
-# harness on a tighter trigger: only when code that actually touches
-# the LLM call path changes (or when a human fires it manually).
+# The main CI workflow ignores tests/e2e/** via pytest.ini's addopts.
+# This workflow runs the provider harness against a real LLM on a
+# tighter trigger: pushes/PRs that touch the LLM call path, and on
+# manual dispatch.
 #
 # Today only the Gemini path is exercised — the BAML client factory
 # at graphora_server/utils/baml_helper.py only speaks google-ai. When
@@ -12,6 +12,19 @@ name: Provider E2E
 # and a matrix entry here, guarded by its own test-tier secret.
 
 on:
+  push:
+    branches: [ main, oss, revamp ]
+    paths:
+      - 'pyproject.toml'
+      - 'graphora_server/services/llm/**'
+      - 'graphora_server/utils/baml_helper.py'
+      - 'graphora_server/utils/llm_helper.py'
+      - 'graphora_server/baml_src/**'
+      - 'graphora_server/baml_client/**'
+      - 'graphora_server/services/transform/graph_transformer.py'
+      - 'graphora_server/services/transform/helpers.py'
+      - 'tests/e2e/providers/**'
+      - '.github/workflows/provider-e2e.yml'
   pull_request:
     branches: [ main, oss, revamp ]
     paths:
@@ -36,14 +49,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        provider: [gemini]
+        # Each matrix entry pins the narrow install shape the harness
+        # needs for that provider. Using a targeted `.[server,<provider>,dev]`
+        # install — NOT `--all-extras` — is load-bearing: PR1c-N removes
+        # one provider SDK from base at a time, and the harness has to
+        # fail loudly if the targeted install shape is missing a dep the
+        # runtime actually needs. `--all-extras` would reinstall the
+        # removed SDK via unrelated extras and mask the regression.
+        include:
+          - provider: gemini
+            install_extras: server,gemini,chunking,er,dev
     env:
-      # The matrix value flows into a shell variable via an env block
-      # rather than being inlined into the `run:` body. This protects
+      # The matrix value flows into shell variables via an env block
+      # rather than being inlined into `run:` bodies. This protects
       # against the class of command-injection patterns flagged by the
       # repo's security hook — today the matrix is a static list, but
       # future entries could in principle come from untrusted input.
       PROVIDER: ${{ matrix.provider }}
+      INSTALL_EXTRAS: ${{ matrix.install_extras }}
       # Per-provider spend-capped secrets live in repo settings.
       # Each test_<provider>.py auto-skips when its provider's key
       # isn't set, so forks without access to the secrets see a clean
@@ -64,18 +87,24 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libmagic1
 
-      - name: Install uv
+      # Targeted install: base + [server] + [<provider>] + pipeline
+      # extras the Gemini path genuinely needs (chunking + er for
+      # graph_transformer). No --all-extras, because the whole point
+      # of this workflow is to detect when PR1c-N removes a dep that
+      # a provider path secretly relies on.
+      - name: Install targeted extras for ${{ matrix.provider }}
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "${HOME}/.local/bin" >> $GITHUB_PATH
-
-      - name: Sync dependencies (all extras + dev)
-        run: uv sync --all-extras --group dev
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -e ".[${INSTALL_EXTRAS}]"
+          # pytest-timeout is required by the --timeout flag below.
+          # Installed explicitly here (not via [dev]) to keep the
+          # dep surface minimal and inspectable.
+          python -m pip install --quiet pytest-timeout
 
       - name: Run provider E2E
         env:
           TEST_MODE: "true"
         run: |
-          uv run pytest \
+          pytest \
             "tests/e2e/providers/test_${PROVIDER}.py" \
-            -v --no-header --tb=short --timeout=300
+            -v --no-header --tb=short --timeout=300 --no-cov
