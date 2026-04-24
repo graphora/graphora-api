@@ -117,6 +117,88 @@ class TestUploadFile:
             await client.upload_file("/no/such/file.pdf")
         await client.aclose()
 
+    @pytest.mark.asyncio
+    async def test_schemaless_endpoint_when_schemaless_true(
+        self, tmp_path: Path
+    ) -> None:
+        seen_paths = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_paths.append(request.url.path)
+            return httpx.Response(
+                200,
+                json={
+                    "transform_id": "tx3",
+                    "status": "pending",
+                    "document_count": 1,
+                },
+            )
+
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"%PDF-")
+
+        client = _make_client(handler)
+        await client.upload_file(str(f), schemaless=True)
+        assert seen_paths == ["/api/v1/transform/schemaless/upload"]
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_schemaless_and_ontology_mutually_exclusive(
+        self, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"%PDF-")
+        client = _make_client(lambda r: httpx.Response(200, json={}))
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            await client.upload_file(str(f), ontology_id="o-1", schemaless=True)
+        await client.aclose()
+
+
+class TestOntologyRefinementEndpoints:
+    @pytest.mark.asyncio
+    async def test_get_inferred_ontology_is_get(self) -> None:
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.method, request.url.path))
+            return httpx.Response(
+                200,
+                json={
+                    "transform_id": "tx1",
+                    "ontology_yaml": "v: 1\n",
+                    "ontology": {"entities": {}, "relationships": {}},
+                    "stats": {},
+                },
+            )
+
+        client = _make_client(handler)
+        await client.get_inferred_ontology("tx1")
+        assert seen == [("GET", "/api/v1/transform/tx1/inferred-ontology")]
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_finalize_ontology_is_post(self) -> None:
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.method, request.url.path))
+            return httpx.Response(
+                200,
+                json={
+                    "transform_id": "tx1",
+                    "ontology_id": "auto_refined_xyz",
+                    "ontology_yaml": "v: 1\n",
+                    "ontology": {"entities": {}, "relationships": {}},
+                    "stats": {},
+                },
+            )
+
+        client = _make_client(handler)
+        result = await client.finalize_ontology("tx1")
+        assert seen == [("POST", "/api/v1/transform/tx1/finalize-ontology")]
+        assert result["ontology_id"] == "auto_refined_xyz"
+        await client.aclose()
+
 
 # ---- get_graph / get_status -----------------------------------------------
 

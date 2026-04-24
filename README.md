@@ -251,9 +251,38 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 | Tool | Purpose |
 |------|---------|
-| `extract_document(file_path \| url, ontology_id?)` | Run extraction on a local file or URL. Auto-infers schema if `ontology_id` is omitted. Returns a `transform_id`. |
+| `extract_document(file_path \| url, ontology_id?, schemaless?)` | Run extraction on a local file or URL. Auto-infers schema if `ontology_id` is omitted. Set `schemaless=True` to skip pre-extraction schema inference entirely (see Schema-less mode below). Returns a `transform_id`. |
 | `query_graph(transform_id, filter_type?, limit?)` | Fetch nodes + edges. Filter by entity type (case-insensitive), limit capped at 200 to keep agent context usable. |
 | `get_evidence(transform_id, node_id)` | Return a node's full properties, its incoming/outgoing edges, and the provenance fields (source chunk, document id, offsets) that justify it being in the graph. |
+| `refine_ontology(transform_id, save?)` | Run post-hoc ontology inference over what was extracted. `save=False` (default) returns YAML inline; `save=True` persists it as a new ontology and returns the `ontology_id`. |
+
+## Schema-less extraction mode
+
+Two ways to start an extraction without pre-committing to a schema:
+
+1. **Auto-schema** (default on `/transform/upload`): Graphora peeks at the first few KB of the document, asks the LLM "what schema fits?", then extracts against that inferred schema. Fast but biases the extractor — the LLM commits to categories before seeing the full document.
+
+2. **Schema-less** (new on `/transform/schemaless/upload`): Graphora extracts against a permissive generic schema (Person, Organization, Concept, Entity + RELATED_TO/WORKS_AT/KNOWS). Types emerge from what was actually extracted, not what the LLM was told to look for.
+
+After a schema-less extraction completes, refine the ontology from the emerged graph:
+
+```bash
+# Preview the inferred ontology (no side-effects)
+GET  /api/v1/transform/{transform_id}/inferred-ontology
+
+# Persist the inferred ontology as a new ontology_id
+POST /api/v1/transform/{transform_id}/finalize-ontology
+```
+
+Or from the MCP layer:
+
+```
+await extract_document(file_path="paper.pdf", schemaless=True)     # -> tx_id
+# ... wait for extraction to complete ...
+await refine_ontology(transform_id=tx_id, save=True)               # -> ontology_id
+```
+
+The refinement endpoint works on any completed extraction, not just schema-less ones — use it to tighten an ontology based on what was actually surfaced.
 
 ## Project Structure
 

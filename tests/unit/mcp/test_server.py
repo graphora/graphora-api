@@ -17,6 +17,7 @@ from graphora_server.mcp.server import (
     _tool_impl_extract_document,
     _tool_impl_get_evidence,
     _tool_impl_query_graph,
+    _tool_impl_refine_ontology,
 )
 
 
@@ -53,16 +54,43 @@ class FakeAPIClient:
         self.calls: List[tuple] = []
 
     async def upload_file(
-        self, file_path: str, ontology_id: Optional[str] = None
+        self,
+        file_path: str,
+        ontology_id: Optional[str] = None,
+        *,
+        schemaless: bool = False,
     ) -> Dict[str, Any]:
-        self.calls.append(("upload_file", file_path, ontology_id))
+        self.calls.append(("upload_file", file_path, ontology_id, schemaless))
         return self.upload_file_return
 
     async def upload_url(
-        self, url: str, ontology_id: Optional[str] = None
+        self,
+        url: str,
+        ontology_id: Optional[str] = None,
+        *,
+        schemaless: bool = False,
     ) -> Dict[str, Any]:
-        self.calls.append(("upload_url", url, ontology_id))
+        self.calls.append(("upload_url", url, ontology_id, schemaless))
         return self.upload_url_return
+
+    async def get_inferred_ontology(self, transform_id: str) -> Dict[str, Any]:
+        self.calls.append(("get_inferred_ontology", transform_id))
+        return {
+            "transform_id": transform_id,
+            "ontology_yaml": "version: '0.1.0'\n",
+            "ontology": {"entities": {"Person": {}}, "relationships": {}},
+            "stats": {"node_count": 1, "edge_count": 0},
+        }
+
+    async def finalize_ontology(self, transform_id: str) -> Dict[str, Any]:
+        self.calls.append(("finalize_ontology", transform_id))
+        return {
+            "transform_id": transform_id,
+            "ontology_id": "auto_refined_abc",
+            "ontology_yaml": "version: '0.1.0'\n",
+            "ontology": {"entities": {"Person": {}}, "relationships": {}},
+            "stats": {"node_count": 1, "edge_count": 0},
+        }
 
     async def get_graph(
         self, transform_id: str, *, limit: int = 1000, skip: int = 0
@@ -99,7 +127,7 @@ class TestExtractDocument:
             api, file_path="/tmp/a.pdf", url=None, ontology_id=None
         )
         assert result["transform_id"] == "tx_file"
-        assert api.calls == [("upload_file", "/tmp/a.pdf", None)]
+        assert api.calls == [("upload_file", "/tmp/a.pdf", None, False)]
 
     @pytest.mark.asyncio
     async def test_uploads_url_when_url_given(self) -> None:
@@ -108,7 +136,7 @@ class TestExtractDocument:
             api, file_path=None, url="https://example.com", ontology_id=None
         )
         assert result["transform_id"] == "tx_url"
-        assert api.calls == [("upload_url", "https://example.com", None)]
+        assert api.calls == [("upload_url", "https://example.com", None, False)]
 
     @pytest.mark.asyncio
     async def test_passes_ontology_id_through(self) -> None:
@@ -116,7 +144,7 @@ class TestExtractDocument:
         await _tool_impl_extract_document(
             api, file_path="/tmp/a.pdf", url=None, ontology_id="ont-42"
         )
-        assert api.calls == [("upload_file", "/tmp/a.pdf", "ont-42")]
+        assert api.calls == [("upload_file", "/tmp/a.pdf", "ont-42", False)]
 
     @pytest.mark.asyncio
     async def test_rejects_both_inputs(self) -> None:
@@ -268,3 +296,57 @@ class TestGetEvidence:
         assert result["incoming_edges"] == []
         assert result["outgoing_edges"] == []
         assert result["evidence"] == {}
+
+
+# ---- schemaless + refine_ontology -----------------------------------------
+
+
+class TestSchemalessFlag:
+    @pytest.mark.asyncio
+    async def test_schemaless_passed_to_client_on_file(self) -> None:
+        api = FakeAPIClient()
+        await _tool_impl_extract_document(
+            api, file_path="/tmp/a.pdf", url=None, ontology_id=None, schemaless=True
+        )
+        assert api.calls == [("upload_file", "/tmp/a.pdf", None, True)]
+
+    @pytest.mark.asyncio
+    async def test_schemaless_passed_to_client_on_url(self) -> None:
+        api = FakeAPIClient()
+        await _tool_impl_extract_document(
+            api,
+            file_path=None,
+            url="https://example.com",
+            ontology_id=None,
+            schemaless=True,
+        )
+        assert api.calls == [("upload_url", "https://example.com", None, True)]
+
+    @pytest.mark.asyncio
+    async def test_schemaless_and_ontology_id_are_exclusive(self) -> None:
+        api = FakeAPIClient()
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            await _tool_impl_extract_document(
+                api,
+                file_path="/tmp/a.pdf",
+                url=None,
+                ontology_id="ont-1",
+                schemaless=True,
+            )
+
+
+class TestRefineOntology:
+    @pytest.mark.asyncio
+    async def test_save_false_hits_inferred_endpoint(self) -> None:
+        api = FakeAPIClient()
+        result = await _tool_impl_refine_ontology(api, "tx-1", save=False)
+        assert result["transform_id"] == "tx-1"
+        assert "ontology_id" not in result
+        assert api.calls == [("get_inferred_ontology", "tx-1")]
+
+    @pytest.mark.asyncio
+    async def test_save_true_hits_finalize_endpoint(self) -> None:
+        api = FakeAPIClient()
+        result = await _tool_impl_refine_ontology(api, "tx-1", save=True)
+        assert result["ontology_id"] == "auto_refined_abc"
+        assert api.calls == [("finalize_ontology", "tx-1")]

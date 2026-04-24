@@ -39,6 +39,7 @@ from graphora_server.services.audit_service import audit_service, OperationType
 from graphora_server.services.chunking.config import ChunkingConfig
 from graphora_server.services.schema_inference import create_auto_schema_ontology
 from graphora_server.services.document_parser import DocumentParser
+from graphora_server.services.user_db_service import UserDatabaseService
 from graphora_server.auth import get_current_user_id
 from graphora_server.exceptions import AIConfigurationError
 
@@ -702,4 +703,373 @@ async def cleanup_transform_status(
         logger.error(f"Failed to schedule cleanup for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Failed to schedule cleanup: {str(e)}"
+        )
+
+
+@router.get(
+    "/transform/{transform_id}/inferred-ontology",
+    response_class=JSONResponse,
+)
+async def get_inferred_ontology(
+    transform_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> JSONResponse:
+    """Run post-hoc ontology inference on a completed extraction.
+
+    Unlike the pre-extraction auto-schema path, this endpoint runs
+    AFTER extraction and refines the ontology from emerged types.
+    Side-effect-free: the response carries the YAML inline but the
+    ontology is not persisted. Callers that want to save it should
+    POST the YAML to the ontology endpoint explicitly.
+
+    Args:
+        transform_id: Completed transform to analyze.
+
+    Returns:
+        JSON: {ontology_yaml: str, ontology: dict, stats: {...}}
+    """
+    from graphora_server.services.schema_postprocess import (
+        infer_ontology_from_graph,
+        ontology_dict_to_yaml,
+    )
+    from graphora_server.services.storage.memory import InMemoryStorage
+    from graphora_server.services.user_db_service import (
+        is_memory_storage_enabled,
+    )
+    from graphora_server.services.storage.factory import user_has_staging_db
+
+    try:
+        use_in_memory = is_memory_storage_enabled() or not await user_has_staging_db(
+            user_id
+        )
+        if use_in_memory:
+            storage = InMemoryStorage(user_id=user_id)
+            graph = await storage.get_transformation_data(transform_id)
+        else:
+            graph_service = await UserDatabaseService.get_staging_graph_service(user_id)
+            graph = graph_service.get_graph_by_transform_id(
+                transform_id=transform_id, limit=10000, skip=0
+            )
+
+        if not graph.nodes:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Transform {transform_id} has no extracted nodes. "
+                    "Wait for extraction to complete before inferring an ontology."
+                ),
+            )
+
+        nodes_payload = [n.model_dump() for n in graph.nodes]
+        edges_payload = [e.model_dump() for e in graph.edges]
+
+        ontology_dict = await infer_ontology_from_graph(
+            nodes=nodes_payload,
+            edges=edges_payload,
+            user_id=user_id,
+        )
+        yaml_content = ontology_dict_to_yaml(ontology_dict)
+
+        return JSONResponse(
+            {
+                "transform_id": transform_id,
+                "ontology_yaml": yaml_content,
+                "ontology": ontology_dict,
+                "stats": {
+                    "node_count": len(nodes_payload),
+                    "edge_count": len(edges_payload),
+                    "entity_types": len(ontology_dict.get("entities", {})),
+                    "relationship_types": len(ontology_dict.get("relationships", {})),
+                },
+            }
+        )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.warning("Inferred-ontology request rejected for %s: %s", user_id, e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except AIConfigurationError as e:
+        raise HTTPException(status_code=400, detail=e.to_dict())
+    except Exception as e:
+        traceback.print_exc()
+        logger.error("Inferred-ontology failed for user %s: %s", user_id, e)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to infer ontology: {str(e)}"
+        )
+
+
+@router.post("/transform/schemaless/upload", response_model=TransformInitResponse)
+async def upload_documents_schemaless(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+    files: List[UploadFile] = File(...),
+    chunking_config: Optional[str] = Form(
+        None, description="JSON string of chunking configuration"
+    ),
+) -> TransformInitResponse:
+    """Start an extraction without pre-committing to a schema.
+
+    Unlike ``/transform/upload`` (which peeks at the document text
+    to infer an ontology BEFORE extraction) this endpoint uses the
+    default generic schema to run extraction, then leaves post-hoc
+    ontology refinement to the agent/user via:
+
+        GET  /transform/{id}/inferred-ontology   (preview)
+        POST /transform/{id}/finalize-ontology   (save the refinement)
+
+    Effect on the pipeline: the LLM is not biased by a pre-inferred
+    category list — it extracts into broad buckets (Person,
+    Organization, Concept, Entity) and the specific refined types
+    emerge from what was actually surfaced.
+    """
+    from graphora_server.services.schema_inference import get_default_generic_schema
+    from graphora_server.services.ontology_storage_service import (
+        ontology_storage_service,
+    )
+
+    start_time = time.time()
+    temp_dir = Path(settings.UPLOAD_DIR)
+    transform_id = f"transform_{uuid.uuid4().hex}"
+    audit_id = ""
+
+    try:
+        logger.info("Starting schemaless upload for user: %s", user_id)
+
+        parsed_chunking_config = None
+        if chunking_config:
+            try:
+                config_dict = json.loads(chunking_config)
+                parsed_chunking_config = ChunkingConfig(**config_dict)
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning("Invalid chunking config: %s. Using defaults.", e)
+
+        audit_id = await audit_service.log_operation_start(
+            user_id=user_id,
+            operation_type=OperationType.TRANSFORM_STARTED,
+            operation_id=transform_id,
+            resource_name=f"Schemaless {transform_id[:8]}",
+            metadata={
+                "schemaless": True,
+                "files_count": len(files),
+                "file_names": [f.filename for f in files],
+            },
+        )
+
+        await progress_tracker.initialize_transform(transform_id)
+
+        validator = FileValidator()
+        temp_dir = Path(settings.UPLOAD_DIR) / transform_id
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        file_paths: List[Path] = []
+        doc_metadata: List[DocumentMetadata] = []
+        total_file_size = 0
+        doc_info: Optional[DocumentInfo] = None
+
+        for file in files:
+            try:
+                safe_filename = sanitize_filename(file.filename)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+            validation_result = await validator.validate(file)
+            if not validation_result.is_valid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file {safe_filename}: {validation_result.errors}",
+                )
+
+            temp_path = temp_dir / safe_filename
+            async with aiofiles.open(temp_path, "wb") as fh:
+                content = await file.read()
+                await file.seek(0)
+                await fh.write(content)
+
+            file_paths.append(temp_path)
+            total_file_size += len(content)
+
+            metadata = DocumentMetadata(
+                source=safe_filename,
+                document_type=DocumentType(Path(safe_filename).suffix[1:]),
+                tags=["schemaless", user_id],
+            )
+            doc_metadata.append(metadata)
+            doc_info = DocumentInfo(
+                filename=safe_filename,
+                size=len(content),
+                document_type=metadata.document_type,
+                metadata=metadata,
+            )
+
+        await progress_tracker.complete_stage(transform_id, TransformationStage.UPLOAD)
+
+        # Always use the permissive generic schema. No pre-extraction
+        # text sampling — that's what separates schemaless from
+        # auto-schema.
+        generic_yaml = get_default_generic_schema()
+        ontology_id = f"schemaless_{uuid.uuid4().hex[:12]}"
+        await ontology_storage_service.store_ontology(
+            user_id=user_id,
+            ontology_id=ontology_id,
+            yaml_content=generic_yaml,
+            name=f"Schemaless base ({transform_id[:8]})",
+            description=(
+                "Permissive generic schema used for schemaless extraction. "
+                "Run /finalize-ontology after extraction to get a refined version."
+            ),
+        )
+
+        background_tasks.add_task(
+            run_transform_flow,
+            transform_id=transform_id,
+            ontology_id=ontology_id,
+            file_paths=file_paths,
+            metadata=doc_metadata,
+            user_id=user_id,
+            audit_id=audit_id,
+            chunking_config=parsed_chunking_config,
+        )
+
+        upload_duration_ms = int((time.time() - start_time) * 1000)
+        if audit_id:
+            await audit_service.log_operation_success(
+                audit_id=audit_id,
+                duration_ms=upload_duration_ms,
+                metadata={
+                    "transform_id": transform_id,
+                    "ontology_id": ontology_id,
+                    "schemaless": True,
+                    "upload_completed": True,
+                    "total_file_size_bytes": total_file_size,
+                },
+            )
+
+        return TransformInitResponse(
+            id=transform_id,
+            upload_timestamp=datetime.now(timezone.utc),
+            status=TransformStatus.PENDING,
+            document_info=doc_info,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Schemaless upload failed for user %s: %s", user_id, e)
+        traceback.print_exc()
+        upload_duration_ms = int((time.time() - start_time) * 1000)
+        if audit_id:
+            await audit_service.log_operation_failure(
+                audit_id=audit_id,
+                error_message=str(e),
+                duration_ms=upload_duration_ms,
+            )
+        try:
+            if temp_dir.exists():
+                import shutil
+
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception as cleanup_err:
+            logger.warning("Failed to cleanup temp %s: %s", temp_dir, cleanup_err)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process schemaless upload: {str(e)}",
+        )
+
+
+@router.post(
+    "/transform/{transform_id}/finalize-ontology",
+    response_class=JSONResponse,
+)
+async def finalize_inferred_ontology(
+    transform_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> JSONResponse:
+    """Run post-hoc ontology inference and persist the result.
+
+    Companion to ``GET /transform/{id}/inferred-ontology`` — same
+    inference, but creates an ontology row so the user can reference
+    it by id, edit it via the ontology endpoints, or re-extract
+    against it.
+
+    Returns the new ``ontology_id`` + full YAML + stats.
+    """
+    from graphora_server.services.schema_postprocess import (
+        infer_ontology_from_graph,
+        ontology_dict_to_yaml,
+    )
+    from graphora_server.services.storage.memory import InMemoryStorage
+    from graphora_server.services.user_db_service import is_memory_storage_enabled
+    from graphora_server.services.storage.factory import user_has_staging_db
+    from graphora_server.services.ontology_storage_service import (
+        ontology_storage_service,
+    )
+
+    try:
+        use_in_memory = is_memory_storage_enabled() or not await user_has_staging_db(
+            user_id
+        )
+        if use_in_memory:
+            storage = InMemoryStorage(user_id=user_id)
+            graph = await storage.get_transformation_data(transform_id)
+        else:
+            graph_service = await UserDatabaseService.get_staging_graph_service(user_id)
+            graph = graph_service.get_graph_by_transform_id(
+                transform_id=transform_id, limit=10000, skip=0
+            )
+
+        if not graph.nodes:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Transform {transform_id} has no extracted nodes. "
+                    "Cannot finalize ontology on an empty graph."
+                ),
+            )
+
+        nodes_payload = [n.model_dump() for n in graph.nodes]
+        edges_payload = [e.model_dump() for e in graph.edges]
+
+        ontology_dict = await infer_ontology_from_graph(
+            nodes=nodes_payload,
+            edges=edges_payload,
+            user_id=user_id,
+        )
+        yaml_content = ontology_dict_to_yaml(ontology_dict)
+
+        new_ontology_id = f"auto_refined_{uuid.uuid4().hex[:12]}"
+        await ontology_storage_service.store_ontology(
+            user_id=user_id,
+            ontology_id=new_ontology_id,
+            yaml_content=yaml_content,
+            name=f"Refined ({transform_id[:8]})",
+            description=(f"Post-hoc inferred ontology from transform {transform_id}"),
+        )
+
+        return JSONResponse(
+            {
+                "transform_id": transform_id,
+                "ontology_id": new_ontology_id,
+                "ontology_yaml": yaml_content,
+                "ontology": ontology_dict,
+                "stats": {
+                    "node_count": len(nodes_payload),
+                    "edge_count": len(edges_payload),
+                    "entity_types": len(ontology_dict.get("entities", {})),
+                    "relationship_types": len(ontology_dict.get("relationships", {})),
+                },
+            }
+        )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.warning("Finalize-ontology rejected for %s: %s", user_id, e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except AIConfigurationError as e:
+        raise HTTPException(status_code=400, detail=e.to_dict())
+    except Exception as e:
+        traceback.print_exc()
+        logger.error("Finalize-ontology failed for user %s: %s", user_id, e)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to finalize ontology: {str(e)}"
         )

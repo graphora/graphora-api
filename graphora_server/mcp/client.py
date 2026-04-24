@@ -85,26 +85,58 @@ class GraphoraClient:
         self,
         file_path: str,
         ontology_id: Optional[str] = None,
+        *,
+        schemaless: bool = False,
     ) -> Dict[str, Any]:
-        """POST a local file. Uses auto-schema when ``ontology_id`` is None."""
+        """POST a local file.
+
+        Routing:
+            * ``schemaless=True``   → /transform/schemaless/upload
+              (extract with the permissive generic schema; caller
+              runs ``finalize_ontology`` after completion to get a
+              refined ontology)
+            * ``ontology_id``       → /transform/{ontology_id}/upload
+              (extract against a specific stored ontology)
+            * neither               → /transform/upload
+              (auto-schema: pre-extraction text peek + inferred
+              ontology drives extraction)
+        """
         path = Path(file_path)
         if not path.is_file():
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        endpoint = (
-            f"{_API_V1}/transform/{ontology_id}/upload"
-            if ontology_id
-            else f"{_API_V1}/transform/upload"
-        )
+        if schemaless and ontology_id:
+            raise ValueError("schemaless=True and ontology_id are mutually exclusive")
+        if schemaless:
+            endpoint = f"{_API_V1}/transform/schemaless/upload"
+        elif ontology_id:
+            endpoint = f"{_API_V1}/transform/{ontology_id}/upload"
+        else:
+            endpoint = f"{_API_V1}/transform/upload"
+
         with path.open("rb") as fh:
             files = {"files": (path.name, fh, "application/octet-stream")}
             resp = await self._client.post(endpoint, files=files)
+        return _ok(resp)
+
+    async def get_inferred_ontology(self, transform_id: str) -> Dict[str, Any]:
+        resp = await self._client.get(
+            f"{_API_V1}/transform/{transform_id}/inferred-ontology"
+        )
+        return _ok(resp)
+
+    async def finalize_ontology(self, transform_id: str) -> Dict[str, Any]:
+        resp = await self._client.post(
+            f"{_API_V1}/transform/{transform_id}/finalize-ontology"
+        )
         return _ok(resp)
 
     async def upload_url(
         self,
         url: str,
         ontology_id: Optional[str] = None,
+        *,
+        schemaless: bool = False,
     ) -> Dict[str, Any]:
         """Submit a URL for extraction.
 
@@ -138,7 +170,9 @@ class GraphoraClient:
             tmp_path = tmp.name
 
         try:
-            return await self.upload_file(tmp_path, ontology_id=ontology_id)
+            return await self.upload_file(
+                tmp_path, ontology_id=ontology_id, schemaless=schemaless
+            )
         finally:
             try:
                 Path(tmp_path).unlink()

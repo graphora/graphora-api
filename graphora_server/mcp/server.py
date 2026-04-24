@@ -35,15 +35,30 @@ async def _tool_impl_extract_document(
     file_path: Optional[str],
     url: Optional[str],
     ontology_id: Optional[str],
+    schemaless: bool = False,
 ) -> Dict[str, Any]:
     if bool(file_path) == bool(url):
         raise ValueError(
             "Provide exactly one of file_path or url (not both, not neither)."
         )
+    if schemaless and ontology_id:
+        raise ValueError("schemaless=True and ontology_id are mutually exclusive.")
     if file_path:
-        return await api.upload_file(file_path, ontology_id=ontology_id)
+        return await api.upload_file(
+            file_path, ontology_id=ontology_id, schemaless=schemaless
+        )
     assert url is not None
-    return await api.upload_url(url, ontology_id=ontology_id)
+    return await api.upload_url(url, ontology_id=ontology_id, schemaless=schemaless)
+
+
+async def _tool_impl_refine_ontology(
+    api: GraphoraClient,
+    transform_id: str,
+    save: bool,
+) -> Dict[str, Any]:
+    if save:
+        return await api.finalize_ontology(transform_id)
+    return await api.get_inferred_ontology(transform_id)
 
 
 async def _tool_impl_query_graph(
@@ -143,6 +158,7 @@ def build_server(client: Optional[GraphoraClient] = None):
         file_path: Optional[str] = None,
         url: Optional[str] = None,
         ontology_id: Optional[str] = None,
+        schemaless: bool = False,
     ) -> Dict[str, Any]:
         """Extract a knowledge graph from a document or URL.
 
@@ -156,13 +172,52 @@ def build_server(client: Optional[GraphoraClient] = None):
                 When omitted, Graphora auto-infers a schema from the
                 document — use this for zero-config "just extract
                 something" flows.
+            schemaless: If True, skip pre-extraction schema inference
+                entirely. The extractor uses a permissive generic
+                ontology so specific types emerge from what was
+                actually extracted. Call refine_ontology after the
+                transform completes to get a tight refined ontology.
+                Mutually exclusive with ontology_id.
 
         Returns a dict with:
-            transform_id (str): Use with query_graph / get_evidence.
+            transform_id (str): Use with query_graph / get_evidence /
+                refine_ontology.
             status (str): Initial pipeline status (usually ``pending``).
             document_count (int): Files accepted into the pipeline.
         """
-        return await _tool_impl_extract_document(api, file_path, url, ontology_id)
+        return await _tool_impl_extract_document(
+            api, file_path, url, ontology_id, schemaless=schemaless
+        )
+
+    @mcp.tool()
+    async def refine_ontology(
+        transform_id: str,
+        save: bool = False,
+    ) -> Dict[str, Any]:
+        """Infer a refined ontology from an already-extracted graph.
+
+        Runs post-hoc inference over the nodes and edges produced by
+        a completed extraction — useful for turning a schemaless
+        extraction into a clean ontology, or for discovering how a
+        user-supplied ontology could be tightened based on what
+        actually got extracted.
+
+        Args:
+            transform_id: A completed transform ID.
+            save: If True, persist the refined ontology so it can be
+                referenced by id and re-used for future extractions.
+                If False (default), just return the YAML inline —
+                the caller decides whether to save it separately.
+
+        Returns a dict with:
+            transform_id (str)
+            ontology_yaml (str): Canonical YAML rendering.
+            ontology (dict): Parsed ontology (entities + relationships).
+            ontology_id (str, only when save=True): The stored ontology id.
+            stats (dict): node_count / edge_count / entity_types /
+                relationship_types.
+        """
+        return await _tool_impl_refine_ontology(api, transform_id, save)
 
     @mcp.tool()
     async def query_graph(
@@ -272,4 +327,5 @@ __all__ = [
     "_tool_impl_extract_document",
     "_tool_impl_query_graph",
     "_tool_impl_get_evidence",
+    "_tool_impl_refine_ontology",
 ]
