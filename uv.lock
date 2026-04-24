@@ -963,11 +963,6 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "pypdf2" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-benchmark" },
-    { name = "pytest-cov" },
-    { name = "pytest-mock" },
     { name = "python-dotenv" },
     { name = "python-magic" },
     { name = "python-multipart" },
@@ -976,7 +971,6 @@ dependencies = [
     { name = "sentence-transformers" },
     { name = "slowapi" },
     { name = "splink" },
-    { name = "sqlparse" },
     { name = "uvicorn" },
     { name = "vertexai" },
 ]
@@ -985,7 +979,13 @@ dependencies = [
 dev = [
     { name = "black" },
     { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-benchmark" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
     { name = "ruff" },
+    { name = "sqlparse" },
     { name = "vulture" },
 ]
 
@@ -1014,11 +1014,6 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.6.1" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9.0" },
     { name = "pypdf2", specifier = "==3.0.1" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", specifier = ">=0.23.5" },
-    { name = "pytest-benchmark", specifier = ">=4.0.0" },
-    { name = "pytest-cov", specifier = ">=4.1.0" },
-    { name = "pytest-mock", specifier = ">=3.12.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "python-multipart", specifier = ">=0.0.9" },
@@ -1027,7 +1022,6 @@ requires-dist = [
     { name = "sentence-transformers", specifier = ">=3.4.1" },
     { name = "slowapi", specifier = ">=0.1.9" },
     { name = "splink", specifier = "==4.0.7" },
-    { name = "sqlparse", specifier = ">=0.5.1" },
     { name = "uvicorn", specifier = ">=0.27.1" },
     { name = "vertexai", specifier = ">=0.0.1" },
 ]
@@ -1036,7 +1030,13 @@ requires-dist = [
 dev = [
     { name = "black", specifier = ">=24.4.0" },
     { name = "mypy", specifier = ">=1.10.0" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23.5" },
+    { name = "pytest-benchmark", specifier = ">=4.0.0" },
+    { name = "pytest-cov", specifier = ">=4.1.0" },
+    { name = "pytest-mock", specifier = ">=3.12.0" },
     { name = "ruff", specifier = ">=0.7.0" },
+    { name = "sqlparse", specifier = ">=0.5.1" },
     { name = "vulture", specifier = ">=2.11" },
 ]
 
