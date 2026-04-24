@@ -1,0 +1,7 @@
+Acme Corporation was founded in 2015 by Jane Smith. Based in San Francisco,
+Acme develops enterprise software for supply-chain analytics. In 2020, Acme
+acquired BetaTech, a small analytics startup run by John Doe. Jane Smith
+became CEO of the combined entity. BetaTech's offices in Seattle were
+consolidated into Acme's headquarters. Acme currently employs around 450
+people across its US locations and recently opened a small R&D outpost in
+Berlin, led by Priya Patel.

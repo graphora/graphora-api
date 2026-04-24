@@ -1,0 +1,29 @@
+version: "1.0.0"
+name: "Minimal Company-Person"
+description: "Tiny ontology for provider E2E harness — 2 entity types, 2 relationships."
+
+entities:
+  Company:
+    properties:
+      name:
+        type: str
+        description: "Official company name"
+      founded_year:
+        type: int
+        description: "Year the company was founded"
+      location:
+        type: str
+        description: "Primary headquarters location"
+    relationships:
+      FOUNDED_BY:
+        target: Person
+      ACQUIRED:
+        target: Company
+  Person:
+    properties:
+      name:
+        type: str
+        description: "Full name"
+      role:
+        type: str
+        description: "Job title or role"

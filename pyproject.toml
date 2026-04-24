@@ -180,8 +180,10 @@ graphora_server = [
     "templates/ontologies/*.yaml",
 ]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
+# Pytest config lives in pytest.ini (single source of truth — pytest
+# prefers pytest.ini over pyproject.toml when both are present).
+# Provider E2E excludes, coverage package, and markers are declared
+# there.
 
 [tool.ruff]
 target-version = "py311"

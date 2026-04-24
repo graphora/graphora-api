@@ -1,0 +1,81 @@
+name: Provider E2E
+
+# The main CI workflow ignores tests/e2e/** via
+# [tool.pytest.ini_options].addopts. This workflow runs the provider
+# harness on a tighter trigger: only when code that actually touches
+# the LLM call path changes (or when a human fires it manually).
+#
+# Today only the Gemini path is exercised — the BAML client factory
+# at graphora_server/utils/baml_helper.py only speaks google-ai. When
+# OpenAI / Anthropic / Vertex BAML clients land (product-strategy
+# Goal 9, "any LLM"), each provider gets its own test_<provider>.py
+# and a matrix entry here, guarded by its own test-tier secret.
+
+on:
+  pull_request:
+    branches: [ main, oss, revamp ]
+    paths:
+      - 'pyproject.toml'
+      - 'graphora_server/services/llm/**'
+      - 'graphora_server/utils/baml_helper.py'
+      - 'graphora_server/utils/llm_helper.py'
+      - 'graphora_server/baml_src/**'
+      - 'graphora_server/baml_client/**'
+      - 'graphora_server/services/transform/graph_transformer.py'
+      - 'graphora_server/services/transform/helpers.py'
+      - 'tests/e2e/providers/**'
+      - '.github/workflows/provider-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provider-harness:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [gemini]
+    env:
+      # The matrix value flows into a shell variable via an env block
+      # rather than being inlined into the `run:` body. This protects
+      # against the class of command-injection patterns flagged by the
+      # repo's security hook — today the matrix is a static list, but
+      # future entries could in principle come from untrusted input.
+      PROVIDER: ${{ matrix.provider }}
+      # Per-provider spend-capped secrets live in repo settings.
+      # Each test_<provider>.py auto-skips when its provider's key
+      # isn't set, so forks without access to the secrets see a clean
+      # skip rather than a failure.
+      GEMINI_API_KEY_TEST: ${{ secrets.GEMINI_API_KEY_TEST }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "${HOME}/.local/bin" >> $GITHUB_PATH
+
+      - name: Sync dependencies (all extras + dev)
+        run: uv sync --all-extras --group dev
+
+      - name: Run provider E2E
+        env:
+          TEST_MODE: "true"
+        run: |
+          uv run pytest \
+            "tests/e2e/providers/test_${PROVIDER}.py" \
+            -v --no-header --tb=short --timeout=300
