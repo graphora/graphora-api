@@ -32,6 +32,16 @@ dependencies = [
 
 [project.optional-dependencies]
 # HTTP server runtime. Required to run `graphora-server serve`.
+#
+# Contract: `pip install graphora-server[server]` is sufficient to
+# import graphora_server.main:app and start the uvicorn process.
+# Because the app eagerly imports psycopg (audit, usage, ai_config,
+# entity_ledger, schema_storage, feedback, and merge repositories
+# all persist to Postgres), neo4j (api/config.py for credential
+# management + storage module), and pypdf (flows.py for page
+# counting), those three extras are folded into [server] rather
+# than refactored to lazy imports. The result is a honest "[server]
+# is enough to serve" contract.
 server = [
     "fastapi>=0.109.2",
     "uvicorn>=0.27.1",
@@ -43,6 +53,8 @@ server = [
     "cryptography>=42.0.0",
     "httpx>=0.28.0",
     "python-dotenv>=1.0.1",
+    # Transitive extras required to import graphora_server.main:
+    "graphora-server[pdf,neo4j,postgres]",
 ]
 # Semantic chunking.
 chunking = [
