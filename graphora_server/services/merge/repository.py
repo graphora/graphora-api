@@ -10,7 +10,11 @@ import uuid
 from psycopg.types.json import Json
 
 from graphora_server.db import postgres as db
-from graphora_server.services.merge.models import ChangeLogRecord, ChangeLogResolution, MergeStatus
+from graphora_server.services.merge.models import (
+    ChangeLogRecord,
+    ChangeLogResolution,
+    MergeStatus,
+)
 
 logger = logging.getLogger(__name__)
 

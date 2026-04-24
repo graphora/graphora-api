@@ -562,7 +562,9 @@ class LLMClient:
         )
 
         if user_id:
-            from graphora_server.utils.baml_usage_tracker import track_baml_extract_nodes_from_chunk
+            from graphora_server.utils.baml_usage_tracker import (
+                track_baml_extract_nodes_from_chunk,
+            )
 
             result_model = await track_baml_extract_nodes_from_chunk(
                 user_id=user_id,
@@ -710,7 +712,9 @@ class LLMClient:
 
         # Use BAML tracking if user_id provided
         if user_id:
-            from graphora_server.utils.baml_usage_tracker import track_baml_infer_relationship
+            from graphora_server.utils.baml_usage_tracker import (
+                track_baml_infer_relationship,
+            )
 
             return await track_baml_infer_relationship(
                 user_id=user_id,
@@ -755,7 +759,9 @@ class LLMClient:
 
         # Use BAML tracking if user_id provided
         if user_id:
-            from graphora_server.utils.baml_usage_tracker import track_baml_standardise_properties
+            from graphora_server.utils.baml_usage_tracker import (
+                track_baml_standardise_properties,
+            )
 
             return await track_baml_standardise_properties(
                 user_id=user_id,
@@ -792,7 +798,9 @@ class LLMClient:
 
         # Use BAML tracking if user_id provided
         if user_id:
-            from graphora_server.utils.baml_usage_tracker import track_baml_resolve_entities
+            from graphora_server.utils.baml_usage_tracker import (
+                track_baml_resolve_entities,
+            )
 
             return await track_baml_resolve_entities(
                 user_id=user_id,

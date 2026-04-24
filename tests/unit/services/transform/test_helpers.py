@@ -77,7 +77,9 @@ class TestCanonicalization:
 
     def test_canonicalize_company_name_should_remove_suffixes(self):
         """Should remove common company suffixes."""
-        from graphora_server.services.transform.helpers import _canonicalize_company_name
+        from graphora_server.services.transform.helpers import (
+            _canonicalize_company_name,
+        )
 
         # Should lowercase
         result = _canonicalize_company_name("ACME Corporation")
@@ -113,7 +115,9 @@ class TestCanonicalization:
 
     def test_build_canonical_properties_should_canonicalize_all_props(self):
         """Should build canonical version of all properties."""
-        from graphora_server.services.transform.helpers import _build_canonical_properties
+        from graphora_server.services.transform.helpers import (
+            _build_canonical_properties,
+        )
 
         parsed_ontology = {
             "entities": {
@@ -473,7 +477,9 @@ class TestNodeKeyGeneration:
 
     def test_make_deterministic_node_id_should_create_uuid_format(self):
         """Should create UUID-formatted ID."""
-        from graphora_server.services.transform.helpers import _make_deterministic_node_id
+        from graphora_server.services.transform.helpers import (
+            _make_deterministic_node_id,
+        )
 
         node_id = _make_deterministic_node_id("transform-123", "Company", "acme")
 
@@ -509,7 +515,9 @@ class TestColumnDetection:
 
     def test_base_property_from_column_should_strip_prefix(self):
         """Should strip canonical__ prefix from column name."""
-        from graphora_server.services.transform.helpers import _base_property_from_column
+        from graphora_server.services.transform.helpers import (
+            _base_property_from_column,
+        )
 
         # Note: prefix is "canonical__" (double underscore)
         assert _base_property_from_column("canonical__name") == "name"
@@ -616,7 +624,9 @@ class TestEntityDeduplicationPreparation:
 
     def test_prepare_entities_for_deduplication_should_accept_nodes(self):
         """Should prepare entities for deduplication."""
-        from graphora_server.services.transform.helpers import _prepare_entities_for_deduplication
+        from graphora_server.services.transform.helpers import (
+            _prepare_entities_for_deduplication,
+        )
 
         NodeFactory.reset_counter()
 
@@ -683,7 +693,9 @@ class TestSmallGroupDeduplication:
 
     def test_deduplicate_small_entity_group_should_handle_empty_list(self):
         """Should handle empty entity list."""
-        from graphora_server.services.transform.helpers import _deduplicate_small_entity_group
+        from graphora_server.services.transform.helpers import (
+            _deduplicate_small_entity_group,
+        )
 
         # Function signature: (entity_type, entities, parsed_ontology)
         # Returns: (deduplicated_entities, id_mapping)
@@ -694,7 +706,9 @@ class TestSmallGroupDeduplication:
 
     def test_deduplicate_small_entity_group_should_return_single_entity(self):
         """Should return single entity unchanged."""
-        from graphora_server.services.transform.helpers import _deduplicate_small_entity_group
+        from graphora_server.services.transform.helpers import (
+            _deduplicate_small_entity_group,
+        )
 
         NodeFactory.reset_counter()
         node = NodeFactory.create_company(name="Acme")

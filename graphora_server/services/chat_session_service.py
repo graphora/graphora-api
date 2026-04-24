@@ -18,7 +18,11 @@ from typing import Dict, Any, Optional, List
 from enum import Enum
 
 from graphora_server.db import postgres as db
-from graphora_server.services.audit_service import AuditService, OperationType, OperationStatus
+from graphora_server.services.audit_service import (
+    AuditService,
+    OperationType,
+    OperationStatus,
+)
 
 logger = logging.getLogger(__name__)
 

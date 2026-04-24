@@ -17,7 +17,11 @@ from graphora_server.services.merge.new_merger import (
     get_merge_graph,
     log_merge_failure_task,
 )
-from graphora_server.services.merge.models import MergeInitResponse, MergeStatus, ChangeLog
+from graphora_server.services.merge.models import (
+    MergeInitResponse,
+    MergeStatus,
+    ChangeLog,
+)
 from graphora_server.config import settings
 from graphora_server.auth import get_current_user_id
 

@@ -196,7 +196,9 @@ def dashboard_client(monkeypatch):
     async def _fake_quality_service(_user_id: str):
         return FakeQualityService()
 
-    monkeypatch.setattr("graphora_server.api.dashboard._get_quality_service", _fake_quality_service)
+    monkeypatch.setattr(
+        "graphora_server.api.dashboard._get_quality_service", _fake_quality_service
+    )
 
     app.dependency_overrides[get_current_user_id] = lambda: "user-1"
     client = TestClient(app)

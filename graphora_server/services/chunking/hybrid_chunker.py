@@ -25,14 +25,14 @@ def _require_chunking_extras() -> None:
         )
 
 
-from graphora_server.services.chunking.models import (
+from graphora_server.services.chunking.models import (  # noqa: E402 — preceded by lazy-import guard
     ChunkingResult,
     ChunkMetadata,
     ChunkQualityMetrics,
 )
-from graphora_server.services.chunking.config import ChunkingConfig
-from graphora_server.utils.logger import logger
-from graphora_server.config import settings
+from graphora_server.services.chunking.config import ChunkingConfig  # noqa: E402
+from graphora_server.utils.logger import logger  # noqa: E402
+from graphora_server.config import settings  # noqa: E402
 
 
 class ChunkingStrategy(str, Enum):
@@ -222,7 +222,10 @@ class HybridDocumentChunker:
 
     def __init__(
         self,
-        semantic_chunker=None,  # type: Optional["SemanticChunker"]  — lazy import
+        # semantic_chunker is typed loosely because SemanticChunker is a
+        # lazy-imported class; the real type is checked dynamically via
+        # _require_chunking_extras before any use.
+        semantic_chunker=None,
         strategy: ChunkingStrategy = ChunkingStrategy.HYBRID,
         config: Optional[ChunkingConfig] = None,
     ):

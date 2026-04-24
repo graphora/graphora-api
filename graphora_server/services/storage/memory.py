@@ -15,7 +15,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from graphora_server.schemas.graph import Edge, GraphResponse, Node
 
 if TYPE_CHECKING:
-    from graphora_server.schemas.graph_changes import SaveGraphRequest, SaveGraphResponse
+    from graphora_server.schemas.graph_changes import (
+        SaveGraphRequest,
+        SaveGraphResponse,
+    )
 from graphora_server.services.storage.interface import GraphStorageInterface
 from graphora_server.services.storage.models import (
     StorageBatchResult,

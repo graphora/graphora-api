@@ -27,7 +27,10 @@ from graphora_server.schemas.transform import (
 )
 from graphora_server.services.transform.status_models import TransformationStage
 from graphora_server.services.transform.validators import FileValidator
-from graphora_server.services.transform.flows import document_transformation_flow, progress_tracker
+from graphora_server.services.transform.flows import (
+    document_transformation_flow,
+    progress_tracker,
+)
 from graphora_server.services.transform.status_models import DetailedTransformStatus
 from graphora_server.config import settings
 from pathlib import Path
@@ -517,8 +520,12 @@ async def upload_documents_auto_schema(
                 )
         elif auto_schema:
             # No text extracted - use default generic schema
-            from graphora_server.services.schema_inference import get_default_generic_schema
-            from graphora_server.services.ontology_storage_service import ontology_storage_service
+            from graphora_server.services.schema_inference import (
+                get_default_generic_schema,
+            )
+            from graphora_server.services.ontology_storage_service import (
+                ontology_storage_service,
+            )
 
             generic_yaml = get_default_generic_schema()
             ontology_id = f"auto_{uuid.uuid4().hex[:12]}"

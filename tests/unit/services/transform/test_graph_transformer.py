@@ -290,7 +290,9 @@ class TestGraphTransformerContextBuilding:
     @pytest.mark.asyncio
     async def test_nodes_context_should_be_sorted_deterministically(self):
         """Nodes context should sort by type, properties, id for consistency."""
-        from graphora_server.services.transform.graph_transformer import _build_nodes_context
+        from graphora_server.services.transform.graph_transformer import (
+            _build_nodes_context,
+        )
 
         NodeFactory.reset_counter()
 

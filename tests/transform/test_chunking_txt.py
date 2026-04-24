@@ -5,7 +5,10 @@ from graphora_server.services.chunking.config import (
     ChunkingConfig,
     ChunkingStrategy as ConfigChunkingStrategy,
 )
-from graphora_server.services.chunking.hybrid_chunker import HybridDocumentChunker, ChunkingStrategy
+from graphora_server.services.chunking.hybrid_chunker import (
+    HybridDocumentChunker,
+    ChunkingStrategy,
+)
 from graphora_server.services.transform.graph_transformer import _build_nodes_context
 from graphora_server.services.transform.models import BaseNode
 

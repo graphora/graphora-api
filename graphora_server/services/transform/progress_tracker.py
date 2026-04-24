@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 
 import psutil
+
 try:
     import redis
 except ImportError:  # pragma: no cover — exercised without [redis] extra

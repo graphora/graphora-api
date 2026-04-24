@@ -82,7 +82,9 @@ def _patch_quality_service(monkeypatch, service: QualityService):
     async def _get_service(user_id: str) -> QualityService:
         return service
 
-    monkeypatch.setattr("graphora_server.api.quality._get_quality_service", _get_service)
+    monkeypatch.setattr(
+        "graphora_server.api.quality._get_quality_service", _get_service
+    )
 
 
 def test_list_quality_violations_endpoint_filters(test_client, monkeypatch):

@@ -456,7 +456,10 @@ class TestCacheFactory:
             mock_settings.LLM_CACHE_MAX_ENTRIES = 128
             mock_settings.LLM_CACHE_URL = None
 
-            from graphora_server.services.llm.client import _create_cache, _AsyncLRUCache
+            from graphora_server.services.llm.client import (
+                _create_cache,
+                _AsyncLRUCache,
+            )
 
             cache = _create_cache("test-namespace")
 

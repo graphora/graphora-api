@@ -48,10 +48,10 @@ def _require_er_extras() -> None:
         )
 
 
-import logging
-import copy
-import traceback
-from graphora_server.services.merge.learning import merge_learning_service
+import logging  # noqa: E402 — preceded by lazy-import guard
+import copy  # noqa: E402
+import traceback  # noqa: E402
+from graphora_server.services.merge.learning import merge_learning_service  # noqa: E402
 
 
 CANONICAL_COLUMN_PREFIX = "canonical__"

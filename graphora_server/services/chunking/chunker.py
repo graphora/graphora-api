@@ -36,15 +36,21 @@ def _require_chunking_extras() -> None:
     HuggingFaceEmbeddings = _HuggingFaceEmbeddings
 
 
-from graphora_server.services.chunking.models import (
+from graphora_server.services.chunking.models import (  # noqa: E402 — preceded by lazy-import guard
     ChunkingResult,
     ChunkMetadata,
     ChunkQualityMetrics,
 )
-from graphora_server.services.chunking.hybrid_chunker import HybridDocumentChunker, ChunkingStrategy
-from graphora_server.services.chunking.config import ChunkingConfig, DEFAULT_CONFIGS
-from graphora_server.utils.logger import logger
-from graphora_server.config import settings
+from graphora_server.services.chunking.hybrid_chunker import (  # noqa: E402
+    HybridDocumentChunker,
+    ChunkingStrategy,
+)
+from graphora_server.services.chunking.config import (  # noqa: E402
+    ChunkingConfig,
+    DEFAULT_CONFIGS,
+)
+from graphora_server.utils.logger import logger  # noqa: E402
+from graphora_server.config import settings  # noqa: E402
 
 # Global embedding model cache - initialized once per process
 _embedding_cache = None

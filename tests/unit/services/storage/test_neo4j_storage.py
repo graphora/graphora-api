@@ -186,8 +186,12 @@ class TestNeo4jStorageInitialization:
     @pytest.mark.asyncio
     async def test_should_create_driver_with_provided_uri(self):
         """When initializing, should create driver with provided URI."""
-        with patch("graphora_server.services.storage.neo4j.AsyncGraphDatabase") as mock_async_db:
-            with patch("graphora_server.services.storage.neo4j.GraphDatabase") as mock_sync_db:
+        with patch(
+            "graphora_server.services.storage.neo4j.AsyncGraphDatabase"
+        ) as mock_async_db:
+            with patch(
+                "graphora_server.services.storage.neo4j.GraphDatabase"
+            ) as mock_sync_db:
                 mock_driver = AsyncMock()
                 mock_async_db.driver.return_value = mock_driver
 
@@ -222,8 +226,12 @@ class TestNeo4jStorageInitialization:
         from neo4j.exceptions import AuthError
         from graphora_server.services.storage.exceptions import StorageAuthError
 
-        with patch("graphora_server.services.storage.neo4j.AsyncGraphDatabase") as _mock_async_db:
-            with patch("graphora_server.services.storage.neo4j.GraphDatabase") as mock_sync_db:
+        with patch(
+            "graphora_server.services.storage.neo4j.AsyncGraphDatabase"
+        ) as _mock_async_db:
+            with patch(
+                "graphora_server.services.storage.neo4j.GraphDatabase"
+            ) as mock_sync_db:
                 mock_sync_db.driver.side_effect = AuthError("Invalid credentials")
 
                 from graphora_server.services.storage.neo4j import Neo4jStorage
@@ -243,8 +251,12 @@ class TestNeo4jStorageInitialization:
         from neo4j.exceptions import ServiceUnavailable
         from graphora_server.services.storage.exceptions import StorageConnectionError
 
-        with patch("graphora_server.services.storage.neo4j.AsyncGraphDatabase") as _mock_async_db:
-            with patch("graphora_server.services.storage.neo4j.GraphDatabase") as mock_sync_db:
+        with patch(
+            "graphora_server.services.storage.neo4j.AsyncGraphDatabase"
+        ) as _mock_async_db:
+            with patch(
+                "graphora_server.services.storage.neo4j.GraphDatabase"
+            ) as mock_sync_db:
                 mock_sync_db.driver.side_effect = ServiceUnavailable(
                     "Connection refused"
                 )
@@ -263,8 +275,12 @@ class TestNeo4jStorageInitialization:
     @pytest.mark.asyncio
     async def test_should_skip_sync_connectivity_test_with_transaction_manager(self):
         """When transaction_manager is provided, skip sync connectivity test."""
-        with patch("graphora_server.services.storage.neo4j.AsyncGraphDatabase") as mock_async_db:
-            with patch("graphora_server.services.storage.neo4j.GraphDatabase") as mock_sync_db:
+        with patch(
+            "graphora_server.services.storage.neo4j.AsyncGraphDatabase"
+        ) as mock_async_db:
+            with patch(
+                "graphora_server.services.storage.neo4j.GraphDatabase"
+            ) as mock_sync_db:
                 mock_driver = AsyncMock()
                 mock_async_db.driver.return_value = mock_driver
 
@@ -975,7 +991,11 @@ class TestNeo4jStorageFindSimilarNodes:
     @pytest.mark.asyncio
     async def test_should_skip_system_properties_in_similarity(self):
         """System properties should be excluded from similarity search."""
-        from graphora_server.utils.constants import SYSTEM_PROPERTIES, TRANSFORM_ID, VALID_FROM
+        from graphora_server.utils.constants import (
+            SYSTEM_PROPERTIES,
+            TRANSFORM_ID,
+            VALID_FROM,
+        )
 
         properties = {
             "name": "Acme Corp",

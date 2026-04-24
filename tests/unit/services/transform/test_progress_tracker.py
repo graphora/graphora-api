@@ -47,7 +47,9 @@ def mock_settings():
 @pytest.fixture
 def progress_tracker(mock_redis, mock_settings):
     """Create ProgressTracker with mocked dependencies."""
-    with patch("graphora_server.services.transform.progress_tracker.redis") as mock_redis_module:
+    with patch(
+        "graphora_server.services.transform.progress_tracker.redis"
+    ) as mock_redis_module:
         mock_redis_module.from_url.return_value = mock_redis
 
         from graphora_server.services.transform.progress_tracker import ProgressTracker
@@ -477,7 +479,9 @@ class TestResourceMetrics:
 
     def test_should_return_dict_with_required_keys(self, progress_tracker):
         """Should return metrics dict with required keys."""
-        with patch("graphora_server.services.transform.progress_tracker.psutil") as mock_psutil:
+        with patch(
+            "graphora_server.services.transform.progress_tracker.psutil"
+        ) as mock_psutil:
             mock_process = MagicMock()
             mock_process.cpu_percent.return_value = 25.0
             mock_process.memory_info.return_value = MagicMock(rss=1024 * 1024 * 512)

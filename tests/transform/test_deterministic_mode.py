@@ -32,7 +32,10 @@ from graphora_server.services.transform.graph_transformer import (  # noqa: E402
     _build_nodes_context,
     _build_relationships_context,
 )
-from graphora_server.services.transform.models import BaseNode, RelationshipInstance  # noqa: E402
+from graphora_server.services.transform.models import (  # noqa: E402
+    BaseNode,
+    RelationshipInstance,
+)
 
 
 class CompanyModel(BaseModel):

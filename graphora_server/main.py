@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 import httpx
+
 try:
     import redis.asyncio as redis_async
 except ImportError:  # pragma: no cover — exercised without [redis] extra

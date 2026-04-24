@@ -102,9 +102,12 @@ class TestGetCurrentAuth:
         )
 
         with patch(
-            "graphora_server.auth.dependencies._get_jwk_client", return_value=mock_jwk_client
+            "graphora_server.auth.dependencies._get_jwk_client",
+            return_value=mock_jwk_client,
         ):
-            with patch("graphora_server.auth.dependencies.jwt.decode", mock_jwt_decoder.decode):
+            with patch(
+                "graphora_server.auth.dependencies.jwt.decode", mock_jwt_decoder.decode
+            ):
 
                 # This would work with proper mocking of the full chain
                 # For now, test the mock behavior

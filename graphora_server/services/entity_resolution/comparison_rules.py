@@ -148,7 +148,9 @@ class ComparisonRuleGenerator:
         )
 
         # Import here to avoid circular dependency
-        from graphora_server.services.entity_resolution.blocking import BlockingRuleGenerator
+        from graphora_server.services.entity_resolution.blocking import (
+            BlockingRuleGenerator,
+        )
 
         blocking_generator = BlockingRuleGenerator()
         blocking_rules = blocking_generator.generate_rules_for_entity(

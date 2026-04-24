@@ -16,7 +16,10 @@ from graphora_server.services.chat_session_service import (
     ChatContextType,
 )
 from graphora_server.services.audit_service import AuditService
-from graphora_server.utils.llm_helper import get_user_llm_credentials, create_gemini_client
+from graphora_server.utils.llm_helper import (
+    get_user_llm_credentials,
+    create_gemini_client,
+)
 from graphora_server.utils.llm_usage_tracker import track_gemini_usage
 
 logger = logging.getLogger(__name__)

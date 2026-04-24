@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, oss ]
+    branches: [ main, oss, revamp ]
   pull_request:
-    branches: [ main, oss ]
+    branches: [ main, oss, revamp ]
 
 permissions:
   contents: read
@@ -32,11 +32,12 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "${HOME}/.local/bin" >> $GITHUB_PATH
 
-      - name: Sync dependencies
-        run: uv sync
-
-      - name: Install dev tooling
-        run: uv sync --group dev
+      # After PR4-a, heavy deps (fastapi, splink, neo4j, redis, etc.)
+      # live behind extras. CI exercises the full test surface, so pull
+      # all extras and the dev group. Base-only install is separately
+      # smoke-tested below.
+      - name: Sync dependencies (all extras + dev)
+        run: uv sync --all-extras --group dev
 
       - name: Lint
         run: make lint
@@ -50,3 +51,40 @@ jobs:
 
       - name: Dead code scan
         run: make deadcode
+
+      # Smoke test: fresh venv with base install only must succeed
+      # and the console script must be registered. Catches regressions
+      # that break `pip install graphora-server` for users who don't
+      # need the full server runtime.
+      - name: Base install smoke test
+        run: |
+          python -m venv /tmp/base
+          /tmp/base/bin/pip install --quiet --upgrade pip
+          /tmp/base/bin/pip install --quiet .
+          /tmp/base/bin/python -c "import graphora_server; print('ok base import')"
+          /tmp/base/bin/graphora-server --help > /dev/null
+          echo "ok console script registered"
+
+      # Smoke test: wheel build produces all subpackage modules plus
+      # the .baml and ontology yaml assets. Catches the
+      # packages.find regression pattern that bit us in PR2 review.
+      - name: Wheel build smoke test
+        run: |
+          uv run --with build python -m build --wheel --outdir /tmp/wheel
+          WHEEL=$(ls /tmp/wheel/*.whl)
+          PY_COUNT=$(unzip -l "$WHEEL" | grep -c 'graphora_server.*\.py$')
+          BAML_COUNT=$(unzip -l "$WHEEL" | grep -c '\.baml$')
+          YAML_COUNT=$(unzip -l "$WHEEL" | grep -c 'templates.*\.yaml$')
+          echo "python modules: $PY_COUNT  baml: $BAML_COUNT  yaml: $YAML_COUNT"
+          if [ "$PY_COUNT" -lt 100 ]; then
+            echo "::error::wheel has fewer than 100 python modules; packages.find misconfigured?"
+            exit 1
+          fi
+          if [ "$BAML_COUNT" -lt 10 ]; then
+            echo "::error::wheel missing baml assets; package-data misconfigured?"
+            exit 1
+          fi
+          if [ "$YAML_COUNT" -lt 5 ]; then
+            echo "::error::wheel missing ontology templates; package-data misconfigured?"
+            exit 1
+          fi

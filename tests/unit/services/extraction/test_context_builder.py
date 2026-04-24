@@ -3,7 +3,11 @@
 import pytest
 from graphora_server.services.extraction.context_builder import EnhancedContextBuilder
 from graphora_server.services.extraction.config import ContextConfig
-from graphora_server.services.extraction.models import ExtractionGap, GapType, ValidationResult
+from graphora_server.services.extraction.models import (
+    ExtractionGap,
+    GapType,
+    ValidationResult,
+)
 from graphora_server.services.transform.models import BaseNode, RelationshipInstance
 
 

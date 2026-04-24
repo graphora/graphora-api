@@ -2,7 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 from graphora_server.schemas.graph import GraphResponse
 from graphora_server.schemas.graph_changes import SaveGraphRequest, SaveGraphResponse
-from graphora_server.services.user_db_service import UserDatabaseService, is_memory_storage_enabled
+from graphora_server.services.user_db_service import (
+    UserDatabaseService,
+    is_memory_storage_enabled,
+)
 from graphora_server.utils.logger import logger
 import traceback
 from graphora_server.auth import AuthContext, get_current_auth
