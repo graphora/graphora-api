@@ -738,6 +738,7 @@ async def get_inferred_ontology(
     )
     from graphora_server.services.storage.factory import user_has_staging_db
 
+    graph_service = None
     try:
         use_in_memory = is_memory_storage_enabled() or not await user_has_staging_db(
             user_id
@@ -796,6 +797,9 @@ async def get_inferred_ontology(
         raise HTTPException(
             status_code=500, detail=f"Failed to infer ontology: {str(e)}"
         )
+    finally:
+        if graph_service is not None:
+            graph_service.close()
 
 
 @router.post("/transform/schemaless/upload", response_model=TransformInitResponse)
@@ -1005,6 +1009,7 @@ async def finalize_inferred_ontology(
         ontology_storage_service,
     )
 
+    graph_service = None
     try:
         use_in_memory = is_memory_storage_enabled() or not await user_has_staging_db(
             user_id
@@ -1073,3 +1078,6 @@ async def finalize_inferred_ontology(
         raise HTTPException(
             status_code=500, detail=f"Failed to finalize ontology: {str(e)}"
         )
+    finally:
+        if graph_service is not None:
+            graph_service.close()

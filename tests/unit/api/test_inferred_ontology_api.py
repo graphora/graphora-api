@@ -182,3 +182,101 @@ relationships:
 
         assert resp.status_code == 400
         assert "Empty response" in resp.json()["detail"]
+
+    def test_staging_path_closes_graph_service(self, test_client: TestClient) -> None:
+        """Regression: the staging-DB branch must close graph_service.
+
+        Previous bug — both ontology endpoints opened a staging
+        graph service via UserDatabaseService.get_staging_graph_service
+        but never called .close() in a finally block, leaking
+        connections on every call.
+        """
+        mock_client = _mock_llm_response(
+            """version: "0.1.0"
+entities:
+  Person:
+    properties:
+      name:
+        type: str
+"""
+        )
+
+        mock_graph_service = MagicMock()
+        mock_graph_service.get_graph_by_transform_id.return_value = (
+            _graph_with_two_types()
+        )
+        mock_graph_service.close = MagicMock()
+
+        with (
+            patch(
+                "graphora_server.services.user_db_service.is_memory_storage_enabled",
+                return_value=False,
+            ),
+            patch(
+                "graphora_server.services.storage.factory.user_has_staging_db",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch.object(
+                __import__(
+                    "graphora_server.api.transform", fromlist=["UserDatabaseService"]
+                ).UserDatabaseService,
+                "get_staging_graph_service",
+                new=AsyncMock(return_value=mock_graph_service),
+            ),
+            patch(
+                "graphora_server.services.schema_postprocess.get_user_llm_credentials",
+                new_callable=AsyncMock,
+                return_value=("k", "m"),
+            ),
+            patch(
+                "graphora_server.services.schema_postprocess.create_gemini_client",
+                return_value=mock_client,
+            ),
+        ):
+            resp = test_client.get("/api/v1/transform/tx-1/inferred-ontology")
+
+        assert resp.status_code == 200, resp.text
+        mock_graph_service.close.assert_called_once()
+
+    def test_staging_path_closes_on_error(self, test_client: TestClient) -> None:
+        """Resource cleanup must run even when the LLM call fails."""
+        mock_client = _mock_llm_response("")  # empty -> ValueError -> 400
+
+        mock_graph_service = MagicMock()
+        mock_graph_service.get_graph_by_transform_id.return_value = (
+            _graph_with_two_types()
+        )
+        mock_graph_service.close = MagicMock()
+
+        with (
+            patch(
+                "graphora_server.services.user_db_service.is_memory_storage_enabled",
+                return_value=False,
+            ),
+            patch(
+                "graphora_server.services.storage.factory.user_has_staging_db",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch.object(
+                __import__(
+                    "graphora_server.api.transform", fromlist=["UserDatabaseService"]
+                ).UserDatabaseService,
+                "get_staging_graph_service",
+                new=AsyncMock(return_value=mock_graph_service),
+            ),
+            patch(
+                "graphora_server.services.schema_postprocess.get_user_llm_credentials",
+                new_callable=AsyncMock,
+                return_value=("k", "m"),
+            ),
+            patch(
+                "graphora_server.services.schema_postprocess.create_gemini_client",
+                return_value=mock_client,
+            ),
+        ):
+            resp = test_client.get("/api/v1/transform/tx-1/inferred-ontology")
+
+        assert resp.status_code == 400
+        mock_graph_service.close.assert_called_once()
