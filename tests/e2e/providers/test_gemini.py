@@ -66,23 +66,44 @@ def _patch_credentials(
     gemini_api_key: str,
     gemini_model: str,
 ) -> None:
-    """Inject test creds into every get_user_llm_credentials call site.
+    """Inject test creds into every credentials/registry call site.
 
-    graphora_server.services.llm.client imports get_user_llm_credentials
-    from utils.llm_helper at module load, so we have to patch BOTH the
-    helper module AND the re-exported name the client holds.
+    services/llm/client.py imports both ``get_user_llm_credentials``
+    (legacy 2-tuple, used by PDF-binary extraction) and
+    ``get_baml_registry_for_user`` (provider-aware, used by the 5
+    chunk-based BAML callsites). Patch both so neither path tries to
+    hit Postgres for AI config lookups in CI.
     """
+    from graphora_server.utils.llm_helper import create_baml_client_registry
 
-    async def fake(user_id: str) -> Tuple[str, str]:
+    async def fake_creds(user_id: str) -> Tuple[str, str]:
         return gemini_api_key, gemini_model
 
+    async def fake_registry(user_id: str):
+        registry = create_baml_client_registry(
+            api_key=gemini_api_key,
+            model_name=gemini_model,
+            provider="gemini",
+        )
+        return registry, gemini_model, "gemini"
+
+    # Legacy 2-tuple — covers extract_*_from_pdf callsites.
     monkeypatch.setattr(
         "graphora_server.utils.llm_helper.get_user_llm_credentials",
-        fake,
+        fake_creds,
     )
     monkeypatch.setattr(
         "graphora_server.services.llm.client.get_user_llm_credentials",
-        fake,
+        fake_creds,
+    )
+    # Provider-aware BAML registry — covers chunk-based extraction.
+    monkeypatch.setattr(
+        "graphora_server.utils.llm_helper.get_baml_registry_for_user",
+        fake_registry,
+    )
+    monkeypatch.setattr(
+        "graphora_server.services.llm.client.get_baml_registry_for_user",
+        fake_registry,
     )
 
 
