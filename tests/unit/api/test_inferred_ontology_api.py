@@ -101,13 +101,9 @@ relationships:
                 return_value=_graph_with_two_types(),
             ),
             patch(
-                "graphora_server.services.schema_postprocess.get_user_llm_credentials",
+                "graphora_server.services.schema_postprocess.get_llm_client_for_user",
                 new_callable=AsyncMock,
-                return_value=("k", "m"),
-            ),
-            patch(
-                "graphora_server.services.schema_postprocess.create_gemini_client",
-                return_value=mock_client,
+                return_value=(mock_client, "m", "gemini"),
             ),
         ):
             resp = test_client.get("/api/v1/transform/tx-1/inferred-ontology")
@@ -169,13 +165,9 @@ relationships:
                 return_value=_graph_with_two_types(),
             ),
             patch(
-                "graphora_server.services.schema_postprocess.get_user_llm_credentials",
+                "graphora_server.services.schema_postprocess.get_llm_client_for_user",
                 new_callable=AsyncMock,
-                return_value=("k", "m"),
-            ),
-            patch(
-                "graphora_server.services.schema_postprocess.create_gemini_client",
-                return_value=mock_client,
+                return_value=(mock_client, "m", "gemini"),
             ),
         ):
             resp = test_client.get("/api/v1/transform/tx-1/inferred-ontology")
@@ -225,13 +217,9 @@ entities:
                 new=AsyncMock(return_value=mock_graph_service),
             ),
             patch(
-                "graphora_server.services.schema_postprocess.get_user_llm_credentials",
+                "graphora_server.services.schema_postprocess.get_llm_client_for_user",
                 new_callable=AsyncMock,
-                return_value=("k", "m"),
-            ),
-            patch(
-                "graphora_server.services.schema_postprocess.create_gemini_client",
-                return_value=mock_client,
+                return_value=(mock_client, "m", "gemini"),
             ),
         ):
             resp = test_client.get("/api/v1/transform/tx-1/inferred-ontology")
@@ -267,13 +255,9 @@ entities:
                 new=AsyncMock(return_value=mock_graph_service),
             ),
             patch(
-                "graphora_server.services.schema_postprocess.get_user_llm_credentials",
+                "graphora_server.services.schema_postprocess.get_llm_client_for_user",
                 new_callable=AsyncMock,
-                return_value=("k", "m"),
-            ),
-            patch(
-                "graphora_server.services.schema_postprocess.create_gemini_client",
-                return_value=mock_client,
+                return_value=(mock_client, "m", "gemini"),
             ),
         ):
             resp = test_client.get("/api/v1/transform/tx-1/inferred-ontology")

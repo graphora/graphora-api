@@ -26,9 +26,9 @@ from graphora_server.utils.func_helper import retry_async
 from graphora_server.utils.llm_usage_tracker import track_gemini_usage
 from graphora_server.utils.logger import logger
 from graphora_server.utils.llm_helper import (
-    get_user_llm_credentials,
     create_gemini_client,
-    create_baml_client_registry,
+    get_baml_registry_for_user,
+    get_user_llm_credentials,
 )
 from graphora_server.config import settings
 
@@ -524,8 +524,9 @@ class LLMClient:
             raise ValueError("user_id is required to get LLM credentials")
 
         # Get user's LLM credentials and create client registry
-        api_key, model_name = await get_user_llm_credentials(user_id)
-        client_registry = create_baml_client_registry(api_key, model_name)
+        client_registry, model_name, _provider = await get_baml_registry_for_user(
+            user_id
+        )
 
         chunk_hash = md5(chunk)
         ontology_hash = md5(ontology_yaml or "")
@@ -616,8 +617,9 @@ class LLMClient:
             raise ValueError("user_id is required to get LLM credentials")
 
         # Get user's LLM credentials and create client registry
-        api_key, model_name = await get_user_llm_credentials(user_id)
-        client_registry = create_baml_client_registry(api_key, model_name)
+        client_registry, model_name, _provider = await get_baml_registry_for_user(
+            user_id
+        )
 
         chunk_hash = md5(chunk)
         ontology_hash = md5(ontology_yaml or "")
@@ -707,8 +709,9 @@ class LLMClient:
             raise ValueError("user_id is required to get LLM credentials")
 
         # Get user's LLM credentials and create client registry
-        api_key, model_name = await get_user_llm_credentials(user_id)
-        client_registry = create_baml_client_registry(api_key, model_name)
+        client_registry, model_name, _provider = await get_baml_registry_for_user(
+            user_id
+        )
 
         # Use BAML tracking if user_id provided
         if user_id:
@@ -754,8 +757,9 @@ class LLMClient:
             raise ValueError("user_id is required to get LLM credentials")
 
         # Get user's LLM credentials and create client registry
-        api_key, model_name = await get_user_llm_credentials(user_id)
-        client_registry = create_baml_client_registry(api_key, model_name)
+        client_registry, model_name, _provider = await get_baml_registry_for_user(
+            user_id
+        )
 
         # Use BAML tracking if user_id provided
         if user_id:
@@ -793,8 +797,9 @@ class LLMClient:
             raise ValueError("user_id is required to get LLM credentials")
 
         # Get user's LLM credentials and create client registry
-        api_key, model_name = await get_user_llm_credentials(user_id)
-        client_registry = create_baml_client_registry(api_key, model_name)
+        client_registry, model_name, _provider = await get_baml_registry_for_user(
+            user_id
+        )
 
         # Use BAML tracking if user_id provided
         if user_id:

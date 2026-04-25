@@ -309,6 +309,27 @@ class Settings(BaseSettings):
         default=None, description="Clerk backend API key for management operations"
     )
 
+    # LLM provider env-var fast path. When LLM_PROVIDER=ollama is set,
+    # get_llm_client_for_user skips the DB lookup and serves the
+    # client from these env values — the no-key local path. Production
+    # multi-user deployments leave LLM_PROVIDER unset and configure
+    # providers per-user via /api/v1/ai_config.
+    LLM_PROVIDER: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override LLM provider via env. Currently 'ollama' is the only "
+            "supported override; 'gemini' is the default DB-backed flow."
+        ),
+    )
+    OLLAMA_HOST: str = Field(
+        default="http://localhost:11434",
+        description="Ollama server URL when LLM_PROVIDER=ollama",
+    )
+    OLLAMA_MODEL: str = Field(
+        default="llama3.2",
+        description="Ollama model name when LLM_PROVIDER=ollama",
+    )
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def split_cors_origins(cls, value):

@@ -109,6 +109,34 @@ make dev
 
 No database setup required. The system will use in-memory storage and auto-infer schemas.
 
+### No-Key Local Mode (Ollama)
+
+Run extraction entirely offline by pointing Graphora at a local Ollama server:
+
+```bash
+# Install + pull a model
+brew install ollama
+ollama serve &
+ollama pull llama3.2
+
+# Set environment variables
+export AUTH_BYPASS_ENABLED=true
+export STORAGE_TYPE=memory
+export LLM_PROVIDER=ollama
+export OLLAMA_HOST=http://localhost:11434
+export OLLAMA_MODEL=llama3.2
+
+# Install the Ollama extra and start the server
+pip install 'graphora-server[server,ollama]'
+make dev
+```
+
+Tradeoffs vs. the Gemini path:
+
+* **PDF handling:** Gemini ingests PDFs natively (multimodal). Ollama is text-only, so PDF inputs are pre-extracted via pymupdf/pypdf before chunking. Layout/table fidelity drops; clean text extracts well.
+* **Quality:** small models (llama3.2:1b–3b, phi-3:mini) extract simple entity types reliably but degrade on nested relationships. Larger models (llama3.1:8b, qwen2.5:7b) are closer to Gemini-flash quality.
+* **Speed:** depends on hardware. CPU-only is slow; an M-series Mac or any consumer GPU is comfortable.
+
 ### Full Setup with Neo4j
 
 For production deployments:

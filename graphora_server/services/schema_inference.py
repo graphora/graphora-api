@@ -14,8 +14,7 @@ import yaml
 from google.genai import types
 
 from graphora_server.utils.llm_helper import (
-    get_user_llm_credentials,
-    create_gemini_client,
+    get_llm_client_for_user,
 )
 from graphora_server.services.ontology_storage_service import ontology_storage_service
 
@@ -91,9 +90,8 @@ async def infer_schema_from_text(
         f"Inferring schema from {len(sample)} characters of text for user {user_id}"
     )
 
-    # Get user's LLM credentials
-    api_key, model_name = await get_user_llm_credentials(user_id)
-    client = create_gemini_client(api_key)
+    # Provider-aware: routes to Gemini OR Ollama based on env/config.
+    client, model_name, _provider = await get_llm_client_for_user(user_id)
 
     # Call LLM for schema inference
     prompt = SCHEMA_INFERENCE_PROMPT.format(text_sample=sample)

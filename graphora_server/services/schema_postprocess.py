@@ -30,7 +30,7 @@ import yaml
 from google.genai import types
 
 from graphora_server.utils.llm_helper import (
-    create_gemini_client,
+    get_llm_client_for_user,
     get_user_llm_credentials,
 )
 
@@ -177,14 +177,22 @@ async def infer_ontology_from_graph(
 ) -> Dict[str, Any]:
     """Infer a refined ontology YAML dict from an emerged graph.
 
+    Provider-agnostic: uses ``get_llm_client_for_user`` so the same
+    code path runs against Gemini (default) or Ollama (when
+    LLM_PROVIDER=ollama is set or the user's stored provider is
+    ollama). Both clients expose the same
+    ``client.models.generate_content`` shape.
+
     Args:
         nodes: Extracted nodes as dicts with at least ``id``, ``type``,
             optionally ``label`` and ``properties``.
         edges: Extracted edges as dicts with ``source``, ``target``,
             ``type``.
         user_id: For LLM credential lookup.
-        client_factory: Test hook. ``(api_key) -> genai.Client``.
-            Production callers leave this None.
+        client_factory: Test hook. Legacy 2-tuple form
+            ``(api_key) -> client`` is still accepted for backward
+            compat with the existing tests; when set, the legacy
+            Gemini-only path is taken.
 
     Returns:
         Parsed ontology dict with keys ``version``, ``entities``, and
@@ -201,9 +209,13 @@ async def infer_ontology_from_graph(
     summary = summarize_graph(nodes, edges)
     prompt = POSTPROCESS_PROMPT.format(graph_summary=summary)
 
-    api_key, model_name = await get_user_llm_credentials(user_id)
-    factory = client_factory or create_gemini_client
-    client = factory(api_key)
+    if client_factory is not None:
+        # Legacy test-hook path. Keeps the existing test suite green
+        # while the new provider abstraction lands.
+        api_key, model_name = await get_user_llm_credentials(user_id)
+        client = client_factory(api_key)
+    else:
+        client, model_name, _provider = await get_llm_client_for_user(user_id)
 
     logger.info(
         "Running post-hoc ontology inference for user %s over %d nodes / %d edges",

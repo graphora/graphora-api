@@ -47,6 +47,73 @@ from pypdf import PdfReader, PdfWriter
 progress_tracker = ProgressTracker()
 
 
+async def _should_pre_extract_pdfs(user_id: str) -> bool:
+    """Return True when the active LLM provider needs pre-extracted text.
+
+    Gemini ingests PDF bytes natively (multimodal). Ollama is text-only,
+    so for Ollama users we extract PDF → text via DocumentParser before
+    routing through ``construct_knowledge_graph(chunks=...)``.
+
+    Resolution order matches ``get_llm_client_for_user``:
+        1. ``LLM_PROVIDER=ollama`` env var → True (no DB lookup)
+        2. User's stored provider == "ollama" → True
+        3. Anything else → False (the existing Gemini-binary fast path)
+
+    Errors fetching the user's stored config fail closed to False so a
+    transient DB issue doesn't silently switch every user to the
+    text-only path.
+    """
+    from graphora_server.config import get_settings
+
+    settings_obj = get_settings()
+    if (settings_obj.LLM_PROVIDER or "").lower() == "ollama":
+        return True
+
+    try:
+        from graphora_server.services.ai_config_service import AIConfigService
+
+        result = await AIConfigService().get_user_provider_secret(user_id)
+        if not result:
+            return False
+        provider_name, _api_key, _model = result
+        return provider_name == "ollama"
+    except Exception as exc:
+        logger.warning(
+            "PDF-routing provider lookup failed for user %s: %s — defaulting "
+            "to Gemini binary path",
+            user_id,
+            exc,
+        )
+        return False
+
+
+async def _pdf_to_text_file(pdf_path: str, output_dir: Path) -> Optional[str]:
+    """Extract a PDF to a sibling .txt file using DocumentParser.
+
+    Returns the new path on success, None when no text could be
+    extracted (e.g., scanned PDFs without OCR fallback). Used by the
+    Ollama branch — the resulting text file goes through the regular
+    chunking pipeline as if it were a .txt input.
+    """
+    from graphora_server.services.document_parser import DocumentParser
+
+    parser = DocumentParser()
+    text = await parser.parse_file(pdf_path)
+    if not text or not text.strip():
+        logger.warning(
+            "DocumentParser returned no text for %s; cannot route through "
+            "the Ollama text path",
+            pdf_path,
+        )
+        return None
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / (Path(pdf_path).stem + ".txt")
+    async with aiofiles.open(out_path, "w", encoding="utf-8") as fh:
+        await fh.write(text)
+    return str(out_path)
+
+
 @task(name="usage-track-document", retries=2, retry_delay_seconds=10)
 async def track_document_usage_task(
     user_id: str, request: DocumentUsageRequest, processing_started_at: datetime
@@ -286,15 +353,36 @@ async def document_transformation_flow(
         pdf_folder = Path(settings.UPLOAD_DIR) / transform_id / "pdf"
         pdf_folder.mkdir(parents=True, exist_ok=True)
 
+        # Provider gate: Ollama is text-only, so PDFs need to be
+        # pre-extracted to text instead of going through the Gemini
+        # binary path. Resolved once per flow — checking per-PDF would
+        # cost a DB lookup we don't need.
+        pdf_needs_text_extraction = await _should_pre_extract_pdfs(user_id)
+        pdf_text_folder = Path(settings.UPLOAD_DIR) / transform_id / "pdf-text"
+
         # Collect paths to chunk
         doc_paths_to_chunk: List[Tuple[str, Optional[ChunkingStrategy]]] = []
         for processed_path in processed_paths:
             suffix = Path(processed_path).suffix.lower()
             if suffix == ".pdf":
-                pdf_splits = split_pdf(
-                    input_pdf=processed_path, location=pdf_folder, pages=100
-                )
-                pdf_files.extend(pdf_splits)
+                if pdf_needs_text_extraction:
+                    text_path = await _pdf_to_text_file(processed_path, pdf_text_folder)
+                    if text_path:
+                        doc_paths_to_chunk.append(
+                            (text_path, ChunkingStrategy.STRUCTURAL)
+                        )
+                    else:
+                        logger.warning(
+                            "Skipping %s — PDF text extraction produced no "
+                            "content and the active provider cannot ingest "
+                            "PDFs natively",
+                            processed_path,
+                        )
+                else:
+                    pdf_splits = split_pdf(
+                        input_pdf=processed_path, location=pdf_folder, pages=100
+                    )
+                    pdf_files.extend(pdf_splits)
             else:
                 strategy_override = (
                     ChunkingStrategy.STRUCTURAL
