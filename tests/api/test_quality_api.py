@@ -5,16 +5,16 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock
 
-from app.api.quality import get_current_user_id
-from app.main import app
-from app.services.quality.models import (
+from graphora_server.api.quality import get_current_user_id
+from graphora_server.main import app
+from graphora_server.services.quality.models import (
     QualityMetrics,
     QualityResults,
     QualityRuleType,
     QualitySeverity,
     QualityViolation,
 )
-from app.services.quality.service import QualityService
+from graphora_server.services.quality.service import QualityService
 
 
 class _NoopNeo4j:
@@ -82,7 +82,9 @@ def _patch_quality_service(monkeypatch, service: QualityService):
     async def _get_service(user_id: str) -> QualityService:
         return service
 
-    monkeypatch.setattr("app.api.quality._get_quality_service", _get_service)
+    monkeypatch.setattr(
+        "graphora_server.api.quality._get_quality_service", _get_service
+    )
 
 
 def test_list_quality_violations_endpoint_filters(test_client, monkeypatch):

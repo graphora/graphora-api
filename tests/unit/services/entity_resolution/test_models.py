@@ -6,7 +6,7 @@ Ensures domain-agnostic behavior with ontology-driven configuration.
 
 import pytest
 
-from app.services.entity_resolution.models import (
+from graphora_server.services.entity_resolution.models import (
     DataType,
     ComparisonMethod,
     ComparisonPrior,

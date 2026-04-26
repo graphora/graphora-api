@@ -12,10 +12,10 @@ from io import BytesIO
 
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app.auth import get_current_user_id
-from app.schemas.transform import TransformStatus
-from app.services.transform.status_models import (
+from graphora_server.main import app
+from graphora_server.auth import get_current_user_id
+from graphora_server.schemas.transform import TransformStatus
+from graphora_server.services.transform.status_models import (
     DetailedTransformStatus,
     TransformationStage,
     StageStatus,
@@ -43,7 +43,7 @@ def test_client():
 @pytest.fixture
 def mock_audit_service():
     """Mock audit service."""
-    with patch("app.api.transform.audit_service") as mock:
+    with patch("graphora_server.api.transform.audit_service") as mock:
         mock.log_operation_start = AsyncMock(return_value="audit-123")
         mock.log_operation_success = AsyncMock()
         mock.log_operation_failure = AsyncMock()
@@ -53,7 +53,7 @@ def mock_audit_service():
 @pytest.fixture
 def mock_progress_tracker():
     """Mock progress tracker."""
-    with patch("app.api.transform.progress_tracker") as mock:
+    with patch("graphora_server.api.transform.progress_tracker") as mock:
         mock.initialize_transform = AsyncMock()
         mock.complete_stage = AsyncMock()
         mock.get_detailed_status = AsyncMock()
@@ -64,7 +64,7 @@ def mock_progress_tracker():
 @pytest.fixture
 def mock_file_validator():
     """Mock file validator."""
-    with patch("app.api.transform.FileValidator") as MockClass:
+    with patch("graphora_server.api.transform.FileValidator") as MockClass:
         instance = MagicMock()
         instance.validate = AsyncMock(return_value=MagicMock(is_valid=True, errors=[]))
         MockClass.return_value = instance
@@ -102,7 +102,7 @@ class TestFilenameSanitization:
 
     def test_sanitize_filename_should_allow_valid_names(self):
         """Should allow valid filenames."""
-        from app.api.transform import sanitize_filename
+        from graphora_server.api.transform import sanitize_filename
 
         assert sanitize_filename("document.pdf") == "document.pdf"
         assert sanitize_filename("my-file_2024.txt") == "my-file_2024.txt"
@@ -110,7 +110,7 @@ class TestFilenameSanitization:
 
     def test_sanitize_filename_should_reject_path_traversal(self):
         """Should reject path traversal attempts."""
-        from app.api.transform import sanitize_filename
+        from graphora_server.api.transform import sanitize_filename
 
         with pytest.raises(ValueError, match="path traversal"):
             sanitize_filename("../etc/passwd")
@@ -123,7 +123,7 @@ class TestFilenameSanitization:
 
     def test_sanitize_filename_should_reject_empty(self):
         """Should reject empty filenames."""
-        from app.api.transform import sanitize_filename
+        from graphora_server.api.transform import sanitize_filename
 
         with pytest.raises(ValueError, match="cannot be empty"):
             sanitize_filename("")
@@ -133,7 +133,7 @@ class TestFilenameSanitization:
 
     def test_sanitize_filename_should_reject_special_characters(self):
         """Should reject filenames with dangerous characters."""
-        from app.api.transform import sanitize_filename
+        from graphora_server.api.transform import sanitize_filename
 
         with pytest.raises(ValueError, match="disallowed characters"):
             sanitize_filename("file;rm -rf.txt")
@@ -143,7 +143,7 @@ class TestFilenameSanitization:
 
     def test_sanitize_filename_should_reject_dot_only(self):
         """Should reject dot-only filenames."""
-        from app.api.transform import sanitize_filename
+        from graphora_server.api.transform import sanitize_filename
 
         with pytest.raises(ValueError, match="Invalid filename"):
             sanitize_filename(".")
@@ -269,11 +269,11 @@ class TestUploadEndpointValidation:
 
         files = {"files": ("test.pdf", BytesIO(b"fake pdf content"), "application/pdf")}
 
-        with patch("app.api.transform.settings") as mock_settings:
+        with patch("graphora_server.api.transform.settings") as mock_settings:
             mock_settings.UPLOAD_DIR = "/tmp/test-uploads"
             mock_settings.API_V1_STR = "/api/v1"
 
-            with patch("app.api.transform.Path") as MockPath:
+            with patch("graphora_server.api.transform.Path") as MockPath:
                 mock_path = MagicMock()
                 mock_path.mkdir = MagicMock()
                 mock_path.exists.return_value = False
@@ -297,11 +297,11 @@ class TestUploadEndpointValidation:
         """Should reject filenames with path traversal."""
         files = {"files": ("../../../etc/passwd", BytesIO(b"content"), "text/plain")}
 
-        with patch("app.api.transform.settings") as mock_settings:
+        with patch("graphora_server.api.transform.settings") as mock_settings:
             mock_settings.UPLOAD_DIR = "/tmp/test-uploads"
             mock_settings.API_V1_STR = "/api/v1"
 
-            with patch("app.api.transform.Path") as MockPath:
+            with patch("graphora_server.api.transform.Path") as MockPath:
                 mock_path = MagicMock()
                 mock_path.mkdir = MagicMock()
                 MockPath.return_value = mock_path
@@ -335,7 +335,7 @@ class TestChunkingConfigValidation:
 
     def test_should_validate_chunking_strategy_enum(self):
         """Should validate chunking strategy values."""
-        from app.services.chunking.config import ChunkingConfig
+        from graphora_server.services.chunking.config import ChunkingConfig
 
         # Valid strategies
         valid_strategies = ["semantic", "structural", "hybrid", "recursive"]
@@ -361,11 +361,11 @@ class TestTransformAuthenticationRequirements:
         # Ensure auth bypass is disabled for this test
         monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        from app.config import Settings
+        from graphora_server.config import Settings
 
         test_settings = Settings()
 
-        with patch("app.auth.dependencies.settings", test_settings):
+        with patch("graphora_server.auth.dependencies.settings", test_settings):
             client = TestClient(app)
             response = client.get("/api/v1/transform/status/transform-123")
 
@@ -376,11 +376,11 @@ class TestTransformAuthenticationRequirements:
         """Cleanup endpoint should require authentication."""
         monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        from app.config import Settings
+        from graphora_server.config import Settings
 
         test_settings = Settings()
 
-        with patch("app.auth.dependencies.settings", test_settings):
+        with patch("graphora_server.auth.dependencies.settings", test_settings):
             client = TestClient(app)
             response = client.post("/api/v1/transform/status/transform-123/cleanup")
 

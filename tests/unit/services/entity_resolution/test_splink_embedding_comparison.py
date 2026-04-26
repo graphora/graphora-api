@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from unittest.mock import MagicMock
 
-from app.services.entity_resolution.splink_embedding_comparison import (
+from graphora_server.services.entity_resolution.splink_embedding_comparison import (
     EmbeddingAwareComparisonFactory,
     EMBEDDING_PRIOR,
     DEFAULT_EMBEDDING_THRESHOLDS,

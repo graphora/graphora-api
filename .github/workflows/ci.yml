@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, oss ]
+    branches: [ main, oss, revamp ]
   pull_request:
-    branches: [ main, oss ]
+    branches: [ main, oss, revamp ]
 
 permissions:
   contents: read
@@ -32,11 +32,12 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "${HOME}/.local/bin" >> $GITHUB_PATH
 
-      - name: Sync dependencies
-        run: uv sync
-
-      - name: Install dev tooling
-        run: uv sync --group dev
+      # After PR4-a, heavy deps (fastapi, splink, neo4j, redis, etc.)
+      # live behind extras. CI exercises the full test surface, so pull
+      # all extras and the dev group. Base-only install is separately
+      # smoke-tested below.
+      - name: Sync dependencies (all extras + dev)
+        run: uv sync --all-extras --group dev
 
       - name: Lint
         run: make lint
@@ -50,3 +51,61 @@ jobs:
 
       - name: Dead code scan
         run: make deadcode
+
+      # Smoke test: fresh venv with base install only must succeed,
+      # the package must import, and the console script must be
+      # registered. Catches regressions that break
+      # `pip install graphora-server` for users who don't need the
+      # full server runtime (e.g. future MCP-only consumers).
+      - name: Base install smoke test
+        run: |
+          python -m venv /tmp/base
+          /tmp/base/bin/pip install --quiet --upgrade pip
+          /tmp/base/bin/pip install --quiet .
+          /tmp/base/bin/python -c "import graphora_server; print('ok base import')"
+          /tmp/base/bin/graphora-server --help > /dev/null
+          echo "ok console script registered"
+
+      # Smoke test: [server] extra must be self-contained enough to
+      # import graphora_server.main:app without ModuleNotFoundError.
+      # This catches the exact regression from the PR4-a review:
+      # `serve --help` passing while a real `serve` blows up on
+      # eager imports of psycopg / neo4j / pypdf in the app chain.
+      #
+      # TEST_MODE=true suppresses the DATABASE_URL check in
+      # ai_config_service.__init__, which would otherwise fail at
+      # module load because CI has no live Postgres. The import
+      # check proves the module graph *resolves*; it doesn't prove
+      # the app can answer requests.
+      - name: Server extra import smoke test
+        env:
+          TEST_MODE: "true"
+        run: |
+          python -m venv /tmp/server
+          /tmp/server/bin/pip install --quiet --upgrade pip
+          /tmp/server/bin/pip install --quiet '.[server]'
+          /tmp/server/bin/python -c "from graphora_server.main import app; print('ok main.app imports with [server] only')"
+
+      # Smoke test: wheel build produces all subpackage modules plus
+      # the .baml and ontology yaml assets. Catches the
+      # packages.find regression pattern that bit us in PR2 review.
+      - name: Wheel build smoke test
+        run: |
+          uv run --with build python -m build --wheel --outdir /tmp/wheel
+          WHEEL=$(ls /tmp/wheel/*.whl)
+          PY_COUNT=$(unzip -l "$WHEEL" | grep -c 'graphora_server.*\.py$')
+          BAML_COUNT=$(unzip -l "$WHEEL" | grep -c '\.baml$')
+          YAML_COUNT=$(unzip -l "$WHEEL" | grep -c 'templates.*\.yaml$')
+          echo "python modules: $PY_COUNT  baml: $BAML_COUNT  yaml: $YAML_COUNT"
+          if [ "$PY_COUNT" -lt 100 ]; then
+            echo "::error::wheel has fewer than 100 python modules; packages.find misconfigured?"
+            exit 1
+          fi
+          if [ "$BAML_COUNT" -lt 10 ]; then
+            echo "::error::wheel missing baml assets; package-data misconfigured?"
+            exit 1
+          fi
+          if [ "$YAML_COUNT" -lt 5 ]; then
+            echo "::error::wheel missing ontology templates; package-data misconfigured?"
+            exit 1
+          fi

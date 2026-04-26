@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.main import app
-from app.auth import get_current_user_id
-from app.services.transform.status_models import TransformationStage
+from graphora_server.main import app
+from graphora_server.auth import get_current_user_id
+from graphora_server.services.transform.status_models import TransformationStage
 
 
 pytestmark = pytest.mark.integration
@@ -14,8 +14,8 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def transform_upload_setup(monkeypatch, tmp_path):
-    from app.api import transform as transform_api
-    from app.schemas.transform import ValidationResult
+    from graphora_server.api import transform as transform_api
+    from graphora_server.schemas.transform import ValidationResult
 
     recorded: dict = {}
 

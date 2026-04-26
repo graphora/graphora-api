@@ -1,14 +1,14 @@
 from datetime import datetime
 
 
-from app.services.quality.exceptions import QualityValidationError
-from app.services.transform.flows import _classify_transform_failure
-from app.services.transform.status_models import (
+from graphora_server.services.quality.exceptions import QualityValidationError
+from graphora_server.services.transform.flows import _classify_transform_failure
+from graphora_server.services.transform.status_models import (
     TransformFailureReason,
     TransformationStage,
     ErrorSummary,
 )
-from app.services.transform.tasks import ExtractionError
+from graphora_server.services.transform.tasks import ExtractionError
 
 
 class _FakeLLMError(Exception):

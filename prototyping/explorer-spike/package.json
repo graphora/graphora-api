@@ -1,0 +1,28 @@
+{
+  "name": "explorer-spike",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Throwaway bundle-size + render-perf spike for the Evidence Explorer. See README.md.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "analyze": "vite build --mode analyze"
+  },
+  "dependencies": {
+    "@neo4j-nvl/base": "^0.3.8",
+    "@neo4j-nvl/react": "^0.3.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "rollup-plugin-visualizer": "^5.13.1",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}

@@ -8,11 +8,11 @@ import pytest
 import numpy as np
 from unittest.mock import MagicMock, AsyncMock
 
-from app.services.entity_resolution.cross_document_service import (
+from graphora_server.services.entity_resolution.cross_document_service import (
     CrossDocumentResolutionService,
     create_cross_document_service,
 )
-from app.services.transform.models import BaseNode
+from graphora_server.services.transform.models import BaseNode
 
 
 # ============================================================

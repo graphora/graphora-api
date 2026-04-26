@@ -128,7 +128,7 @@
           },
           "files": {
             "items": {
-              "format": "binary",
+              "contentMediaType": "application/octet-stream",
               "type": "string"
             },
             "title": "Files",
@@ -163,7 +163,7 @@
           },
           "files": {
             "items": {
-              "format": "binary",
+              "contentMediaType": "application/octet-stream",
               "type": "string"
             },
             "title": "Files",
@@ -174,6 +174,35 @@
           "files"
         ],
         "title": "Body_upload_documents_auto_schema_api_v1_transform_upload_post",
+        "type": "object"
+      },
+      "Body_upload_documents_schemaless_api_v1_transform_schemaless_upload_post": {
+        "properties": {
+          "chunking_config": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "JSON string of chunking configuration",
+            "title": "Chunking Config"
+          },
+          "files": {
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Files",
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "Body_upload_documents_schemaless_api_v1_transform_schemaless_upload_post",
         "type": "object"
       },
       "ChangeLog": {
@@ -259,6 +288,7 @@
           "metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -300,6 +330,7 @@
             "type": "array"
           },
           "session_context": {
+            "additionalProperties": true,
             "description": "Session context",
             "title": "Session Context",
             "type": "object"
@@ -335,6 +366,7 @@
             "type": "object"
           },
           "chunking_estimate": {
+            "additionalProperties": true,
             "title": "Chunking Estimate",
             "type": "object"
           },
@@ -343,6 +375,7 @@
             "type": "number"
           },
           "document_stats": {
+            "additionalProperties": true,
             "title": "Document Stats",
             "type": "object"
           },
@@ -1176,6 +1209,7 @@
             "title": "Failure Code"
           },
           "failure_details": {
+            "additionalProperties": true,
             "title": "Failure Details",
             "type": "object"
           },
@@ -1190,7 +1224,7 @@
             ]
           },
           "overall_status": {
-            "$ref": "#/components/schemas/app__services__transform__status_models__TransformStatus"
+            "$ref": "#/components/schemas/graphora_server__services__transform__status_models__TransformStatus"
           },
           "resource_metrics": {
             "$ref": "#/components/schemas/ResourceMetrics"
@@ -1334,6 +1368,7 @@
             "type": "string"
           },
           "properties": {
+            "additionalProperties": true,
             "description": "Properties of the relationship",
             "title": "Properties",
             "type": "object"
@@ -1411,6 +1446,7 @@
             "type": "string"
           },
           "properties": {
+            "additionalProperties": true,
             "description": "Edge properties",
             "title": "Properties",
             "type": "object"
@@ -1536,6 +1572,7 @@
             "type": "array"
           },
           "details": {
+            "additionalProperties": true,
             "title": "Details",
             "type": "object"
           },
@@ -1673,6 +1710,7 @@
             "type": "array"
           },
           "metadata": {
+            "additionalProperties": true,
             "description": "Metadata about the graph",
             "title": "Metadata",
             "type": "object"
@@ -1785,6 +1823,7 @@
           "cost_limit_usd": {
             "anyOf": [
               {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
                 "type": "string"
               },
               {
@@ -1796,6 +1835,7 @@
           },
           "current_cost_usd": {
             "description": "Current cost",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Current Cost Usd",
             "type": "string"
           },
@@ -1841,6 +1881,7 @@
           "remaining_cost_usd": {
             "anyOf": [
               {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
                 "type": "string"
               },
               {
@@ -2026,6 +2067,7 @@
           },
           "input_price_per_1k_tokens": {
             "description": "Input token price per 1K",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Input Price Per 1K Tokens",
             "type": "string"
           },
@@ -2078,6 +2120,7 @@
           },
           "output_price_per_1k_tokens": {
             "description": "Output token price per 1K",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Output Price Per 1K Tokens",
             "type": "string"
           },
@@ -2217,6 +2260,7 @@
             "title": "Labels"
           },
           "properties": {
+            "additionalProperties": true,
             "description": "Properties of the node",
             "title": "Properties",
             "type": "object"
@@ -2283,6 +2327,7 @@
             "type": "string"
           },
           "properties": {
+            "additionalProperties": true,
             "description": "Node properties",
             "title": "Properties",
             "type": "object"
@@ -2378,6 +2423,7 @@
           "data": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2720,6 +2766,7 @@
             "type": "string"
           },
           "validation_config": {
+            "additionalProperties": true,
             "description": "Configuration used for validation",
             "title": "Validation Config",
             "type": "object"
@@ -2980,6 +3027,7 @@
             "type": "number"
           },
           "context": {
+            "additionalProperties": true,
             "description": "Additional context for the violation",
             "title": "Context",
             "type": "object"
@@ -3196,6 +3244,7 @@
           "validation": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3219,6 +3268,7 @@
           "metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3495,6 +3545,7 @@
           "data": {
             "additionalProperties": {
               "items": {
+                "additionalProperties": true,
                 "type": "object"
               },
               "type": "array"
@@ -3622,6 +3673,7 @@
           "options": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3669,6 +3721,7 @@
           "metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3937,6 +3990,7 @@
           "error_details": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4041,6 +4095,7 @@
           "initial_context": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4191,7 +4246,7 @@
             "type": "string"
           },
           "status": {
-            "$ref": "#/components/schemas/app__schemas__transform__TransformStatus"
+            "$ref": "#/components/schemas/graphora_server__schemas__transform__TransformStatus"
           },
           "upload_timestamp": {
             "format": "date-time",
@@ -4463,6 +4518,7 @@
           "daily_usage": {
             "description": "Daily usage breakdown",
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Daily Usage",
@@ -4478,11 +4534,13 @@
           },
           "estimated_total_cost_usd": {
             "description": "Estimated total cost",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Estimated Total Cost Usd",
             "type": "string"
           },
           "model_usage": {
             "additionalProperties": {
+              "additionalProperties": true,
               "type": "object"
             },
             "description": "Usage by model",
@@ -4504,6 +4562,7 @@
           "success_rate": {
             "anyOf": [
               {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
                 "type": "string"
               },
               {
@@ -4711,6 +4770,7 @@
           "metadata": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4754,6 +4814,7 @@
           "sessions": {
             "description": "User's chat sessions",
             "items": {
+              "additionalProperties": true,
               "type": "object"
             },
             "title": "Sessions",
@@ -4768,6 +4829,13 @@
       },
       "ValidationError": {
         "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
           "loc": {
             "items": {
               "anyOf": [
@@ -4799,7 +4867,7 @@
         "title": "ValidationError",
         "type": "object"
       },
-      "app__schemas__chat__SchemaRefinementRequest": {
+      "graphora_server__schemas__chat__SchemaRefinementRequest": {
         "description": "Request model for schema refinement",
         "example": {
           "context": {
@@ -4812,6 +4880,7 @@
           "context": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4869,7 +4938,7 @@
         "title": "SchemaRefinementRequest",
         "type": "object"
       },
-      "app__schemas__chat__SchemaRefinementResponse": {
+      "graphora_server__schemas__chat__SchemaRefinementResponse": {
         "description": "Response model for schema refinement",
         "properties": {
           "changes_made": {
@@ -4959,11 +5028,12 @@
         "title": "SchemaRefinementResponse",
         "type": "object"
       },
-      "app__schemas__schema__SchemaRefinementRequest": {
+      "graphora_server__schemas__schema__SchemaRefinementRequest": {
         "properties": {
           "context": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4998,7 +5068,7 @@
         "title": "SchemaRefinementRequest",
         "type": "object"
       },
-      "app__schemas__schema__SchemaRefinementResponse": {
+      "graphora_server__schemas__schema__SchemaRefinementResponse": {
         "properties": {
           "changes_made": {
             "description": "List of changes made",
@@ -5035,7 +5105,7 @@
         "title": "SchemaRefinementResponse",
         "type": "object"
       },
-      "app__schemas__transform__TransformStatus": {
+      "graphora_server__schemas__transform__TransformStatus": {
         "enum": [
           "pending",
           "validating",
@@ -5047,7 +5117,7 @@
         "title": "TransformStatus",
         "type": "string"
       },
-      "app__services__transform__status_models__TransformStatus": {
+      "graphora_server__services__transform__status_models__TransformStatus": {
         "description": "Overall status of the transformation",
         "enum": [
           "initializing",
@@ -5582,7 +5652,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/app__schemas__chat__SchemaRefinementRequest"
+                "$ref": "#/components/schemas/graphora_server__schemas__chat__SchemaRefinementRequest"
               }
             }
           },
@@ -5593,7 +5663,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/app__schemas__chat__SchemaRefinementResponse"
+                  "$ref": "#/components/schemas/graphora_server__schemas__chat__SchemaRefinementResponse"
                 }
               }
             },
@@ -6049,6 +6119,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Available Strategies Api V1 Chunking Strategies Get",
                   "type": "object"
                 }
@@ -6124,6 +6195,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Validate Chunking Config Api V1 Chunking Validate Post",
                   "type": "object"
                 }
@@ -6794,6 +6866,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Merge Statistics Api Api V1 Merge Statistics  Merge Id  Get",
                   "type": "object"
                 }
@@ -6920,6 +6993,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Changed Props",
                 "type": "object"
               }
@@ -8174,7 +8248,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/app__schemas__schema__SchemaRefinementRequest"
+                "$ref": "#/components/schemas/graphora_server__schemas__schema__SchemaRefinementRequest"
               }
             }
           },
@@ -8185,7 +8259,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/app__schemas__schema__SchemaRefinementResponse"
+                  "$ref": "#/components/schemas/graphora_server__schemas__schema__SchemaRefinementResponse"
                 }
               }
             },
@@ -8349,6 +8423,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Delete Schema Api V1 Schema  Schema Id  Delete",
                   "type": "object"
                 }
@@ -8628,6 +8703,53 @@
         ]
       }
     },
+    "/api/v1/transform/schemaless/upload": {
+      "post": {
+        "description": "Start an extraction without pre-committing to a schema.\n\nUnlike ``/transform/upload`` (which peeks at the document text\nto infer an ontology BEFORE extraction) this endpoint uses the\ndefault generic schema to run extraction, then leaves post-hoc\nontology refinement to the agent/user via:\n\n    GET  /transform/{id}/inferred-ontology   (preview)\n    POST /transform/{id}/finalize-ontology   (save the refinement)\n\nEffect on the pipeline: the LLM is not biased by a pre-inferred\ncategory list \u2014 it extracts into broad buckets (Person,\nOrganization, Concept, Entity) and the specific refined types\nemerge from what was actually surfaced.",
+        "operationId": "upload_documents_schemaless_api_v1_transform_schemaless_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_documents_schemaless_api_v1_transform_schemaless_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransformInitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Documents Schemaless",
+        "tags": [
+          "Transform"
+        ]
+      }
+    },
     "/api/v1/transform/status/{transform_id}": {
       "get": {
         "description": "Get detailed transformation status\n\nArgs:\n    transform_id: Transformation ID to get status for\n    user_id: User's ID (from header)\n    include_metrics: Whether to include resource metrics\n\nReturns:\n    DetailedTransformStatus with current progress\n\nRaises:\n    HTTPException: If transform not found or other error",
@@ -8832,6 +8954,98 @@
           }
         ],
         "summary": "Upload Documents",
+        "tags": [
+          "Transform"
+        ]
+      }
+    },
+    "/api/v1/transform/{transform_id}/finalize-ontology": {
+      "post": {
+        "description": "Run post-hoc ontology inference and persist the result.\n\nCompanion to ``GET /transform/{id}/inferred-ontology`` \u2014 same\ninference, but creates an ontology row so the user can reference\nit by id, edit it via the ontology endpoints, or re-extract\nagainst it.\n\nReturns the new ``ontology_id`` + full YAML + stats.",
+        "operationId": "finalize_inferred_ontology_api_v1_transform__transform_id__finalize_ontology_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transform_id",
+            "required": true,
+            "schema": {
+              "title": "Transform Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Finalize Inferred Ontology",
+        "tags": [
+          "Transform"
+        ]
+      }
+    },
+    "/api/v1/transform/{transform_id}/inferred-ontology": {
+      "get": {
+        "description": "Run post-hoc ontology inference on a completed extraction.\n\nUnlike the pre-extraction auto-schema path, this endpoint runs\nAFTER extraction and refines the ontology from emerged types.\nSide-effect-free: the response carries the YAML inline but the\nontology is not persisted. Callers that want to save it should\nPOST the YAML to the ontology endpoint explicitly.\n\nArgs:\n    transform_id: Completed transform to analyze.\n\nReturns:\n    JSON: {ontology_yaml: str, ontology: dict, stats: {...}}",
+        "operationId": "get_inferred_ontology_api_v1_transform__transform_id__inferred_ontology_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transform_id",
+            "required": true,
+            "schema": {
+              "title": "Transform Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Inferred Ontology",
         "tags": [
           "Transform"
         ]

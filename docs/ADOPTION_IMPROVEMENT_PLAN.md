@@ -13,20 +13,22 @@ This plan addresses key adoption barriers identified through market research and
 
 ## Phase 1: Remove Friction (Week 1-2)
 
-### 1.1 Remove Marker API & libmagic Dependencies ✅ COMPLETE
+### 1.1 Remove Marker API & libmagic Dependencies ⚠️ PARTIAL
 
 **Problem:** Documentation mentions Marker API for PDF processing and libmagic, but they're not actually used.
 
-**Status:** Completed. Removed all Marker API settings, python-magic dependency, libmagic references from documentation, and the app/services/marker/ directory.
+**Status:** Marker API and `app/services/marker/` directory were removed. **`python-magic` is still a runtime dependency** (`app/services/transform/validators.py:3` imports it at module load for MIME validation on file uploads). The `libmagic1` system library is installed by the Docker dev image (see commit `78b93c7`).
 
-**Backend Changes:**
+Removing `python-magic` requires first making that import lazy with a `mimetypes`-based fallback (tracked in the work-vault packaging audit). Until then, this section's earlier "COMPLETE" claim was incorrect.
 
-| File | Action |
-|------|--------|
-| `README.md` | Remove libmagic installation instructions |
-| `app/config.py` | Remove `PDF_PROCESSOR`, `MARKER_API_*` settings |
-| `docs/LOCAL_DEVELOPMENT.md` | Remove Marker references |
-| `pyproject.toml` | Remove `python-magic` if present |
+**Backend Changes (retained for audit trail — some still pending):**
+
+| File | Action | Status |
+|------|--------|--------|
+| `README.md` | Remove libmagic installation instructions | ⚠️ libmagic still required in deployment env |
+| `app/config.py` | Remove `PDF_PROCESSOR`, `MARKER_API_*` settings | ✅ |
+| `docs/LOCAL_DEVELOPMENT.md` | Remove Marker references | ✅ |
+| `pyproject.toml` | Remove `python-magic` | ⏳ pending lazy-import refactor |
 
 **Verification:**
 ```bash

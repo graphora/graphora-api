@@ -6,12 +6,12 @@ Ensures domain-agnostic behavior - rules derived from ontology, not hardcoded.
 
 import pytest
 
-from app.services.entity_resolution.comparison_rules import (
+from graphora_server.services.entity_resolution.comparison_rules import (
     ComparisonRuleGenerator,
     generate_rules_from_ontology,
     generate_config_from_ontology,
 )
-from app.services.entity_resolution.models import (
+from graphora_server.services.entity_resolution.models import (
     ComparisonMethod,
     DataType,
     ComparisonRule,

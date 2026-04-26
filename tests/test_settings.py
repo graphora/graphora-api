@@ -1,6 +1,6 @@
 """Unit tests for app configuration helpers."""
 
-from app.config import Settings
+from graphora_server.config import Settings
 
 
 def test_settings_split_cors_origins_from_env(monkeypatch):

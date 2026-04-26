@@ -81,7 +81,7 @@ class TestCypherInjectionValidation:
 
     def test_should_accept_valid_alphanumeric_identifier(self):
         """Valid identifiers with letters, numbers, underscores should be accepted."""
-        from app.services.storage.neo4j import validate_cypher_identifier
+        from graphora_server.services.storage.neo4j import validate_cypher_identifier
 
         assert validate_cypher_identifier("Company") == "Company"
         assert validate_cypher_identifier("Person_v2") == "Person_v2"
@@ -90,7 +90,7 @@ class TestCypherInjectionValidation:
 
     def test_should_reject_identifier_with_semicolon(self):
         """Identifiers with semicolons (potential injection) should be rejected."""
-        from app.services.storage.neo4j import (
+        from graphora_server.services.storage.neo4j import (
             validate_cypher_identifier,
             CypherInjectionError,
         )
@@ -102,7 +102,7 @@ class TestCypherInjectionValidation:
 
     def test_should_reject_identifier_with_backticks(self):
         """Identifiers with backticks should be rejected."""
-        from app.services.storage.neo4j import (
+        from graphora_server.services.storage.neo4j import (
             validate_cypher_identifier,
             CypherInjectionError,
         )
@@ -112,7 +112,7 @@ class TestCypherInjectionValidation:
 
     def test_should_reject_identifier_starting_with_number(self):
         """Identifiers starting with numbers should be rejected."""
-        from app.services.storage.neo4j import (
+        from graphora_server.services.storage.neo4j import (
             validate_cypher_identifier,
             CypherInjectionError,
         )
@@ -122,7 +122,7 @@ class TestCypherInjectionValidation:
 
     def test_should_reject_empty_identifier(self):
         """Empty identifiers should be rejected."""
-        from app.services.storage.neo4j import (
+        from graphora_server.services.storage.neo4j import (
             validate_cypher_identifier,
             CypherInjectionError,
         )
@@ -134,7 +134,7 @@ class TestCypherInjectionValidation:
 
     def test_should_reject_identifier_exceeding_max_length(self):
         """Identifiers exceeding 256 characters should be rejected."""
-        from app.services.storage.neo4j import (
+        from graphora_server.services.storage.neo4j import (
             validate_cypher_identifier,
             CypherInjectionError,
         )
@@ -148,7 +148,7 @@ class TestCypherInjectionValidation:
 
     def test_should_reject_identifier_with_special_characters(self):
         """Identifiers with special characters should be rejected."""
-        from app.services.storage.neo4j import (
+        from graphora_server.services.storage.neo4j import (
             validate_cypher_identifier,
             CypherInjectionError,
         )
@@ -161,7 +161,7 @@ class TestCypherInjectionValidation:
 
     def test_validate_cypher_labels_should_validate_all_labels(self):
         """validate_cypher_labels should validate each label in the list."""
-        from app.services.storage.neo4j import (
+        from graphora_server.services.storage.neo4j import (
             validate_cypher_labels,
             CypherInjectionError,
         )
@@ -186,8 +186,12 @@ class TestNeo4jStorageInitialization:
     @pytest.mark.asyncio
     async def test_should_create_driver_with_provided_uri(self):
         """When initializing, should create driver with provided URI."""
-        with patch("app.services.storage.neo4j.AsyncGraphDatabase") as mock_async_db:
-            with patch("app.services.storage.neo4j.GraphDatabase") as mock_sync_db:
+        with patch(
+            "graphora_server.services.storage.neo4j.AsyncGraphDatabase"
+        ) as mock_async_db:
+            with patch(
+                "graphora_server.services.storage.neo4j.GraphDatabase"
+            ) as mock_sync_db:
                 mock_driver = AsyncMock()
                 mock_async_db.driver.return_value = mock_driver
 
@@ -202,7 +206,7 @@ class TestNeo4jStorageInitialization:
                 )
                 mock_sync_db.driver.return_value = mock_sync_driver
 
-                from app.services.storage.neo4j import Neo4jStorage
+                from graphora_server.services.storage.neo4j import Neo4jStorage
 
                 _storage = Neo4jStorage(
                     uri="bolt://localhost:7687",
@@ -220,13 +224,17 @@ class TestNeo4jStorageInitialization:
     async def test_should_raise_storage_auth_error_on_auth_failure(self):
         """When authentication fails, should raise StorageAuthError."""
         from neo4j.exceptions import AuthError
-        from app.services.storage.exceptions import StorageAuthError
+        from graphora_server.services.storage.exceptions import StorageAuthError
 
-        with patch("app.services.storage.neo4j.AsyncGraphDatabase") as _mock_async_db:
-            with patch("app.services.storage.neo4j.GraphDatabase") as mock_sync_db:
+        with patch(
+            "graphora_server.services.storage.neo4j.AsyncGraphDatabase"
+        ) as _mock_async_db:
+            with patch(
+                "graphora_server.services.storage.neo4j.GraphDatabase"
+            ) as mock_sync_db:
                 mock_sync_db.driver.side_effect = AuthError("Invalid credentials")
 
-                from app.services.storage.neo4j import Neo4jStorage
+                from graphora_server.services.storage.neo4j import Neo4jStorage
 
                 with pytest.raises(StorageAuthError) as exc_info:
                     Neo4jStorage(
@@ -241,15 +249,19 @@ class TestNeo4jStorageInitialization:
     async def test_should_raise_storage_connection_error_on_service_unavailable(self):
         """When service is unavailable, should raise StorageConnectionError."""
         from neo4j.exceptions import ServiceUnavailable
-        from app.services.storage.exceptions import StorageConnectionError
+        from graphora_server.services.storage.exceptions import StorageConnectionError
 
-        with patch("app.services.storage.neo4j.AsyncGraphDatabase") as _mock_async_db:
-            with patch("app.services.storage.neo4j.GraphDatabase") as mock_sync_db:
+        with patch(
+            "graphora_server.services.storage.neo4j.AsyncGraphDatabase"
+        ) as _mock_async_db:
+            with patch(
+                "graphora_server.services.storage.neo4j.GraphDatabase"
+            ) as mock_sync_db:
                 mock_sync_db.driver.side_effect = ServiceUnavailable(
                     "Connection refused"
                 )
 
-                from app.services.storage.neo4j import Neo4jStorage
+                from graphora_server.services.storage.neo4j import Neo4jStorage
 
                 with pytest.raises(StorageConnectionError) as exc_info:
                     Neo4jStorage(
@@ -263,12 +275,16 @@ class TestNeo4jStorageInitialization:
     @pytest.mark.asyncio
     async def test_should_skip_sync_connectivity_test_with_transaction_manager(self):
         """When transaction_manager is provided, skip sync connectivity test."""
-        with patch("app.services.storage.neo4j.AsyncGraphDatabase") as mock_async_db:
-            with patch("app.services.storage.neo4j.GraphDatabase") as mock_sync_db:
+        with patch(
+            "graphora_server.services.storage.neo4j.AsyncGraphDatabase"
+        ) as mock_async_db:
+            with patch(
+                "graphora_server.services.storage.neo4j.GraphDatabase"
+            ) as mock_sync_db:
                 mock_driver = AsyncMock()
                 mock_async_db.driver.return_value = mock_driver
 
-                from app.services.storage.neo4j import Neo4jStorage
+                from graphora_server.services.storage.neo4j import Neo4jStorage
 
                 # Provide transaction_manager to skip sync test
                 _storage = Neo4jStorage(
@@ -407,11 +423,11 @@ class TestNeo4jStorageNodeOperations:
     @pytest.mark.asyncio
     async def test_build_node_query_should_handle_dict_input(self):
         """_build_node_query should handle dict input as well as BaseNode."""
-        from app.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.storage.neo4j import Neo4jStorage
 
         # Create a mock storage instance
-        with patch("app.services.storage.neo4j.AsyncGraphDatabase"):
-            with patch("app.services.storage.neo4j.GraphDatabase"):
+        with patch("graphora_server.services.storage.neo4j.AsyncGraphDatabase"):
+            with patch("graphora_server.services.storage.neo4j.GraphDatabase"):
                 storage = Neo4jStorage.__new__(Neo4jStorage)
 
                 node_dict = {
@@ -529,7 +545,7 @@ class TestNeo4jStorageRelationshipOperations:
     @pytest.mark.asyncio
     async def test_store_relationships_should_validate_relationship_type(self):
         """Relationship type should be validated for Cypher injection."""
-        from app.services.storage.neo4j import (
+        from graphora_server.services.storage.neo4j import (
             validate_cypher_identifier,
             CypherInjectionError,
         )
@@ -710,7 +726,7 @@ class TestNeo4jStorageIndexOperations:
     @pytest.mark.asyncio
     async def test_create_ft_index_should_validate_index_name(self):
         """Index name should be validated for Cypher injection."""
-        from app.services.storage.neo4j import (
+        from graphora_server.services.storage.neo4j import (
             validate_cypher_identifier,
             CypherInjectionError,
         )
@@ -721,7 +737,7 @@ class TestNeo4jStorageIndexOperations:
     @pytest.mark.asyncio
     async def test_create_ft_index_should_validate_property_names(self):
         """Property names should be validated for Cypher injection."""
-        from app.services.storage.neo4j import (
+        from graphora_server.services.storage.neo4j import (
             validate_cypher_identifier,
             CypherInjectionError,
         )
@@ -975,7 +991,11 @@ class TestNeo4jStorageFindSimilarNodes:
     @pytest.mark.asyncio
     async def test_should_skip_system_properties_in_similarity(self):
         """System properties should be excluded from similarity search."""
-        from app.utils.constants import SYSTEM_PROPERTIES, TRANSFORM_ID, VALID_FROM
+        from graphora_server.utils.constants import (
+            SYSTEM_PROPERTIES,
+            TRANSFORM_ID,
+            VALID_FROM,
+        )
 
         properties = {
             "name": "Acme Corp",
@@ -1033,7 +1053,7 @@ class TestNeo4jStorageBatchOperations:
         self, mock_neo4j_storage
     ):
         """store_nodes should return StorageBatchResult."""
-        from app.services.storage.models import StorageBatchResult
+        from graphora_server.services.storage.models import StorageBatchResult
 
         session = mock_neo4j_storage.session
         NodeFactory.reset_counter()

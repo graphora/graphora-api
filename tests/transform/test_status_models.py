@@ -1,7 +1,7 @@
 from datetime import datetime
 
 
-from app.services.transform.status_models import (
+from graphora_server.services.transform.status_models import (
     DetailedTransformStatus,
     ErrorSummary,
     ResourceMetrics,

@@ -290,7 +290,9 @@ class TestGraphTransformerContextBuilding:
     @pytest.mark.asyncio
     async def test_nodes_context_should_be_sorted_deterministically(self):
         """Nodes context should sort by type, properties, id for consistency."""
-        from app.services.transform.graph_transformer import _build_nodes_context
+        from graphora_server.services.transform.graph_transformer import (
+            _build_nodes_context,
+        )
 
         NodeFactory.reset_counter()
 
@@ -315,7 +317,7 @@ class TestGraphTransformerContextBuilding:
     @pytest.mark.asyncio
     async def test_relationships_context_should_identify_orphan_nodes(self):
         """Should list nodes not in any relationship."""
-        from app.services.transform.graph_transformer import (
+        from graphora_server.services.transform.graph_transformer import (
             _build_relationships_context,
         )
 
@@ -354,7 +356,7 @@ class TestGraphTransformerNodeMerging:
 
     def test_merge_nodes_should_combine_provenance_chunk_ids(self):
         """Merged node should have combined chunk IDs from both sources."""
-        from app.services.transform.helpers import merge_nodes
+        from graphora_server.services.transform.helpers import merge_nodes
 
         NodeFactory.reset_counter()
 
@@ -372,7 +374,7 @@ class TestGraphTransformerNodeMerging:
 
     def test_merge_nodes_should_prefer_higher_confidence_values(self):
         """Should prefer property values from higher confidence node."""
-        from app.services.transform.helpers import merge_nodes
+        from graphora_server.services.transform.helpers import merge_nodes
 
         NodeFactory.reset_counter()
 
@@ -394,7 +396,7 @@ class TestGraphTransformerNodeMerging:
 
     def test_merge_nodes_should_prefer_longer_strings_when_confidence_equal(self):
         """When confidence equal, should prefer longer string values."""
-        from app.services.transform.helpers import merge_nodes
+        from graphora_server.services.transform.helpers import merge_nodes
 
         NodeFactory.reset_counter()
 

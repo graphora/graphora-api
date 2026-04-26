@@ -26,7 +26,7 @@ import json
 @pytest.fixture
 def async_lru_cache():
     """Create a fresh AsyncLRUCache instance."""
-    from app.services.llm.client import _AsyncLRUCache
+    from graphora_server.services.llm.client import _AsyncLRUCache
 
     return _AsyncLRUCache(max_size=3)
 
@@ -51,7 +51,7 @@ class TestMD5Hash:
 
     def test_md5_should_return_consistent_hash(self):
         """Same input should produce same hash."""
-        from app.services.llm.client import md5
+        from graphora_server.services.llm.client import md5
 
         hash1 = md5("hello world")
         hash2 = md5("hello world")
@@ -60,7 +60,7 @@ class TestMD5Hash:
 
     def test_md5_should_return_different_hash_for_different_input(self):
         """Different input should produce different hash."""
-        from app.services.llm.client import md5
+        from graphora_server.services.llm.client import md5
 
         hash1 = md5("hello")
         hash2 = md5("world")
@@ -69,7 +69,7 @@ class TestMD5Hash:
 
     def test_md5_should_return_32_character_hex_string(self):
         """MD5 hash should be 32 hex characters."""
-        from app.services.llm.client import md5
+        from graphora_server.services.llm.client import md5
 
         result = md5("test input")
 
@@ -78,7 +78,7 @@ class TestMD5Hash:
 
     def test_md5_should_handle_empty_string(self):
         """Should handle empty string input."""
-        from app.services.llm.client import md5
+        from graphora_server.services.llm.client import md5
 
         result = md5("")
 
@@ -86,7 +86,7 @@ class TestMD5Hash:
 
     def test_md5_should_handle_unicode(self):
         """Should handle unicode characters."""
-        from app.services.llm.client import md5
+        from graphora_server.services.llm.client import md5
 
         result = md5("你好世界")
 
@@ -103,7 +103,7 @@ class TestCacheKeyGeneration:
 
     def test_cache_key_should_combine_parts(self):
         """Should combine multiple parts into single key."""
-        from app.services.llm.client import _cache_key
+        from graphora_server.services.llm.client import _cache_key
 
         key = _cache_key("part1", "part2", "part3")
 
@@ -111,7 +111,7 @@ class TestCacheKeyGeneration:
 
     def test_cache_key_should_be_deterministic(self):
         """Same parts should produce same key."""
-        from app.services.llm.client import _cache_key
+        from graphora_server.services.llm.client import _cache_key
 
         key1 = _cache_key("a", "b", "c")
         key2 = _cache_key("a", "b", "c")
@@ -120,7 +120,7 @@ class TestCacheKeyGeneration:
 
     def test_cache_key_should_differ_for_different_parts(self):
         """Different parts should produce different key."""
-        from app.services.llm.client import _cache_key
+        from graphora_server.services.llm.client import _cache_key
 
         key1 = _cache_key("a", "b", "c")
         key2 = _cache_key("x", "y", "z")
@@ -129,7 +129,7 @@ class TestCacheKeyGeneration:
 
     def test_cache_key_should_handle_none_parts(self):
         """Should handle None values in parts."""
-        from app.services.llm.client import _cache_key
+        from graphora_server.services.llm.client import _cache_key
 
         key = _cache_key("a", None, "c")
 
@@ -137,7 +137,7 @@ class TestCacheKeyGeneration:
 
     def test_cache_key_should_handle_empty_string_parts(self):
         """Should handle empty string parts."""
-        from app.services.llm.client import _cache_key
+        from graphora_server.services.llm.client import _cache_key
 
         key = _cache_key("a", "", "c")
 
@@ -145,7 +145,7 @@ class TestCacheKeyGeneration:
 
     def test_cache_key_order_matters(self):
         """Parts order should affect the key."""
-        from app.services.llm.client import _cache_key
+        from graphora_server.services.llm.client import _cache_key
 
         key1 = _cache_key("a", "b", "c")
         key2 = _cache_key("c", "b", "a")
@@ -163,7 +163,7 @@ class TestPreviewFunction:
 
     def test_preview_should_truncate_long_text(self):
         """Should truncate text longer than limit."""
-        from app.services.llm.client import _preview
+        from graphora_server.services.llm.client import _preview
 
         long_text = "a" * 300
         result = _preview(long_text, limit=200)
@@ -173,7 +173,7 @@ class TestPreviewFunction:
 
     def test_preview_should_preserve_short_text(self):
         """Should not truncate text shorter than limit."""
-        from app.services.llm.client import _preview
+        from graphora_server.services.llm.client import _preview
 
         short_text = "hello world"
         result = _preview(short_text, limit=200)
@@ -183,7 +183,7 @@ class TestPreviewFunction:
 
     def test_preview_should_replace_newlines(self):
         """Should replace newlines with spaces."""
-        from app.services.llm.client import _preview
+        from graphora_server.services.llm.client import _preview
 
         text_with_newlines = "line1\nline2\nline3"
         result = _preview(text_with_newlines)
@@ -193,7 +193,7 @@ class TestPreviewFunction:
 
     def test_preview_should_handle_none(self):
         """Should return empty string for None."""
-        from app.services.llm.client import _preview
+        from graphora_server.services.llm.client import _preview
 
         result = _preview(None)
 
@@ -201,7 +201,7 @@ class TestPreviewFunction:
 
     def test_preview_should_handle_empty_string(self):
         """Should return empty string for empty input."""
-        from app.services.llm.client import _preview
+        from graphora_server.services.llm.client import _preview
 
         result = _preview("")
 
@@ -209,7 +209,7 @@ class TestPreviewFunction:
 
     def test_preview_should_respect_custom_limit(self):
         """Should use custom limit when provided."""
-        from app.services.llm.client import _preview
+        from graphora_server.services.llm.client import _preview
 
         text = "a" * 100
         result = _preview(text, limit=50)
@@ -318,7 +318,7 @@ class TestAsyncLRUCache:
     @pytest.mark.asyncio
     async def test_cache_should_be_thread_safe(self):
         """Should handle concurrent access safely."""
-        from app.services.llm.client import _AsyncLRUCache
+        from graphora_server.services.llm.client import _AsyncLRUCache
 
         cache = _AsyncLRUCache(max_size=100)
 
@@ -358,7 +358,7 @@ class TestRedisCache:
             MockRedis.from_url.return_value = mock_redis_client
             mock_redis_client.get.return_value = None
 
-            from app.services.llm.client import _RedisCache
+            from graphora_server.services.llm.client import _RedisCache
 
             cache = _RedisCache("redis://localhost", "test", 3600)
             result = await cache.get("nonexistent")
@@ -371,7 +371,7 @@ class TestRedisCache:
         with patch("redis.asyncio.Redis") as MockRedis:
             MockRedis.from_url.return_value = mock_redis_client
 
-            from app.services.llm.client import _RedisCache
+            from graphora_server.services.llm.client import _RedisCache
 
             cache = _RedisCache("redis://localhost", "myns", 3600)
 
@@ -387,7 +387,7 @@ class TestRedisCache:
             MockRedis.from_url.return_value = mock_redis_client
             mock_redis_client.get.return_value = '{"name": "Acme", "value": 42}'
 
-            from app.services.llm.client import _RedisCache
+            from graphora_server.services.llm.client import _RedisCache
 
             cache = _RedisCache("redis://localhost", "test", 3600)
             result = await cache.get("mykey")
@@ -400,7 +400,7 @@ class TestRedisCache:
         with patch("redis.asyncio.Redis") as MockRedis:
             MockRedis.from_url.return_value = mock_redis_client
 
-            from app.services.llm.client import _RedisCache
+            from graphora_server.services.llm.client import _RedisCache
 
             cache = _RedisCache("redis://localhost", "test", 3600)
             await cache.set("mykey", {"data": "value"})
@@ -416,7 +416,7 @@ class TestRedisCache:
         with patch("redis.asyncio.Redis") as MockRedis:
             MockRedis.from_url.return_value = mock_redis_client
 
-            from app.services.llm.client import _RedisCache
+            from graphora_server.services.llm.client import _RedisCache
 
             cache = _RedisCache("redis://localhost", "test", 3600)
             await cache.set("mykey", "value")
@@ -432,7 +432,7 @@ class TestRedisCache:
             MockRedis.from_url.return_value = mock_redis_client
             mock_redis_client.get.return_value = "invalid json {"
 
-            from app.services.llm.client import _RedisCache
+            from graphora_server.services.llm.client import _RedisCache
 
             cache = _RedisCache("redis://localhost", "test", 3600)
             result = await cache.get("corrupted")
@@ -452,11 +452,14 @@ class TestCacheFactory:
 
     def test_create_cache_should_return_lru_without_redis_url(self):
         """Should return AsyncLRUCache when no Redis URL configured."""
-        with patch("app.services.llm.client.settings") as mock_settings:
+        with patch("graphora_server.services.llm.client.settings") as mock_settings:
             mock_settings.LLM_CACHE_MAX_ENTRIES = 128
             mock_settings.LLM_CACHE_URL = None
 
-            from app.services.llm.client import _create_cache, _AsyncLRUCache
+            from graphora_server.services.llm.client import (
+                _create_cache,
+                _AsyncLRUCache,
+            )
 
             cache = _create_cache("test-namespace")
 
@@ -464,11 +467,11 @@ class TestCacheFactory:
 
     def test_create_cache_should_use_configured_max_entries(self):
         """Should use configured max entries for LRU cache."""
-        with patch("app.services.llm.client.settings") as mock_settings:
+        with patch("graphora_server.services.llm.client.settings") as mock_settings:
             mock_settings.LLM_CACHE_MAX_ENTRIES = 256
             mock_settings.LLM_CACHE_URL = None
 
-            from app.services.llm.client import _create_cache
+            from graphora_server.services.llm.client import _create_cache
 
             cache = _create_cache("test-namespace")
 
@@ -486,7 +489,7 @@ class TestLLMClient:
     @pytest.mark.asyncio
     async def test_extract_nodes_should_require_user_id(self):
         """Should raise error when user_id is not provided."""
-        from app.services.llm.client import LLMClient
+        from graphora_server.services.llm.client import LLMClient
 
         client = LLMClient()
 
@@ -501,14 +504,14 @@ class TestLLMClient:
     @pytest.mark.asyncio
     async def test_extract_nodes_should_use_cache_on_hit(self):
         """Should return cached result on cache hit."""
-        from app.services.llm.client import _PDF_NODE_CACHE
+        from graphora_server.services.llm.client import _PDF_NODE_CACHE
 
         # Pre-populate cache
         cached_result = {"entities": [{"name": "Acme"}]}
 
         with patch.object(_PDF_NODE_CACHE, "get", return_value=cached_result):
             with patch(
-                "app.services.llm.client.get_user_llm_credentials",
+                "graphora_server.services.llm.client.get_user_llm_credentials",
                 return_value=("api-key", "model"),
             ):
                 # The actual extraction should be skipped due to cache hit
@@ -527,7 +530,7 @@ class TestRetryIntegration:
     @pytest.mark.asyncio
     async def test_retry_should_attempt_multiple_times_on_failure(self):
         """Should retry on exceptions."""
-        from app.utils.func_helper import retry_async
+        from graphora_server.utils.func_helper import retry_async
 
         attempt_count = 0
 
@@ -547,7 +550,7 @@ class TestRetryIntegration:
     @pytest.mark.asyncio
     async def test_retry_should_raise_after_max_attempts(self):
         """Should raise exception after max attempts."""
-        from app.utils.func_helper import retry_async
+        from graphora_server.utils.func_helper import retry_async
 
         attempt_count = 0
 

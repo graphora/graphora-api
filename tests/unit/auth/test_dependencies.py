@@ -73,12 +73,12 @@ class TestGetCurrentAuth:
         # Ensure auth bypass is disabled for this test
         monkeypatch.setenv("AUTH_BYPASS_ENABLED", "false")
 
-        from app.config import Settings
+        from graphora_server.config import Settings
 
         test_settings = Settings()
 
-        with patch("app.auth.dependencies.settings", test_settings):
-            from app.auth.dependencies import get_current_auth
+        with patch("graphora_server.auth.dependencies.settings", test_settings):
+            from graphora_server.auth.dependencies import get_current_auth
 
             with pytest.raises(HTTPException) as exc_info:
                 get_current_auth(credentials=None)
@@ -102,9 +102,12 @@ class TestGetCurrentAuth:
         )
 
         with patch(
-            "app.auth.dependencies._get_jwk_client", return_value=mock_jwk_client
+            "graphora_server.auth.dependencies._get_jwk_client",
+            return_value=mock_jwk_client,
         ):
-            with patch("app.auth.dependencies.jwt.decode", mock_jwt_decoder.decode):
+            with patch(
+                "graphora_server.auth.dependencies.jwt.decode", mock_jwt_decoder.decode
+            ):
 
                 # This would work with proper mocking of the full chain
                 # For now, test the mock behavior
@@ -182,7 +185,7 @@ class TestAuthEnvironmentBehavior:
         monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.delenv("CLERK_ISSUER", raising=False)
 
-        from app.auth.dependencies import _is_production
+        from graphora_server.auth.dependencies import _is_production
 
         assert _is_production() is True
 
@@ -195,7 +198,7 @@ class TestAuthEnvironmentBehavior:
 
         monkeypatch.setenv("ENVIRONMENT", "development")
 
-        from app.auth.dependencies import _is_production
+        from graphora_server.auth.dependencies import _is_production
 
         assert _is_production() is False
 
@@ -206,7 +209,7 @@ class TestAuthEnvironmentBehavior:
         monkeypatch.delenv("CLERK_AUDIENCE", raising=False)
 
         # Reset the warning flag for testing
-        from app.auth import dependencies
+        from graphora_server.auth import dependencies
 
         dependencies._auth_warnings_logged = False
 

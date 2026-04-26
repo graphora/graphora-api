@@ -9,7 +9,7 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from app.services.transform.status_models import (
+from graphora_server.services.transform.status_models import (
     TransformationStage,
     StageStatus,
     TransformStatus,
@@ -38,7 +38,7 @@ def mock_redis():
 @pytest.fixture
 def mock_settings():
     """Mock settings."""
-    with patch("app.services.transform.progress_tracker.settings") as mock:
+    with patch("graphora_server.services.transform.progress_tracker.settings") as mock:
         mock.REDIS_URL = "redis://localhost:6379"
         mock.TIMING_WINDOW_HOURS = 24
         yield mock
@@ -47,10 +47,12 @@ def mock_settings():
 @pytest.fixture
 def progress_tracker(mock_redis, mock_settings):
     """Create ProgressTracker with mocked dependencies."""
-    with patch("app.services.transform.progress_tracker.redis") as mock_redis_module:
+    with patch(
+        "graphora_server.services.transform.progress_tracker.redis"
+    ) as mock_redis_module:
         mock_redis_module.from_url.return_value = mock_redis
 
-        from app.services.transform.progress_tracker import ProgressTracker
+        from graphora_server.services.transform.progress_tracker import ProgressTracker
 
         tracker = ProgressTracker()
         tracker.redis = mock_redis
@@ -477,7 +479,9 @@ class TestResourceMetrics:
 
     def test_should_return_dict_with_required_keys(self, progress_tracker):
         """Should return metrics dict with required keys."""
-        with patch("app.services.transform.progress_tracker.psutil") as mock_psutil:
+        with patch(
+            "graphora_server.services.transform.progress_tracker.psutil"
+        ) as mock_psutil:
             mock_process = MagicMock()
             mock_process.cpu_percent.return_value = 25.0
             mock_process.memory_info.return_value = MagicMock(rss=1024 * 1024 * 512)

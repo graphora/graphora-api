@@ -1,6 +1,6 @@
 """Unit tests for extraction models."""
 
-from app.services.extraction.models import (
+from graphora_server.services.extraction.models import (
     ExtractionConfidence,
     ExtractionGap,
     GapType,

@@ -2,16 +2,16 @@
 
 import pytest
 
-from app.services.storage.memory import (
+from graphora_server.services.storage.memory import (
     InMemoryStorage,
     get_memory_store,
     clear_memory_store,
     clear_all_memory_stores,
 )
-from app.services.storage.models import StorageStage
-from app.services.transform.models import BaseNode, RelationshipInstance
-from app.schemas.graph import Node
-from app.schemas.graph_changes import (
+from graphora_server.services.storage.models import StorageStage
+from graphora_server.services.transform.models import BaseNode, RelationshipInstance
+from graphora_server.schemas.graph import Node
+from graphora_server.schemas.graph_changes import (
     SaveGraphRequest,
     NodeChanges,
     EdgeChanges,

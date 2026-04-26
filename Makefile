@@ -71,10 +71,10 @@ install-dev:
 	uv sync --group dev
 
 dev:
-	LOG_LEVEL=DEBUG uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
+	LOG_LEVEL=DEBUG uv run graphora-server serve --host 0.0.0.0 --port 8000 --reload
 
 start:
-	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+	uv run graphora-server serve --host 0.0.0.0 --port 8000
 
 compose-up:
 	$(LOCAL_COMPOSE) up -d
@@ -189,7 +189,7 @@ openapi-snapshot:
 	PYTHONPATH=. uv run python scripts/openapi_snapshot.py
 
 typecheck:
-	uv run mypy app
+	uv run mypy graphora_server
 
 pre-commit:
 	$(MAKE) lint-fix

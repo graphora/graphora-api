@@ -1,68 +1,216 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "graphora-api"
+name = "graphora-server"
 version = "0.1.0"
-description = "FastAPI-based document processing backend with knowledge graph construction"
+description = "Graphora server: the extraction pipeline and HTTP API behind the Graphora CLI + MCP client"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.109.2",
-    "instructor>=1.7.0",
-    "instructor[vertexai]>=1.7.0",
+    # Foundational — always installed.
+    "baml-py==0.89.0",
+    "pydantic>=2.6.1",
+    "pydantic-settings>=2.0.0",
+    "pyyaml>=6.0.1",
+    "aiofiles>=23.2.1",
+    # MIME validation. The Python package is tiny, but the underlying
+    # libmagic1 C library is opt-in; validators.py falls back to
+    # mimetypes gracefully when python-magic or libmagic is missing.
+    "python-magic>=0.4.27",
+    # LLM providers: only google-genai and openai stay in base today.
+    # google-genai is the active BAML path (utils/baml_helper.py only
+    # constructs google-ai clients) and graphora_server.services.llm.client
+    # imports from google.genai directly. openai is still here because
+    # the ai_config_service references the provider by string and we
+    # haven't yet proved no fallback path touches the SDK — a future
+    # pass with the provider E2E harness gating will move it to
+    # [openai] alongside a test_openai.py that exercises BAML.
+    #
+    # Removed from base (no Python imports, no BAML client):
+    #   anthropic[vertex]       → now only in [anthropic]
+    #   instructor              → dead (BAML replaces it)
+    #   instructor[vertexai]    → dead
+    #
+    # Still in base pending a paired BAML-cleanup pass:
+    #   vertexai                → clients.baml declares a legacy
+    #                             VertexAI client; removing the SDK
+    #                             without removing the BAML client
+    #                             would break anyone who flips the
+    #                             client_registry.set_primary switch.
+    #   google-cloud-aiplatform → transitive of vertexai
     "openai>=1.52.0",
-    "langchain>=0.3.19",
-    "langchain-community>=0.3.17",
-    "langchain-experimental>=0.3.4",
-    "langchain-huggingface>=0.1.2",
-    "sentence-transformers>=3.4.1",
-    "psutil>=5.9.8",
-    "neo4j>=5.27.0",
-    "pandas>=2.2.2",
-    "numpy>=1.26.4",
-    "scikit-learn>=1.4.1.post1",
+    "google-genai>=1.2.0",
     "google-cloud-aiplatform>=1.43.0",
     "vertexai>=0.0.1",
-    "prefect>=3.2.7",
-    "pyyaml>=6.0.1",
-    "mistralai[gcp]>=1.5.0",
+]
+
+[project.optional-dependencies]
+# HTTP server runtime. Required to run `graphora-server serve`.
+#
+# Contract: `pip install graphora-server[server]` is sufficient to
+# import graphora_server.main:app and start the uvicorn process.
+# Because the app eagerly imports psycopg (audit, usage, ai_config,
+# entity_ledger, schema_storage, feedback, and merge repositories
+# all persist to Postgres), neo4j (api/config.py for credential
+# management + storage module), and pypdf (flows.py for page
+# counting), those three extras are folded into [server] rather
+# than refactored to lazy imports. The result is a honest "[server]
+# is enough to serve" contract.
+server = [
+    "fastapi>=0.109.2",
     "uvicorn>=0.27.1",
     "python-multipart>=0.0.9",
-    "python-magic>=0.4.27",
-    "python-dotenv>=1.0.1",
-    "PyPDF2==3.0.1",
+    "slowapi>=0.1.9",
+    "prefect>=3.2.7",
+    "psutil>=5.9.8",
     "PyJWT[crypto]>=2.9.0",
     "cryptography>=42.0.0",
-    "pydantic>=2.6.1",
-    "flask-login>=0.6.3",
-    "flask-wtf>=1.2.2",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.0.1",
+    # Transitive extras required to import graphora_server.main:
+    "graphora-server[pdf,neo4j,postgres]",
+]
+# Semantic chunking.
+chunking = [
+    "langchain-experimental>=0.3.4",
+    "langchain-text-splitters>=0.3.0",
+]
+# Local embeddings via HuggingFace. Pulls torch; heavy.
+embeddings = [
+    "sentence-transformers>=3.4.1",
+    "langchain-huggingface>=0.1.2",
+]
+# Entity resolution pipeline (Splink + DuckDB). Heavy.
+er = [
+    "splink==4.0.7",
+    "pandas>=2.2.2",
+    "numpy>=1.26.4",
+]
+# PDF parsing.
+#
+# pypdf is the default lightweight backend (tiny, pure-Python).
+# pymupdf (AGPL / commercial) is added as the preferred layout-aware
+# extractor — the parser tries it first and falls back to pypdf when
+# pymupdf isn't installed. Both are ~small enough to include together
+# in [pdf]; the parser handles either alone.
+pdf = [
+    "pypdf>=4.0.0",
+    "pymupdf>=1.24.0",
+]
+
+# Office / "broad document" parsing via Microsoft's MarkItDown.
+# Covers docx/xlsx/pptx/epub/rtf/odt and normalizes everything to
+# Markdown — matches the README's "Word docs" promise.
+docling = [
+    "markitdown[docx,xlsx,pptx]>=0.1.0",
+]
+
+# URL content extraction for "give me the text of this article".
+# trafilatura handles boilerplate removal and is the cheapest /
+# most-accurate open-source option we tested. Only installed when
+# the URL path is needed.
+url = [
+    "trafilatura>=1.12.0",
+]
+# Graph backends.
+neo4j = [
+    "neo4j>=5.27.0",
+]
+postgres = [
     "psycopg[binary]>=3.2.0",
     "psycopg-pool>=3.2.0",
-    "sqlalchemy>=2.0.36",
-    "alembic>=1.14.1",
-    "splink==4.0.7",
-    "google-ai-generativelanguage==0.6.10",
-    "google-api-core==2.24.0",
-    "google-api-python-client==2.156.0",
-    "google-auth==2.37.0",
-    "google-auth-httplib2==0.2.0",
-    "google-generativeai==0.8.3",
-    "googleapis-common-protos==1.66.0",
-    "anthropic[vertex]>=0.43.1",
-    "google-genai>=1.2.0",
-    "aiofiles>=23.2.1",
-    "aiohttp>=3.11.12",
-    "aiocache>=0.12.3",
+]
+# Kuzu: embedded graph DB for [local] mode. Declared as its own extra
+# so the client-side [local] meta-extra can depend on graphora-server
+# [kuzu] transitively once graphora-server is published to PyPI.
+# The storage/factory dispatch to Kuzu is not wired yet (Gate 5 work);
+# for now this extra installs the driver only.
+kuzu = [
+    "kuzu>=0.6.0",
+]
+# Cache / progress backend.
+redis = [
     "redis>=5.0.11",
+]
+# Ollama client. When this is installed AND Ollama is reachable on
+# localhost:11434, the server can route to a local model instead of
+# a cloud LLM. Server-side BAML Ollama provider wiring is upstream
+# work (tracked in the Gate 2 "no-key local" exit criterion).
+ollama = [
+    "ollama>=0.4.0",
+]
+
+# MCP (Model Context Protocol) server surface. Ships the
+# `graphora-mcp` console script, which exposes the extraction API
+# as MCP tools for agent clients (Claude Desktop, Cursor, etc.).
+# The server talks HTTP to a running Graphora deployment rather
+# than importing the service modules in-process — keeps the MCP
+# bootstrap light (no Postgres/Neo4j startup) and matches how
+# real users deploy it (local MCP → hosted or local Graphora URL).
+# [url] is folded in because the MCP extract_document tool
+# advertises URL input — installing [mcp] alone without it would
+# leave one of the three documented entry points broken at
+# runtime.
+mcp = [
+    "mcp>=1.0.0",
     "httpx>=0.28.0",
-    "slowapi>=0.1.9",
-    "textstat>=0.7.3",
-    "sqlparse>=0.5.1",
+    "graphora-server[url]",
+]
+
+# Per-provider LLM extras. Parallel to graphora-client's [openai] /
+# [anthropic] / [gemini] naming.
+#
+# The underlying SDK packages are ALSO still in base dependencies
+# today: BAML may dynamically import provider clients at runtime
+# based on config, and `rg` can't see those imports. Once PR1c's
+# provider E2E harness lands, we move these packages out of base
+# one-at-a-time (each gated by the harness) so the provider extras
+# become the only place they're declared. Until then, installing
+# `graphora-server[openai]` is a no-op beyond making the intent
+# explicit — openai is already installed via base.
+openai = [
+    "openai>=1.52.0",
+]
+anthropic = [
+    "anthropic[vertex]>=0.43.1",
+]
+gemini = [
+    "google-genai>=1.2.0",
+]
+vertexai = [
+    "vertexai>=0.0.1",
+    "google-cloud-aiplatform>=1.43.0",
+]
+
+# Convenience union. Use this for a runnable server with all features.
+all = [
+    "graphora-server[server,chunking,embeddings,er,pdf,docling,url,neo4j,postgres,kuzu,redis,ollama,mcp,openai,anthropic,gemini,vertexai]",
+]
+
+# Developer tooling. Named `dev` to mirror the locked taxonomy; kept
+# as a [project.optional-dependencies] entry (pip-installable) rather
+# than a [dependency-groups] entry (uv-only) so contributors using
+# pip/poetry/hatch can also access it via `pip install -e '.[dev]'`.
+# The [dependency-groups] dev block below is kept in sync as uv's
+# preferred shape.
+dev = [
+    "ruff>=0.7.0",
+    "black>=24.4.0",
+    "mypy>=1.10.0",
+    "vulture>=2.11",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.5",
     "pytest-benchmark>=4.0.0",
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
-    "baml-py==0.89.0",
+    "sqlparse>=0.5.1",
 ]
+
+[project.scripts]
+graphora-server = "graphora_server.__main__:main"
+graphora-mcp = "graphora_server.mcp.__main__:main"
 
 [dependency-groups]
 dev = [
@@ -70,13 +218,28 @@ dev = [
     "black>=24.4.0",
     "mypy>=1.10.0",
     "vulture>=2.11",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.5",
+    "pytest-benchmark>=4.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "sqlparse>=0.5.1",
 ]
 
-[tool.setuptools]
-packages = ["app"]
+[tool.setuptools.packages.find]
+include = ["graphora_server*"]
+exclude = ["tests*", "scripts*", "migrations*", "docs*", "prototyping*"]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
+[tool.setuptools.package-data]
+graphora_server = [
+    "baml_src/*.baml",
+    "templates/ontologies/*.yaml",
+]
+
+# Pytest config lives in pytest.ini (single source of truth — pytest
+# prefers pytest.ini over pyproject.toml when both are present).
+# Provider E2E excludes, coverage package, and markers are declared
+# there.
 
 [tool.ruff]
 target-version = "py311"

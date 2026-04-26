@@ -7,7 +7,7 @@ Tests for configuration validation and defaults.
 import pytest
 from pydantic import ValidationError
 
-from app.services.chunking.config import (
+from graphora_server.services.chunking.config import (
     ChunkingConfig,
     ChunkingStrategy,
     DEFAULT_CONFIGS,

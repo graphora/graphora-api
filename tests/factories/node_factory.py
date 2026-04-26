@@ -63,7 +63,7 @@ class NodeFactory:
         Returns:
             BaseNode instance.
         """
-        from app.services.transform.models import BaseNode, NodeProvenance
+        from graphora_server.services.transform.models import BaseNode, NodeProvenance
 
         node_id = node_id or cls._next_id()
         props = properties or {"name": f"Test {node_type} {node_id}"}

@@ -29,11 +29,13 @@ Extract knowledge graphs from the command line:
 # Install
 pip install graphora[cli]
 
-# Extract
+# Extract (uses the hosted demo at demo.graphora.io — no database or API key needed)
 graphora extract document.pdf --output graph.json
 ```
 
-That's it! No database setup, no LLM keys required to get started.
+That's it! No database setup, and no LLM keys of your own required to try the hosted demo.
+
+> **Want to self-host?** Then you will need an LLM key. Jump to [Self-Hosting](#self-hosting) below — the [Zero-Config Mode](#zero-config-mode) section is explicit about which key to set (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`). Work is underway to add an Ollama-auto-detect path that removes this requirement for local runs — see [[product-strategy]] in the work vault.
 
 ## Why Graphora?
 
@@ -50,7 +52,7 @@ That's it! No database setup, no LLM keys required to get started.
 ## Features
 
 - **AI-powered extraction**: Advanced LLM-driven entity and relationship extraction from unstructured documents
-- **Multi-format support**: Process PDFs, Word docs, text files, and more
+- **Multi-format support**: Process PDFs, plain text (`.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html`), Office formats (`.docx`, `.xlsx`, `.pptx`) via MarkItDown, and URLs via trafilatura. Install extras `graphora-server[pdf,docling,url]` for the full document-type surface
 - **Visual schema builder**: Design your ontology with an intuitive drag-and-drop interface
 - **Schema chat copilot**: Natural language conversations with streaming responses to refine your schema
 - **Auto schema inference**: Let AI suggest schemas from your documents
@@ -106,6 +108,34 @@ make dev
 ```
 
 No database setup required. The system will use in-memory storage and auto-infer schemas.
+
+### No-Key Local Mode (Ollama)
+
+Run extraction entirely offline by pointing Graphora at a local Ollama server:
+
+```bash
+# Install + pull a model
+brew install ollama
+ollama serve &
+ollama pull llama3.2
+
+# Set environment variables
+export AUTH_BYPASS_ENABLED=true
+export STORAGE_TYPE=memory
+export LLM_PROVIDER=ollama
+export OLLAMA_HOST=http://localhost:11434
+export OLLAMA_MODEL=llama3.2
+
+# Install the Ollama extra and start the server
+pip install 'graphora-server[server,ollama]'
+make dev
+```
+
+Tradeoffs vs. the Gemini path:
+
+* **PDF handling:** Gemini ingests PDFs natively (multimodal). Ollama is text-only, so PDF inputs are pre-extracted via pymupdf/pypdf before chunking. Layout/table fidelity drops; clean text extracts well.
+* **Quality:** small models (llama3.2:1b–3b, phi-3:mini) extract simple entity types reliably but degrade on nested relationships. Larger models (llama3.1:8b, qwen2.5:7b) are closer to Gemini-flash quality.
+* **Speed:** depends on hardware. CPU-only is slow; an M-series Mac or any consumer GPU is comfortable.
 
 ### Full Setup with Neo4j
 
@@ -204,6 +234,83 @@ Call the API from CI jobs or data pipelines without extra backend code. Mint sho
 4. Repeat the minting step whenever the token expires (keep TTLs short and rotate the Clerk API key like any other secret).
 
 The `graphora` Python package automatically reads `GRAPHORA_AUTH_TOKEN`, so no application changes are required.
+
+## MCP Server (agent access)
+
+Expose Graphora as an MCP (Model Context Protocol) server so agent clients — Claude Desktop, Cursor, custom LLM apps — can extract, query, and inspect knowledge graphs via tool calls.
+
+### Install
+
+```bash
+pip install 'graphora-server[mcp]'
+```
+
+This adds the `graphora-mcp` console script and pulls in URL support (`[url]`) transitively so `extract_document(url=...)` works out of the box.
+
+### Run
+
+```bash
+export GRAPHORA_API_URL=http://localhost:8000        # or your deployment
+export GRAPHORA_AUTH_TOKEN=<clerk-jwt>               # required unless server has auth bypass
+graphora-mcp
+```
+
+The server speaks MCP over stdio — agent clients launch it on demand.
+
+### Claude Desktop config
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "graphora": {
+      "command": "graphora-mcp",
+      "env": {
+        "GRAPHORA_API_URL": "http://localhost:8000",
+        "GRAPHORA_AUTH_TOKEN": "<clerk-jwt>"
+      }
+    }
+  }
+}
+```
+
+### Tools exposed
+
+| Tool | Purpose |
+|------|---------|
+| `extract_document(file_path \| url, ontology_id?, schemaless?)` | Run extraction on a local file or URL. Auto-infers schema if `ontology_id` is omitted. Set `schemaless=True` to skip pre-extraction schema inference entirely (see Schema-less mode below). Returns a `transform_id`. |
+| `query_graph(transform_id, filter_type?, limit?)` | Fetch nodes + edges. Filter by entity type (case-insensitive), limit capped at 200 to keep agent context usable. |
+| `get_evidence(transform_id, node_id)` | Return a node's full properties, its incoming/outgoing edges, and the provenance fields (source chunk, document id, offsets) that justify it being in the graph. |
+| `refine_ontology(transform_id, save?)` | Run post-hoc ontology inference over what was extracted. `save=False` (default) returns YAML inline; `save=True` persists it as a new ontology and returns the `ontology_id`. |
+
+## Schema-less extraction mode
+
+Two ways to start an extraction without pre-committing to a schema:
+
+1. **Auto-schema** (default on `/transform/upload`): Graphora peeks at the first few KB of the document, asks the LLM "what schema fits?", then extracts against that inferred schema. Fast but biases the extractor — the LLM commits to categories before seeing the full document.
+
+2. **Schema-less** (new on `/transform/schemaless/upload`): Graphora extracts against a permissive generic schema (Person, Organization, Concept, Entity + RELATED_TO/WORKS_AT/KNOWS). Types emerge from what was actually extracted, not what the LLM was told to look for.
+
+After a schema-less extraction completes, refine the ontology from the emerged graph:
+
+```bash
+# Preview the inferred ontology (no side-effects)
+GET  /api/v1/transform/{transform_id}/inferred-ontology
+
+# Persist the inferred ontology as a new ontology_id
+POST /api/v1/transform/{transform_id}/finalize-ontology
+```
+
+Or from the MCP layer:
+
+```
+await extract_document(file_path="paper.pdf", schemaless=True)     # -> tx_id
+# ... wait for extraction to complete ...
+await refine_ontology(transform_id=tx_id, save=True)               # -> ontology_id
+```
+
+The refinement endpoint works on any completed extraction, not just schema-less ones — use it to tighten an ontology based on what was actually surfaced.
 
 ## Project Structure
 

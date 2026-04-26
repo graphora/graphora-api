@@ -2,9 +2,9 @@ from typing import List
 
 import pytest
 
-from app.services.quality.models import QualityRuleType, QualitySeverity
-from app.services.quality.validator import QualityValidator
-from app.services.transform.models import (
+from graphora_server.services.quality.models import QualityRuleType, QualitySeverity
+from graphora_server.services.quality.validator import QualityValidator
+from graphora_server.services.transform.models import (
     BaseNode,
     DocumentKnowledgeGraph,
     RelationshipInstance,

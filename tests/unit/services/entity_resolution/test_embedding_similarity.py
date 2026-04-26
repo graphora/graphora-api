@@ -8,7 +8,7 @@ import pytest
 import numpy as np
 from unittest.mock import patch, MagicMock
 
-from app.services.entity_resolution.embedding_similarity import (
+from graphora_server.services.entity_resolution.embedding_similarity import (
     EmbeddingSimilarity,
     get_embedding_similarity,
 )
@@ -353,7 +353,7 @@ class TestGetEmbeddingSimilarity:
     def test_should_return_same_instance(self, mock_model):
         """Should return same instance for same model."""
         # Reset global instance
-        import app.services.entity_resolution.embedding_similarity as module
+        import graphora_server.services.entity_resolution.embedding_similarity as module
 
         module._default_instance = None
 
@@ -369,7 +369,7 @@ class TestGetEmbeddingSimilarity:
 
     def test_should_create_new_instance_for_different_model(self, mock_model):
         """Should create new instance for different model."""
-        import app.services.entity_resolution.embedding_similarity as module
+        import graphora_server.services.entity_resolution.embedding_similarity as module
 
         module._default_instance = None
 

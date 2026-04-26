@@ -68,7 +68,7 @@ class TestCanonicalization:
 
     def test_canonicalize_whitespace_should_normalize_spaces(self):
         """Should normalize multiple spaces to single space."""
-        from app.services.transform.helpers import _canonicalize_whitespace
+        from graphora_server.services.transform.helpers import _canonicalize_whitespace
 
         assert _canonicalize_whitespace("hello   world") == "hello world"
         assert _canonicalize_whitespace("  leading") == "leading"
@@ -77,7 +77,9 @@ class TestCanonicalization:
 
     def test_canonicalize_company_name_should_remove_suffixes(self):
         """Should remove common company suffixes."""
-        from app.services.transform.helpers import _canonicalize_company_name
+        from graphora_server.services.transform.helpers import (
+            _canonicalize_company_name,
+        )
 
         # Should lowercase
         result = _canonicalize_company_name("ACME Corporation")
@@ -85,27 +87,27 @@ class TestCanonicalization:
 
     def test_basic_canonical_value_should_lowercase_strings(self):
         """Should lowercase and strip string values."""
-        from app.services.transform.helpers import _basic_canonical_value
+        from graphora_server.services.transform.helpers import _basic_canonical_value
 
         assert _basic_canonical_value("Hello World") == "hello world"
         assert _basic_canonical_value("  UPPERCASE  ") == "uppercase"
 
     def test_basic_canonical_value_should_handle_none(self):
         """Should return None for None input."""
-        from app.services.transform.helpers import _basic_canonical_value
+        from graphora_server.services.transform.helpers import _basic_canonical_value
 
         assert _basic_canonical_value(None) is None
 
     def test_basic_canonical_value_should_stringify_numbers(self):
         """Should convert numbers to strings."""
-        from app.services.transform.helpers import _basic_canonical_value
+        from graphora_server.services.transform.helpers import _basic_canonical_value
 
         assert _basic_canonical_value(123) == "123"
         assert _basic_canonical_value(45.67) == "45.67"
 
     def test_basic_canonical_value_should_handle_lists(self):
         """Should handle list values."""
-        from app.services.transform.helpers import _basic_canonical_value
+        from graphora_server.services.transform.helpers import _basic_canonical_value
 
         result = _basic_canonical_value(["a", "b", "c"])
         # Should return some canonical representation
@@ -113,7 +115,9 @@ class TestCanonicalization:
 
     def test_build_canonical_properties_should_canonicalize_all_props(self):
         """Should build canonical version of all properties."""
-        from app.services.transform.helpers import _build_canonical_properties
+        from graphora_server.services.transform.helpers import (
+            _build_canonical_properties,
+        )
 
         parsed_ontology = {
             "entities": {
@@ -143,7 +147,7 @@ class TestCanonicalization:
 
     def test_canonicalize_value_should_use_registered_canonicalizer(self):
         """Should use registered canonicalizer when available."""
-        from app.services.transform.helpers import (
+        from graphora_server.services.transform.helpers import (
             _canonicalize_value,
             register_canonicalizer,
         )
@@ -168,7 +172,7 @@ class TestNodeMerging:
 
     def test_merge_nodes_should_combine_chunk_ids(self):
         """Merged node should have combined chunk IDs."""
-        from app.services.transform.helpers import merge_nodes
+        from graphora_server.services.transform.helpers import merge_nodes
 
         NodeFactory.reset_counter()
 
@@ -189,7 +193,7 @@ class TestNodeMerging:
 
     def test_merge_nodes_should_deduplicate_chunk_ids(self):
         """Merged chunk IDs should not have duplicates."""
-        from app.services.transform.helpers import merge_nodes
+        from graphora_server.services.transform.helpers import merge_nodes
 
         NodeFactory.reset_counter()
 
@@ -210,7 +214,7 @@ class TestNodeMerging:
 
     def test_merge_nodes_should_prefer_higher_confidence(self):
         """Should use values from higher confidence node."""
-        from app.services.transform.helpers import merge_nodes
+        from graphora_server.services.transform.helpers import merge_nodes
 
         NodeFactory.reset_counter()
 
@@ -229,7 +233,7 @@ class TestNodeMerging:
 
     def test_merge_nodes_should_preserve_id_from_existing(self):
         """Should preserve the ID from the existing node."""
-        from app.services.transform.helpers import merge_nodes
+        from graphora_server.services.transform.helpers import merge_nodes
 
         NodeFactory.reset_counter()
 
@@ -248,8 +252,8 @@ class TestNodeMerging:
 
     def test_merge_nodes_should_handle_missing_provenance(self):
         """Should handle nodes with missing provenance."""
-        from app.services.transform.helpers import merge_nodes
-        from app.services.transform.models import BaseNode
+        from graphora_server.services.transform.helpers import merge_nodes
+        from graphora_server.services.transform.models import BaseNode
 
         # Create node without provenance
         existing = BaseNode(
@@ -270,7 +274,7 @@ class TestNodeMerging:
 
     def test_merge_nodes_should_preserve_type(self):
         """Should preserve the entity type."""
-        from app.services.transform.helpers import merge_nodes
+        from graphora_server.services.transform.helpers import merge_nodes
 
         NodeFactory.reset_counter()
 
@@ -283,7 +287,7 @@ class TestNodeMerging:
 
     def test_merge_nodes_should_combine_properties(self):
         """Should combine properties from both nodes."""
-        from app.services.transform.helpers import merge_nodes
+        from graphora_server.services.transform.helpers import merge_nodes
 
         NodeFactory.reset_counter()
 
@@ -313,7 +317,7 @@ class TestPropertyNormalization:
 
     def test_coerce_property_value_should_handle_string_type(self):
         """Should coerce value to string type."""
-        from app.services.transform.helpers import _coerce_property_value
+        from graphora_server.services.transform.helpers import _coerce_property_value
 
         prop_def = {"type": "string"}
 
@@ -322,7 +326,7 @@ class TestPropertyNormalization:
 
     def test_coerce_property_value_should_handle_integer_type(self):
         """Should coerce value to integer type."""
-        from app.services.transform.helpers import _coerce_property_value
+        from graphora_server.services.transform.helpers import _coerce_property_value
 
         prop_def = {"type": "integer"}
 
@@ -331,7 +335,7 @@ class TestPropertyNormalization:
 
     def test_coerce_property_value_should_handle_float_type(self):
         """Should coerce value to float type."""
-        from app.services.transform.helpers import _coerce_property_value
+        from graphora_server.services.transform.helpers import _coerce_property_value
 
         prop_def = {"type": "float"}
 
@@ -340,7 +344,7 @@ class TestPropertyNormalization:
 
     def test_coerce_property_value_should_return_none_for_invalid(self):
         """Should return None for values that can't be coerced."""
-        from app.services.transform.helpers import _coerce_property_value
+        from graphora_server.services.transform.helpers import _coerce_property_value
 
         prop_def = {"type": "integer"}
 
@@ -349,7 +353,7 @@ class TestPropertyNormalization:
 
     def test_coerce_property_value_should_handle_boolean_type(self):
         """Should coerce value to boolean type."""
-        from app.services.transform.helpers import _coerce_property_value
+        from graphora_server.services.transform.helpers import _coerce_property_value
 
         prop_def = {"type": "boolean"}
 
@@ -359,28 +363,28 @@ class TestPropertyNormalization:
 
     def test_apply_case_format_should_handle_lowercase(self):
         """Should convert to lowercase."""
-        from app.services.transform.helpers import _apply_case_format
+        from graphora_server.services.transform.helpers import _apply_case_format
 
         result = _apply_case_format("Hello World", "lowercase")
         assert result == "hello world"
 
     def test_apply_case_format_should_handle_uppercase(self):
         """Should convert to uppercase."""
-        from app.services.transform.helpers import _apply_case_format
+        from graphora_server.services.transform.helpers import _apply_case_format
 
         result = _apply_case_format("Hello World", "uppercase")
         assert result == "HELLO WORLD"
 
     def test_apply_case_format_should_handle_title_case(self):
         """Should convert to title case."""
-        from app.services.transform.helpers import _apply_case_format
+        from graphora_server.services.transform.helpers import _apply_case_format
 
         result = _apply_case_format("hello world", "titlecase")
         assert result == "Hello World"
 
     def test_apply_case_format_should_preserve_unknown_format(self):
         """Should preserve value for unknown format."""
-        from app.services.transform.helpers import _apply_case_format
+        from graphora_server.services.transform.helpers import _apply_case_format
 
         result = _apply_case_format("Hello World", "unknown_format")
         assert result == "Hello World"
@@ -396,7 +400,7 @@ class TestPropertyTypeDetection:
 
     def test_is_prop_type_string_should_detect_string_types(self):
         """Should detect string property types."""
-        from app.services.transform.helpers import _is_prop_type_string
+        from graphora_server.services.transform.helpers import _is_prop_type_string
 
         assert _is_prop_type_string("string") is True
         assert _is_prop_type_string("str") is True
@@ -405,7 +409,7 @@ class TestPropertyTypeDetection:
 
     def test_is_prop_type_number_should_detect_number_types(self):
         """Should detect number property types."""
-        from app.services.transform.helpers import _is_prop_type_number
+        from graphora_server.services.transform.helpers import _is_prop_type_number
 
         assert _is_prop_type_number("integer") is True
         assert _is_prop_type_number("float") is True
@@ -414,7 +418,7 @@ class TestPropertyTypeDetection:
 
     def test_is_prop_type_datetime_should_detect_datetime_types(self):
         """Should detect datetime property types."""
-        from app.services.transform.helpers import _is_prop_type_datetime
+        from graphora_server.services.transform.helpers import _is_prop_type_datetime
 
         assert _is_prop_type_datetime("datetime") is True
         assert _is_prop_type_datetime("date") is True
@@ -431,7 +435,7 @@ class TestNodeKeyGeneration:
 
     def test_generate_node_key_should_create_deterministic_key(self):
         """Should create deterministic key for same input."""
-        from app.services.transform.helpers import _generate_node_key
+        from graphora_server.services.transform.helpers import _generate_node_key
 
         parsed_ontology = {
             "entities": {"Company": {"properties": {"name": {"type": "string"}}}}
@@ -444,7 +448,7 @@ class TestNodeKeyGeneration:
 
     def test_generate_node_key_should_differ_for_different_input(self):
         """Should create different keys for different input."""
-        from app.services.transform.helpers import _generate_node_key
+        from graphora_server.services.transform.helpers import _generate_node_key
 
         parsed_ontology = {
             "entities": {"Company": {"properties": {"name": {"type": "string"}}}}
@@ -457,7 +461,7 @@ class TestNodeKeyGeneration:
 
     def test_generate_node_key_should_include_type(self):
         """Should create different keys for different entity types."""
-        from app.services.transform.helpers import _generate_node_key
+        from graphora_server.services.transform.helpers import _generate_node_key
 
         parsed_ontology = {
             "entities": {
@@ -473,7 +477,9 @@ class TestNodeKeyGeneration:
 
     def test_make_deterministic_node_id_should_create_uuid_format(self):
         """Should create UUID-formatted ID."""
-        from app.services.transform.helpers import _make_deterministic_node_id
+        from graphora_server.services.transform.helpers import (
+            _make_deterministic_node_id,
+        )
 
         node_id = _make_deterministic_node_id("transform-123", "Company", "acme")
 
@@ -482,7 +488,7 @@ class TestNodeKeyGeneration:
 
     def test_make_canonical_node_id_should_be_deterministic(self):
         """Should create deterministic ID from node key."""
-        from app.services.transform.helpers import _make_canonical_node_id
+        from graphora_server.services.transform.helpers import _make_canonical_node_id
 
         id1 = _make_canonical_node_id("Company:name=acme")
         id2 = _make_canonical_node_id("Company:name=acme")
@@ -500,7 +506,7 @@ class TestColumnDetection:
 
     def test_is_canonical_column_should_detect_canonical_prefix(self):
         """Should detect columns with canonical__ prefix (double underscore)."""
-        from app.services.transform.helpers import _is_canonical_column
+        from graphora_server.services.transform.helpers import _is_canonical_column
 
         # Note: prefix is "canonical__" (double underscore)
         assert _is_canonical_column("canonical__name") is True
@@ -509,7 +515,9 @@ class TestColumnDetection:
 
     def test_base_property_from_column_should_strip_prefix(self):
         """Should strip canonical__ prefix from column name."""
-        from app.services.transform.helpers import _base_property_from_column
+        from graphora_server.services.transform.helpers import (
+            _base_property_from_column,
+        )
 
         # Note: prefix is "canonical__" (double underscore)
         assert _base_property_from_column("canonical__name") == "name"
@@ -527,8 +535,8 @@ class TestOrphanPruning:
 
     def test_prune_orphaned_nodes_should_remove_disconnected_nodes(self):
         """Should remove nodes not in any relationship."""
-        from app.services.transform.helpers import prune_orphaned_nodes
-        from app.services.transform.models import DocumentKnowledgeGraph
+        from graphora_server.services.transform.helpers import prune_orphaned_nodes
+        from graphora_server.services.transform.models import DocumentKnowledgeGraph
 
         NodeFactory.reset_counter()
         RelationshipFactory.reset_counter()
@@ -574,8 +582,8 @@ class TestOrphanPruning:
 
     def test_prune_orphaned_nodes_should_keep_connected_nodes(self):
         """Should keep nodes that are in relationships."""
-        from app.services.transform.helpers import prune_orphaned_nodes
-        from app.services.transform.models import DocumentKnowledgeGraph
+        from graphora_server.services.transform.helpers import prune_orphaned_nodes
+        from graphora_server.services.transform.models import DocumentKnowledgeGraph
 
         NodeFactory.reset_counter()
         RelationshipFactory.reset_counter()
@@ -616,7 +624,9 @@ class TestEntityDeduplicationPreparation:
 
     def test_prepare_entities_for_deduplication_should_accept_nodes(self):
         """Should prepare entities for deduplication."""
-        from app.services.transform.helpers import _prepare_entities_for_deduplication
+        from graphora_server.services.transform.helpers import (
+            _prepare_entities_for_deduplication,
+        )
 
         NodeFactory.reset_counter()
 
@@ -642,7 +652,7 @@ class TestEntityDeduplicationPreparation:
 
     def test_create_splink_dataframe_should_include_all_properties(self):
         """Should include all node properties in dataframe."""
-        from app.services.transform.helpers import _create_splink_dataframe
+        from graphora_server.services.transform.helpers import _create_splink_dataframe
 
         # Create entity data dicts with nested properties as expected by the function
         entities_data = [
@@ -683,7 +693,9 @@ class TestSmallGroupDeduplication:
 
     def test_deduplicate_small_entity_group_should_handle_empty_list(self):
         """Should handle empty entity list."""
-        from app.services.transform.helpers import _deduplicate_small_entity_group
+        from graphora_server.services.transform.helpers import (
+            _deduplicate_small_entity_group,
+        )
 
         # Function signature: (entity_type, entities, parsed_ontology)
         # Returns: (deduplicated_entities, id_mapping)
@@ -694,7 +706,9 @@ class TestSmallGroupDeduplication:
 
     def test_deduplicate_small_entity_group_should_return_single_entity(self):
         """Should return single entity unchanged."""
-        from app.services.transform.helpers import _deduplicate_small_entity_group
+        from graphora_server.services.transform.helpers import (
+            _deduplicate_small_entity_group,
+        )
 
         NodeFactory.reset_counter()
         node = NodeFactory.create_company(name="Acme")
@@ -715,14 +729,14 @@ class TestTransitiveClosure:
 
     def test_apply_transitive_closure_should_handle_empty_mappings(self):
         """Should handle empty mappings."""
-        from app.services.transform.helpers import _apply_transitive_closure
+        from graphora_server.services.transform.helpers import _apply_transitive_closure
 
         result = _apply_transitive_closure({})
         assert result == {}
 
     def test_apply_transitive_closure_should_handle_simple_mapping(self):
         """Should handle direct A -> B mapping."""
-        from app.services.transform.helpers import _apply_transitive_closure
+        from graphora_server.services.transform.helpers import _apply_transitive_closure
 
         mappings = {"a": "b"}
         result = _apply_transitive_closure(mappings)
@@ -731,7 +745,7 @@ class TestTransitiveClosure:
 
     def test_apply_transitive_closure_should_resolve_chains(self):
         """Should resolve A -> B -> C to A -> C, B -> C."""
-        from app.services.transform.helpers import _apply_transitive_closure
+        from graphora_server.services.transform.helpers import _apply_transitive_closure
 
         mappings = {"a": "b", "b": "c"}
         result = _apply_transitive_closure(mappings)
@@ -742,7 +756,7 @@ class TestTransitiveClosure:
 
     def test_apply_transitive_closure_should_handle_multiple_clusters(self):
         """Should handle multiple independent clusters."""
-        from app.services.transform.helpers import _apply_transitive_closure
+        from graphora_server.services.transform.helpers import _apply_transitive_closure
 
         mappings = {
             "a1": "a_rep",
@@ -761,7 +775,7 @@ class TestTransitiveClosure:
 
     def test_apply_transitive_closure_should_handle_long_chains(self):
         """Should handle long chains efficiently."""
-        from app.services.transform.helpers import _apply_transitive_closure
+        from graphora_server.services.transform.helpers import _apply_transitive_closure
 
         # Create chain: e1 -> e2 -> e3 -> e4 -> e5 -> rep
         mappings = {
@@ -788,7 +802,7 @@ class TestExtractProperties:
 
     def test_extract_properties_should_get_model_dict(self):
         """Should extract properties from Pydantic model."""
-        from app.services.transform.helpers import _extract_properties
+        from graphora_server.services.transform.helpers import _extract_properties
         from pydantic import BaseModel
 
         class TestEntity(BaseModel):
@@ -803,7 +817,7 @@ class TestExtractProperties:
 
     def test_extract_properties_should_exclude_none_values(self):
         """Should handle optional fields with None values."""
-        from app.services.transform.helpers import _extract_properties
+        from graphora_server.services.transform.helpers import _extract_properties
         from pydantic import BaseModel
         from typing import Optional
 

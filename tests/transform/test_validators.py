@@ -3,7 +3,7 @@ from io import BytesIO
 import pytest
 from starlette.datastructures import UploadFile
 
-from app.services.transform.validators import FileValidator
+from graphora_server.services.transform.validators import FileValidator
 
 
 @pytest.mark.asyncio
@@ -12,7 +12,7 @@ async def test_file_validator_accepts_allowed_mime(monkeypatch):
     upload = UploadFile(filename="doc.pdf", file=BytesIO(b"%PDF-test"))
 
     monkeypatch.setattr(
-        "app.services.transform.validators.magic.from_buffer",
+        "graphora_server.services.transform.validators.magic.from_buffer",
         lambda _content, mime=True: "application/pdf",
     )
 
@@ -28,7 +28,7 @@ async def test_file_validator_rejects_disallowed_mime(monkeypatch):
     upload = UploadFile(filename="script.sh", file=BytesIO(b"#!/bin/bash"))
 
     monkeypatch.setattr(
-        "app.services.transform.validators.magic.from_buffer",
+        "graphora_server.services.transform.validators.magic.from_buffer",
         lambda _content, mime=True: "application/x-shellscript",
     )
 
@@ -45,7 +45,7 @@ async def test_file_validator_rejects_files_over_limit(monkeypatch):
 
     monkeypatch.setattr(FileValidator, "MAX_FILE_SIZE", 8)
     monkeypatch.setattr(
-        "app.services.transform.validators.magic.from_buffer",
+        "graphora_server.services.transform.validators.magic.from_buffer",
         lambda _content, mime=True: "text/plain",
     )
 

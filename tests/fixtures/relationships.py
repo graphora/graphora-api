@@ -11,7 +11,10 @@ import pytest
 @pytest.fixture
 def sample_employs_relationship():
     """Standard EMPLOYS relationship for testing."""
-    from app.services.transform.models import RelationshipInstance, NodeProvenance
+    from graphora_server.services.transform.models import (
+        RelationshipInstance,
+        NodeProvenance,
+    )
 
     return RelationshipInstance(
         id="rel-123",
@@ -35,7 +38,7 @@ def sample_employs_relationship():
 @pytest.fixture
 def sample_relationship_instance():
     """Generic relationship instance for testing."""
-    from app.services.transform.models import RelationshipInstance
+    from graphora_server.services.transform.models import RelationshipInstance
 
     return RelationshipInstance(
         id="rel-789",
@@ -51,7 +54,10 @@ def sample_relationship_instance():
 @pytest.fixture
 def relationship_factory():
     """Factory fixture for creating custom relationships."""
-    from app.services.transform.models import RelationshipInstance, NodeProvenance
+    from graphora_server.services.transform.models import (
+        RelationshipInstance,
+        NodeProvenance,
+    )
     import uuid
 
     def create_relationship(
@@ -98,7 +104,10 @@ def create_test_relationship(
     confidence: float = 0.85,
 ):
     """Create a test relationship outside of pytest fixtures."""
-    from app.services.transform.models import RelationshipInstance, NodeProvenance
+    from graphora_server.services.transform.models import (
+        RelationshipInstance,
+        NodeProvenance,
+    )
 
     return RelationshipInstance(
         id=rel_id,

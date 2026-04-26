@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.schema_inference import (
+from graphora_server.services.schema_inference import (
     infer_schema_from_text,
     _parse_yaml_response,
     create_auto_schema_ontology,
@@ -145,22 +145,18 @@ relationships: {}
         mock_client.models.generate_content.return_value = mock_response
 
         with patch(
-            "app.services.schema_inference.get_user_llm_credentials",
+            "graphora_server.services.schema_inference.get_llm_client_for_user",
             new_callable=AsyncMock,
-            return_value=("api-key", "model-name"),
+            return_value=(mock_client, "model-name", "gemini"),
         ):
-            with patch(
-                "app.services.schema_inference.create_gemini_client",
-                return_value=mock_client,
-            ):
-                result = await infer_schema_from_text(
-                    ["Sample text about people and companies."],
-                    "test-user",
-                )
+            result = await infer_schema_from_text(
+                ["Sample text about people and companies."],
+                "test-user",
+            )
 
-                assert "entities" in result
-                assert "Person" in result["entities"]
-                mock_client.models.generate_content.assert_called_once()
+            assert "entities" in result
+            assert "Person" in result["entities"]
+            mock_client.models.generate_content.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_infer_schema_adds_missing_version(self):
@@ -176,17 +172,13 @@ relationships: {}
         mock_client.models.generate_content.return_value = mock_response
 
         with patch(
-            "app.services.schema_inference.get_user_llm_credentials",
+            "graphora_server.services.schema_inference.get_llm_client_for_user",
             new_callable=AsyncMock,
-            return_value=("api-key", "model-name"),
+            return_value=(mock_client, "model-name", "gemini"),
         ):
-            with patch(
-                "app.services.schema_inference.create_gemini_client",
-                return_value=mock_client,
-            ):
-                result = await infer_schema_from_text(["Sample text"], "test-user")
+            result = await infer_schema_from_text(["Sample text"], "test-user")
 
-                assert result["version"] == "0.1.0"
+            assert result["version"] == "0.1.0"
 
     @pytest.mark.asyncio
     async def test_infer_schema_adds_missing_relationships(self):
@@ -203,18 +195,14 @@ entities:
         mock_client.models.generate_content.return_value = mock_response
 
         with patch(
-            "app.services.schema_inference.get_user_llm_credentials",
+            "graphora_server.services.schema_inference.get_llm_client_for_user",
             new_callable=AsyncMock,
-            return_value=("api-key", "model-name"),
+            return_value=(mock_client, "model-name", "gemini"),
         ):
-            with patch(
-                "app.services.schema_inference.create_gemini_client",
-                return_value=mock_client,
-            ):
-                result = await infer_schema_from_text(["Sample text"], "test-user")
+            result = await infer_schema_from_text(["Sample text"], "test-user")
 
-                assert "relationships" in result
-                assert isinstance(result["relationships"], dict)
+            assert "relationships" in result
+            assert isinstance(result["relationships"], dict)
 
 
 class TestCreateAutoSchemaOntology:
@@ -236,30 +224,26 @@ relationships: {}
         mock_client.models.generate_content.return_value = mock_response
 
         with patch(
-            "app.services.schema_inference.get_user_llm_credentials",
+            "graphora_server.services.schema_inference.get_llm_client_for_user",
             new_callable=AsyncMock,
-            return_value=("api-key", "model-name"),
+            return_value=(mock_client, "model-name", "gemini"),
         ):
             with patch(
-                "app.services.schema_inference.create_gemini_client",
-                return_value=mock_client,
-            ):
-                with patch(
-                    "app.services.schema_inference.ontology_storage_service.store_ontology",
-                    new_callable=AsyncMock,
-                    return_value=True,
-                ) as mock_store:
-                    ontology_id = await create_auto_schema_ontology(
-                        text_chunks=["Sample text"],
-                        user_id="test-user",
-                        transform_id="transform_abc123",
-                    )
+                "graphora_server.services.schema_inference.ontology_storage_service.store_ontology",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_store:
+                ontology_id = await create_auto_schema_ontology(
+                    text_chunks=["Sample text"],
+                    user_id="test-user",
+                    transform_id="transform_abc123",
+                )
 
-                    assert ontology_id.startswith("auto_")
-                    mock_store.assert_called_once()
-                    call_args = mock_store.call_args
-                    assert call_args.kwargs["user_id"] == "test-user"
-                    assert "Auto-generated" in call_args.kwargs["name"]
+                assert ontology_id.startswith("auto_")
+                mock_store.assert_called_once()
+                call_args = mock_store.call_args
+                assert call_args.kwargs["user_id"] == "test-user"
+                assert "Auto-generated" in call_args.kwargs["name"]
 
     @pytest.mark.asyncio
     async def test_create_ontology_raises_on_store_failure(self):
@@ -277,22 +261,18 @@ relationships: {}
         mock_client.models.generate_content.return_value = mock_response
 
         with patch(
-            "app.services.schema_inference.get_user_llm_credentials",
+            "graphora_server.services.schema_inference.get_llm_client_for_user",
             new_callable=AsyncMock,
-            return_value=("api-key", "model-name"),
+            return_value=(mock_client, "model-name", "gemini"),
         ):
             with patch(
-                "app.services.schema_inference.create_gemini_client",
-                return_value=mock_client,
+                "graphora_server.services.schema_inference.ontology_storage_service.store_ontology",
+                new_callable=AsyncMock,
+                return_value=False,
             ):
-                with patch(
-                    "app.services.schema_inference.ontology_storage_service.store_ontology",
-                    new_callable=AsyncMock,
-                    return_value=False,
-                ):
-                    with pytest.raises(ValueError, match="Failed to store"):
-                        await create_auto_schema_ontology(
-                            text_chunks=["Sample text"],
-                            user_id="test-user",
-                            transform_id="transform_abc123",
-                        )
+                with pytest.raises(ValueError, match="Failed to store"):
+                    await create_auto_schema_ontology(
+                        text_chunks=["Sample text"],
+                        user_id="test-user",
+                        transform_id="transform_abc123",
+                    )

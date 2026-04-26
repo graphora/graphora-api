@@ -7,7 +7,7 @@ Tests for file upload validation and security checks.
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from app.services.transform.validators import FileValidator
+from graphora_server.services.transform.validators import FileValidator
 
 
 # ============================================================
@@ -205,7 +205,7 @@ class TestFullFileValidation:
             content=b"%PDF-1.4 mock pdf content" * 100,
         )
 
-        with patch("app.services.transform.validators.magic") as mock_magic:
+        with patch("graphora_server.services.transform.validators.magic") as mock_magic:
             mock_magic.from_buffer.return_value = "application/pdf"
 
             result = await file_validator.validate(mock_file)
@@ -221,7 +221,7 @@ class TestFullFileValidation:
             content=b"This is plain text content",
         )
 
-        with patch("app.services.transform.validators.magic") as mock_magic:
+        with patch("graphora_server.services.transform.validators.magic") as mock_magic:
             mock_magic.from_buffer.return_value = "text/plain"
 
             result = await file_validator.validate(mock_file)
@@ -238,7 +238,7 @@ class TestFullFileValidation:
             content=b"MZ" + b"\x00" * 100,  # PE header
         )
 
-        with patch("app.services.transform.validators.magic") as mock_magic:
+        with patch("graphora_server.services.transform.validators.magic") as mock_magic:
             mock_magic.from_buffer.return_value = "application/x-executable"
 
             result = await file_validator.validate(mock_file)
@@ -256,7 +256,7 @@ class TestFullFileValidation:
             content=large_content,
         )
 
-        with patch("app.services.transform.validators.magic") as mock_magic:
+        with patch("graphora_server.services.transform.validators.magic") as mock_magic:
             mock_magic.from_buffer.return_value = "application/pdf"
 
             result = await file_validator.validate(mock_file)
@@ -276,7 +276,7 @@ class TestFullFileValidation:
             content=b"%PDF-1.4 mock pdf content",
         )
 
-        with patch("app.services.transform.validators.magic") as mock_magic:
+        with patch("graphora_server.services.transform.validators.magic") as mock_magic:
             mock_magic.from_buffer.return_value = "application/pdf"
 
             result = await file_validator.validate(mock_file)
@@ -291,7 +291,7 @@ class TestFullFileValidation:
         """Should handle exceptions during validation gracefully."""
         mock_file = mock_upload_file(filename="document.pdf")
 
-        with patch("app.services.transform.validators.magic") as mock_magic:
+        with patch("graphora_server.services.transform.validators.magic") as mock_magic:
             mock_magic.from_buffer.side_effect = Exception("Magic library error")
 
             result = await file_validator.validate(mock_file)
@@ -310,7 +310,7 @@ class TestFullFileValidation:
             content=b"malicious content",
         )
 
-        with patch("app.services.transform.validators.magic") as mock_magic:
+        with patch("graphora_server.services.transform.validators.magic") as mock_magic:
             mock_magic.from_buffer.return_value = "application/x-executable"
 
             result = await file_validator.validate(mock_file)

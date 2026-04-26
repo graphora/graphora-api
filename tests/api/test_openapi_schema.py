@@ -9,7 +9,7 @@ from scripts.openapi_snapshot import stub_dependencies
 @pytest.fixture(scope="module")
 def openapi_schema():
     stub_dependencies()
-    from app.main import app
+    from graphora_server.main import app
 
     return app.openapi()
 

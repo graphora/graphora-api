@@ -1,7 +1,7 @@
 """Unit tests for extraction configuration classes."""
 
 import pytest
-from app.services.extraction.config import (
+from graphora_server.services.extraction.config import (
     ValidationConfig,
     ContextConfig,
     MultiPassConfig,

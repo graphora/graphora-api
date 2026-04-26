@@ -1,0 +1,116 @@
+name: Provider E2E
+
+# The main CI workflow ignores tests/e2e/** via pytest.ini's addopts.
+# This workflow runs the provider harness against a real LLM on a
+# tighter trigger: pushes/PRs that touch the LLM call path, and on
+# manual dispatch.
+#
+# Today only the Gemini path is exercised — the BAML client factory
+# at graphora_server/utils/baml_helper.py only speaks google-ai. When
+# OpenAI / Anthropic / Vertex BAML clients land (product-strategy
+# Goal 9, "any LLM"), each provider gets its own test_<provider>.py
+# and a matrix entry here, guarded by its own test-tier secret.
+
+on:
+  push:
+    branches: [ main, oss, revamp ]
+    paths:
+      - 'pyproject.toml'
+      - 'graphora_server/services/llm/**'
+      - 'graphora_server/utils/baml_helper.py'
+      - 'graphora_server/utils/llm_helper.py'
+      - 'graphora_server/baml_src/**'
+      - 'graphora_server/baml_client/**'
+      - 'graphora_server/services/transform/graph_transformer.py'
+      - 'graphora_server/services/transform/helpers.py'
+      - 'tests/e2e/providers/**'
+      - '.github/workflows/provider-e2e.yml'
+  pull_request:
+    branches: [ main, oss, revamp ]
+    paths:
+      - 'pyproject.toml'
+      - 'graphora_server/services/llm/**'
+      - 'graphora_server/utils/baml_helper.py'
+      - 'graphora_server/utils/llm_helper.py'
+      - 'graphora_server/baml_src/**'
+      - 'graphora_server/baml_client/**'
+      - 'graphora_server/services/transform/graph_transformer.py'
+      - 'graphora_server/services/transform/helpers.py'
+      - 'tests/e2e/providers/**'
+      - '.github/workflows/provider-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provider-harness:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each matrix entry pins the narrow install shape the harness
+        # needs for that provider. Using a targeted `.[server,<provider>,dev]`
+        # install — NOT `--all-extras` — is load-bearing: PR1c-N removes
+        # one provider SDK from base at a time, and the harness has to
+        # fail loudly if the targeted install shape is missing a dep the
+        # runtime actually needs. `--all-extras` would reinstall the
+        # removed SDK via unrelated extras and mask the regression.
+        include:
+          - provider: gemini
+            install_extras: server,gemini,chunking,er,dev
+    env:
+      # The matrix value flows into shell variables via an env block
+      # rather than being inlined into `run:` bodies. This protects
+      # against the class of command-injection patterns flagged by the
+      # repo's security hook — today the matrix is a static list, but
+      # future entries could in principle come from untrusted input.
+      PROVIDER: ${{ matrix.provider }}
+      INSTALL_EXTRAS: ${{ matrix.install_extras }}
+      # Per-provider spend-capped secrets live in repo settings.
+      # Each test_<provider>.py auto-skips when its provider's key
+      # isn't set, so forks without access to the secrets see a clean
+      # skip rather than a failure.
+      GEMINI_API_KEY_TEST: ${{ secrets.GEMINI_API_KEY_TEST }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+      # Targeted install: base + [server] + [<provider>] + pipeline
+      # extras the Gemini path genuinely needs (chunking + er for
+      # graph_transformer). No --all-extras, because the whole point
+      # of this workflow is to detect when PR1c-N removes a dep that
+      # a provider path secretly relies on.
+      - name: Install targeted extras for ${{ matrix.provider }}
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -e ".[${INSTALL_EXTRAS}]"
+          # pytest-timeout is required by the --timeout flag below.
+          # Installed explicitly here (not via [dev]) to keep the
+          # dep surface minimal and inspectable.
+          python -m pip install --quiet pytest-timeout
+
+      - name: Run provider E2E
+        env:
+          TEST_MODE: "true"
+          # The root tests/conftest.py installs lightweight stubs for
+          # splink, langchain, redis, and pandas so unit tests don't
+          # need native deps. The E2E harness exercises the REAL
+          # extraction path including splink entity resolution, so it
+          # must skip those stubs.
+          GRAPHORA_TEST_REAL_DEPS: "1"
+        run: |
+          pytest \
+            "tests/e2e/providers/test_${PROVIDER}.py" \
+            -v --no-header --tb=short --timeout=300 --no-cov

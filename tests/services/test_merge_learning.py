@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.merge.learning import MergeLearningService
+from graphora_server.services.merge.learning import MergeLearningService
 
 
 @pytest.mark.asyncio

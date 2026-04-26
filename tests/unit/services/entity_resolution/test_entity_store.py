@@ -6,7 +6,7 @@ Tests for persistent entity storage and cross-document resolution.
 import pytest
 import numpy as np
 
-from app.services.entity_resolution.entity_store import (
+from graphora_server.services.entity_resolution.entity_store import (
     EntityStore,
     CrossDocumentResolver,
 )
