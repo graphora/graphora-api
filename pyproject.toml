@@ -121,6 +121,22 @@ neo4j = [
 postgres = [
     "psycopg[binary]>=3.2.0",
     "psycopg-pool>=3.2.0",
+    # pgvector type adapters for embedding columns colocated with
+    # Apache AGE graph data. Used by the [age] graph backend extra
+    # below for similarity search; harmless when only the application
+    # database is in play.
+    "pgvector>=0.3.0",
+]
+# Apache AGE graph backend (Postgres extension). Sister extra to
+# [neo4j] — installing [age] gives you the storage adapter that
+# implements GraphStorageInterface against AGE's openCypher subset
+# colocated with pgvector for embedding similarity. Depends on
+# [postgres] for the underlying psycopg + pool. Server-side AGE
+# needs PostgreSQL >= 14 with `apache-age` and `pgvector` extensions
+# loaded at the database; the Python side is just psycopg + a thin
+# cypher() helper. (Gate 5 / C2-postgres.)
+age = [
+    "graphora-server[postgres]",
 ]
 # Kuzu: embedded graph DB for [local] mode. Declared as its own extra
 # so the client-side [local] meta-extra can depend on graphora-server

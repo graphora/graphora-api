@@ -1431,6 +1431,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+age = [
+    { name = "pgvector" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
+]
 all = [
     { name = "anthropic", extra = ["vertex"] },
     { name = "cryptography" },
@@ -1449,6 +1454,7 @@ all = [
     { name = "ollama" },
     { name = "openai" },
     { name = "pandas" },
+    { name = "pgvector" },
     { name = "prefect" },
     { name = "psutil" },
     { name = "psycopg", extra = ["binary"] },
@@ -1522,6 +1528,7 @@ pdf = [
     { name = "pypdf" },
 ]
 postgres = [
+    { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
 ]
@@ -1533,6 +1540,7 @@ server = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "neo4j" },
+    { name = "pgvector" },
     { name = "prefect" },
     { name = "psutil" },
     { name = "psycopg", extra = ["binary"] },
@@ -1580,6 +1588,7 @@ requires-dist = [
     { name = "google-genai", specifier = ">=1.2.0" },
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.2.0" },
     { name = "graphora-server", extras = ["pdf", "neo4j", "postgres"], marker = "extra == 'server'" },
+    { name = "graphora-server", extras = ["postgres"], marker = "extra == 'age'" },
     { name = "graphora-server", extras = ["server", "chunking", "embeddings", "er", "pdf", "docling", "url", "neo4j", "postgres", "kuzu", "redis", "ollama", "mcp", "openai", "anthropic", "gemini", "vertexai"], marker = "extra == 'all'" },
     { name = "graphora-server", extras = ["url"], marker = "extra == 'mcp'" },
     { name = "httpx", marker = "extra == 'mcp'", specifier = ">=0.28.0" },
@@ -1597,6 +1606,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.52.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.52.0" },
     { name = "pandas", marker = "extra == 'er'", specifier = ">=2.2.2" },
+    { name = "pgvector", marker = "extra == 'postgres'", specifier = ">=0.3.0" },
     { name = "prefect", marker = "extra == 'server'", specifier = ">=3.2.7" },
     { name = "psutil", marker = "extra == 'server'", specifier = ">=5.9.8" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2.0" },
@@ -3567,6 +3577,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b8/b0/a36c468d2d0dec62ddea7c5e4177e93abb12f48ac90f09f24d0581c5189f/pendulum-3.2.0-pp311-pypy311_pp73-musllinux_1_1_x86_64.whl", hash = "sha256:5cd956d4176afc7bfe8a91bf3f771b46ff8d326f6c5bf778eb5010eb742ebba6", size = 561884 },
     { url = "https://files.pythonhosted.org/packages/c5/4d/dad105261898907bf806cabca53d3878529a9fa2c0d5d7f95f2035246fc2/pendulum-3.2.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:39ef129d7b90aab49708645867abdd207b714ba7bff12dae549975b0aca09716", size = 261236 },
     { url = "https://files.pythonhosted.org/packages/02/fb/d65db067a67df7252f18b0cb7420dda84078b9e8bfb375215469c14a50be/pendulum-3.2.0-py3-none-any.whl", hash = "sha256:f3a9c18a89b4d9ef39c5fa6a78722aaff8d5be2597c129a3b16b9f40a561acf3", size = 114111 },
+]
+
+[[package]]
+name = "pgvector"
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/6c/6d8b4b03b958c02fa8687ec6063c49d952a189f8c91ebbe51e877dfab8f7/pgvector-0.4.2.tar.gz", hash = "sha256:322cac0c1dc5d41c9ecf782bd9991b7966685dee3a00bc873631391ed949513a", size = 31354 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/26/6cee8a1ce8c43625ec561aff19df07f9776b7525d9002c86bceb3e0ac970/pgvector-0.4.2-py3-none-any.whl", hash = "sha256:549d45f7a18593783d5eec609ea1684a724ba8405c4cb182a0b2b08aeff04e08", size = 27441 },
 ]
 
 [[package]]

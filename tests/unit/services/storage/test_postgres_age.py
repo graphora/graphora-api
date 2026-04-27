@@ -1,0 +1,237 @@
+"""Unit tests for the Apache AGE storage adapter foundation.
+
+Slice 1 covers the connection layer + cypher helper + agtype parser.
+Method-body tests for store_nodes / get_node_by_id / etc. land
+alongside their implementations in subsequent slices.
+
+These tests deliberately avoid a real Postgres connection — agtype
+parsing and identifier validation are pure-function logic, and the
+connection lifecycle is exercised via mocked psycopg pools. The
+integration test that round-trips through a real AGE instance is
+gated behind a testcontainers fixture and lives in
+tests/integration/ when it lands.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from graphora_server.services.storage.postgres_age import (
+    CypherInjectionError,
+    PostgresAGEStorage,
+    _validate_identifier,
+)
+
+
+class TestIdentifierValidation:
+    """Cypher identifier safety — labels and graph names get
+    interpolated into AGE's cypher() body as raw strings, so the
+    validator is the only thing standing between a malicious caller
+    and SQL/Cypher injection."""
+
+    def test_accepts_simple_alpha(self) -> None:
+        assert _validate_identifier("Person") == "Person"
+
+    def test_accepts_underscore_prefix(self) -> None:
+        assert _validate_identifier("_internal") == "_internal"
+
+    def test_accepts_alphanumeric_with_underscore(self) -> None:
+        assert _validate_identifier("Person_42") == "Person_42"
+
+    def test_rejects_empty(self) -> None:
+        with pytest.raises(CypherInjectionError, match="Empty"):
+            _validate_identifier("")
+
+    def test_rejects_leading_digit(self) -> None:
+        with pytest.raises(CypherInjectionError, match="Invalid"):
+            _validate_identifier("42Person")
+
+    def test_rejects_special_chars(self) -> None:
+        # Each one is a real injection attempt vector for the
+        # cypher() interpolation. None should pass.
+        for bad in ["Per;son", "Person'", "Person--", "Per son", "Per`son"]:
+            with pytest.raises(CypherInjectionError):
+                _validate_identifier(bad)
+
+    def test_rejects_overlong(self) -> None:
+        with pytest.raises(CypherInjectionError, match="exceeds 256"):
+            _validate_identifier("a" * 300)
+
+    def test_includes_kind_in_error(self) -> None:
+        # The kind label flows into error messages so the operator
+        # can tell which validation tripped.
+        with pytest.raises(CypherInjectionError, match="graph name"):
+            _validate_identifier("", kind="graph name")
+
+
+class TestAgtypeParser:
+    """AGE returns vertex/edge values as ``{...}::<type>`` strings.
+    The parser strips the trailing type tag and json-decodes the
+    body. Scalars round-trip through json.loads."""
+
+    def test_parses_typed_vertex(self) -> None:
+        raw = '{"id": 0, "label": "Person", "properties": {"name": "Alice"}}::vertex'
+        parsed = PostgresAGEStorage._parse_agtype(raw)
+        assert parsed == {
+            "id": 0,
+            "label": "Person",
+            "properties": {"name": "Alice"},
+        }
+
+    def test_parses_typed_edge(self) -> None:
+        raw = '{"id": 1, "label": "KNOWS", "start_id": 0, "end_id": 2}::edge'
+        parsed = PostgresAGEStorage._parse_agtype(raw)
+        assert parsed["label"] == "KNOWS"
+        assert parsed["start_id"] == 0
+
+    def test_parses_scalar_string(self) -> None:
+        # AGE returns scalar strings json-quoted.
+        assert PostgresAGEStorage._parse_agtype('"hello"') == "hello"
+
+    def test_parses_scalar_number(self) -> None:
+        assert PostgresAGEStorage._parse_agtype("42") == 42
+
+    def test_parses_null(self) -> None:
+        assert PostgresAGEStorage._parse_agtype(None) is None
+
+    def test_passes_through_already_parsed(self) -> None:
+        # If psycopg's agtype adapter returns a dict directly (newer
+        # versions), the parser should be a no-op.
+        already_parsed = {"id": 0}
+        assert PostgresAGEStorage._parse_agtype(already_parsed) == already_parsed
+
+    def test_invalid_json_returns_raw(self) -> None:
+        # Defensive: don't raise on unexpected agtype shapes — the
+        # method is best-effort. Caller can inspect the raw value.
+        assert (
+            PostgresAGEStorage._parse_agtype("not json::vertex") == "not json::vertex"
+        )
+
+
+class TestPostgresAGEStorageInitialization:
+    """Class construction — no I/O, just config validation and pool
+    placeholder setup."""
+
+    def test_defaults_graph_name_to_graphora(self) -> None:
+        storage = PostgresAGEStorage(dsn="postgresql://localhost/test")
+        assert storage.graph_name == "graphora"
+        assert storage._pool is None  # Lazy — no connection yet.
+
+    def test_validates_graph_name_at_construction(self) -> None:
+        # Invalid graph names short-circuit before any I/O.
+        with pytest.raises(CypherInjectionError):
+            PostgresAGEStorage(
+                dsn="postgresql://localhost/test",
+                graph_name="bad name",
+            )
+
+    def test_carries_pool_size_config(self) -> None:
+        storage = PostgresAGEStorage(
+            dsn="postgresql://localhost/test",
+            min_pool_size=2,
+            max_pool_size=20,
+        )
+        assert storage.min_pool_size == 2
+        assert storage.max_pool_size == 20
+
+
+class TestPostgresAGEStorageMethodStubs:
+    """Stubbed GraphStorageInterface methods raise NotImplementedError
+    with a clear pointer to the slice that owns the implementation.
+
+    These tests pin the pending-method contract — when a slice lands,
+    the corresponding test here flips from "raises" to "round-trips."
+    The naming pattern lets future contributors find the stubs by
+    grepping for the slice number.
+    """
+
+    @pytest.fixture
+    def storage(self) -> PostgresAGEStorage:
+        return PostgresAGEStorage(dsn="postgresql://localhost/test")
+
+    @pytest.mark.asyncio
+    async def test_store_nodes_pending_slice_2(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        with pytest.raises(NotImplementedError, match="slice 2"):
+            await storage.store_nodes([], batch_index=0, transform_id="t")
+
+    @pytest.mark.asyncio
+    async def test_get_node_by_id_pending_slice_3(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        with pytest.raises(NotImplementedError, match="slice 3"):
+            await storage.get_node_by_id("nid")
+
+    @pytest.mark.asyncio
+    async def test_find_similar_nodes_pending_slice_4(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        with pytest.raises(NotImplementedError, match="slice 4"):
+            await storage.find_similar_nodes(
+                label="Person", properties={"name": "Alice"}
+            )
+
+    @pytest.mark.asyncio
+    async def test_create_ft_index_pending_slice_5(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        with pytest.raises(NotImplementedError, match="slice 5"):
+            await storage.create_or_replace_ft_index_for_node("ix", "Person", ["name"])
+
+
+class TestExecuteCypher:
+    """Foundation _execute_cypher uses a mocked psycopg pool to avoid
+    needing a real Postgres. Verifies query shape, parameter
+    serialization, and graph-name interpolation."""
+
+    @pytest.mark.asyncio
+    async def test_wraps_query_in_cypher_function(self) -> None:
+        storage = PostgresAGEStorage(dsn="postgresql://localhost/test")
+        cur = AsyncMock()
+        cur.fetchall = AsyncMock(return_value=[("result_row",)])
+        cur.execute = AsyncMock()
+        cur.__aenter__ = AsyncMock(return_value=cur)
+        cur.__aexit__ = AsyncMock(return_value=None)
+        conn = MagicMock()
+        conn.cursor = MagicMock(return_value=cur)
+        conn.commit = AsyncMock()
+
+        @asynccontextmanager_helper()
+        async def fake_get_connection():
+            yield conn
+
+        with patch.object(storage, "_get_connection", fake_get_connection):
+            rows = await storage._execute_cypher(
+                "MATCH (n) RETURN n",
+                params={"foo": "bar"},
+            )
+
+        # Last execute() call was the cypher() wrapper — earlier
+        # calls were LOAD 'age' / SET search_path emitted by
+        # _get_connection. We assert on the cypher() wrapper.
+        cypher_calls = [
+            call
+            for call in cur.execute.call_args_list
+            if call.args and "cypher(" in call.args[0]
+        ]
+        assert cypher_calls, "expected a cypher() SQL wrapper to be issued"
+        sql, sql_params = cypher_calls[0].args
+        assert "cypher('graphora'" in sql
+        assert "$cypher$MATCH (n) RETURN n$cypher$" in sql
+        assert sql_params == ('{"foo": "bar"}',)
+        assert rows == [("result_row",)]
+
+
+def asynccontextmanager_helper():
+    """Tiny shim — returns a decorator that wraps an async generator
+    into an async context manager so we can patch.object() the
+    _get_connection attribute. ``contextlib.asynccontextmanager`` is
+    the right tool but it doesn't compose well with patch.object's
+    callable expectation in MagicMock land.
+    """
+    from contextlib import asynccontextmanager
+
+    return asynccontextmanager
