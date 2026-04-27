@@ -183,18 +183,12 @@ class TestPostgresAGEStorageMethodStubs:
         return PostgresAGEStorage(dsn="postgresql://localhost/test")
 
     @pytest.mark.asyncio
-    async def test_get_node_by_id_pending_slice_4(
+    async def test_find_similar_nodes_pending_slice_5(
         self, storage: PostgresAGEStorage
     ) -> None:
-        # Read-path methods migrate from slice 4 onwards.
+        # pgvector + pg_trgm wiring is heavier than the rest of the
+        # read path; defers to slice 5.
         with pytest.raises(NotImplementedError, match="slice"):
-            await storage.get_node_by_id("nid")
-
-    @pytest.mark.asyncio
-    async def test_find_similar_nodes_pending_slice_4(
-        self, storage: PostgresAGEStorage
-    ) -> None:
-        with pytest.raises(NotImplementedError, match="slice 4"):
             await storage.find_similar_nodes(
                 label="Person", properties={"name": "Alice"}
             )
@@ -832,3 +826,215 @@ class TestStoreRelationships:
                 )
         assert mock_exec.call_count == 1
         assert result.items_processed == 1
+
+
+class TestReadPath:
+    """Slice 4: read-path methods that the app's verification +
+    HTTP read endpoints + merge flow all depend on. Tests mock
+    the Cypher boundary and pin the agtype-vertex-to-Node /
+    agtype-edge-to-Edge mappings."""
+
+    @pytest.fixture
+    def storage(self) -> PostgresAGEStorage:
+        return PostgresAGEStorage(dsn="postgresql://localhost/test")
+
+    @pytest.mark.asyncio
+    async def test_get_transformation_data_two_round_trips(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        responses = [
+            [
+                (
+                    '{"id": 0, "label": "Person", "properties": '
+                    '{"id": "n1", "name": "Alice", "__tid": "t-42"}}::vertex',
+                ),
+                (
+                    '{"id": 1, "label": "Company", "properties": '
+                    '{"id": "n2", "name": "Acme", "__tid": "t-42"}}::vertex',
+                ),
+            ],
+            [
+                (
+                    '{"id": 100, "label": "WORKS_AT", "start_id": 0, '
+                    '"end_id": 1, "properties": {"id": "e1", '
+                    '"role": "engineer", "__tid": "t-42"}}::edge',
+                    '"n1"',
+                    '"n2"',
+                ),
+            ],
+        ]
+        call_log = []
+
+        async def stub_run(query, params=None, return_columns=None):
+            call_log.append((query, params))
+            return responses[len(call_log) - 1]
+
+        with patch.object(storage, "_execute_cypher", new=stub_run):
+            response = await storage.get_transformation_data("t-42")
+
+        assert len(call_log) == 2
+        assert "MATCH (n)" in call_log[0][0]
+        assert "n.__tid = $transform_id" in call_log[0][0]
+        assert "MATCH (s)-[r]->(t)" in call_log[1][0]
+        assert "r.__tid = $transform_id" in call_log[1][0]
+        assert response.total_nodes == 2
+        assert response.total_edges == 1
+        assert {n.type for n in response.nodes} == {"Person", "Company"}
+        assert response.edges[0].source == "n1"
+        assert response.edges[0].target == "n2"
+        assert response.edges[0].type == "WORKS_AT"
+
+    @pytest.mark.asyncio
+    async def test_get_transformation_data_returns_empty_response(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        with patch.object(storage, "_execute_cypher", new=AsyncMock(return_value=[])):
+            response = await storage.get_transformation_data("missing-tx")
+        assert response.total_nodes == 0
+        assert response.total_edges == 0
+        assert response.nodes == []
+        assert response.edges == []
+
+    @pytest.mark.asyncio
+    async def test_get_transformation_data_dedupes_nodes(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        dup = (
+            '{"id": 0, "label": "Person", "properties": '
+            '{"id": "n1", "name": "Alice"}}::vertex'
+        )
+        responses = [[(dup,), (dup,)], []]
+        call_count = [0]
+
+        async def stub_run(*args, **kwargs):
+            r = responses[call_count[0]]
+            call_count[0] += 1
+            return r
+
+        with patch.object(storage, "_execute_cypher", new=stub_run):
+            response = await storage.get_transformation_data("t-42")
+        assert response.total_nodes == 1
+        assert response.nodes[0].id == "n1"
+
+    @pytest.mark.asyncio
+    async def test_get_merge_data_keys_on_merge_id(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.get_merge_data("m-1")
+        for call in mock_exec.call_args_list:
+            cypher = call.args[0]
+            assert "__mid" in cypher
+            assert "__tid" not in cypher
+
+    @pytest.mark.asyncio
+    async def test_get_nodes_by_property_validates_property_name(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        with pytest.raises(CypherInjectionError):
+            await storage.get_nodes_by_property("name; DROP", "anything")
+
+    @pytest.mark.asyncio
+    async def test_get_nodes_by_property_returns_matching_nodes(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        rows = [
+            (
+                '{"id": 0, "label": "Person", "properties": '
+                '{"id": "n1", "name": "Alice"}}::vertex',
+            ),
+        ]
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=rows)
+        ) as mock_exec:
+            nodes = await storage.get_nodes_by_property("name", "Alice")
+        cypher = mock_exec.call_args.args[0]
+        assert "n.name = $value" in cypher
+        assert nodes[0].id == "n1"
+        assert nodes[0].properties["name"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_get_relationships_between_nodes_uses_in_clause(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.get_relationships_between_nodes(["n1", "n2", "n3"])
+        cypher = mock_exec.call_args.args[0]
+        params = mock_exec.call_args.kwargs["params"]
+        assert "s.id IN $node_ids" in cypher
+        assert "t.id IN $node_ids" in cypher
+        assert params["node_ids"] == ["n1", "n2", "n3"]
+
+    @pytest.mark.asyncio
+    async def test_get_relationships_between_with_type_filter(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.get_relationships_between(
+                "n1", "n2", relationship_type="WORKS_AT"
+            )
+        cypher = mock_exec.call_args.args[0]
+        assert "[r:WORKS_AT]" in cypher
+
+    @pytest.mark.asyncio
+    async def test_get_relationships_between_no_type_filter(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.get_relationships_between("n1", "n2")
+        cypher = mock_exec.call_args.args[0]
+        assert "-[r]->" in cypher
+        assert "[r:" not in cypher
+
+    @pytest.mark.asyncio
+    async def test_get_all_node_properties_skips_metadata(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        rows = [('["id", "name", "__tid", "extractor_model"]',)]
+        with patch.object(storage, "_execute_cypher", new=AsyncMock(return_value=rows)):
+            keys = await storage.get_all_node_properties("Person")
+        assert "__tid" not in keys
+        assert "id" in keys
+        assert "name" in keys
+        assert "extractor_model" in keys
+
+
+class TestVertexToNode:
+    """Pin the AGE-vertex to schema-Node mapping. The vertex_id from
+    AGE is its internal numeric id; the user-facing id is in the
+    property bag."""
+
+    def test_pulls_user_id_from_properties_not_age_internal(self) -> None:
+        parsed = {
+            "id": 0,
+            "label": "Person",
+            "properties": {"id": "user-uuid", "name": "Alice"},
+        }
+        node = PostgresAGEStorage._vertex_to_node(parsed)
+        assert node.id == "user-uuid"
+        assert node.type == "Person"
+        assert node.label == "Person"
+
+    def test_strips_age_internal_id_from_properties(self) -> None:
+        parsed = {
+            "id": 99999,
+            "label": "Person",
+            "properties": {"id": "user-uuid", "name": "Alice"},
+        }
+        node = PostgresAGEStorage._vertex_to_node(parsed)
+        assert "id" not in node.properties
+        assert node.properties["name"] == "Alice"
+
+    def test_returns_none_for_malformed_input(self) -> None:
+        assert (
+            PostgresAGEStorage._vertex_to_node({"label": "X", "properties": "weird"})
+            is None
+        )

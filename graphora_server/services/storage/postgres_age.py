@@ -748,25 +748,252 @@ class PostgresAGEStorage(GraphStorageInterface):
         )
 
     async def get_transformation_data(self, transform_id: str) -> GraphResponse:
-        raise NotImplementedError(
-            "AGE adapter: get_transformation_data — slice 3 (read path)"
+        """Read all nodes + relationships written under one transform_id.
+
+        Used by:
+          - storage.tasks.store_knowledge_graph (verification call after
+            the write loop, line 232)
+          - api.graph.get_graph (HTTP endpoint)
+          - api.transform.get_transformation_data (HTTP endpoint)
+
+        AGE Cypher returns vertex / edge agtype values; ``_parse_agtype``
+        extracts the property bags. Single round-trip with two MATCH
+        clauses — separate node and edge queries are simpler than the
+        Neo4j adapter's collect/UNWIND tangle and round-trip-equivalent
+        for the size budgets we target.
+        """
+        # Nodes
+        node_rows = await self._execute_cypher(
+            f"""
+            MATCH (n)
+            WHERE n.{TRANSFORM_ID} = $transform_id
+            RETURN n
+            """,
+            params={"transform_id": transform_id},
+            return_columns="(n agtype)",
+        )
+
+        nodes_list: List[Node] = []
+        node_ids_seen: set = set()
+        for row in node_rows:
+            parsed = self._parse_agtype(row[0])
+            if not isinstance(parsed, dict):
+                continue
+            node = self._vertex_to_node(parsed)
+            if node is None or node.id in node_ids_seen:
+                continue
+            nodes_list.append(node)
+            node_ids_seen.add(node.id)
+
+        # Edges scoped to the same transform — match on the
+        # __tid metadata stamped at write time. This is more
+        # reliable than "any edge touching a node we just read"
+        # because it survives merges that add cross-transform edges.
+        edge_rows = await self._execute_cypher(
+            f"""
+            MATCH (s)-[r]->(t)
+            WHERE r.{TRANSFORM_ID} = $transform_id
+            RETURN r, s.id, t.id
+            """,
+            params={"transform_id": transform_id},
+            return_columns="(r agtype, source_id agtype, target_id agtype)",
+        )
+
+        edges_list: List[Edge] = []
+        edge_ids_seen: set = set()
+        for row in edge_rows:
+            edge = self._edge_row_to_edge(row)
+            if edge is None or edge.id in edge_ids_seen:
+                continue
+            edges_list.append(edge)
+            edge_ids_seen.add(edge.id)
+
+        return GraphResponse(
+            nodes=nodes_list,
+            edges=edges_list,
+            total_nodes=len(nodes_list),
+            total_edges=len(edges_list),
         )
 
     async def get_merge_data(self, merge_id: str) -> GraphResponse:
-        raise NotImplementedError("AGE adapter: get_merge_data — slice 3 (read path)")
+        """Same shape as get_transformation_data but keyed by merge_id.
+
+        Used by callers reading a merge result. Implementation mirrors
+        get_transformation_data with the metadata key swapped — the
+        Neo4j adapter has the same near-duplicate (~200 LoC) flagged
+        in CLAUDE.md performance notes; we keep the duplication local
+        rather than introduce a shared helper that would obscure the
+        Cypher.
+        """
+        node_rows = await self._execute_cypher(
+            f"""
+            MATCH (n)
+            WHERE n.{MERGE_ID} = $merge_id
+            RETURN n
+            """,
+            params={"merge_id": merge_id},
+            return_columns="(n agtype)",
+        )
+        nodes_list: List[Node] = []
+        node_ids_seen: set = set()
+        for row in node_rows:
+            parsed = self._parse_agtype(row[0])
+            if not isinstance(parsed, dict):
+                continue
+            node = self._vertex_to_node(parsed)
+            if node is None or node.id in node_ids_seen:
+                continue
+            nodes_list.append(node)
+            node_ids_seen.add(node.id)
+
+        edge_rows = await self._execute_cypher(
+            f"""
+            MATCH (s)-[r]->(t)
+            WHERE r.{MERGE_ID} = $merge_id
+            RETURN r, s.id, t.id
+            """,
+            params={"merge_id": merge_id},
+            return_columns="(r agtype, source_id agtype, target_id agtype)",
+        )
+        edges_list: List[Edge] = []
+        edge_ids_seen: set = set()
+        for row in edge_rows:
+            edge = self._edge_row_to_edge(row)
+            if edge is None or edge.id in edge_ids_seen:
+                continue
+            edges_list.append(edge)
+            edge_ids_seen.add(edge.id)
+
+        return GraphResponse(
+            nodes=nodes_list,
+            edges=edges_list,
+            total_nodes=len(nodes_list),
+            total_edges=len(edges_list),
+        )
+
+    @staticmethod
+    def _vertex_to_node(parsed: Dict[str, Any]) -> Optional[Node]:
+        """Map an AGE-parsed vertex dict to the schema's Node.
+
+        ``parsed`` shape (after ``_parse_agtype``):
+            {"id": <int>, "label": <type-string>,
+             "properties": {...user properties...}}
+        The "id" key on the AGE vertex is AGE's internal numeric id,
+        not the user-facing UUID we wrote. We pull the user id from
+        the property bag.
+        """
+        props = parsed.get("properties") or {}
+        if not isinstance(props, dict):
+            return None
+        node_id = props.get("id") or props.get(TRANSFORM_ID, "")
+        label = parsed.get("label") or props.get("type") or ""
+        return Node(
+            id=str(node_id),
+            label=str(label),
+            type=str(label),
+            properties={k: v for k, v in props.items() if k != "id"},
+        )
+
+    @staticmethod
+    def _edge_row_to_edge(row: tuple) -> Optional[Edge]:
+        """Map an (edge agtype, source_id agtype, target_id agtype) row
+        to the schema's Edge.
+
+        AGE edge agtype shape:
+            {"id": <int>, "label": <rel-type>, "start_id": <int>,
+             "end_id": <int>, "properties": {...}}
+        We pair AGE's internal start/end ids with the user-facing
+        source.id / target.id we returned alongside the edge — the
+        cypher query projects both so the caller can stitch them.
+        """
+        if len(row) < 3:
+            return None
+        edge_parsed = PostgresAGEStorage._parse_agtype(row[0])
+        source_id = PostgresAGEStorage._parse_agtype(row[1])
+        target_id = PostgresAGEStorage._parse_agtype(row[2])
+        if not isinstance(edge_parsed, dict):
+            return None
+        props = edge_parsed.get("properties") or {}
+        if not isinstance(props, dict):
+            props = {}
+        rel_id = props.get("id") or str(edge_parsed.get("id", ""))
+        rel_type = edge_parsed.get("label") or props.get("type") or ""
+        return Edge(
+            id=str(rel_id),
+            source=str(source_id) if source_id is not None else "",
+            target=str(target_id) if target_id is not None else "",
+            type=str(rel_type),
+            properties=props,
+        )
 
     async def get_all_node_properties(self, entity_name: str) -> List[str]:
-        raise NotImplementedError("AGE adapter: get_all_node_properties — slice 3")
+        # Used by ontology-introspection flows. Sample a few nodes of
+        # this type and union their property keys — same shape as
+        # the Neo4j adapter's implementation.
+        validated = _validate_identifier(entity_name, "entity name")
+        rows = await self._execute_cypher(
+            f"""
+            MATCH (n:{validated})
+            RETURN keys(n) AS props
+            LIMIT 100
+            """,
+            return_columns="(props agtype)",
+        )
+        seen: set = set()
+        for row in rows:
+            parsed = self._parse_agtype(row[0])
+            if isinstance(parsed, list):
+                for k in parsed:
+                    if isinstance(k, str) and not k.startswith("__"):
+                        seen.add(k)
+        return sorted(seen)
 
     async def get_all_relationship_properties(self, rel_name: str) -> List[str]:
-        raise NotImplementedError(
-            "AGE adapter: get_all_relationship_properties — slice 3"
+        validated = _validate_identifier(rel_name, "relationship type")
+        rows = await self._execute_cypher(
+            f"""
+            MATCH ()-[r:{validated}]->()
+            RETURN keys(r) AS props
+            LIMIT 100
+            """,
+            return_columns="(props agtype)",
         )
+        seen: set = set()
+        for row in rows:
+            parsed = self._parse_agtype(row[0])
+            if isinstance(parsed, list):
+                for k in parsed:
+                    if isinstance(k, str) and not k.startswith("__"):
+                        seen.add(k)
+        return sorted(seen)
 
     async def get_nodes_by_property(
         self, property_name: str, property_value: Any
     ) -> List[Node]:
-        raise NotImplementedError("AGE adapter: get_nodes_by_property — slice 3")
+        """Used by services/merge/new_merger.py (line ~591) to find
+        nodes matching a property during merge resolution.
+
+        ``property_name`` is interpolated into the Cypher (validated);
+        ``property_value`` goes through the params channel.
+        """
+        validated = _validate_identifier(property_name, "property name")
+        rows = await self._execute_cypher(
+            f"""
+            MATCH (n)
+            WHERE n.{validated} = $value
+            RETURN n
+            """,
+            params={"value": _coerce_for_age(property_value)},
+            return_columns="(n agtype)",
+        )
+        nodes: List[Node] = []
+        for row in rows:
+            parsed = self._parse_agtype(row[0])
+            if isinstance(parsed, dict):
+                node = self._vertex_to_node(parsed)
+                if node is not None:
+                    nodes.append(node)
+        return nodes
 
     async def get_relationships_between(
         self,
@@ -774,12 +1001,51 @@ class PostgresAGEStorage(GraphStorageInterface):
         target_id: str,
         relationship_type: Optional[str] = None,
     ) -> List[Edge]:
-        raise NotImplementedError("AGE adapter: get_relationships_between — slice 3")
+        """Find directed edges from source_id to target_id.
+
+        ``relationship_type`` is optional — when provided, scoped to
+        that type (validated for injection-safety since it interpolates
+        into Cypher); when None, all types are returned.
+        """
+        if relationship_type:
+            rel_clause = f":{_validate_identifier(relationship_type, 'rel type')}"
+        else:
+            rel_clause = ""
+        rows = await self._execute_cypher(
+            f"""
+            MATCH (s {{id: $source_id}})-[r{rel_clause}]->(t {{id: $target_id}})
+            RETURN r, s.id, t.id
+            """,
+            params={"source_id": source_id, "target_id": target_id},
+            return_columns="(r agtype, source_id agtype, target_id agtype)",
+        )
+        edges: List[Edge] = []
+        for row in rows:
+            edge = self._edge_row_to_edge(row)
+            if edge is not None:
+                edges.append(edge)
+        return edges
 
     async def get_relationships_between_nodes(self, node_ids: List[str]) -> List[Edge]:
-        raise NotImplementedError(
-            "AGE adapter: get_relationships_between_nodes — slice 3"
+        """Used by services/merge/new_merger.py (line ~612) to find
+        all edges where either endpoint is in ``node_ids``. AGE's
+        openCypher subset supports IN with a list parameter.
+        """
+        rows = await self._execute_cypher(
+            """
+            MATCH (s)-[r]->(t)
+            WHERE s.id IN $node_ids OR t.id IN $node_ids
+            RETURN r, s.id, t.id
+            """,
+            params={"node_ids": list(node_ids)},
+            return_columns="(r agtype, source_id agtype, target_id agtype)",
         )
+        edges: List[Edge] = []
+        for row in rows:
+            edge = self._edge_row_to_edge(row)
+            if edge is not None:
+                edges.append(edge)
+        return edges
 
     async def find_nodes_by_property_value(
         self,
@@ -799,9 +1065,12 @@ class PostgresAGEStorage(GraphStorageInterface):
         include_relationships: bool = True,
     ) -> List[Node]:
         # Embedding similarity via pgvector <-> operator on a sibling
-        # table; property-bag fuzzy match via pg_trgm. Slice 4.
+        # table; property-bag fuzzy match via pg_trgm. Slice 5 — the
+        # only merge-flow read-path method that needs the heavier
+        # pgvector wiring; the rest of the merge reads landed in
+        # slice 4.
         raise NotImplementedError(
-            "AGE adapter: find_similar_nodes (pgvector + pg_trgm) — slice 4"
+            "AGE adapter: find_similar_nodes (pgvector + pg_trgm) — slice 5"
         )
 
     async def create_node(self, label: str, properties: Dict[str, Any]) -> Node:
@@ -830,7 +1099,23 @@ class PostgresAGEStorage(GraphStorageInterface):
         raise NotImplementedError("AGE adapter: get_relationship — slice 3")
 
     async def get_node_by_id(self, node_id: str) -> Optional[Node]:
-        raise NotImplementedError("AGE adapter: get_node_by_id — slice 3")
+        """Find a node by user-facing id property (not AGE's internal
+        numeric id). Returns None when the id isn't present."""
+        rows = await self._execute_cypher(
+            """
+            MATCH (n {id: $id})
+            RETURN n
+            LIMIT 1
+            """,
+            params={"id": node_id},
+            return_columns="(n agtype)",
+        )
+        if not rows:
+            return None
+        parsed = self._parse_agtype(rows[0][0])
+        if not isinstance(parsed, dict):
+            return None
+        return self._vertex_to_node(parsed)
 
     async def get_edges_between(self, source_id: str, target_id: str) -> List[Edge]:
         raise NotImplementedError("AGE adapter: get_edges_between — slice 3")
