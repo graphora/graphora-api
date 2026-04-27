@@ -1,6 +1,7 @@
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Body,
     Depends,
     File,
     Form,
@@ -8,6 +9,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from pydantic import BaseModel, Field
 from typing import List, Optional
 import aiofiles
 import uuid
@@ -981,23 +983,51 @@ async def upload_documents_schemaless(
         )
 
 
+class FinalizeOntologyRequest(BaseModel):
+    """Optional request body for the finalize-ontology endpoint.
+
+    When ``yaml_content`` is provided the server skips post-hoc
+    inference and persists the supplied YAML verbatim — this is the
+    UX path for "I edited the inferred ontology and want my edits
+    saved, not re-overwritten by a fresh LLM call." When omitted
+    (default) the server runs inference itself, mirroring the
+    original endpoint behaviour.
+    """
+
+    yaml_content: Optional[str] = Field(
+        default=None,
+        description=(
+            "User-edited ontology YAML. When set, persisted as-is "
+            "after a basic shape check; LLM inference is skipped. "
+            "When omitted, the server runs post-hoc inference on the "
+            "extracted graph and persists that result."
+        ),
+    )
+
+
 @router.post(
     "/transform/{transform_id}/finalize-ontology",
     response_class=JSONResponse,
 )
 async def finalize_inferred_ontology(
     transform_id: str,
+    body: Optional[FinalizeOntologyRequest] = Body(default=None),
     user_id: str = Depends(get_current_user_id),
 ) -> JSONResponse:
-    """Run post-hoc ontology inference and persist the result.
+    """Persist a refined ontology for a completed transform.
 
-    Companion to ``GET /transform/{id}/inferred-ontology`` — same
-    inference, but creates an ontology row so the user can reference
-    it by id, edit it via the ontology endpoints, or re-extract
-    against it.
+    Two modes, controlled by the request body:
 
-    Returns the new ``ontology_id`` + full YAML + stats.
+    * **No body / empty body** — runs post-hoc ontology inference on
+      the extracted graph (LLM round-trip) and persists the result.
+      Same behaviour as the original endpoint.
+    * **Body with ``yaml_content``** — skips inference and persists
+      the user-supplied YAML verbatim after a basic shape check.
+
+    Returns the new ``ontology_id`` + full YAML + stats in both cases.
     """
+    import yaml as yaml_lib
+
     from graphora_server.services.schema_postprocess import (
         infer_ontology_from_graph,
         ontology_dict_to_yaml,
@@ -1007,6 +1037,16 @@ async def finalize_inferred_ontology(
     from graphora_server.services.storage.factory import user_has_staging_db
     from graphora_server.services.ontology_storage_service import (
         ontology_storage_service,
+    )
+
+    # Treat whitespace-only yaml_content the same as "no body" so an
+    # accidentally-empty form field doesn't fail validation; preserve
+    # the user's exact YAML otherwise (no strip — trailing newlines
+    # round-trip cleanly through the ontology store).
+    user_supplied_yaml = (
+        body.yaml_content
+        if body and body.yaml_content and body.yaml_content.strip()
+        else None
     )
 
     graph_service = None
@@ -1035,12 +1075,47 @@ async def finalize_inferred_ontology(
         nodes_payload = [n.model_dump() for n in graph.nodes]
         edges_payload = [e.model_dump() for e in graph.edges]
 
-        ontology_dict = await infer_ontology_from_graph(
-            nodes=nodes_payload,
-            edges=edges_payload,
-            user_id=user_id,
-        )
-        yaml_content = ontology_dict_to_yaml(ontology_dict)
+        if user_supplied_yaml is not None:
+            # Validate the YAML the user wants to persist. Mirrors the
+            # shape check schema_postprocess applies to LLM output:
+            # must parse, must be a dict, must have a non-empty
+            # ``entities`` key. Other shape validation is left to the
+            # downstream ontology storage / quality services so this
+            # endpoint stays focused on the YAML→stored-row contract.
+            try:
+                ontology_dict = yaml_lib.safe_load(user_supplied_yaml)
+            except yaml_lib.YAMLError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Provided yaml_content is not valid YAML: {exc}",
+                )
+            if not isinstance(ontology_dict, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Provided yaml_content must parse to a YAML mapping; "
+                        f"got {type(ontology_dict).__name__}."
+                    ),
+                )
+            if not ontology_dict.get("entities"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Provided yaml_content has no 'entities' key (or it is "
+                        "empty). At least one entity type is required to "
+                        "persist as an ontology."
+                    ),
+                )
+            ontology_dict.setdefault("version", "0.1.0")
+            ontology_dict.setdefault("relationships", {})
+            yaml_content = user_supplied_yaml
+        else:
+            ontology_dict = await infer_ontology_from_graph(
+                nodes=nodes_payload,
+                edges=edges_payload,
+                user_id=user_id,
+            )
+            yaml_content = ontology_dict_to_yaml(ontology_dict)
 
         new_ontology_id = f"auto_refined_{uuid.uuid4().hex[:12]}"
         await ontology_storage_service.store_ontology(
@@ -1048,7 +1123,11 @@ async def finalize_inferred_ontology(
             ontology_id=new_ontology_id,
             yaml_content=yaml_content,
             name=f"Refined ({transform_id[:8]})",
-            description=(f"Post-hoc inferred ontology from transform {transform_id}"),
+            description=(
+                "User-edited ontology persisted from transform " f"{transform_id}"
+                if user_supplied_yaml is not None
+                else f"Post-hoc inferred ontology from transform {transform_id}"
+            ),
         )
 
         return JSONResponse(
@@ -1057,11 +1136,14 @@ async def finalize_inferred_ontology(
                 "ontology_id": new_ontology_id,
                 "ontology_yaml": yaml_content,
                 "ontology": ontology_dict,
+                "source": "user_edit" if user_supplied_yaml is not None else "inferred",
                 "stats": {
                     "node_count": len(nodes_payload),
                     "edge_count": len(edges_payload),
                     "entity_types": len(ontology_dict.get("entities", {})),
-                    "relationship_types": len(ontology_dict.get("relationships", {})),
+                    "relationship_types": len(
+                        ontology_dict.get("relationships", {}) or {}
+                    ),
                 },
             }
         )

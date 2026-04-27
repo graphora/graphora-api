@@ -1656,6 +1656,25 @@
         "title": "ErrorSummary",
         "type": "object"
       },
+      "FinalizeOntologyRequest": {
+        "description": "Optional request body for the finalize-ontology endpoint.\n\nWhen ``yaml_content`` is provided the server skips post-hoc\ninference and persists the supplied YAML verbatim \u2014 this is the\nUX path for \"I edited the inferred ontology and want my edits\nsaved, not re-overwritten by a fresh LLM call.\" When omitted\n(default) the server runs inference itself, mirroring the\noriginal endpoint behaviour.",
+        "properties": {
+          "yaml_content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "User-edited ontology YAML. When set, persisted as-is after a basic shape check; LLM inference is skipped. When omitted, the server runs post-hoc inference on the extracted graph and persists that result.",
+            "title": "Yaml Content"
+          }
+        },
+        "title": "FinalizeOntologyRequest",
+        "type": "object"
+      },
       "GeminiConfigRequest": {
         "description": "Schema for creating/updating Gemini configuration",
         "properties": {
@@ -8961,7 +8980,7 @@
     },
     "/api/v1/transform/{transform_id}/finalize-ontology": {
       "post": {
-        "description": "Run post-hoc ontology inference and persist the result.\n\nCompanion to ``GET /transform/{id}/inferred-ontology`` \u2014 same\ninference, but creates an ontology row so the user can reference\nit by id, edit it via the ontology endpoints, or re-extract\nagainst it.\n\nReturns the new ``ontology_id`` + full YAML + stats.",
+        "description": "Persist a refined ontology for a completed transform.\n\nTwo modes, controlled by the request body:\n\n* **No body / empty body** \u2014 runs post-hoc ontology inference on\n  the extracted graph (LLM round-trip) and persists the result.\n  Same behaviour as the original endpoint.\n* **Body with ``yaml_content``** \u2014 skips inference and persists\n  the user-supplied YAML verbatim after a basic shape check.\n\nReturns the new ``ontology_id`` + full YAML + stats in both cases.",
         "operationId": "finalize_inferred_ontology_api_v1_transform__transform_id__finalize_ontology_post",
         "parameters": [
           {
@@ -8974,6 +8993,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FinalizeOntologyRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
