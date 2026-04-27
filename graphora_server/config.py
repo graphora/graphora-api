@@ -44,8 +44,11 @@ class Settings(BaseSettings):
     STORAGE_TYPE: str = Field(
         default="neo4j",
         description=(
-            "Graph storage type: 'neo4j' (production), 'postgres' (Apache AGE on "
-            "PostgreSQL — Gate 5 C2-postgres), or 'memory' (local dev/demos)"
+            "Graph storage type: 'neo4j' (production) or 'memory' (local "
+            "dev/demos). 'postgres' (Apache AGE) is reserved — the adapter "
+            "foundation has shipped (Gate 5 C2-postgres slice 1) but the "
+            "factory dispatch is not yet wired; setting STORAGE_TYPE=postgres "
+            "today raises a purpose-built reserved error."
         ),
     )
     STORAGE_BATCH_SIZE: int = Field(

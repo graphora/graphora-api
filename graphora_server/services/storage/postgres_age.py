@@ -245,14 +245,28 @@ class PostgresAGEStorage(GraphStorageInterface):
                 await conn.commit()
                 return rows
 
+    # AGE's known agtype type tags. Anything not on this list is
+    # not a type tag — even if it follows ``::``. See
+    # ``_parse_agtype`` for why this matters.
+    _AGE_TYPE_TAGS = ("vertex", "edge", "path")
+
     @staticmethod
     def _parse_agtype(value: Any) -> Any:
         """Parse an AGE ``agtype`` cell into a Python value.
 
         AGE returns vertices/edges/paths as strings of the form
         ``{...properties...}::vertex`` (with a trailing type tag).
-        Strip the tag and json-decode the body. Scalar types
-        (numbers, strings) round-trip through json.loads directly.
+        Scalars are returned as bare JSON.
+
+        Strategy: try a bare json.loads first — that handles
+        scalars (including strings that happen to contain ``::``,
+        e.g. ``"a::b"``). If that fails, strip a trailing
+        ``::<known-tag>`` and retry. Defensive on malformed input:
+        return the raw string rather than raise.
+
+        The earlier implementation stripped on the rightmost
+        ``::`` unconditionally, which broke valid scalar strings
+        like ``"a::b"`` — flagged in slice-1 review.
         """
         import json
 
@@ -260,16 +274,23 @@ class PostgresAGEStorage(GraphStorageInterface):
             return None
         if not isinstance(value, str):
             return value
-        # AGE may return either ``{...}::vertex`` (typed) or a bare
-        # JSON string. Strip a trailing ``::<type>`` if present.
-        body = value
-        if "::" in body:
-            split_idx = body.rfind("::")
-            body = body[:split_idx]
+        # Direct parse first — covers scalars like "a::b" and 42.
         try:
-            return json.loads(body)
+            return json.loads(value)
         except json.JSONDecodeError:
-            return value
+            pass
+        # Fallback: strip a trailing ::<known-type> tag and retry.
+        # We anchor on the known-tag set so an embedded ``::`` in
+        # a scalar can't accidentally trigger the strip.
+        for tag in PostgresAGEStorage._AGE_TYPE_TAGS:
+            suffix = "::" + tag
+            if value.endswith(suffix):
+                body = value[: -len(suffix)]
+                try:
+                    return json.loads(body)
+                except json.JSONDecodeError:
+                    break  # Tag matched but body is malformed.
+        return value
 
     # --- GraphStorageInterface methods (stubbed pending slice 2+) ---
 

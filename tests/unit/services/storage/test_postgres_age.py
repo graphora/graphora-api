@@ -109,6 +109,28 @@ class TestAgtypeParser:
             PostgresAGEStorage._parse_agtype("not json::vertex") == "not json::vertex"
         )
 
+    def test_scalar_string_with_embedded_double_colon(self) -> None:
+        # Regression for slice-1 review: the earlier implementation
+        # stripped on the rightmost ``::`` unconditionally, so
+        # ``"a::b"`` (a JSON-quoted scalar containing ``::``) parsed
+        # as ``"a"`` and then crashed back to the raw string. Anchor
+        # on the known-tag suffix list so this case round-trips.
+        assert PostgresAGEStorage._parse_agtype('"a::b"') == "a::b"
+
+    def test_scalar_string_with_unknown_type_tag_suffix(self) -> None:
+        # ``"foo"::custom`` is not an AGE-recognized tag — the parser
+        # should not strip ``::custom`` and should return the raw
+        # value rather than mis-decoding. Defensive against future
+        # AGE versions that introduce tags we don't know about.
+        assert PostgresAGEStorage._parse_agtype('"foo"::custom') == '"foo"::custom'
+
+    def test_path_type_tag(self) -> None:
+        # AGE returns paths as ``[v, e, v, ...]::path`` — same strip
+        # logic applies as vertex/edge.
+        raw = '[{"id": 0}, {"id": 1}]::path'
+        parsed = PostgresAGEStorage._parse_agtype(raw)
+        assert parsed == [{"id": 0}, {"id": 1}]
+
 
 class TestPostgresAGEStorageInitialization:
     """Class construction — no I/O, just config validation and pool
@@ -180,6 +202,38 @@ class TestPostgresAGEStorageMethodStubs:
     ) -> None:
         with pytest.raises(NotImplementedError, match="slice 5"):
             await storage.create_or_replace_ft_index_for_node("ix", "Person", ["name"])
+
+
+class TestFactoryReservedDispatch:
+    """STORAGE_TYPE='postgres' is reserved at slice 1 — the adapter
+    foundation is in but the storage methods are stubs. Both factory
+    entry points (``create_storage`` and ``create_storage_for_user``)
+    must reject up-front with a purpose-built error rather than let
+    an extraction half-run and crash on first store_nodes call.
+
+    These tests pin that contract until slice 2 wires real dispatch.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_storage_rejects_postgres_with_reserved_error(self) -> None:
+        from graphora_server.services.storage.factory import (
+            StorageConfig,
+            create_storage,
+        )
+
+        config = StorageConfig(storage_type="postgres")
+        with pytest.raises(NotImplementedError, match="reserved"):
+            await create_storage(config)
+
+    @pytest.mark.asyncio
+    async def test_create_storage_for_user_rejects_postgres_with_reserved_error(
+        self,
+    ) -> None:
+        from graphora_server.services.storage import factory
+
+        with patch.object(factory.settings, "STORAGE_TYPE", "postgres"):
+            with pytest.raises(NotImplementedError, match="reserved"):
+                await factory.create_storage_for_user(user_id="u1", use_staging=True)
 
 
 class TestExecuteCypher:

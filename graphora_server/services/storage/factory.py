@@ -76,10 +76,27 @@ async def create_storage(config: StorageConfig) -> GraphStorageInterface:
             database=config.database,
         )
 
+    elif storage_type == "postgres":
+        # C2-postgres slice 1 has shipped the adapter foundation
+        # (connection layer, schema bootstrap, cypher() helper) but
+        # only stubs for the 22 GraphStorageInterface methods.
+        # Wiring dispatch here would let an operator flip
+        # STORAGE_TYPE=postgres and hit NotImplementedError on the
+        # first store_nodes call in production — a worse failure
+        # mode than refusing up-front. The dispatch lands alongside
+        # slice 2 (write path) when the adapter is actually usable.
+        raise NotImplementedError(
+            "STORAGE_TYPE='postgres' (Apache AGE) is reserved — slice 1 "
+            "foundation has landed but the storage methods are not yet "
+            "implemented (Gate 5 / C2-postgres). Use 'neo4j' or 'memory' "
+            "until slice 2 ships the write path."
+        )
+
     else:
         raise ValueError(
             f"Unsupported storage type: {storage_type}. "
-            f"Supported types: 'neo4j', 'memory'"
+            f"Supported types: 'neo4j', 'memory'. "
+            f"('postgres' is reserved — see Gate 5 / C2-postgres.)"
         )
 
 
@@ -153,6 +170,17 @@ async def create_storage_for_user(
             username=db_config.username,
             password=db_config.password,
             database="neo4j",
+        )
+
+    elif storage_type == "postgres":
+        # See create_storage(): the AGE adapter foundation is in but
+        # the storage methods are stubs. Reject up-front rather than
+        # let an extraction half-run before failing.
+        raise NotImplementedError(
+            "STORAGE_TYPE='postgres' (Apache AGE) is reserved — slice 1 "
+            "foundation has landed but the storage methods are not yet "
+            "implemented (Gate 5 / C2-postgres). Use 'neo4j' or 'memory' "
+            "until slice 2 ships the write path."
         )
 
     else:
