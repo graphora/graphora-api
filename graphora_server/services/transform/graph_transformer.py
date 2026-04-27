@@ -17,6 +17,9 @@ from graphora_server.services.transform.helpers import (
 from graphora_server.services.llm.client import LLMClient
 from graphora_server.services.transform.models import BaseNode, RelationshipInstance
 from graphora_server.services.entity_ledger_service import entity_ledger_service
+from graphora_server.services.extraction.prompt_versions import (
+    get_prompt_version as _resolve_prompt_version,
+)
 from graphora_server.utils.logger import logger
 import os
 import json
@@ -170,6 +173,7 @@ async def build_graph_from_chunks(
     enable_multi_pass: bool = False,
     max_passes: int = 2,
     chunk_metadatas: Optional[List[Any]] = None,
+    extractor_model: Optional[str] = None,
 ) -> DocumentKnowledgeGraph:
     """Build knowledge graph from text chunks.
 
@@ -205,6 +209,7 @@ async def build_graph_from_chunks(
             document_usage_id,
             max_passes,
             chunk_metadatas=chunk_metadatas,
+            extractor_model=extractor_model,
         )
 
     # Default single-pass extraction
@@ -218,6 +223,9 @@ async def build_graph_from_chunks(
         user_id,
         document_usage_id,
         chunk_metadatas=chunk_metadatas,
+        extractor_model=extractor_model,
+        node_baml_function="ExtractNodesFromChunk",
+        rel_baml_function="ExtractRelationshipsFromChunk",
     )
 
 
@@ -229,6 +237,7 @@ async def build_graph_from_pdfs(
     user_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
     chunk_metadatas: Optional[List[Any]] = None,
+    extractor_model: Optional[str] = None,
 ) -> DocumentKnowledgeGraph:
     """Build a graph by sending each PDF split file to Gemini's
     multimodal API. Caller may pass per-split ``chunk_metadatas``;
@@ -250,6 +259,9 @@ async def build_graph_from_pdfs(
         document_usage_id,
         chunk_metadatas=chunk_metadatas,
         treat_chunks_as_text=False,
+        extractor_model=extractor_model,
+        node_baml_function="ExtractNodesFromPdf",
+        rel_baml_function="ExtractRelationshipsFromPdf",
     )
 
 
@@ -264,6 +276,9 @@ async def _build_graph_from(
     document_usage_id: Optional[str] = None,
     chunk_metadatas: Optional[List[Any]] = None,
     treat_chunks_as_text: bool = True,
+    extractor_model: Optional[str] = None,
+    node_baml_function: Optional[str] = None,
+    rel_baml_function: Optional[str] = None,
 ) -> DocumentKnowledgeGraph:
     nodes_only_ontology = ontology_parser.build_entities_only_model()
     nodes: List[BaseNode] = []
@@ -309,6 +324,12 @@ async def _build_graph_from(
             transform_id=transform_id,
             chunk_metadata=cm,
             chunk_text=chunk_text_for_props,
+            extractor_model=extractor_model,
+            prompt_version=(
+                _resolve_prompt_version(node_baml_function)
+                if node_baml_function
+                else None
+            ),
         )
         for new_node in base_nodes:
             is_duplicate = any(
@@ -402,6 +423,12 @@ async def _build_graph_from(
                 relationships_only_kg,
                 chunk_metadata=cm,
                 chunk_text=chunk_text_for_props,
+                extractor_model=extractor_model,
+                prompt_version=(
+                    _resolve_prompt_version(rel_baml_function)
+                    if rel_baml_function
+                    else None
+                ),
             )
             for new_relationship in base_relationships:
                 is_duplicate = any(
@@ -667,6 +694,7 @@ async def _build_graph_with_multi_pass(
     document_usage_id: Optional[str] = None,
     max_passes: int = 2,
     chunk_metadatas: Optional[List[Any]] = None,
+    extractor_model: Optional[str] = None,
 ) -> DocumentKnowledgeGraph:
     """Build knowledge graph using multi-pass extraction with validation.
 
@@ -720,6 +748,7 @@ async def _build_graph_with_multi_pass(
         max_passes=max_passes,
         progress_callback=progress_callback,
         chunk_metadatas=chunk_metadatas,
+        extractor_model=extractor_model,
     )
 
     # Hydrate nodes with entity ledger if user_id provided

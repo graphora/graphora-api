@@ -65,11 +65,18 @@ class NodeProvenance(BaseModel):
     """Information about where a node came from.
 
     Source-span fields (``source_file``, ``page_number``,
-    ``char_offset``) populate the contract documented in
-    ``graphora_server/mcp/server.py::_EVIDENCE_KEYS`` — the same set
-    the Explorer Evidence tab consumes. All Optional + None-default
-    so older payloads (cached responses, in-flight extractions) stay
-    valid through the schema bump.
+    ``char_offset``) and decision-trail fields (``extractor_model``,
+    ``prompt_version``, ``validator_score``) populate the contract
+    documented in ``graphora_server/mcp/server.py::_EVIDENCE_KEYS``
+    — the same set the Explorer Evidence tab consumes. All Optional
+    + None-default so older payloads (cached responses, in-flight
+    extractions) stay valid through the schema bump.
+
+    A1-prov added the source-span fields. B0-prov-extend (Gate 4
+    entry) adds the decision-trail fields so a user inspecting an
+    extracted fact can see *which model + which prompt version*
+    produced it, and what the validator scored — the foundation for
+    the full Decision Log landing in slice 2.
     """
 
     chunk_ids: List[str] = Field(default_factory=list)
@@ -80,6 +87,13 @@ class NodeProvenance(BaseModel):
     source_file: Optional[str] = None
     page_number: Optional[int] = None
     char_offset: Optional[int] = None
+    # B0-prov-extend (Gate 4 entry). All Optional — single-pass
+    # extraction leaves validator_score None; non-instrumented
+    # callers leave the others None too. Graceful degrade
+    # everywhere.
+    extractor_model: Optional[str] = None
+    prompt_version: Optional[str] = None
+    validator_score: Optional[float] = None
 
 
 class BaseNode(BaseModel):

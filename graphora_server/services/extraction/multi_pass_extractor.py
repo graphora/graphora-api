@@ -18,10 +18,40 @@ from .models import (
     RefinementResult,
 )
 from .config import MultiPassConfig
+from .prompt_versions import get_prompt_version
 from .validator import ExtractionValidator
 from .context_builder import EnhancedContextBuilder
 
 logger = logging.getLogger(__name__)
+
+
+def _backfill_validator_score(
+    nodes: List[BaseNode],
+    relationships: List[RelationshipInstance],
+    score: Optional[float],
+) -> None:
+    """B0-prov-extend: stamp pass-level validator_score on extracted facts.
+
+    The validator computes one ``overall_confidence`` per pass — not
+    per-node. Stamping the same value onto every node/edge that
+    survived the pass gives users a coarse "what was the validator
+    quality at the pass that produced this fact" anchor, which is
+    enough for the Evidence-tab citation surface. Per-node validator
+    scores would require Decision Log machinery (Slice 2).
+
+    Setdefault-style — only writes when validator_score is currently
+    None on both the NodeProvenance object and the property bag.
+    Refinement-pass overrides are deliberately NOT applied here; a
+    fact is anchored to the validation that first accepted it.
+    """
+    if score is None:
+        return
+    for fact in [*nodes, *relationships]:
+        prov = getattr(fact, "provenance", None)
+        if prov is not None and prov.validator_score is None:
+            prov.validator_score = score
+        if "validator_score" not in fact.properties:
+            fact.properties["validator_score"] = score
 
 
 class MultiPassExtractor:
@@ -66,6 +96,7 @@ class MultiPassExtractor:
         max_passes: Optional[int] = None,
         progress_callback: Optional[Any] = None,
         chunk_metadatas: Optional[List[Any]] = None,
+        extractor_model: Optional[str] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Multi-pass extraction with validation-driven refinement.
 
@@ -101,6 +132,7 @@ class MultiPassExtractor:
             user_id,
             progress_callback,
             chunk_metadatas=chunk_metadatas,
+            extractor_model=extractor_model,
         )
 
         logger.info(
@@ -116,6 +148,17 @@ class MultiPassExtractor:
         for pass_num in range(2, max_passes + 1):
             # Validate current extraction
             validation_result = self.validator.validate(nodes, relationships)
+
+            # B0-prov-extend: stamp the pass-level validator score
+            # onto every node/edge that came out of the validated
+            # pass. setdefault-style — only writes when absent so a
+            # later refinement pass with a higher score doesn't
+            # silently override the earlier one.
+            _backfill_validator_score(
+                nodes,
+                relationships,
+                validation_result.overall_confidence,
+            )
 
             if not validation_result.needs_refinement():
                 logger.info(
@@ -167,6 +210,7 @@ class MultiPassExtractor:
                     user_id,
                     pass_num,
                     chunk_metadatas=chunk_metadatas,
+                    extractor_model=extractor_model,
                 )
             )
 
@@ -198,6 +242,17 @@ class MultiPassExtractor:
                 },
             )
 
+        # Final validator pass + back-fill so any refinement-pass
+        # facts created in the last iteration (which the in-loop
+        # back-fill couldn't reach) still carry validator_score.
+        # Cheap — the validator is in-process, no LLM call.
+        # setdefault semantics in _backfill_validator_score mean
+        # already-scored facts are left alone.
+        final_validation = self.validator.validate(nodes, relationships)
+        _backfill_validator_score(
+            nodes, relationships, final_validation.overall_confidence
+        )
+
         return nodes, relationships
 
     async def _initial_extraction_pass(
@@ -207,6 +262,7 @@ class MultiPassExtractor:
         user_id: Optional[str],
         progress_callback: Optional[Any] = None,
         chunk_metadatas: Optional[List[Any]] = None,
+        extractor_model: Optional[str] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Perform initial extraction pass with relationship-aware entity context.
 
@@ -270,6 +326,8 @@ class MultiPassExtractor:
                 transform_id=transform_id,
                 chunk_metadata=cm,
                 chunk_text=chunk,
+                extractor_model=extractor_model,
+                prompt_version=get_prompt_version("ExtractNodesFromChunk"),
             )
 
             # Add chunk index to provenance
@@ -351,6 +409,8 @@ class MultiPassExtractor:
                 relationships_only_kg,
                 chunk_metadata=cm,
                 chunk_text=chunk,
+                extractor_model=extractor_model,
+                prompt_version=get_prompt_version("ExtractRelationshipsFromChunk"),
             )
 
             # Deduplicate relationships
@@ -381,6 +441,7 @@ class MultiPassExtractor:
         user_id: Optional[str],
         pass_number: int,
         chunk_metadatas: Optional[List[Any]] = None,
+        extractor_model: Optional[str] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance], RefinementResult]:
         """Perform targeted refinement for identified gaps.
 
@@ -414,6 +475,7 @@ class MultiPassExtractor:
                     transform_id,
                     user_id,
                     chunk_metadatas=chunk_metadatas,
+                    extractor_model=extractor_model,
                 )
                 for chunk_gaps in gaps_by_chunk.values()
             ]
@@ -432,6 +494,7 @@ class MultiPassExtractor:
                     transform_id,
                     user_id,
                     chunk_metadatas=chunk_metadatas,
+                    extractor_model=extractor_model,
                 )
                 new_nodes.extend(chunk_nodes)
                 new_relationships.extend(chunk_rels)
@@ -452,6 +515,7 @@ class MultiPassExtractor:
         transform_id: str,
         user_id: Optional[str],
         chunk_metadatas: Optional[List[Any]] = None,
+        extractor_model: Optional[str] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Extract entities/relationships for specific gaps.
 
@@ -528,6 +592,8 @@ class MultiPassExtractor:
                         transform_id=transform_id,
                         chunk_metadata=cm,
                         chunk_text=chunk_text,
+                        extractor_model=extractor_model,
+                        prompt_version=get_prompt_version("ExtractNodesFromChunk"),
                     )
                     new_nodes.extend(extracted_nodes)
                 except Exception as e:
@@ -572,6 +638,10 @@ class MultiPassExtractor:
                         rels_kg,
                         chunk_metadata=cm,
                         chunk_text=chunk_text,
+                        extractor_model=extractor_model,
+                        prompt_version=get_prompt_version(
+                            "ExtractRelationshipsFromChunk"
+                        ),
                     )
                     new_relationships.extend(extracted_rels)
                 except Exception as e:
