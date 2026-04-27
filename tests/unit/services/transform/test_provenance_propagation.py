@@ -315,91 +315,29 @@ class TestTransformAsNodesIntegrates:
 
 
 class TestPdfBinaryPathProvenance:
-    """The PDF-binary path (Gemini multimodal, default for PDFs) used
-    to bypass provenance entirely. After the fix, build_graph_from_pdfs
-    accepts ``chunk_metadatas`` and stamps source-span properties on
-    every emitted node — minus ``source_text`` since the binary path
-    doesn't have text on our side.
+    """Production-contract regression for the PDF-binary path
+    (Gemini multimodal, default for PDFs).
+
+    The contract this suite asserts — matches the brief's
+    desired-state table:
+      * source_chunk_id   ← cm.chunk_id (split filename)
+      * document_name     ← cm.source_file (original PDF filename)
+      * source_text       ← cm.source_text (excerpt extracted by
+                             DocumentParser at split time)
+      * extraction_confidence ← LLM confidence_score
+      * page_number       INTENTIONALLY ABSENT — split filename's
+                          trailing integer is the chunk's last-page
+                          index, not the per-fact page; emitting it
+                          as page_number would be wrong provenance.
+                          Per-page citation is Gate 4 work.
+      * chunk_offset      INTENTIONALLY ABSENT — no character-level
+                          offset is meaningful for a binary PDF
+                          chunk.
+
+    The end-to-end test below exercises the contract via
+    _build_graph_from(treat_chunks_as_text=False), which is the path
+    flows.py routes binary PDFs through.
     """
-
-    @pytest.mark.asyncio
-    async def test_pdf_binary_extraction_emits_provenance_without_source_text(
-        self,
-    ) -> None:
-        from graphora_server.services.transform import graph_transformer
-        from graphora_server.services.transform.ontology_helper import (
-            OntologyParser,
-        )
-        from graphora_server.services.entity_ledger_service import (
-            entity_ledger_service,
-        )
-
-        # Ontology with a Person entity to satisfy transform_as_nodes.
-        parser = OntologyParser.__new__(OntologyParser)
-        parser.parsed_ontology = {
-            "entities": {
-                "Person": {"properties": {"name": {"type": "str", "required": True}}}
-            }
-        }
-        parser.ontology_yaml = "version: '0.1.0'\n"
-        parser.build_entities_only_model = lambda: object  # noqa: E731 - stub
-        parser.build_relationships_only_model = lambda: object  # noqa: E731
-
-        # Stub LLM extraction to return a Person entity for each call.
-        async def fake_extract_nodes(*_args, **_kwargs):
-            return _StubEntityResult()
-
-        async def fake_extract_rels(*_args, **_kwargs):
-            class _Empty:
-                confidence_score = 0.9
-
-            return _Empty()
-
-        cm = ChunkMetadata(
-            transform_id="tx",
-            chunk_id="page_abc-def_3.pdf",
-            source_file="report.pdf",
-            page_number=3,
-        )
-
-        with patch.object(
-            entity_ledger_service, "hydrate_nodes", new=AsyncMock(return_value=None)
-        ):
-            graph = await graph_transformer._build_graph_from(
-                ontology_parser=parser,
-                chunks_or_pdf_paths=["/tmp/pdf-folder/page_abc-def_3.pdf"],
-                transform_id="tx",
-                node_extractor=fake_extract_nodes,
-                relationship_extractor=fake_extract_rels,
-                chunk_metadatas=[cm],
-                treat_chunks_as_text=False,
-            )
-
-        assert graph.nodes, "expected at least one extracted node"
-        node = graph.nodes[0]
-        # Properties carry the provenance the FE/MCP read.
-        assert node.properties.get("source_chunk_id") == "page_abc-def_3.pdf"
-        assert node.properties.get("document_name") == "report.pdf"
-        assert node.properties.get("page_number") == 3
-        # CRITICAL: source_text MUST NOT be the path string.
-        assert "source_text" not in node.properties
-
-    def test_pdf_split_filename_with_real_uuid_drives_provenance(self) -> None:
-        """End-to-end of the bug pair: real uuid4 in the split
-        filename is parsed (regex fix) AND becomes the chunk_id +
-        page_number on the ChunkMetadata flows.py builds for each
-        split. Mirrors what flows.py does inline."""
-        import uuid as _uuid
-
-        real_filename = f"page_{_uuid.uuid4()}_5.pdf"
-        cm = ChunkMetadata(
-            transform_id="tx",
-            chunk_id=real_filename,
-            source_file="report.pdf",
-            page_number=_page_number_from_path(Path(real_filename)),
-        )
-        assert cm.page_number == 5
-        assert cm.source_file == "report.pdf"
 
     @pytest.mark.asyncio
     async def test_pdf_binary_path_writes_source_text_from_chunk_metadata(
@@ -469,11 +407,16 @@ class TestPdfBinaryPathProvenance:
         )
         assert node.properties["source_chunk_id"] == "page_abc-def_3.pdf"
         assert node.properties["document_name"] == "report.pdf"
-        # page_number is INTENTIONALLY absent on multi-page chunks
-        # — split_pdf's filename trailing integer is the last page in
-        # the chunk, not the page a fact came from. Per-page citation
-        # is Gate 4 work.
+        # document_id auto-derives from source_file when not passed.
+        assert node.properties["document_id"] == "report.pdf"
+        # extraction_confidence flows through from the LLM stub's
+        # confidence_score (0.92 from _StubEntityResult).
+        assert node.properties["extraction_confidence"] == 0.92
+        # page_number INTENTIONALLY absent — see class docstring.
         assert "page_number" not in node.properties
+        # chunk_offset INTENTIONALLY absent — no character offset
+        # for binary PDF chunks.
+        assert "chunk_offset" not in node.properties
 
 
 class TestOllamaTextSidecarPath:
