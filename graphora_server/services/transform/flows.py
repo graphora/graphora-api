@@ -304,6 +304,10 @@ async def document_transformation_flow(
         processed_paths: List[str] = []
         doc_chunk_results: List[Tuple[ChunkingResult, List[ChunkMetadata]]] = []
         pdf_files: List[str] = []
+        # A1-prov: per-split ChunkMetadata for the PDF-binary path,
+        # built alongside pdf_files so build_graph_from_pdfs can stamp
+        # source_file / source_chunk_id / page_number on emitted nodes.
+        pdf_metadatas: List[ChunkMetadata] = []
         graphs = []
 
         # Start PARSE stage
@@ -360,6 +364,14 @@ async def document_transformation_flow(
         pdf_needs_text_extraction = await _should_pre_extract_pdfs(user_id)
         pdf_text_folder = Path(settings.UPLOAD_DIR) / transform_id / "pdf-text"
 
+        # A1-prov: when we extract a PDF to a text sidecar (Ollama
+        # path), the chunker sees `report.txt` and would record that
+        # as document_name. Track the mapping so we can rewrite the
+        # ChunkMetadata.source_file back to the original PDF after
+        # chunking. The Evidence tab should cite the file the user
+        # uploaded, not the intermediate sidecar.
+        text_sidecar_to_original: Dict[str, str] = {}
+
         # Collect paths to chunk
         doc_paths_to_chunk: List[Tuple[str, Optional[ChunkingStrategy]]] = []
         for processed_path in processed_paths:
@@ -371,6 +383,7 @@ async def document_transformation_flow(
                         doc_paths_to_chunk.append(
                             (text_path, ChunkingStrategy.STRUCTURAL)
                         )
+                        text_sidecar_to_original[text_path] = Path(processed_path).name
                     else:
                         logger.warning(
                             "Skipping %s — PDF text extraction produced no "
@@ -382,6 +395,50 @@ async def document_transformation_flow(
                     pdf_splits = split_pdf(
                         input_pdf=processed_path, location=pdf_folder, pages=100
                     )
+                    # A1-prov: build per-split ChunkMetadata so the
+                    # binary-PDF extraction path stamps source_file
+                    # (the original PDF filename), source_chunk_id
+                    # (the split filename), and source_text (a 1000-
+                    # char excerpt extracted from the split's PDF
+                    # text via DocumentParser) on every emitted node
+                    # and edge.
+                    #
+                    # page_number is intentionally NOT set here.
+                    # split_pdf's filename trailing integer is the
+                    # last page in the chunk, not the page a fact
+                    # came from — citing it as page_number would be
+                    # wrong provenance for any fact from earlier
+                    # pages. Per-page page_number requires the LLM
+                    # emitting it during extraction, deferred to
+                    # Gate 4.
+                    from graphora_server.services.document_parser import (
+                        DocumentParser,
+                    )
+
+                    parser = DocumentParser()
+                    original_name = Path(processed_path).name
+                    for split_path in pdf_splits:
+                        split_name = Path(split_path).name
+                        # Best-effort text extraction. None on parse
+                        # failure (scanned PDFs, etc.) — Evidence tab
+                        # falls back to "no source text" gracefully.
+                        try:
+                            split_text = await parser.parse_file(split_path)
+                        except Exception as exc:  # pragma: no cover
+                            logger.warning(
+                                "Could not parse %s for source_text: %s",
+                                split_path,
+                                exc,
+                            )
+                            split_text = None
+                        pdf_metadatas.append(
+                            ChunkMetadata(
+                                transform_id=transform_id,
+                                chunk_id=split_name,
+                                source_file=original_name,
+                                source_text=split_text,
+                            )
+                        )
                     pdf_files.extend(pdf_splits)
             else:
                 strategy_override = (
@@ -405,6 +462,18 @@ async def document_transformation_flow(
                         strategy_override=strategy_override,
                     )
                     if chunk_result and chunk_metadata:
+                        # A1-prov: when this chunked path was a text
+                        # sidecar generated from a PDF (Ollama route),
+                        # rewrite source_file to the original PDF
+                        # filename so Evidence cites the user's upload,
+                        # not the intermediate `.txt`.
+                        original_pdf = text_sidecar_to_original.get(source_path)
+                        if original_pdf:
+                            for cm in chunk_metadata:
+                                cm.source_file = original_pdf
+                            if chunk_result.chunk_metadata:
+                                for cm in chunk_result.chunk_metadata:
+                                    cm.source_file = original_pdf
                         doc_chunk_results.append((chunk_result, chunk_metadata))
                     else:
                         chunk_failures.append((source_path, "No chunks produced"))
@@ -454,6 +523,11 @@ async def document_transformation_flow(
                             )
                         ),
                         user_id=user_id,
+                        # A1-prov: forward per-chunk metadata so the
+                        # extraction pipeline can stamp source-span
+                        # properties (document_name, page_number,
+                        # source_text, chunk_offset) on every node/edge.
+                        chunk_metadatas=chunk_metadata,
                     )
                     if graph_result:
                         graphs.append(graph_result)
@@ -480,6 +554,7 @@ async def document_transformation_flow(
                         )
                     ),
                     user_id=user_id,
+                    chunk_metadatas=pdf_metadatas,
                 )
                 if pdf_graph_result:
                     graphs.append(pdf_graph_result)

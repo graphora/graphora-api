@@ -62,13 +62,24 @@ class OntologyDefinition(BaseModel):
 
 
 class NodeProvenance(BaseModel):
-    """Information about where a node came from"""
+    """Information about where a node came from.
+
+    Source-span fields (``source_file``, ``page_number``,
+    ``char_offset``) populate the contract documented in
+    ``graphora_server/mcp/server.py::_EVIDENCE_KEYS`` — the same set
+    the Explorer Evidence tab consumes. All Optional + None-default
+    so older payloads (cached responses, in-flight extractions) stay
+    valid through the schema bump.
+    """
 
     chunk_ids: List[str] = Field(default_factory=list)
     extraction_timestamp: str = Field(
         default_factory=lambda: datetime.now().isoformat()
     )
     confidence_score: Optional[float] = None
+    source_file: Optional[str] = None
+    page_number: Optional[int] = None
+    char_offset: Optional[int] = None
 
 
 class BaseNode(BaseModel):

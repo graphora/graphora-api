@@ -5,8 +5,9 @@ from graphora_server.services.transform.models import (
     RelationshipInstance,
     DocumentKnowledgeGraph,
 )
+from graphora_server.services.chunking.models import ChunkMetadata
 from pydantic import BaseModel
-from typing import Dict, Any, List, Tuple, Optional, Callable, Set
+from typing import Dict, Any, List, Tuple, Optional, Callable, Set, Union
 from dataclasses import dataclass
 import json
 import uuid
@@ -213,6 +214,74 @@ def _basic_canonical_value(value: Any) -> Optional[str]:
     return str(value)
 
 
+# A1-prov: cap source-text excerpts written to node/edge properties.
+# Chunk text can be 32 KB; embedding it on every node bloats the graph
+# payload. The Evidence tab and MCP get_evidence show a quoted span,
+# so a 1000-char excerpt is sufficient. Full text remains addressable
+# via source_chunk_id when a downstream tool needs it.
+_SOURCE_TEXT_PROPERTY_LIMIT = 1000
+
+
+def _attach_provenance_properties(
+    node_or_edge: Union[BaseNode, RelationshipInstance],
+    chunk_metadata: Optional[ChunkMetadata] = None,
+    chunk_text: Optional[str] = None,
+    document_id: Optional[str] = None,
+) -> None:
+    """Copy provenance fields from a chunk into a node or edge's properties.
+
+    Mirrors ``graphora_server/mcp/server.py::_EVIDENCE_KEYS`` so the
+    Explorer Evidence tab and the MCP ``get_evidence`` tool find the
+    same set of fields. ``setdefault`` semantics throughout — if an
+    LLM extractor already emitted (say) ``document_id``, that value
+    wins; we never clobber.
+
+    No-op when none of the optional inputs are set; extraction still
+    succeeds and just emits an empty Evidence tab for that node.
+    """
+    props = node_or_edge.properties
+    if chunk_metadata is not None:
+        if chunk_metadata.chunk_id:
+            props.setdefault("source_chunk_id", chunk_metadata.chunk_id)
+        if chunk_metadata.source_file:
+            props.setdefault("document_name", chunk_metadata.source_file)
+        if chunk_metadata.page_number is not None:
+            props.setdefault("page_number", chunk_metadata.page_number)
+        # ``start_position`` is always set on ChunkMetadata (default 0)
+        # — write it only when non-zero so we don't pollute every node
+        # with an uninformative ``chunk_offset: 0``.
+        if chunk_metadata.start_position:
+            props.setdefault("chunk_offset", chunk_metadata.start_position)
+
+    # source_text resolution: prefer the explicit chunk_text arg
+    # (text-chunk path), fall back to chunk_metadata.source_text
+    # (PDF-binary path, where the chunker can't pass text inline and
+    # flows.py pre-extracts an excerpt at split time).
+    text_to_write = chunk_text or (
+        chunk_metadata.source_text if chunk_metadata else None
+    )
+    if text_to_write:
+        truncated = text_to_write[:_SOURCE_TEXT_PROPERTY_LIMIT]
+        props.setdefault("source_text", truncated)
+
+    # Resolve document_id with fallback to the chunk's source_file.
+    # In Graphora today the safe_filename written by the upload
+    # endpoint is the natural per-file identifier (api/transform.py
+    # passes metadata.source, which is the same string the chunker
+    # later sees as Path(file_path).name → ChunkMetadata.source_file).
+    # Auto-deriving here means every callsite doesn't have to thread
+    # an extra parameter just to repeat that fact.
+    resolved_doc_id = document_id or (
+        chunk_metadata.source_file if chunk_metadata else None
+    )
+    if resolved_doc_id:
+        props.setdefault("document_id", resolved_doc_id)
+
+    prov = getattr(node_or_edge, "provenance", None)
+    if prov is not None and prov.confidence_score is not None:
+        props.setdefault("extraction_confidence", prov.confidence_score)
+
+
 def _get_registered_canonicalizer(
     entity_type: str, prop_name: str
 ) -> Optional[Canonicalizer]:
@@ -340,7 +409,19 @@ def transform_as_nodes(
     ontology: Dict[str, Any],
     entity_result: BaseModel,
     transform_id: Optional[str] = None,
+    *,
+    chunk_metadata: Optional[ChunkMetadata] = None,
+    chunk_text: Optional[str] = None,
+    document_id: Optional[str] = None,
 ) -> List[BaseNode]:
+    """Build BaseNode objects from a BAML extraction result.
+
+    The new ``chunk_metadata`` / ``chunk_text`` / ``document_id``
+    keyword arguments are A1-prov plumbing — when set, every emitted
+    node gets source-span properties via
+    ``_attach_provenance_properties``. Defaults remain backward-
+    compatible; older callsites continue to work.
+    """
     nodes = []
     chunk_node_registry = {}
     use_deterministic_ids = settings.DETERMINISTIC_MODE and bool(transform_id)
@@ -396,10 +477,31 @@ def transform_as_nodes(
                 canonical_key=node_key,
                 canonical_id=canonical_id,
                 provenance=NodeProvenance(
-                    chunk_ids=[node_id],
+                    chunk_ids=(
+                        [chunk_metadata.chunk_id]
+                        if chunk_metadata and chunk_metadata.chunk_id
+                        else [node_id]
+                    ),
                     extraction_timestamp=datetime.now(timezone.utc).isoformat(),
                     confidence_score=entity_result.confidence_score,
+                    source_file=(
+                        chunk_metadata.source_file if chunk_metadata else None
+                    ),
+                    page_number=(
+                        chunk_metadata.page_number if chunk_metadata else None
+                    ),
+                    char_offset=(
+                        chunk_metadata.start_position
+                        if chunk_metadata and chunk_metadata.start_position
+                        else None
+                    ),
                 ),
+            )
+            _attach_provenance_properties(
+                node,
+                chunk_metadata=chunk_metadata,
+                chunk_text=chunk_text,
+                document_id=document_id,
             )
             chunk_node_registry[entity_type][node_key] = node_id
             nodes.append(node)
@@ -407,8 +509,20 @@ def transform_as_nodes(
 
 
 def transform_as_relationships(
-    ontology: Dict[str, Any], nodes: List[BaseNode], relationship_result: BaseModel
+    ontology: Dict[str, Any],
+    nodes: List[BaseNode],
+    relationship_result: BaseModel,
+    *,
+    chunk_metadata: Optional[ChunkMetadata] = None,
+    chunk_text: Optional[str] = None,
+    document_id: Optional[str] = None,
 ) -> List[RelationshipInstance]:
+    """Build RelationshipInstance objects from a BAML extraction.
+
+    A1-prov keyword args mirror ``transform_as_nodes``: when set,
+    every emitted edge gets source-span properties. Defaults stay
+    backward-compatible.
+    """
     logger.debug("%s", "#" * 30)
     logger.debug("relationship_result: %s", relationship_result)
     logger.debug("nodes: %s", nodes)
@@ -519,10 +633,31 @@ def transform_as_relationships(
                 target_type=target_type,
                 properties=rel_properties,
                 provenance=NodeProvenance(
-                    chunk_ids=[rel_id],
+                    chunk_ids=(
+                        [chunk_metadata.chunk_id]
+                        if chunk_metadata and chunk_metadata.chunk_id
+                        else [rel_id]
+                    ),
                     extraction_timestamp=datetime.now(timezone.utc).isoformat(),
                     confidence_score=relationship_result.confidence_score,
+                    source_file=(
+                        chunk_metadata.source_file if chunk_metadata else None
+                    ),
+                    page_number=(
+                        chunk_metadata.page_number if chunk_metadata else None
+                    ),
+                    char_offset=(
+                        chunk_metadata.start_position
+                        if chunk_metadata and chunk_metadata.start_position
+                        else None
+                    ),
                 ),
+            )
+            _attach_provenance_properties(
+                rel,
+                chunk_metadata=chunk_metadata,
+                chunk_text=chunk_text,
+                document_id=document_id,
             )
             relationships.append(rel)
 

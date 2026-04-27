@@ -65,6 +65,7 @@ class MultiPassExtractor:
         user_id: Optional[str] = None,
         max_passes: Optional[int] = None,
         progress_callback: Optional[Any] = None,
+        chunk_metadatas: Optional[List[Any]] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Multi-pass extraction with validation-driven refinement.
 
@@ -95,7 +96,11 @@ class MultiPassExtractor:
 
         # Pass 1: Initial extraction
         nodes, relationships = await self._initial_extraction_pass(
-            chunks, transform_id, user_id, progress_callback
+            chunks,
+            transform_id,
+            user_id,
+            progress_callback,
+            chunk_metadatas=chunk_metadatas,
         )
 
         logger.info(
@@ -161,6 +166,7 @@ class MultiPassExtractor:
                     transform_id,
                     user_id,
                     pass_num,
+                    chunk_metadatas=chunk_metadatas,
                 )
             )
 
@@ -200,6 +206,7 @@ class MultiPassExtractor:
         transform_id: str,
         user_id: Optional[str],
         progress_callback: Optional[Any] = None,
+        chunk_metadatas: Optional[List[Any]] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Perform initial extraction pass with relationship-aware entity context.
 
@@ -237,6 +244,17 @@ class MultiPassExtractor:
 
         # Extract entities from each chunk
         for chunk_index, chunk in enumerate(chunks):
+            # A1-prov: pull the matching ChunkMetadata for this chunk;
+            # transform_as_nodes uses it to stamp source-span properties
+            # on each emitted node. None when the caller didn't provide
+            # metadata — extraction still succeeds, just without
+            # provenance enrichment.
+            cm = (
+                chunk_metadatas[chunk_index]
+                if chunk_metadatas and chunk_index < len(chunk_metadatas)
+                else None
+            )
+
             nodes_only_kg = await self.llm_client.extract_nodes_from_chunk(
                 chunk,
                 response_model=nodes_only_ontology,
@@ -250,6 +268,8 @@ class MultiPassExtractor:
                 self.ontology_parser.parsed_ontology,
                 nodes_only_kg,
                 transform_id=transform_id,
+                chunk_metadata=cm,
+                chunk_text=chunk,
             )
 
             # Add chunk index to provenance
@@ -308,6 +328,12 @@ class MultiPassExtractor:
         )
 
         for chunk_index, chunk in enumerate(chunks):
+            cm = (
+                chunk_metadatas[chunk_index]
+                if chunk_metadatas and chunk_index < len(chunk_metadatas)
+                else None
+            )
+
             relationships_only_kg = (
                 await self.llm_client.extract_relationships_from_chunk(
                     chunk,
@@ -320,7 +346,11 @@ class MultiPassExtractor:
             )
 
             base_relationships = transform_as_relationships(
-                self.ontology_parser.parsed_ontology, nodes, relationships_only_kg
+                self.ontology_parser.parsed_ontology,
+                nodes,
+                relationships_only_kg,
+                chunk_metadata=cm,
+                chunk_text=chunk,
             )
 
             # Deduplicate relationships
@@ -350,6 +380,7 @@ class MultiPassExtractor:
         transform_id: str,
         user_id: Optional[str],
         pass_number: int,
+        chunk_metadatas: Optional[List[Any]] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance], RefinementResult]:
         """Perform targeted refinement for identified gaps.
 
@@ -382,6 +413,7 @@ class MultiPassExtractor:
                     relationships,
                     transform_id,
                     user_id,
+                    chunk_metadatas=chunk_metadatas,
                 )
                 for chunk_gaps in gaps_by_chunk.values()
             ]
@@ -399,6 +431,7 @@ class MultiPassExtractor:
                     relationships,
                     transform_id,
                     user_id,
+                    chunk_metadatas=chunk_metadatas,
                 )
                 new_nodes.extend(chunk_nodes)
                 new_relationships.extend(chunk_rels)
@@ -418,6 +451,7 @@ class MultiPassExtractor:
         existing_relationships: List[RelationshipInstance],
         transform_id: str,
         user_id: Optional[str],
+        chunk_metadatas: Optional[List[Any]] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Extract entities/relationships for specific gaps.
 
@@ -450,6 +484,17 @@ class MultiPassExtractor:
 
             chunk_text = chunks[chunk_idx]
 
+            # A1-prov: pull the matching ChunkMetadata for the chunk
+            # being re-examined. Refinement-pass nodes/edges need the
+            # same source-span properties as initial-pass ones — without
+            # this gap, any node introduced during refinement would
+            # silently fall out of the Evidence contract.
+            cm = (
+                chunk_metadatas[chunk_idx]
+                if chunk_metadatas and chunk_idx < len(chunk_metadatas)
+                else None
+            )
+
             # Build refinement context
             context = self.context_builder.build_refinement_context(
                 gaps=gaps,
@@ -481,6 +526,8 @@ class MultiPassExtractor:
                         self.ontology_parser.parsed_ontology,
                         nodes_kg,
                         transform_id=transform_id,
+                        chunk_metadata=cm,
+                        chunk_text=chunk_text,
                     )
                     new_nodes.extend(extracted_nodes)
                 except Exception as e:
@@ -523,6 +570,8 @@ class MultiPassExtractor:
                         self.ontology_parser.parsed_ontology,
                         existing_nodes + new_nodes,
                         rels_kg,
+                        chunk_metadata=cm,
+                        chunk_text=chunk_text,
                     )
                     new_relationships.extend(extracted_rels)
                 except Exception as e:

@@ -1,4 +1,4 @@
-from typing import List, Callable, Tuple, Optional, Union
+from typing import Any, List, Callable, Tuple, Optional, Union
 from pathlib import Path
 from prefect import task, get_run_logger
 from datetime import datetime, timezone
@@ -123,8 +123,17 @@ async def construct_knowledge_graph(
     pdf_paths: List[Path] = [],
     progress_callback: Optional[Callable[[int, int], None]] = None,
     user_id: Optional[str] = None,
+    chunk_metadatas: Optional[List[Any]] = None,
 ) -> Tuple[Optional[DocumentKnowledgeGraph], Optional[ExtractionMetrics]]:
-    """Construct knowledge graph from chunks using ontology"""
+    """Construct knowledge graph from chunks using ontology.
+
+    ``chunk_metadatas`` (optional, A1-prov): per-chunk metadata
+    objects same length as ``chunks``. Forwarded to extraction so
+    nodes/edges get source-span properties on their property bags.
+    The PDF-binary path (``pdf_paths``) does not consume this — its
+    chunks are filesystem paths, not text, and per-page metadata is
+    derived elsewhere.
+    """
     logger = get_run_logger()
 
     try:
@@ -149,6 +158,7 @@ async def construct_knowledge_graph(
                 transform_id=transform_id,
                 progress_callback=progress_callback,
                 user_id=user_id,
+                chunk_metadatas=chunk_metadatas,
             )
         elif pdf_paths:
             graph = await build_graph_from_pdfs(
@@ -157,6 +167,7 @@ async def construct_knowledge_graph(
                 transform_id=transform_id,
                 progress_callback=progress_callback,
                 user_id=user_id,
+                chunk_metadatas=chunk_metadatas,
             )
 
         metrics = ExtractionMetrics(

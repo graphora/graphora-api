@@ -1,5 +1,6 @@
 from typing import List, Tuple, Optional, Any
 import asyncio
+import re
 from pathlib import Path
 
 import aiofiles
@@ -9,6 +10,36 @@ from graphora_server.services.chunking.config import ChunkingConfig, ChunkingStr
 from graphora_server.config import settings
 from graphora_server.utils.logger import logger
 from prefect import task
+
+
+# Pattern matches the per-chunk split filenames emitted by
+# graphora_server/services/transform/flows.py::split_pdf:
+# ``page_<uuid4>_<last_page_index_in_chunk>.pdf``. The uuid is the
+# canonical 36-char string (8-4-4-4-12 hex with hyphens) returned by
+# ``str(uuid.uuid4())``, hence the hyphen in the character class.
+# The trailing integer is the 1-based index of the *last page in the
+# chunk* — when split_pdf runs with the default ``pages=100``, a
+# value of 50 means "the chunk that ends at page 50" (which could be
+# pages 1-50, 51-100, etc., depending on chunk size).
+_PDF_PAGE_FILENAME_RE = re.compile(r"^page_[a-f0-9-]+_(\d+)\.pdf$", re.IGNORECASE)
+
+
+def _page_number_from_path(path: Path) -> Optional[int]:
+    """Extract the trailing page index from a split-pdf filename.
+
+    Returns the 1-based last-page-in-chunk number when the filename
+    matches the split_pdf convention, ``None`` otherwise. With
+    default split chunking this is a coarse page anchor, not a
+    per-page number — callers that need exact per-page provenance
+    should derive it from the PDF parser instead.
+    """
+    match = _PDF_PAGE_FILENAME_RE.match(path.name)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:  # pragma: no cover — regex guarantees digits
+        return None
 
 
 @task(
@@ -52,6 +83,28 @@ async def chunk_document(
 
         if not result:
             raise ChunkingError("Chunking failed")
+
+        # A1-prov: stamp per-chunk provenance on every ChunkMetadata
+        # so downstream extraction can copy these onto node/edge
+        # properties. The chunker itself doesn't know the source path
+        # or whether the chunk came from a per-page PDF split — we
+        # add that here, where file_path is the authoritative source
+        # of truth.
+        chunk_result, chunk_metadatas = result
+        path = Path(file_path)
+        source_file = path.name
+        page_number = _page_number_from_path(path)
+        for cm in chunk_metadatas:
+            if cm.source_file is None:
+                cm.source_file = source_file
+            if cm.page_number is None and page_number is not None:
+                cm.page_number = page_number
+        if hasattr(chunk_result, "chunk_metadata") and chunk_result.chunk_metadata:
+            for cm in chunk_result.chunk_metadata:
+                if cm.source_file is None:
+                    cm.source_file = source_file
+                if cm.page_number is None and page_number is not None:
+                    cm.page_number = page_number
 
         return result
 
