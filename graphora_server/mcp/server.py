@@ -286,6 +286,13 @@ _EVIDENCE_KEYS = {
     "chunk_offset",
     "page_number",
     "extraction_confidence",
+    # B0-prov-extend (Gate 4 entry). The decision-trail fields the
+    # Explorer Evidence tab + this tool both consume. Frontend
+    # mirror lives in app/src/app/(app)/explorer/[transform_id]/
+    # evidence-tab.tsx::EVIDENCE_KEYS.
+    "extractor_model",
+    "prompt_version",
+    "validator_score",
 }
 
 

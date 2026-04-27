@@ -278,8 +278,19 @@ def _attach_provenance_properties(
         props.setdefault("document_id", resolved_doc_id)
 
     prov = getattr(node_or_edge, "provenance", None)
-    if prov is not None and prov.confidence_score is not None:
-        props.setdefault("extraction_confidence", prov.confidence_score)
+    if prov is not None:
+        if prov.confidence_score is not None:
+            props.setdefault("extraction_confidence", prov.confidence_score)
+        # B0-prov-extend: surface the decision-trail fields onto
+        # properties so the Explorer Evidence tab + MCP get_evidence
+        # find them via the same _EVIDENCE_KEYS contract used for
+        # source-span fields.
+        if prov.extractor_model is not None:
+            props.setdefault("extractor_model", prov.extractor_model)
+        if prov.prompt_version is not None:
+            props.setdefault("prompt_version", prov.prompt_version)
+        if prov.validator_score is not None:
+            props.setdefault("validator_score", prov.validator_score)
 
 
 def _get_registered_canonicalizer(
@@ -413,14 +424,22 @@ def transform_as_nodes(
     chunk_metadata: Optional[ChunkMetadata] = None,
     chunk_text: Optional[str] = None,
     document_id: Optional[str] = None,
+    extractor_model: Optional[str] = None,
+    prompt_version: Optional[str] = None,
+    validator_score: Optional[float] = None,
 ) -> List[BaseNode]:
     """Build BaseNode objects from a BAML extraction result.
 
-    The new ``chunk_metadata`` / ``chunk_text`` / ``document_id``
-    keyword arguments are A1-prov plumbing — when set, every emitted
-    node gets source-span properties via
-    ``_attach_provenance_properties``. Defaults remain backward-
-    compatible; older callsites continue to work.
+    Keyword args:
+      ``chunk_metadata`` / ``chunk_text`` / ``document_id``
+        A1-prov plumbing — source-span properties on every emitted
+        node.
+      ``extractor_model`` / ``prompt_version`` / ``validator_score``
+        B0-prov-extend (Gate 4 entry) — decision-trail fields. When
+        set, populated on NodeProvenance and on node properties via
+        ``_attach_provenance_properties``.
+
+    All defaults are None so older callsites stay backward-compatible.
     """
     nodes = []
     chunk_node_registry = {}
@@ -495,6 +514,9 @@ def transform_as_nodes(
                         if chunk_metadata and chunk_metadata.start_position
                         else None
                     ),
+                    extractor_model=extractor_model,
+                    prompt_version=prompt_version,
+                    validator_score=validator_score,
                 ),
             )
             _attach_provenance_properties(
@@ -516,12 +538,16 @@ def transform_as_relationships(
     chunk_metadata: Optional[ChunkMetadata] = None,
     chunk_text: Optional[str] = None,
     document_id: Optional[str] = None,
+    extractor_model: Optional[str] = None,
+    prompt_version: Optional[str] = None,
+    validator_score: Optional[float] = None,
 ) -> List[RelationshipInstance]:
     """Build RelationshipInstance objects from a BAML extraction.
 
     A1-prov keyword args mirror ``transform_as_nodes``: when set,
-    every emitted edge gets source-span properties. Defaults stay
-    backward-compatible.
+    every emitted edge gets source-span properties. B0-prov-extend
+    adds the decision-trail kwargs (extractor_model, prompt_version,
+    validator_score). Defaults stay backward-compatible.
     """
     logger.debug("%s", "#" * 30)
     logger.debug("relationship_result: %s", relationship_result)
@@ -651,6 +677,9 @@ def transform_as_relationships(
                         if chunk_metadata and chunk_metadata.start_position
                         else None
                     ),
+                    extractor_model=extractor_model,
+                    prompt_version=prompt_version,
+                    validator_score=validator_score,
                 ),
             )
             _attach_provenance_properties(

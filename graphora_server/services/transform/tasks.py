@@ -86,6 +86,45 @@ async def load_and_validate_ontology(ontology_path: Path) -> OntologyDefinition:
         raise ValueError(f"Invalid ontology file: {str(e)}")
 
 
+async def _resolve_extractor_model_name(user_id: Optional[str]) -> Optional[str]:
+    """Resolve the LLM model name configured for ``user_id``.
+
+    Used at the top of ``construct_knowledge_graph`` to stamp
+    ``extractor_model`` on every emitted node/edge. Resolution
+    matches ``get_baml_registry_for_user``'s precedence so the
+    value we record matches the model BAML actually invokes:
+
+      1. ``LLM_PROVIDER=ollama`` env var → ``OLLAMA_MODEL`` env value
+      2. User's stored provider config → ``model_name`` field
+
+    Returns None when:
+      * ``user_id`` is None (test path / no auth)
+      * The user has no AI config
+      * Lookup fails (DB unavailable, etc.)
+
+    None falls through to a None ``extractor_model`` on properties,
+    which the Evidence tab renders as "model unknown" rather than
+    failing extraction.
+    """
+    from graphora_server.config import get_settings
+
+    settings_obj = get_settings()
+    if (settings_obj.LLM_PROVIDER or "").lower() == "ollama":
+        return settings_obj.OLLAMA_MODEL
+    if not user_id:
+        return None
+    try:
+        from graphora_server.services.ai_config_service import AIConfigService
+
+        result = await AIConfigService().get_user_provider_secret(user_id)
+        if not result:
+            return None
+        _provider, _api_key, model_name = result
+        return model_name
+    except Exception:
+        return None
+
+
 def should_retry_extraction_error(exc: Exception) -> bool:
     """Determine if extraction error should be retried"""
     error_msg = str(exc).lower()
@@ -142,6 +181,13 @@ async def construct_knowledge_graph(
         # Load and validate ontology with user_id for Supabase fallback
         parser = OntologyParser(ontology_path, user_id)
 
+        # B0-prov-extend: resolve the LLM model name once per
+        # extraction batch (one DB hit, not per-chunk). The
+        # downstream pipeline stamps it onto every emitted
+        # NodeProvenance + node/edge property. None when no user
+        # config exists (e.g., test mode) — graceful degrade.
+        extractor_model = await _resolve_extractor_model_name(user_id)
+
         # Process chunks with controlled concurrency
         concurrency = settings.EXTRACTION_CONCURRENCY
         if len(chunks) < concurrency:
@@ -159,6 +205,7 @@ async def construct_knowledge_graph(
                 progress_callback=progress_callback,
                 user_id=user_id,
                 chunk_metadatas=chunk_metadatas,
+                extractor_model=extractor_model,
             )
         elif pdf_paths:
             graph = await build_graph_from_pdfs(
@@ -168,6 +215,7 @@ async def construct_knowledge_graph(
                 progress_callback=progress_callback,
                 user_id=user_id,
                 chunk_metadatas=chunk_metadatas,
+                extractor_model=extractor_model,
             )
 
         metrics = ExtractionMetrics(
