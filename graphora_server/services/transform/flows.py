@@ -454,6 +454,11 @@ async def document_transformation_flow(
                             )
                         ),
                         user_id=user_id,
+                        # A1-prov: forward per-chunk metadata so the
+                        # extraction pipeline can stamp source-span
+                        # properties (document_name, page_number,
+                        # source_text, chunk_offset) on every node/edge.
+                        chunk_metadatas=chunk_metadata,
                     )
                     if graph_result:
                         graphs.append(graph_result)

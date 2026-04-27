@@ -37,6 +37,14 @@ class ChunkMetadata(BaseModel):
     chunk_id: Optional[str] = None
     chunk_index: int = 0
 
+    # Source provenance (A1-prov). Populated by the chunker when the
+    # source file is known. ``page_number`` is set when the chunker
+    # can derive it (currently: PDF chunks whose split filename
+    # follows the ``page_<uuid>_<n>.pdf`` pattern emitted by
+    # split_pdf in flows.py).
+    source_file: Optional[str] = None
+    page_number: Optional[int] = None
+
     # Position and content
     start_position: int = 0  # Renamed for consistency
     end_position: int = 0  # Renamed for consistency

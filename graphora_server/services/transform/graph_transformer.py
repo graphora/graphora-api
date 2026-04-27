@@ -169,6 +169,7 @@ async def build_graph_from_chunks(
     document_usage_id: Optional[str] = None,
     enable_multi_pass: bool = False,
     max_passes: int = 2,
+    chunk_metadatas: Optional[List[Any]] = None,
 ) -> DocumentKnowledgeGraph:
     """Build knowledge graph from text chunks.
 
@@ -181,6 +182,11 @@ async def build_graph_from_chunks(
         document_usage_id: Document usage tracking ID.
         enable_multi_pass: Whether to use multi-pass extraction with validation.
         max_passes: Maximum extraction passes when multi-pass is enabled.
+        chunk_metadatas: Optional per-chunk metadata. Same length and
+            order as ``chunks``. When provided, A1-prov source-span
+            properties (source_chunk_id, source_text, document_name,
+            page_number, chunk_offset, extraction_confidence) are
+            stamped on every emitted node and edge.
 
     Returns:
         DocumentKnowledgeGraph with extracted nodes and relationships.
@@ -198,6 +204,7 @@ async def build_graph_from_chunks(
             user_id,
             document_usage_id,
             max_passes,
+            chunk_metadatas=chunk_metadatas,
         )
 
     # Default single-pass extraction
@@ -210,6 +217,7 @@ async def build_graph_from_chunks(
         progress_callback,
         user_id,
         document_usage_id,
+        chunk_metadatas=chunk_metadatas,
     )
 
 
@@ -243,6 +251,7 @@ async def _build_graph_from(
     progress_callback: Optional[Callable[[int, int], None]] = None,
     user_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
+    chunk_metadatas: Optional[List[Any]] = None,
 ) -> DocumentKnowledgeGraph:
     nodes_only_ontology = ontology_parser.build_entities_only_model()
     nodes: List[BaseNode] = []
@@ -254,6 +263,21 @@ async def _build_graph_from(
     # Step 1: LLM-based entity extraction per chunk with deterministic context snapshots.
     for chunk_index, chunk in enumerate(chunks_or_pdf_paths):
         context_used = context_envelope
+        # A1-prov: per-chunk metadata for source-span stamping.
+        # Pulled by index when the caller provided it; None for the
+        # PDF-binary path where each entry is a path, not a text
+        # chunk, and ChunkMetadata isn't applicable.
+        cm = (
+            chunk_metadatas[chunk_index]
+            if chunk_metadatas and chunk_index < len(chunk_metadatas)
+            else None
+        )
+        # Avoid stamping multi-KB binary PDF paths into source_text.
+        # When chunks_or_pdf_paths is the PDF-binary path, chunk is a
+        # filesystem path string; only treat it as source_text on the
+        # text-chunk path (cm is set there).
+        chunk_text_for_props = chunk if cm is not None else None
+
         nodes_only_kg, duration = await _timed_call(
             node_extractor,
             chunk,
@@ -269,6 +293,8 @@ async def _build_graph_from(
             ontology_parser.parsed_ontology,
             nodes_only_kg,
             transform_id=transform_id,
+            chunk_metadata=cm,
+            chunk_text=chunk_text_for_props,
         )
         for new_node in base_nodes:
             is_duplicate = any(
@@ -346,8 +372,18 @@ async def _build_graph_from(
         results = await asyncio.gather(*tasks)
 
         for idx, (relationships_only_kg, duration) in zip(group_indices, results):
+            cm = (
+                chunk_metadatas[idx]
+                if chunk_metadatas and idx < len(chunk_metadatas)
+                else None
+            )
+            chunk_text_for_props = chunks_or_pdf_paths[idx] if cm is not None else None
             base_relationships = transform_as_relationships(
-                ontology_parser.parsed_ontology, nodes, relationships_only_kg
+                ontology_parser.parsed_ontology,
+                nodes,
+                relationships_only_kg,
+                chunk_metadata=cm,
+                chunk_text=chunk_text_for_props,
             )
             for new_relationship in base_relationships:
                 is_duplicate = any(
@@ -612,6 +648,7 @@ async def _build_graph_with_multi_pass(
     user_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
     max_passes: int = 2,
+    chunk_metadatas: Optional[List[Any]] = None,
 ) -> DocumentKnowledgeGraph:
     """Build knowledge graph using multi-pass extraction with validation.
 
@@ -664,6 +701,7 @@ async def _build_graph_with_multi_pass(
         user_id=user_id,
         max_passes=max_passes,
         progress_callback=progress_callback,
+        chunk_metadatas=chunk_metadatas,
     )
 
     # Hydrate nodes with entity ledger if user_id provided

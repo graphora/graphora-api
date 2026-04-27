@@ -1,5 +1,6 @@
 from typing import List, Tuple, Optional, Any
 import asyncio
+import re
 from pathlib import Path
 
 import aiofiles
@@ -9,6 +10,30 @@ from graphora_server.services.chunking.config import ChunkingConfig, ChunkingStr
 from graphora_server.config import settings
 from graphora_server.utils.logger import logger
 from prefect import task
+
+
+# Pattern matches the per-page split filenames emitted by
+# graphora_server/services/transform/flows.py::split_pdf
+# (``page_<uuid>_<n>.pdf``). The trailing 1-based page index is the
+# only payload we need; uuid and prefix are positional anchors.
+_PDF_PAGE_FILENAME_RE = re.compile(r"^page_[a-f0-9]+_(\d+)\.pdf$", re.IGNORECASE)
+
+
+def _page_number_from_path(path: Path) -> Optional[int]:
+    """Extract the 1-based page number from a PDF split filename.
+
+    Returns None for any path that doesn't match the split-pdf
+    convention — non-PDF inputs, future format changes, or PDFs that
+    weren't split (e.g., single-page documents that bypass split_pdf).
+    Callers treat None as "page is unknown" rather than an error.
+    """
+    match = _PDF_PAGE_FILENAME_RE.match(path.name)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:  # pragma: no cover — regex guarantees digits
+        return None
 
 
 @task(
@@ -52,6 +77,28 @@ async def chunk_document(
 
         if not result:
             raise ChunkingError("Chunking failed")
+
+        # A1-prov: stamp per-chunk provenance on every ChunkMetadata
+        # so downstream extraction can copy these onto node/edge
+        # properties. The chunker itself doesn't know the source path
+        # or whether the chunk came from a per-page PDF split — we
+        # add that here, where file_path is the authoritative source
+        # of truth.
+        chunk_result, chunk_metadatas = result
+        path = Path(file_path)
+        source_file = path.name
+        page_number = _page_number_from_path(path)
+        for cm in chunk_metadatas:
+            if cm.source_file is None:
+                cm.source_file = source_file
+            if cm.page_number is None and page_number is not None:
+                cm.page_number = page_number
+        if hasattr(chunk_result, "chunk_metadata") and chunk_result.chunk_metadata:
+            for cm in chunk_result.chunk_metadata:
+                if cm.source_file is None:
+                    cm.source_file = source_file
+                if cm.page_number is None and page_number is not None:
+                    cm.page_number = page_number
 
         return result
 
