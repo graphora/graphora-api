@@ -401,6 +401,107 @@ class TestPdfBinaryPathProvenance:
         assert cm.page_number == 5
         assert cm.source_file == "report.pdf"
 
+    @pytest.mark.asyncio
+    async def test_pdf_binary_path_writes_source_text_from_chunk_metadata(
+        self,
+    ) -> None:
+        """Closes the brief's contract gap: binary PDF nodes need
+        source_text. flows.py pre-extracts text per split via
+        DocumentParser, stores on ChunkMetadata.source_text, and the
+        helper picks it up even though the chunk_text arg is None
+        (the binary path passes treat_chunks_as_text=False)."""
+        from graphora_server.services.transform import graph_transformer
+        from graphora_server.services.transform.ontology_helper import (
+            OntologyParser,
+        )
+        from graphora_server.services.entity_ledger_service import (
+            entity_ledger_service,
+        )
+
+        parser = OntologyParser.__new__(OntologyParser)
+        parser.parsed_ontology = {
+            "entities": {
+                "Person": {"properties": {"name": {"type": "str", "required": True}}}
+            }
+        }
+        parser.ontology_yaml = "version: '0.1.0'\n"
+        parser.build_entities_only_model = lambda: object  # noqa: E731
+        parser.build_relationships_only_model = lambda: object  # noqa: E731
+
+        async def fake_extract_nodes(*_a, **_kw):
+            return _StubEntityResult()
+
+        async def fake_extract_rels(*_a, **_kw):
+            class _Empty:
+                confidence_score = 0.9
+
+            return _Empty()
+
+        cm = ChunkMetadata(
+            transform_id="tx",
+            chunk_id="page_abc-def_3.pdf",
+            source_file="report.pdf",
+            source_text="Alice joined Acme in 2019. (extracted from page 1.)",
+        )
+
+        with patch.object(
+            entity_ledger_service, "hydrate_nodes", new=AsyncMock(return_value=None)
+        ):
+            graph = await graph_transformer._build_graph_from(
+                ontology_parser=parser,
+                chunks_or_pdf_paths=["/tmp/pdf/page_abc-def_3.pdf"],
+                transform_id="tx",
+                node_extractor=fake_extract_nodes,
+                relationship_extractor=fake_extract_rels,
+                chunk_metadatas=[cm],
+                treat_chunks_as_text=False,
+            )
+
+        node = graph.nodes[0]
+        # source_text DOES populate on the binary path now — pulled
+        # from ChunkMetadata.source_text since the helper found it
+        # there. Path strings would still NOT show up because the
+        # treat_chunks_as_text=False gate prevents the path from
+        # being passed as chunk_text.
+        assert (
+            node.properties["source_text"]
+            == "Alice joined Acme in 2019. (extracted from page 1.)"
+        )
+        assert node.properties["source_chunk_id"] == "page_abc-def_3.pdf"
+        assert node.properties["document_name"] == "report.pdf"
+        # page_number is INTENTIONALLY absent on multi-page chunks
+        # — split_pdf's filename trailing integer is the last page in
+        # the chunk, not the page a fact came from. Per-page citation
+        # is Gate 4 work.
+        assert "page_number" not in node.properties
+
+
+class TestOllamaTextSidecarPath:
+    """Regression for finding #3 — Ollama-extracted PDF previously
+    cited the .txt sidecar as document_name, not the original .pdf."""
+
+    def test_chunk_metadata_source_file_can_be_overridden_post_chunk(
+        self,
+    ) -> None:
+        """flows.py overwrites source_file after chunk_document
+        returns, when a PDF-to-text sidecar mapping exists. This
+        test exercises the override mechanism on the data model
+        without re-running the full flow."""
+        cm = ChunkMetadata(
+            transform_id="tx",
+            chunk_id="c1",
+            source_file="report.txt",
+        )
+        # Simulate what flows.py does after chunking the sidecar.
+        cm.source_file = "report.pdf"
+        assert cm.source_file == "report.pdf"
+
+        # And the helper picks up the override correctly.
+        node = BaseNode(id="n", type="T", properties={})
+        _attach_provenance_properties(node, chunk_metadata=cm)
+        assert node.properties["document_name"] == "report.pdf"
+        assert node.properties["document_id"] == "report.pdf"
+
 
 class TestRefinementPassProvenance:
     """The multi-pass refinement (gap re-extraction) used to call

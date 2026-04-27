@@ -253,8 +253,15 @@ def _attach_provenance_properties(
         if chunk_metadata.start_position:
             props.setdefault("chunk_offset", chunk_metadata.start_position)
 
-    if chunk_text:
-        truncated = chunk_text[:_SOURCE_TEXT_PROPERTY_LIMIT]
+    # source_text resolution: prefer the explicit chunk_text arg
+    # (text-chunk path), fall back to chunk_metadata.source_text
+    # (PDF-binary path, where the chunker can't pass text inline and
+    # flows.py pre-extracts an excerpt at split time).
+    text_to_write = chunk_text or (
+        chunk_metadata.source_text if chunk_metadata else None
+    )
+    if text_to_write:
+        truncated = text_to_write[:_SOURCE_TEXT_PROPERTY_LIMIT]
         props.setdefault("source_text", truncated)
 
     # Resolve document_id with fallback to the chunk's source_file.

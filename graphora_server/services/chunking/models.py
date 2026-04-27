@@ -38,11 +38,20 @@ class ChunkMetadata(BaseModel):
     chunk_index: int = 0
 
     # Source provenance (A1-prov). Populated by the chunker when the
-    # source file is known. ``page_number`` is set when the chunker
-    # can derive it (currently: PDF chunks whose split filename
-    # follows the ``page_<uuid>_<n>.pdf`` pattern emitted by
-    # split_pdf in flows.py).
+    # source file is known.
+    #
+    # ``source_text`` is the chunk's literal text excerpt; written
+    # out-of-band only by the PDF-binary path (where the LLM consumes
+    # the binary and our pipeline doesn't otherwise carry text). The
+    # text-chunk path leaves it None and supplies text via
+    # ``chunk_text`` directly to the extraction helper.
+    #
+    # ``page_number`` is intentionally left None on multi-page PDF
+    # chunks — split filenames encode the *last page in the chunk*,
+    # not the page a fact came from. Per-page citation requires the
+    # LLM emitting page numbers, deferred to Gate 4 (Decision Log).
     source_file: Optional[str] = None
+    source_text: Optional[str] = None
     page_number: Optional[int] = None
 
     # Position and content
