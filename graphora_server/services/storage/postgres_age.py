@@ -31,8 +31,10 @@ from __future__ import annotations
 import logging
 import re
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from graphora_server.schemas.graph import Edge, GraphResponse, Node
@@ -44,6 +46,7 @@ from graphora_server.services.storage.models import (
     StorageStage,
 )
 from graphora_server.services.transform.models import BaseNode, RelationshipInstance
+from graphora_server.utils.constants import MERGE_ID, TRANSFORM_ID
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +66,30 @@ class CypherInjectionError(Exception):
     so they have to be interpolated as strings — which means *we*
     have to validate them or risk a SQL/Cypher injection.
     """
+
+
+def _coerce_for_age(value: Any) -> Any:
+    """Coerce a Python value into something AGE's jsonb params accept.
+
+    AGE only accepts JSON-compatible values inside cypher() bodies.
+    Datetime → ISO-8601 string, enum → its ``.value``, Pydantic
+    model → ``.model_dump()``, dicts/lists → recursed into.
+    Everything else passes through; psycopg's json adapter raises
+    on truly unsupported types so we don't silently drop.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    if hasattr(value, "model_dump") and callable(value.model_dump):
+        return _coerce_for_age(value.model_dump())
+    if isinstance(value, dict):
+        return {str(k): _coerce_for_age(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_coerce_for_age(v) for v in value]
+    return value
 
 
 def _validate_identifier(name: str, kind: str = "identifier") -> str:
@@ -327,10 +354,156 @@ class PostgresAGEStorage(GraphStorageInterface):
         merge_id: Optional[str] = None,
         merge: bool = True,
     ) -> StorageBatchResult:
-        # Bulk node write via UNWIND $batch CREATE/MERGE pattern,
-        # avoiding the per-row N+1 footgun the Neo4j adapter has.
-        # Slice 2.
-        raise NotImplementedError("AGE adapter: store_nodes — slice 2 (write path)")
+        """Bulk-write nodes via UNWIND batch grouped by entity type.
+
+        AGE Cypher requires labels to be static (not parameterized),
+        so heterogeneous node lists are bucketed by ``node.type``
+        and one UNWIND batch query is issued per bucket. This avoids
+        the per-row N+1 the Neo4j adapter has (one session per node)
+        — even a 1000-node single-type batch is one round trip.
+
+        Identifiers (entity types) are interpolated into the Cypher
+        string after passing ``_validate_identifier``; properties go
+        through the cypher() jsonb params channel and are coerced
+        via ``_coerce_for_age`` to plain JSON values so datetime /
+        enum / Pydantic model fields don't blow up the adapter.
+        """
+        start_time = time.time()
+        items_processed = 0
+        success = True
+        error_message: Optional[str] = None
+        warnings: List[str] = []
+
+        # Bucket by validated entity type. Nodes that fail
+        # validation get warned and skipped rather than raising —
+        # matches Neo4j's resilience for partial-batch failures.
+        by_type: Dict[str, List[Dict[str, Any]]] = {}
+        for node in nodes:
+            try:
+                node_id, node_type, props = self._extract_node_writepath_fields(
+                    node, transform_id, merge_id
+                )
+                validated_type = _validate_identifier(node_type, "node type")
+            except (CypherInjectionError, ValueError) as exc:
+                warnings.append(f"Skipping node: {exc}")
+                continue
+            by_type.setdefault(validated_type, []).append(
+                {"id": node_id, "props": props}
+            )
+
+        op = "MERGE" if merge else "CREATE"
+        for node_type, batch in by_type.items():
+            cypher = (
+                f"UNWIND $batch AS row "
+                f"{op} (n:{node_type} {{id: row.id}}) "
+                f"SET n += row.props "
+                f"RETURN n.id AS node_id"
+            )
+            try:
+                await self._execute_cypher(
+                    cypher,
+                    params={"batch": batch},
+                    return_columns="(node_id agtype)",
+                )
+                items_processed += len(batch)
+            except Exception as exc:
+                logger.error(
+                    "Failed to store batch of %d %s nodes: %s",
+                    len(batch),
+                    node_type,
+                    exc,
+                )
+                success = False
+                error_message = str(exc)
+                warnings.append(
+                    f"Failed batch of {len(batch)} {node_type} nodes: {exc}"
+                )
+                break
+
+        if items_processed > 0:
+            try:
+                checkpoint_result = await self.update_checkpoint(
+                    transform_id, batch_index, StorageStage.NODES
+                )
+                if not checkpoint_result.success:
+                    success = False
+                    error_message = checkpoint_result.error
+                    warnings.append(
+                        f"Checkpoint update failed: {checkpoint_result.error}"
+                    )
+            except Exception as exc:
+                success = False
+                error_message = f"Failed to update checkpoint: {exc}"
+                warnings.append(error_message)
+
+        if items_processed < len(nodes):
+            warnings.append(
+                f"Partial batch: {items_processed} of {len(nodes)} nodes stored"
+            )
+
+        processing_time_ms = (time.time() - start_time) * 1000
+        return StorageBatchResult(
+            batch_index=batch_index,
+            items_processed=items_processed,
+            processing_time_ms=processing_time_ms,
+            success=success,
+            error=error_message,
+            warnings=warnings,
+        )
+
+    @staticmethod
+    def _extract_node_writepath_fields(
+        node: Any,
+        transform_id: str,
+        merge_id: Optional[str],
+    ) -> tuple:
+        """Pull (id, type, props) from a BaseNode or dict input,
+        merging in metadata + provenance and coercing to JSON.
+
+        Lifted out of ``store_nodes`` so the value-prep logic can be
+        unit-tested without a fake AGE connection.
+        """
+        if isinstance(node, dict):
+            node_id = node.get("id") or str(uuid.uuid4())
+            node_type = node.get("type", "")
+            raw_props = dict(node.get("properties", {}) or {})
+            provenance = None
+        else:
+            node_id = node.id
+            node_type = node.type
+            raw_props = dict(node.properties or {})
+            provenance = getattr(node, "provenance", None)
+
+        if not node_type:
+            raise ValueError(f"Node {node_id} has no type — refusing to write")
+
+        # Strip metadata and rebuild — caller may have left stale
+        # transform_id / merge_id values from a prior batch.
+        props = {
+            k: v
+            for k, v in raw_props.items()
+            if k not in ("id", "type", TRANSFORM_ID, MERGE_ID)
+        }
+        props[TRANSFORM_ID] = transform_id
+        if merge_id:
+            props[MERGE_ID] = merge_id
+
+        # Provenance is optional; when present, flatten its fields
+        # onto props so they round-trip through AGE's jsonb path.
+        # Skip None-valued fields so the property bag stays compact.
+        # Don't clobber LLM-emitted properties — same setdefault
+        # semantics as _attach_provenance_properties uses on the
+        # extraction side.
+        if provenance is not None:
+            prov_dict = (
+                provenance.model_dump(exclude_none=True)
+                if hasattr(provenance, "model_dump")
+                else dict(provenance)
+            )
+            for k, v in prov_dict.items():
+                props.setdefault(k, v)
+
+        return node_id, node_type, _coerce_for_age(props)
 
     async def store_relationships(
         self,
@@ -340,8 +513,126 @@ class PostgresAGEStorage(GraphStorageInterface):
         merge_id: Optional[str] = None,
         merge: bool = True,
     ) -> StorageBatchResult:
-        raise NotImplementedError(
-            "AGE adapter: store_relationships — slice 2 (write path)"
+        """Write relationships one Cypher statement per relationship.
+
+        Slice 3 ships the simple per-row path: AGE's openCypher subset
+        doesn't support the same UNWIND-batch shape with mixed
+        relationship-type / source-type / target-type triples that
+        the node path uses (relationship type, like label, must be
+        static in a single Cypher statement). Bucketing by triple
+        and batching per bucket is a slice-4 optimization.
+
+        Versioning (valid_from/valid_to bi-temporal updates that the
+        Neo4j adapter does on conflict) is also slice-4 work; the
+        first cut is MERGE-only — duplicate (source, type, target)
+        merges into the same edge with last-write-wins on properties.
+        """
+        start_time = time.time()
+        items_processed = 0
+        success = True
+        error_message: Optional[str] = None
+        warnings: List[str] = []
+        seen_rel_ids: set = set()
+
+        op = "MERGE" if merge else "CREATE"
+
+        for rel in relationships:
+            if rel.id in seen_rel_ids:
+                continue
+
+            try:
+                source_type = _validate_identifier(rel.source_type, "source type")
+                target_type = _validate_identifier(rel.target_type, "target type")
+                rel_type = _validate_identifier(rel.type, "relationship type")
+            except CypherInjectionError as exc:
+                warnings.append(
+                    f"Skipping relationship {rel.id}: invalid identifier ({exc})"
+                )
+                continue
+
+            # Build property bag the same way as nodes — strip
+            # metadata, add transform_id / merge_id, fold provenance,
+            # coerce to JSON-safe.
+            raw_props = dict(rel.properties or {})
+            props = {
+                k: v for k, v in raw_props.items() if k not in (TRANSFORM_ID, MERGE_ID)
+            }
+            props[TRANSFORM_ID] = transform_id
+            if merge_id:
+                props[MERGE_ID] = merge_id
+            if rel.provenance is not None:
+                prov_dict = (
+                    rel.provenance.model_dump(exclude_none=True)
+                    if hasattr(rel.provenance, "model_dump")
+                    else dict(rel.provenance)
+                )
+                for k, v in prov_dict.items():
+                    props.setdefault(k, v)
+            props = _coerce_for_age(props)
+
+            cypher = (
+                f"MATCH (s:{source_type} {{id: $source_id}}) "
+                f"MATCH (t:{target_type} {{id: $target_id}}) "
+                f"{op} (s)-[r:{rel_type}]->(t) "
+                f"SET r += $props "
+                f"RETURN r"
+            )
+            try:
+                await self._execute_cypher(
+                    cypher,
+                    params={
+                        "source_id": rel.source_id,
+                        "target_id": rel.target_id,
+                        "props": props,
+                    },
+                    return_columns="(r agtype)",
+                )
+                items_processed += 1
+                seen_rel_ids.add(rel.id)
+            except Exception as exc:
+                logger.error(
+                    "Failed to store relationship %s (%s -[%s]-> %s): %s",
+                    rel.id,
+                    rel.source_id,
+                    rel.type,
+                    rel.target_id,
+                    exc,
+                )
+                success = False
+                error_message = str(exc)
+                warnings.append(f"Failed relationship {rel.id}: {exc}")
+                break
+
+        if items_processed > 0:
+            try:
+                checkpoint_result = await self.update_checkpoint(
+                    transform_id, batch_index, StorageStage.RELATIONSHIPS
+                )
+                if not checkpoint_result.success:
+                    success = False
+                    error_message = checkpoint_result.error
+                    warnings.append(
+                        f"Checkpoint update failed: {checkpoint_result.error}"
+                    )
+            except Exception as exc:
+                success = False
+                error_message = f"Failed to update checkpoint: {exc}"
+                warnings.append(error_message)
+
+        if items_processed < len(relationships):
+            warnings.append(
+                f"Partial batch: {items_processed} of "
+                f"{len(relationships)} relationships stored"
+            )
+
+        processing_time_ms = (time.time() - start_time) * 1000
+        return StorageBatchResult(
+            batch_index=batch_index,
+            items_processed=items_processed,
+            processing_time_ms=processing_time_ms,
+            success=success,
+            error=error_message,
+            warnings=warnings,
         )
 
     async def get_storage_status(

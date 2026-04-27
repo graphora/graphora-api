@@ -22,8 +22,16 @@ import pytest
 from graphora_server.services.storage.postgres_age import (
     CypherInjectionError,
     PostgresAGEStorage,
+    _coerce_for_age,
     _validate_identifier,
 )
+from graphora_server.services.storage.models import StorageStage
+from graphora_server.services.transform.models import (
+    BaseNode,
+    NodeProvenance,
+    RelationshipInstance,
+)
+from graphora_server.utils.constants import MERGE_ID, TRANSFORM_ID
 
 
 class TestIdentifierValidation:
@@ -175,20 +183,11 @@ class TestPostgresAGEStorageMethodStubs:
         return PostgresAGEStorage(dsn="postgresql://localhost/test")
 
     @pytest.mark.asyncio
-    async def test_store_nodes_pending_slice_2(
+    async def test_get_node_by_id_pending_slice_4(
         self, storage: PostgresAGEStorage
     ) -> None:
-        # Note: store_nodes / store_relationships migrated to slice 3
-        # alongside per-user factory dispatch. The error message still
-        # points at the next-up slice, the marker just shifted.
+        # Read-path methods migrate from slice 4 onwards.
         with pytest.raises(NotImplementedError, match="slice"):
-            await storage.store_nodes([], batch_index=0, transform_id="t")
-
-    @pytest.mark.asyncio
-    async def test_get_node_by_id_pending_slice_3(
-        self, storage: PostgresAGEStorage
-    ) -> None:
-        with pytest.raises(NotImplementedError, match="slice 3"):
             await storage.get_node_by_id("nid")
 
     @pytest.mark.asyncio
@@ -345,41 +344,116 @@ class TestCheckpointRoundTrip:
 
 
 class TestFactoryDispatch:
-    """STORAGE_TYPE='postgres' stays reserved at BOTH factory entry
-    points until slice 3 lands them together with per-user Postgres
-    config in UserDatabaseService.
+    """Slice 3: STORAGE_TYPE='postgres' wired at BOTH factory entry
+    points, sharing the ``_build_age_storage`` helper so they stay
+    in lockstep — the asymmetric wiring slice 2 first attempted was
+    the contract bug flagged in review.
 
-    Slice 2's first commit asymmetrically wired only ``create_storage()``
-    while leaving ``create_storage_for_user()`` reserved — but every
-    real-app storage flow (services/storage/tasks.py, api/quality.py,
-    api/dashboard.py, services/quality/tasks.py,
-    services/merge/new_merger.py) enters via ``create_storage_for_user``,
-    so the partial wiring would have made flipping STORAGE_TYPE=postgres
-    look usable in unit tests but fail in production. The follow-up
-    commit pulled ``create_storage()`` back to also raise — both move
-    together in slice 3.
+    Per-user Postgres routing (parallel to Neo4j's stagingDb / prodDb)
+    is intentionally out of scope for slice 3; both entry points use
+    the same global ``POSTGRES_AGE_DSN``. ``use_staging`` is a no-op
+    for postgres and just emits a debug warning. Slice 4 wires
+    multi-tenant Postgres routing if/when there's actual demand.
     """
 
     @pytest.mark.asyncio
-    async def test_create_storage_rejects_postgres_pending_slice_3(self) -> None:
+    async def test_create_storage_constructs_postgres_age_storage(self) -> None:
+        from graphora_server.services.storage import factory
         from graphora_server.services.storage.factory import (
             StorageConfig,
             create_storage,
         )
 
-        config = StorageConfig(storage_type="postgres")
-        with pytest.raises(NotImplementedError, match="slice 3"):
-            await create_storage(config)
+        with patch.object(factory.settings, "POSTGRES_AGE_DSN", "postgresql://fake/db"):
+            with patch.object(factory.settings, "POSTGRES_AGE_GRAPH_NAME", "graphora"):
+                config = StorageConfig(storage_type="postgres")
+                storage = await create_storage(config)
+
+        assert isinstance(storage, PostgresAGEStorage)
+        assert storage.dsn == "postgresql://fake/db"
+        assert storage.graph_name == "graphora"
 
     @pytest.mark.asyncio
-    async def test_create_storage_for_user_rejects_postgres_pending_slice_3(
+    async def test_create_storage_for_user_constructs_postgres_age_storage(
         self,
     ) -> None:
+        # Real-app paths (tasks.py, api/quality.py, services/merge/...)
+        # enter through create_storage_for_user, so this is the
+        # entry point that has to actually work for STORAGE_TYPE=postgres
+        # to be usable end-to-end. Pinned here.
         from graphora_server.services.storage import factory
 
         with patch.object(factory.settings, "STORAGE_TYPE", "postgres"):
-            with pytest.raises(NotImplementedError, match="slice 3"):
-                await factory.create_storage_for_user(user_id="u1", use_staging=True)
+            with patch.object(
+                factory.settings, "POSTGRES_AGE_DSN", "postgresql://fake/db"
+            ):
+                storage = await factory.create_storage_for_user(
+                    user_id="u1", use_staging=True
+                )
+
+        assert isinstance(storage, PostgresAGEStorage)
+
+    @pytest.mark.asyncio
+    async def test_create_storage_falls_back_to_database_url(self) -> None:
+        # When POSTGRES_AGE_DSN is unset, the AGE adapter rides on
+        # the application Postgres connection (resolved_database_url).
+        from graphora_server.services.storage import factory
+        from graphora_server.services.storage.factory import (
+            StorageConfig,
+            create_storage,
+        )
+
+        with patch.object(factory.settings, "POSTGRES_AGE_DSN", None):
+            with patch.object(
+                type(factory.settings),
+                "resolved_database_url",
+                new_callable=lambda: property(
+                    lambda self: "postgresql://app-db/graphora"
+                ),
+            ):
+                config = StorageConfig(storage_type="postgres")
+                storage = await create_storage(config)
+
+        assert isinstance(storage, PostgresAGEStorage)
+        assert storage.dsn == "postgresql://app-db/graphora"
+
+    @pytest.mark.asyncio
+    async def test_create_storage_rejects_when_no_dsn_available(self) -> None:
+        from graphora_server.services.storage import factory
+        from graphora_server.services.storage.factory import (
+            StorageConfig,
+            create_storage,
+        )
+
+        with patch.object(factory.settings, "POSTGRES_AGE_DSN", None):
+            with patch.object(
+                type(factory.settings),
+                "resolved_database_url",
+                new_callable=lambda: property(lambda self: ""),
+            ):
+                config = StorageConfig(storage_type="postgres")
+                with pytest.raises(ValueError, match="POSTGRES_AGE_DSN"):
+                    await create_storage(config)
+
+    @pytest.mark.asyncio
+    async def test_create_storage_for_user_use_staging_false_still_works(
+        self,
+    ) -> None:
+        # Per-user Postgres routing is slice 4 work — for now
+        # use_staging=False on postgres returns the same shared AGE
+        # storage and emits a warning rather than refusing. Pin
+        # the behaviour so callers (merge flow) keep working.
+        from graphora_server.services.storage import factory
+
+        with patch.object(factory.settings, "STORAGE_TYPE", "postgres"):
+            with patch.object(
+                factory.settings, "POSTGRES_AGE_DSN", "postgresql://fake/db"
+            ):
+                storage = await factory.create_storage_for_user(
+                    user_id="u1", use_staging=False
+                )
+
+        assert isinstance(storage, PostgresAGEStorage)
 
 
 class TestExecuteCypher:
@@ -435,3 +509,326 @@ def asynccontextmanager_helper():
     from contextlib import asynccontextmanager
 
     return asynccontextmanager
+
+
+class TestCoerceForAge:
+    """``_coerce_for_age`` is the value-side hardening between
+    Python land and AGE's jsonb-only param channel — datetime,
+    Pydantic models, enums, and nested dicts/lists all get
+    flattened to JSON-compatible values."""
+
+    def test_passes_through_primitives(self) -> None:
+        for v in [None, "x", 42, 3.14, True]:
+            assert _coerce_for_age(v) == v
+
+    def test_datetime_to_isoformat(self) -> None:
+        from datetime import timezone as tz
+
+        dt = datetime(2026, 4, 27, 15, 0, 0, tzinfo=tz.utc)
+        assert _coerce_for_age(dt) == "2026-04-27T15:00:00+00:00"
+
+    def test_enum_to_value(self) -> None:
+        assert _coerce_for_age(StorageStage.NODES) == "nodes"
+
+    def test_pydantic_model_to_dict(self) -> None:
+        prov = NodeProvenance(
+            chunk_ids=["c1"],
+            extraction_timestamp="2026-04-27",
+            confidence_score=0.9,
+        )
+        out = _coerce_for_age(prov)
+        assert isinstance(out, dict)
+        assert out["confidence_score"] == 0.9
+        assert out["chunk_ids"] == ["c1"]
+
+    def test_nested_dict_recursion(self) -> None:
+        out = _coerce_for_age({"stage": StorageStage.NODES, "nested": {"score": 0.5}})
+        assert out == {"stage": "nodes", "nested": {"score": 0.5}}
+
+    def test_list_recursion(self) -> None:
+        assert _coerce_for_age([StorageStage.NODES, StorageStage.RELATIONSHIPS]) == [
+            "nodes",
+            "relationships",
+        ]
+
+
+def _ok_checkpoint_result():
+    """Tiny helper — returns a fake StorageBatchResult-shaped object
+    so update_checkpoint mocks satisfy ``.success`` / ``.error``
+    accesses without bringing in the full pydantic model."""
+    return type("R", (), {"success": True, "error": None})()
+
+
+class TestStoreNodes:
+    """Slice 3: store_nodes ships UNWIND-batched writes grouped
+    by entity type. Tests mock ``_execute_cypher`` so we can pin
+    the Cypher shape, batch grouping, property coercion, and
+    partial-batch failure semantics without a live AGE."""
+
+    @pytest.fixture
+    def storage(self) -> PostgresAGEStorage:
+        return PostgresAGEStorage(dsn="postgresql://localhost/test")
+
+    def _make_node(
+        self, type_: str, name: str, *, with_provenance: bool = False
+    ) -> BaseNode:
+        prov = (
+            NodeProvenance(
+                chunk_ids=["c1"],
+                extraction_timestamp="2026-04-27",
+                confidence_score=0.9,
+                source_file="doc.pdf",
+            )
+            if with_provenance
+            else None
+        )
+        return BaseNode(
+            type=type_,
+            properties={"name": name},
+            provenance=prov,
+        )
+
+    @pytest.mark.asyncio
+    async def test_buckets_by_type_one_unwind_per_bucket(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        nodes = [
+            self._make_node("Person", "Alice"),
+            self._make_node("Person", "Bob"),
+            self._make_node("Company", "Acme"),
+        ]
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            with patch.object(
+                storage,
+                "update_checkpoint",
+                new=AsyncMock(return_value=_ok_checkpoint_result()),
+            ):
+                result = await storage.store_nodes(
+                    nodes, batch_index=0, transform_id="t-42"
+                )
+
+        # Two type buckets in input → two cypher calls (Person + Company).
+        assert mock_exec.call_count == 2
+        cyphers = [c.args[0] for c in mock_exec.call_args_list]
+        assert any("MERGE (n:Person {id: row.id})" in c for c in cyphers)
+        assert any("MERGE (n:Company {id: row.id})" in c for c in cyphers)
+        assert all("UNWIND $batch AS row" in c for c in cyphers)
+        assert result.success is True
+        assert result.items_processed == 3
+
+    @pytest.mark.asyncio
+    async def test_create_mode_uses_create_keyword(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # merge=False maps to CREATE; pin to prevent silent flips.
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            with patch.object(
+                storage,
+                "update_checkpoint",
+                new=AsyncMock(return_value=_ok_checkpoint_result()),
+            ):
+                await storage.store_nodes(
+                    [self._make_node("Person", "Alice")],
+                    batch_index=0,
+                    transform_id="t",
+                    merge=False,
+                )
+        cypher = mock_exec.call_args.args[0]
+        assert "CREATE (n:Person {id: row.id})" in cypher
+
+    @pytest.mark.asyncio
+    async def test_skips_nodes_with_invalid_type(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # Injection-attempt entity type — should be skipped and
+        # warned, not crash the whole batch.
+        nodes = [
+            BaseNode(type="Per;son", properties={"name": "Bad"}),
+            self._make_node("Person", "Good"),
+        ]
+        with patch.object(storage, "_execute_cypher", new=AsyncMock(return_value=[])):
+            with patch.object(
+                storage,
+                "update_checkpoint",
+                new=AsyncMock(return_value=_ok_checkpoint_result()),
+            ):
+                result = await storage.store_nodes(
+                    nodes, batch_index=0, transform_id="t"
+                )
+        assert result.items_processed == 1
+        assert any("Per;son" in w or "alphanumerics" in w for w in result.warnings)
+
+    @pytest.mark.asyncio
+    async def test_partial_batch_failure_reports_warnings(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # First _execute_cypher call succeeds, second raises.
+        nodes = [
+            self._make_node("Person", "Alice"),
+            self._make_node("Company", "Acme"),
+        ]
+        responses = [iter([[], RuntimeError("boom")])]
+
+        async def flaky(*args, **kwargs):
+            v = next(responses[0])
+            if isinstance(v, Exception):
+                raise v
+            return v
+
+        with patch.object(storage, "_execute_cypher", new=flaky):
+            with patch.object(
+                storage,
+                "update_checkpoint",
+                new=AsyncMock(return_value=_ok_checkpoint_result()),
+            ):
+                result = await storage.store_nodes(
+                    nodes, batch_index=0, transform_id="t"
+                )
+        assert result.success is False
+        assert result.items_processed == 1  # First bucket succeeded
+        assert "boom" in (result.error or "")
+        assert any("Partial batch" in w for w in result.warnings)
+
+
+class TestExtractNodeWritepathFields:
+    """Static helper extracted from store_nodes so the value-prep
+    logic (metadata strip + provenance fold + JSON coerce) can be
+    pinned without faking AGE."""
+
+    def test_basenode_input(self) -> None:
+        node = BaseNode(type="Person", properties={"name": "Alice"})
+        node_id, node_type, props = PostgresAGEStorage._extract_node_writepath_fields(
+            node, transform_id="t-42", merge_id=None
+        )
+        assert node_type == "Person"
+        assert props["name"] == "Alice"
+        assert props[TRANSFORM_ID] == "t-42"
+        assert MERGE_ID not in props
+
+    def test_dict_input_with_uuid_fallback(self) -> None:
+        node_id, _, _ = PostgresAGEStorage._extract_node_writepath_fields(
+            {"type": "Person", "properties": {}},
+            transform_id="t",
+            merge_id=None,
+        )
+        # Auto-assigned a UUID when the dict didn't carry an id.
+        assert isinstance(node_id, str) and len(node_id) >= 32
+
+    def test_provenance_setdefault_doesnt_clobber(self) -> None:
+        # LLM-emitted source_file should win over provenance's value.
+        node = BaseNode(
+            type="Person",
+            properties={"name": "Alice", "source_file": "manual.pdf"},
+            provenance=NodeProvenance(
+                chunk_ids=["c1"],
+                extraction_timestamp="2026-04-27",
+                source_file="auto.pdf",
+            ),
+        )
+        _, _, props = PostgresAGEStorage._extract_node_writepath_fields(
+            node, transform_id="t", merge_id=None
+        )
+        assert props["source_file"] == "manual.pdf"
+
+    def test_no_type_raises(self) -> None:
+        with pytest.raises(ValueError, match="no type"):
+            PostgresAGEStorage._extract_node_writepath_fields(
+                {"id": "abc", "type": "", "properties": {}},
+                transform_id="t",
+                merge_id=None,
+            )
+
+
+class TestStoreRelationships:
+    """Slice 3: per-rel MERGE Cypher with static identifier
+    interpolation. Versioning + bucketed UNWIND batching lands in
+    slice 4."""
+
+    @pytest.fixture
+    def storage(self) -> PostgresAGEStorage:
+        return PostgresAGEStorage(dsn="postgresql://localhost/test")
+
+    def _make_rel(self, rel_type: str = "WORKS_AT") -> RelationshipInstance:
+        return RelationshipInstance(
+            type=rel_type,
+            source_id="s1",
+            target_id="t1",
+            source_type="Person",
+            target_type="Company",
+            properties={"role": "engineer"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_emits_match_match_merge_cypher(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        rel = self._make_rel()
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            with patch.object(
+                storage,
+                "update_checkpoint",
+                new=AsyncMock(return_value=_ok_checkpoint_result()),
+            ):
+                result = await storage.store_relationships(
+                    [rel], batch_index=0, transform_id="t-42"
+                )
+        cypher = mock_exec.call_args.args[0]
+        assert "MATCH (s:Person {id: $source_id})" in cypher
+        assert "MATCH (t:Company {id: $target_id})" in cypher
+        assert "MERGE (s)-[r:WORKS_AT]->(t)" in cypher
+        assert "SET r += $props" in cypher
+        # Source/target ids passed through params, not interpolated.
+        params = mock_exec.call_args.kwargs["params"]
+        assert params["source_id"] == "s1"
+        assert params["target_id"] == "t1"
+        assert params["props"]["role"] == "engineer"
+        assert params["props"][TRANSFORM_ID] == "t-42"
+        assert result.items_processed == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_invalid_identifier(self, storage: PostgresAGEStorage) -> None:
+        # Injection attempt in rel type — must skip with warning,
+        # not interpolate the bad string into Cypher.
+        rel = self._make_rel(rel_type="WORKS;DROP")
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            with patch.object(
+                storage,
+                "update_checkpoint",
+                new=AsyncMock(return_value=_ok_checkpoint_result()),
+            ):
+                result = await storage.store_relationships(
+                    [rel], batch_index=0, transform_id="t"
+                )
+        # _execute_cypher never reached because of the skip.
+        assert mock_exec.call_count == 0
+        assert result.items_processed == 0
+        assert any("Skipping relationship" in w for w in result.warnings)
+
+    @pytest.mark.asyncio
+    async def test_dedupes_on_relationship_id(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # Caller may pass the same RelationshipInstance twice (e.g.
+        # from a duplicated extraction). Skip the second occurrence.
+        rel = self._make_rel()
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            with patch.object(
+                storage,
+                "update_checkpoint",
+                new=AsyncMock(return_value=_ok_checkpoint_result()),
+            ):
+                result = await storage.store_relationships(
+                    [rel, rel], batch_index=0, transform_id="t"
+                )
+        assert mock_exec.call_count == 1
+        assert result.items_processed == 1

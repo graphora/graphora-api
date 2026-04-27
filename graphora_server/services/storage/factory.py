@@ -1,7 +1,8 @@
 """Factory for creating graph storage instances.
 
 This module provides a unified way to create storage instances based on
-configuration, supporting both Neo4j and in-memory storage.
+configuration, supporting Neo4j, Apache AGE on PostgreSQL, and in-memory
+storage.
 """
 
 import logging
@@ -11,6 +12,47 @@ from graphora_server.config import settings
 from graphora_server.services.storage.interface import GraphStorageInterface
 
 logger = logging.getLogger(__name__)
+
+
+def _build_age_storage() -> GraphStorageInterface:
+    """Construct the Apache AGE adapter from global settings.
+
+    Shared between ``create_storage()`` and ``create_storage_for_user()``
+    so they stay in lockstep — pulling them apart was the bug
+    flagged in slice 2 review (asymmetric dispatch made the env var
+    pass unit tests but break real extraction flows).
+
+    Per-user Postgres connections (parallel to Neo4j's per-user
+    stagingDb / prodDb config) are out of scope for slice 3 — every
+    user shares the same Postgres+AGE database identified by
+    ``POSTGRES_AGE_DSN`` (or ``DATABASE_URL`` as fallback). When a
+    multi-tenant Postgres backend is actually requested, slice 4 can
+    extend ``UserDatabaseService`` with a Postgres equivalent.
+    """
+    dsn = settings.POSTGRES_AGE_DSN or settings.resolved_database_url
+    if not dsn:
+        raise ValueError(
+            "STORAGE_TYPE='postgres' requires either POSTGRES_AGE_DSN or "
+            "the application Postgres connection (DATABASE_URL or "
+            "POSTGRES_HOST/USER/DB) to be configured."
+        )
+
+    try:
+        from graphora_server.services.storage.postgres_age import PostgresAGEStorage
+    except ImportError as exc:  # pragma: no cover — exercised without [age]
+        raise ImportError(
+            "Apache AGE storage requires the [age] extra. "
+            "Install with: pip install 'graphora-server[age]'"
+        ) from exc
+
+    logger.info(
+        f"Creating Apache AGE storage at {dsn} "
+        f"(graph={settings.POSTGRES_AGE_GRAPH_NAME})"
+    )
+    return PostgresAGEStorage(
+        dsn=dsn,
+        graph_name=settings.POSTGRES_AGE_GRAPH_NAME,
+    )
 
 
 class StorageConfig:
@@ -77,24 +119,10 @@ async def create_storage(config: StorageConfig) -> GraphStorageInterface:
         )
 
     elif storage_type == "postgres":
-        # All real app storage flows enter through
-        # ``create_storage_for_user()``, not ``create_storage()`` —
-        # tasks.py, api/quality.py, api/dashboard.py,
-        # services/quality/tasks.py, services/merge/new_merger.py.
-        # Wiring just this entry point would let an operator flip
-        # STORAGE_TYPE=postgres, see unit tests pass, then hit a
-        # NotImplementedError on the first real extraction request.
-        # Both entry points must move together — that lands in
-        # slice 3 alongside per-user Postgres config in
-        # UserDatabaseService and store_nodes / store_relationships.
-        raise NotImplementedError(
-            "STORAGE_TYPE='postgres' (Apache AGE) — slice 2 shipped the "
-            "adapter method bodies (checkpoint round-trip, agtype parsing) "
-            "but factory dispatch is intentionally not wired here because "
-            "the app's real storage flows enter through "
-            "create_storage_for_user(). Both entry points move together "
-            "in slice 3 alongside per-user Postgres config."
-        )
+        # Shared with create_storage_for_user() so both entry points
+        # behave identically — slice 2 review caught asymmetry here
+        # as a real bug.
+        return _build_age_storage()
 
     else:
         raise ValueError(
@@ -176,16 +204,21 @@ async def create_storage_for_user(
         )
 
     elif storage_type == "postgres":
-        # Per-user Postgres dispatch (separate stagingDb / prodDb
-        # connections per user, like Neo4j) lands in C2-postgres
-        # slice 3 alongside store_nodes / store_relationships. For
-        # slice 2 the global ``create_storage()`` entry point is
-        # the supported way to use the AGE backend.
-        raise NotImplementedError(
-            "STORAGE_TYPE='postgres' for per-user dispatch is not yet "
-            "wired (Gate 5 / C2-postgres slice 3). Use create_storage() "
-            "with global POSTGRES_AGE_DSN config for now."
-        )
+        # Slice 3: dispatch to AGE using the shared global config.
+        # Per-user Postgres connections (parallel to Neo4j's
+        # stagingDb / prodDb shape) are out of scope for slice 3 —
+        # every user shares the same Postgres+AGE database identified
+        # by POSTGRES_AGE_DSN. ``use_staging`` is currently a no-op
+        # for postgres; slice 4 wires a Postgres equivalent of
+        # UserDatabaseService.get_database_config when actual
+        # multi-tenant Postgres routing is requested.
+        if not use_staging:
+            logger.warning(
+                "Postgres backend ignores use_staging=False (slice 3 "
+                "limitation): all users + environments share the same "
+                "POSTGRES_AGE_DSN until per-user config lands"
+            )
+        return _build_age_storage()
 
     else:
         raise ValueError(f"Unsupported storage type: {storage_type}")
