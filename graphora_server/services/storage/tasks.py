@@ -11,7 +11,6 @@ from graphora_server.services.storage.models import (
 )
 from graphora_server.services.storage.factory import (
     create_storage_for_user,
-    is_memory_storage_enabled,
 )
 from graphora_server.services.transform.models import DocumentKnowledgeGraph
 from graphora_server.config import settings
@@ -78,12 +77,15 @@ async def store_knowledge_graph(
     """
     logger = get_run_logger()
 
-    # Create storage using factory (supports both Neo4j and in-memory)
+    # Create storage using factory (Neo4j, Apache AGE, or in-memory)
     storage = await create_storage_for_user(user_id, use_staging=True)
     start_time = datetime.now()
 
-    # Log storage type being used
-    storage_type = "memory" if is_memory_storage_enabled() else "neo4j"
+    # Log storage type being used. Read from settings.STORAGE_TYPE
+    # rather than the old `memory or neo4j` ternary so that future
+    # backends (postgres/AGE — Gate 5) get labelled correctly in
+    # metrics without another caller fix.
+    storage_type = (settings.STORAGE_TYPE or "neo4j").lower()
     logger.info(
         f"Using {storage_type} storage for transform {transform_id}",
         extra={"transform_id": transform_id, "storage_type": storage_type},

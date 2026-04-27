@@ -345,83 +345,36 @@ class TestCheckpointRoundTrip:
 
 
 class TestFactoryDispatch:
-    """STORAGE_TYPE='postgres' goes from reserved-error (slice 1) to
-    actual dispatch (slice 2) for the global ``create_storage()`` entry
-    point. Per-user dispatch (``create_storage_for_user``) stays
-    reserved until slice 3 wires per-user Postgres config.
+    """STORAGE_TYPE='postgres' stays reserved at BOTH factory entry
+    points until slice 3 lands them together with per-user Postgres
+    config in UserDatabaseService.
+
+    Slice 2's first commit asymmetrically wired only ``create_storage()``
+    while leaving ``create_storage_for_user()`` reserved — but every
+    real-app storage flow (services/storage/tasks.py, api/quality.py,
+    api/dashboard.py, services/quality/tasks.py,
+    services/merge/new_merger.py) enters via ``create_storage_for_user``,
+    so the partial wiring would have made flipping STORAGE_TYPE=postgres
+    look usable in unit tests but fail in production. The follow-up
+    commit pulled ``create_storage()`` back to also raise — both move
+    together in slice 3.
     """
 
     @pytest.mark.asyncio
-    async def test_create_storage_constructs_postgres_age_storage(self) -> None:
-        from graphora_server.services.storage import factory
+    async def test_create_storage_rejects_postgres_pending_slice_3(self) -> None:
         from graphora_server.services.storage.factory import (
             StorageConfig,
             create_storage,
         )
 
-        # Minimal env: explicit DSN set at the global config level.
-        # The constructor does no I/O (lazy pool open), so a fake DSN
-        # is enough to exercise the dispatch path.
-        with patch.object(factory.settings, "POSTGRES_AGE_DSN", "postgresql://fake/db"):
-            with patch.object(factory.settings, "POSTGRES_AGE_GRAPH_NAME", "graphora"):
-                config = StorageConfig(storage_type="postgres")
-                storage = await create_storage(config)
-
-        assert isinstance(storage, PostgresAGEStorage)
-        assert storage.dsn == "postgresql://fake/db"
-        assert storage.graph_name == "graphora"
-
-    @pytest.mark.asyncio
-    async def test_create_storage_falls_back_to_database_url(self) -> None:
-        # When POSTGRES_AGE_DSN is unset, the AGE adapter rides on
-        # the application Postgres connection (resolved_database_url).
-        from graphora_server.services.storage import factory
-        from graphora_server.services.storage.factory import (
-            StorageConfig,
-            create_storage,
-        )
-
-        with patch.object(factory.settings, "POSTGRES_AGE_DSN", None):
-            with patch.object(
-                type(factory.settings),
-                "resolved_database_url",
-                new_callable=lambda: property(
-                    lambda self: "postgresql://app-db/graphora"
-                ),
-            ):
-                config = StorageConfig(storage_type="postgres")
-                storage = await create_storage(config)
-
-        assert isinstance(storage, PostgresAGEStorage)
-        assert storage.dsn == "postgresql://app-db/graphora"
-
-    @pytest.mark.asyncio
-    async def test_create_storage_rejects_when_no_dsn_available(self) -> None:
-        from graphora_server.services.storage import factory
-        from graphora_server.services.storage.factory import (
-            StorageConfig,
-            create_storage,
-        )
-
-        with patch.object(factory.settings, "POSTGRES_AGE_DSN", None):
-            # Make resolved_database_url empty too — operator forgot
-            # to configure both. Should fail loud with a clear msg.
-            with patch.object(
-                type(factory.settings),
-                "resolved_database_url",
-                new_callable=lambda: property(lambda self: ""),
-            ):
-                config = StorageConfig(storage_type="postgres")
-                with pytest.raises(ValueError, match="POSTGRES_AGE_DSN"):
-                    await create_storage(config)
+        config = StorageConfig(storage_type="postgres")
+        with pytest.raises(NotImplementedError, match="slice 3"):
+            await create_storage(config)
 
     @pytest.mark.asyncio
     async def test_create_storage_for_user_rejects_postgres_pending_slice_3(
         self,
     ) -> None:
-        # Per-user Postgres config doesn't exist yet — keep this
-        # branch raising NotImplementedError until slice 3 lands the
-        # UserDatabaseService extension.
         from graphora_server.services.storage import factory
 
         with patch.object(factory.settings, "STORAGE_TYPE", "postgres"):

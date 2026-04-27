@@ -44,12 +44,13 @@ class Settings(BaseSettings):
     STORAGE_TYPE: str = Field(
         default="neo4j",
         description=(
-            "Graph storage type: 'neo4j' (production), 'postgres' "
-            "(Apache AGE on PostgreSQL — Gate 5 C2-postgres; slice 2 "
-            "supports checkpoint round-trip via the global "
-            "create_storage() entry point, slice 3 wires per-user "
-            "dispatch + node/relationship writes), or 'memory' (local "
-            "dev/demos)."
+            "Graph storage type: 'neo4j' (production) or 'memory' (local "
+            "dev/demos). 'postgres' (Apache AGE) is reserved — adapter "
+            "method bodies have shipped (Gate 5 C2-postgres slices 1-2: "
+            "checkpoint round-trip, agtype parsing, Cypher helper) but "
+            "factory dispatch stays unwired at both create_storage() and "
+            "create_storage_for_user() until slice 3 lands per-user "
+            "Postgres config + node/relationship writes together."
         ),
     )
     STORAGE_BATCH_SIZE: int = Field(

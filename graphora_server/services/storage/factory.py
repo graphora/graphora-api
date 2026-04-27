@@ -77,34 +77,23 @@ async def create_storage(config: StorageConfig) -> GraphStorageInterface:
         )
 
     elif storage_type == "postgres":
-        # C2-postgres slice 2: dispatch to the AGE adapter using
-        # global Postgres config. Slice 2 ships checkpoint round-
-        # trip; node/relationship writes land in slice 3.
-        dsn = settings.POSTGRES_AGE_DSN or settings.resolved_database_url
-        if not dsn:
-            raise ValueError(
-                "STORAGE_TYPE='postgres' requires either POSTGRES_AGE_DSN "
-                "or the application Postgres connection (DATABASE_URL or "
-                "POSTGRES_HOST/USER/DB) to be configured."
-            )
-
-        try:
-            from graphora_server.services.storage.postgres_age import (
-                PostgresAGEStorage,
-            )
-        except ImportError as exc:  # pragma: no cover — exercised without [age]
-            raise ImportError(
-                "Apache AGE storage requires the [age] extra. "
-                "Install with: pip install 'graphora-server[age]'"
-            ) from exc
-
-        logger.info(
-            f"Creating Apache AGE storage at {dsn} "
-            f"(graph={settings.POSTGRES_AGE_GRAPH_NAME})"
-        )
-        return PostgresAGEStorage(
-            dsn=dsn,
-            graph_name=settings.POSTGRES_AGE_GRAPH_NAME,
+        # All real app storage flows enter through
+        # ``create_storage_for_user()``, not ``create_storage()`` —
+        # tasks.py, api/quality.py, api/dashboard.py,
+        # services/quality/tasks.py, services/merge/new_merger.py.
+        # Wiring just this entry point would let an operator flip
+        # STORAGE_TYPE=postgres, see unit tests pass, then hit a
+        # NotImplementedError on the first real extraction request.
+        # Both entry points must move together — that lands in
+        # slice 3 alongside per-user Postgres config in
+        # UserDatabaseService and store_nodes / store_relationships.
+        raise NotImplementedError(
+            "STORAGE_TYPE='postgres' (Apache AGE) — slice 2 shipped the "
+            "adapter method bodies (checkpoint round-trip, agtype parsing) "
+            "but factory dispatch is intentionally not wired here because "
+            "the app's real storage flows enter through "
+            "create_storage_for_user(). Both entry points move together "
+            "in slice 3 alongside per-user Postgres config."
         )
 
     else:
