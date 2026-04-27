@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from graphora_server.schemas.graph import Edge, GraphResponse, Node
@@ -345,12 +347,114 @@ class PostgresAGEStorage(GraphStorageInterface):
     async def get_storage_status(
         self, transform_id: str
     ) -> Optional[StorageCheckpoint]:
-        raise NotImplementedError("AGE adapter: get_storage_status — slice 2")
+        """Read the most recent checkpoint for a transform.
+
+        Stores the checkpoint as a ``:_Checkpoint`` vertex inside the
+        same AGE graph (parallels Neo4j's ``:__Checkpoint__`` label,
+        renamed because AGE's identifier rules don't allow leading
+        double-underscore). One vertex per transform_id, MERGEd on
+        the transform_id key.
+
+        Returns None when no checkpoint exists for the transform_id —
+        first-write callers rely on that to distinguish "fresh start"
+        from "resume in progress".
+        """
+        rows = await self._execute_cypher(
+            """
+            MATCH (c:_Checkpoint {transform_id: $transform_id})
+            RETURN c
+            ORDER BY c.timestamp DESC
+            LIMIT 1
+            """,
+            params={"transform_id": transform_id},
+            return_columns="(c agtype)",
+        )
+        if not rows:
+            return None
+
+        parsed = self._parse_agtype(rows[0][0])
+        # AGE returns ``{"id": ..., "label": "_Checkpoint",
+        # "properties": {...}}`` for vertex agtype values. The
+        # property bag is what we built in update_checkpoint.
+        props = parsed.get("properties") if isinstance(parsed, dict) else None
+        if not props:
+            return None
+
+        # Timestamp was written as ISO-8601 from update_checkpoint.
+        # Defensive parse — fall back to wall clock if AGE round-
+        # tripped the value into something fromisoformat can't read.
+        timestamp_raw = props.get("timestamp")
+        try:
+            timestamp = (
+                datetime.fromisoformat(timestamp_raw)
+                if isinstance(timestamp_raw, str)
+                else datetime.now(timezone.utc)
+            )
+        except ValueError:
+            timestamp = datetime.now(timezone.utc)
+
+        return StorageCheckpoint(
+            transform_id=props.get("transform_id", transform_id),
+            last_processed_index=int(props.get("last_processed_index", 0)),
+            stage=StorageStage(props.get("stage", StorageStage.NODES.value)),
+            timestamp=timestamp,
+        )
 
     async def update_checkpoint(
         self, transform_id: str, last_index: int, stage: StorageStage
-    ) -> None:
-        raise NotImplementedError("AGE adapter: update_checkpoint — slice 2")
+    ) -> StorageBatchResult:
+        """MERGE-write a checkpoint vertex for the transform_id.
+
+        Returns a ``StorageBatchResult`` to match the Neo4j adapter's
+        de-facto contract — the abstract interface declares ``-> None``
+        but every caller (store_nodes, store_relationships) checks
+        ``.success`` on the returned object. Slice 3's write-path
+        methods consume this return shape.
+
+        AGE has no Cypher ``datetime()`` builtin, so the timestamp is
+        materialized in Python and passed in as an ISO-8601 string.
+        """
+        start_time = time.time()
+        items_processed = 0
+        success = True
+        error_message: Optional[str] = None
+
+        try:
+            timestamp = datetime.now(timezone.utc).isoformat()
+            stage_value = stage.value if isinstance(stage, StorageStage) else str(stage)
+            await self._execute_cypher(
+                """
+                MERGE (c:_Checkpoint {transform_id: $transform_id})
+                SET c.last_processed_index = $last_index,
+                    c.stage = $stage,
+                    c.timestamp = $timestamp
+                """,
+                params={
+                    "transform_id": transform_id,
+                    "last_index": last_index,
+                    "stage": stage_value,
+                    "timestamp": timestamp,
+                },
+            )
+            items_processed = 1
+        except Exception as exc:
+            logger.error(
+                "Failed to update AGE checkpoint for transform %s: %s",
+                transform_id,
+                exc,
+            )
+            success = False
+            error_message = f"Failed to update checkpoint: {exc}"
+
+        processing_time_ms = (time.time() - start_time) * 1000
+        return StorageBatchResult(
+            batch_index=last_index,
+            items_processed=items_processed,
+            processing_time_ms=processing_time_ms,
+            success=success,
+            error=error_message,
+            warnings=[],
+        )
 
     async def get_transformation_data(self, transform_id: str) -> GraphResponse:
         raise NotImplementedError(

@@ -77,26 +77,40 @@ async def create_storage(config: StorageConfig) -> GraphStorageInterface:
         )
 
     elif storage_type == "postgres":
-        # C2-postgres slice 1 has shipped the adapter foundation
-        # (connection layer, schema bootstrap, cypher() helper) but
-        # only stubs for the 22 GraphStorageInterface methods.
-        # Wiring dispatch here would let an operator flip
-        # STORAGE_TYPE=postgres and hit NotImplementedError on the
-        # first store_nodes call in production — a worse failure
-        # mode than refusing up-front. The dispatch lands alongside
-        # slice 2 (write path) when the adapter is actually usable.
-        raise NotImplementedError(
-            "STORAGE_TYPE='postgres' (Apache AGE) is reserved — slice 1 "
-            "foundation has landed but the storage methods are not yet "
-            "implemented (Gate 5 / C2-postgres). Use 'neo4j' or 'memory' "
-            "until slice 2 ships the write path."
+        # C2-postgres slice 2: dispatch to the AGE adapter using
+        # global Postgres config. Slice 2 ships checkpoint round-
+        # trip; node/relationship writes land in slice 3.
+        dsn = settings.POSTGRES_AGE_DSN or settings.resolved_database_url
+        if not dsn:
+            raise ValueError(
+                "STORAGE_TYPE='postgres' requires either POSTGRES_AGE_DSN "
+                "or the application Postgres connection (DATABASE_URL or "
+                "POSTGRES_HOST/USER/DB) to be configured."
+            )
+
+        try:
+            from graphora_server.services.storage.postgres_age import (
+                PostgresAGEStorage,
+            )
+        except ImportError as exc:  # pragma: no cover — exercised without [age]
+            raise ImportError(
+                "Apache AGE storage requires the [age] extra. "
+                "Install with: pip install 'graphora-server[age]'"
+            ) from exc
+
+        logger.info(
+            f"Creating Apache AGE storage at {dsn} "
+            f"(graph={settings.POSTGRES_AGE_GRAPH_NAME})"
+        )
+        return PostgresAGEStorage(
+            dsn=dsn,
+            graph_name=settings.POSTGRES_AGE_GRAPH_NAME,
         )
 
     else:
         raise ValueError(
             f"Unsupported storage type: {storage_type}. "
-            f"Supported types: 'neo4j', 'memory'. "
-            f"('postgres' is reserved — see Gate 5 / C2-postgres.)"
+            f"Supported types: 'neo4j', 'postgres', 'memory'."
         )
 
 
@@ -173,14 +187,15 @@ async def create_storage_for_user(
         )
 
     elif storage_type == "postgres":
-        # See create_storage(): the AGE adapter foundation is in but
-        # the storage methods are stubs. Reject up-front rather than
-        # let an extraction half-run before failing.
+        # Per-user Postgres dispatch (separate stagingDb / prodDb
+        # connections per user, like Neo4j) lands in C2-postgres
+        # slice 3 alongside store_nodes / store_relationships. For
+        # slice 2 the global ``create_storage()`` entry point is
+        # the supported way to use the AGE backend.
         raise NotImplementedError(
-            "STORAGE_TYPE='postgres' (Apache AGE) is reserved — slice 1 "
-            "foundation has landed but the storage methods are not yet "
-            "implemented (Gate 5 / C2-postgres). Use 'neo4j' or 'memory' "
-            "until slice 2 ships the write path."
+            "STORAGE_TYPE='postgres' for per-user dispatch is not yet "
+            "wired (Gate 5 / C2-postgres slice 3). Use create_storage() "
+            "with global POSTGRES_AGE_DSN config for now."
         )
 
     else:
