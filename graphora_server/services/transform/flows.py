@@ -304,6 +304,10 @@ async def document_transformation_flow(
         processed_paths: List[str] = []
         doc_chunk_results: List[Tuple[ChunkingResult, List[ChunkMetadata]]] = []
         pdf_files: List[str] = []
+        # A1-prov: per-split ChunkMetadata for the PDF-binary path,
+        # built alongside pdf_files so build_graph_from_pdfs can stamp
+        # source_file / source_chunk_id / page_number on emitted nodes.
+        pdf_metadatas: List[ChunkMetadata] = []
         graphs = []
 
         # Start PARSE stage
@@ -382,6 +386,28 @@ async def document_transformation_flow(
                     pdf_splits = split_pdf(
                         input_pdf=processed_path, location=pdf_folder, pages=100
                     )
+                    # A1-prov: build per-split ChunkMetadata so the
+                    # binary-PDF extraction path stamps source_file
+                    # (the original PDF filename), source_chunk_id
+                    # (the split filename), and page_number (parsed
+                    # from the split filename) on every emitted node
+                    # and edge. Without this, the PDF path silently
+                    # falls out of the Evidence contract.
+                    from graphora_server.services.chunking.tasks import (
+                        _page_number_from_path,
+                    )
+
+                    original_name = Path(processed_path).name
+                    for split_path in pdf_splits:
+                        split_name = Path(split_path).name
+                        pdf_metadatas.append(
+                            ChunkMetadata(
+                                transform_id=transform_id,
+                                chunk_id=split_name,
+                                source_file=original_name,
+                                page_number=_page_number_from_path(Path(split_path)),
+                            )
+                        )
                     pdf_files.extend(pdf_splits)
             else:
                 strategy_override = (
@@ -485,6 +511,7 @@ async def document_transformation_flow(
                         )
                     ),
                     user_id=user_id,
+                    chunk_metadatas=pdf_metadatas,
                 )
                 if pdf_graph_result:
                     graphs.append(pdf_graph_result)

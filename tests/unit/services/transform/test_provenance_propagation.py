@@ -12,6 +12,9 @@ The test names follow the brief in
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 
 from graphora_server.services.chunking.models import ChunkMetadata
@@ -77,6 +80,22 @@ class TestPageNumberParser:
         assert _page_number_from_path(Path("page_abc.pdf")) is None
         # Wrong extension.
         assert _page_number_from_path(Path("page_abc_3.txt")) is None
+
+    def test_real_uuid4_split_pdf_filenames_parse(self) -> None:
+        """Regression: split_pdf uses ``str(uuid.uuid4())`` which
+        produces hyphenated uuids like ``123e4567-e89b-12d3-a456-
+        426614174000``. The regex must accept hyphens — without this
+        the entire PDF-binary provenance path silently falls back to
+        page_number=None on every real extraction.
+        """
+        import uuid as _uuid
+
+        for trailing_page in (1, 27, 100, 999):
+            real_uuid = str(_uuid.uuid4())
+            filename = f"page_{real_uuid}_{trailing_page}.pdf"
+            assert (
+                _page_number_from_path(Path(filename)) == trailing_page
+            ), f"failed to parse {filename}"
 
 
 # ---- Test 5: helper happy path --------------------------------------------
@@ -152,6 +171,34 @@ class TestAttachProvenancePropertiesPartial:
         )
         _attach_provenance_properties(node, chunk_metadata=cm)
         assert "chunk_offset" not in node.properties
+
+    def test_document_id_auto_derives_from_source_file(self) -> None:
+        """Regression for the document_id-never-populated finding.
+
+        Callers don't have to thread document_id explicitly — the
+        helper falls back to chunk_metadata.source_file, which is the
+        same value the upload site (api/transform.py) treats as the
+        per-file identifier (safe_filename).
+        """
+        node = BaseNode(id="n", type="T", properties={})
+        cm = ChunkMetadata(
+            transform_id="t",
+            chunk_id="c",
+            source_file="paper.pdf",
+            start_position=0,
+        )
+        _attach_provenance_properties(
+            node, chunk_metadata=cm, chunk_text=None, document_id=None
+        )
+        assert node.properties["document_id"] == "paper.pdf"
+        assert node.properties["document_name"] == "paper.pdf"
+
+    def test_explicit_document_id_wins_over_auto_derived(self) -> None:
+        node = BaseNode(id="n", type="T", properties={})
+        cm = ChunkMetadata(transform_id="t", chunk_id="c", source_file="paper.pdf")
+        _attach_provenance_properties(node, chunk_metadata=cm, document_id="doc-7")
+        assert node.properties["document_id"] == "doc-7"
+        assert node.properties["document_name"] == "paper.pdf"
 
 
 # ---- Test 7: setdefault semantics — never clobber LLM values --------------
@@ -262,3 +309,179 @@ class TestTransformAsNodesIntegrates:
         assert props["source_text"] == "Alice joined Acme in 2019."
         assert props["document_id"] == "doc-7"
         assert props["extraction_confidence"] == 0.92
+
+
+# ---- Coverage gaps surfaced by the second review --------------------------
+
+
+class TestPdfBinaryPathProvenance:
+    """The PDF-binary path (Gemini multimodal, default for PDFs) used
+    to bypass provenance entirely. After the fix, build_graph_from_pdfs
+    accepts ``chunk_metadatas`` and stamps source-span properties on
+    every emitted node — minus ``source_text`` since the binary path
+    doesn't have text on our side.
+    """
+
+    @pytest.mark.asyncio
+    async def test_pdf_binary_extraction_emits_provenance_without_source_text(
+        self,
+    ) -> None:
+        from graphora_server.services.transform import graph_transformer
+        from graphora_server.services.transform.ontology_helper import (
+            OntologyParser,
+        )
+        from graphora_server.services.entity_ledger_service import (
+            entity_ledger_service,
+        )
+
+        # Ontology with a Person entity to satisfy transform_as_nodes.
+        parser = OntologyParser.__new__(OntologyParser)
+        parser.parsed_ontology = {
+            "entities": {
+                "Person": {"properties": {"name": {"type": "str", "required": True}}}
+            }
+        }
+        parser.ontology_yaml = "version: '0.1.0'\n"
+        parser.build_entities_only_model = lambda: object  # noqa: E731 - stub
+        parser.build_relationships_only_model = lambda: object  # noqa: E731
+
+        # Stub LLM extraction to return a Person entity for each call.
+        async def fake_extract_nodes(*_args, **_kwargs):
+            return _StubEntityResult()
+
+        async def fake_extract_rels(*_args, **_kwargs):
+            class _Empty:
+                confidence_score = 0.9
+
+            return _Empty()
+
+        cm = ChunkMetadata(
+            transform_id="tx",
+            chunk_id="page_abc-def_3.pdf",
+            source_file="report.pdf",
+            page_number=3,
+        )
+
+        with patch.object(
+            entity_ledger_service, "hydrate_nodes", new=AsyncMock(return_value=None)
+        ):
+            graph = await graph_transformer._build_graph_from(
+                ontology_parser=parser,
+                chunks_or_pdf_paths=["/tmp/pdf-folder/page_abc-def_3.pdf"],
+                transform_id="tx",
+                node_extractor=fake_extract_nodes,
+                relationship_extractor=fake_extract_rels,
+                chunk_metadatas=[cm],
+                treat_chunks_as_text=False,
+            )
+
+        assert graph.nodes, "expected at least one extracted node"
+        node = graph.nodes[0]
+        # Properties carry the provenance the FE/MCP read.
+        assert node.properties.get("source_chunk_id") == "page_abc-def_3.pdf"
+        assert node.properties.get("document_name") == "report.pdf"
+        assert node.properties.get("page_number") == 3
+        # CRITICAL: source_text MUST NOT be the path string.
+        assert "source_text" not in node.properties
+
+    def test_pdf_split_filename_with_real_uuid_drives_provenance(self) -> None:
+        """End-to-end of the bug pair: real uuid4 in the split
+        filename is parsed (regex fix) AND becomes the chunk_id +
+        page_number on the ChunkMetadata flows.py builds for each
+        split. Mirrors what flows.py does inline."""
+        import uuid as _uuid
+
+        real_filename = f"page_{_uuid.uuid4()}_5.pdf"
+        cm = ChunkMetadata(
+            transform_id="tx",
+            chunk_id=real_filename,
+            source_file="report.pdf",
+            page_number=_page_number_from_path(Path(real_filename)),
+        )
+        assert cm.page_number == 5
+        assert cm.source_file == "report.pdf"
+
+
+class TestRefinementPassProvenance:
+    """The multi-pass refinement (gap re-extraction) used to call
+    transform_as_nodes/_relationships without chunk_metadata, so any
+    node introduced during refinement fell out of the contract.
+    """
+
+    @pytest.mark.asyncio
+    async def test_refinement_pass_threads_chunk_metadata(self) -> None:
+        from graphora_server.services.extraction.multi_pass_extractor import (
+            MultiPassExtractor,
+            MultiPassConfig,
+        )
+        from graphora_server.services.extraction.models import (
+            ExtractionGap,
+            GapType,
+        )
+
+        # Minimal stub ontology parser.
+        class _Parser:
+            parsed_ontology = {
+                "entities": {
+                    "Person": {
+                        "properties": {"name": {"type": "str", "required": True}}
+                    }
+                }
+            }
+            ontology_yaml = "v: 1\n"
+
+            def build_entities_only_model(self):
+                return object
+
+            def build_relationships_only_model(self):
+                return object
+
+        # Stub LLM client whose every call returns one Person.
+        class _StubLLM:
+            async def extract_nodes_from_chunk(self, *_a, **_kw):
+                return _StubEntityResult()
+
+            async def extract_relationships_from_chunk(self, *_a, **_kw):
+                class _Empty:
+                    confidence_score = 0.9
+
+                return _Empty()
+
+        ext = MultiPassExtractor(
+            ontology_parser=_Parser(),
+            llm_client=_StubLLM(),
+            config=MultiPassConfig(
+                max_passes=2,
+                gap_severity_threshold=0.5,
+                enable_parallel_refinement=False,
+            ),
+        )
+
+        gap = ExtractionGap(
+            gap_type=GapType.LOW_CONFIDENCE,
+            description="forced",
+            severity=1.0,
+            chunk_indices=[0],
+        )
+        cm = ChunkMetadata(
+            transform_id="tx",
+            chunk_id="c0",
+            source_file="paper.pdf",
+            page_number=2,
+        )
+
+        new_nodes, _new_rels = await ext._extract_for_gaps(
+            gaps=[gap],
+            chunks=["chunk text body"],
+            existing_nodes=[],
+            existing_relationships=[],
+            transform_id="tx",
+            user_id=None,
+            chunk_metadatas=[cm],
+        )
+        assert new_nodes, "expected refinement to produce at least one node"
+        node = new_nodes[0]
+        assert node.properties.get("source_chunk_id") == "c0"
+        assert node.properties.get("document_name") == "paper.pdf"
+        assert node.properties.get("page_number") == 2
+        assert node.properties.get("source_text") == "chunk text body"

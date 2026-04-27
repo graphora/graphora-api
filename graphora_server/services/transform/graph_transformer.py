@@ -228,7 +228,16 @@ async def build_graph_from_pdfs(
     progress_callback: Optional[Callable[[int, int], None]] = None,
     user_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
+    chunk_metadatas: Optional[List[Any]] = None,
 ) -> DocumentKnowledgeGraph:
+    """Build a graph by sending each PDF split file to Gemini's
+    multimodal API. Caller may pass per-split ``chunk_metadatas``;
+    when present, A1-prov source-span properties (document_name,
+    source_chunk_id, page_number, extraction_confidence) are stamped
+    on emitted nodes/edges. ``source_text`` is intentionally NOT
+    set on this path — Gemini sees the binary, our pipeline does not
+    have the text to embed.
+    """
     llm_client = LLMClient()
     return await _build_graph_from(
         ontology_parser,
@@ -239,6 +248,8 @@ async def build_graph_from_pdfs(
         progress_callback,
         user_id,
         document_usage_id,
+        chunk_metadatas=chunk_metadatas,
+        treat_chunks_as_text=False,
     )
 
 
@@ -252,6 +263,7 @@ async def _build_graph_from(
     user_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
     chunk_metadatas: Optional[List[Any]] = None,
+    treat_chunks_as_text: bool = True,
 ) -> DocumentKnowledgeGraph:
     nodes_only_ontology = ontology_parser.build_entities_only_model()
     nodes: List[BaseNode] = []
@@ -263,20 +275,22 @@ async def _build_graph_from(
     # Step 1: LLM-based entity extraction per chunk with deterministic context snapshots.
     for chunk_index, chunk in enumerate(chunks_or_pdf_paths):
         context_used = context_envelope
-        # A1-prov: per-chunk metadata for source-span stamping.
-        # Pulled by index when the caller provided it; None for the
-        # PDF-binary path where each entry is a path, not a text
-        # chunk, and ChunkMetadata isn't applicable.
+        # A1-prov: per-chunk metadata for source-span stamping. Pulled
+        # by index when the caller provided it; None when the caller
+        # didn't (older callsites or partial wiring).
         cm = (
             chunk_metadatas[chunk_index]
             if chunk_metadatas and chunk_index < len(chunk_metadatas)
             else None
         )
-        # Avoid stamping multi-KB binary PDF paths into source_text.
-        # When chunks_or_pdf_paths is the PDF-binary path, chunk is a
-        # filesystem path string; only treat it as source_text on the
-        # text-chunk path (cm is set there).
-        chunk_text_for_props = chunk if cm is not None else None
+        # source_text is the chunk's literal text; only the text-chunk
+        # path (text/markdown/docx → chunked) supplies it. The PDF-
+        # binary path's "chunk" is a filesystem path, so leave
+        # source_text unset there — Gemini sees the binary, our
+        # pipeline does not have text to embed.
+        chunk_text_for_props = (
+            chunk if treat_chunks_as_text and isinstance(chunk, str) else None
+        )
 
         nodes_only_kg, duration = await _timed_call(
             node_extractor,
@@ -377,7 +391,11 @@ async def _build_graph_from(
                 if chunk_metadatas and idx < len(chunk_metadatas)
                 else None
             )
-            chunk_text_for_props = chunks_or_pdf_paths[idx] if cm is not None else None
+            chunk_text_for_props = (
+                chunks_or_pdf_paths[idx]
+                if treat_chunks_as_text and isinstance(chunks_or_pdf_paths[idx], str)
+                else None
+            )
             base_relationships = transform_as_relationships(
                 ontology_parser.parsed_ontology,
                 nodes,

@@ -167,6 +167,7 @@ async def construct_knowledge_graph(
                 transform_id=transform_id,
                 progress_callback=progress_callback,
                 user_id=user_id,
+                chunk_metadatas=chunk_metadatas,
             )
 
         metrics = ExtractionMetrics(

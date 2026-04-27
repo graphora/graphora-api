@@ -257,8 +257,18 @@ def _attach_provenance_properties(
         truncated = chunk_text[:_SOURCE_TEXT_PROPERTY_LIMIT]
         props.setdefault("source_text", truncated)
 
-    if document_id:
-        props.setdefault("document_id", document_id)
+    # Resolve document_id with fallback to the chunk's source_file.
+    # In Graphora today the safe_filename written by the upload
+    # endpoint is the natural per-file identifier (api/transform.py
+    # passes metadata.source, which is the same string the chunker
+    # later sees as Path(file_path).name → ChunkMetadata.source_file).
+    # Auto-deriving here means every callsite doesn't have to thread
+    # an extra parameter just to repeat that fact.
+    resolved_doc_id = document_id or (
+        chunk_metadata.source_file if chunk_metadata else None
+    )
+    if resolved_doc_id:
+        props.setdefault("document_id", resolved_doc_id)
 
     prov = getattr(node_or_edge, "provenance", None)
     if prov is not None and prov.confidence_score is not None:

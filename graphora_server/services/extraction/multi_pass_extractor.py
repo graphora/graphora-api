@@ -166,6 +166,7 @@ class MultiPassExtractor:
                     transform_id,
                     user_id,
                     pass_num,
+                    chunk_metadatas=chunk_metadatas,
                 )
             )
 
@@ -379,6 +380,7 @@ class MultiPassExtractor:
         transform_id: str,
         user_id: Optional[str],
         pass_number: int,
+        chunk_metadatas: Optional[List[Any]] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance], RefinementResult]:
         """Perform targeted refinement for identified gaps.
 
@@ -411,6 +413,7 @@ class MultiPassExtractor:
                     relationships,
                     transform_id,
                     user_id,
+                    chunk_metadatas=chunk_metadatas,
                 )
                 for chunk_gaps in gaps_by_chunk.values()
             ]
@@ -428,6 +431,7 @@ class MultiPassExtractor:
                     relationships,
                     transform_id,
                     user_id,
+                    chunk_metadatas=chunk_metadatas,
                 )
                 new_nodes.extend(chunk_nodes)
                 new_relationships.extend(chunk_rels)
@@ -447,6 +451,7 @@ class MultiPassExtractor:
         existing_relationships: List[RelationshipInstance],
         transform_id: str,
         user_id: Optional[str],
+        chunk_metadatas: Optional[List[Any]] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Extract entities/relationships for specific gaps.
 
@@ -479,6 +484,17 @@ class MultiPassExtractor:
 
             chunk_text = chunks[chunk_idx]
 
+            # A1-prov: pull the matching ChunkMetadata for the chunk
+            # being re-examined. Refinement-pass nodes/edges need the
+            # same source-span properties as initial-pass ones — without
+            # this gap, any node introduced during refinement would
+            # silently fall out of the Evidence contract.
+            cm = (
+                chunk_metadatas[chunk_idx]
+                if chunk_metadatas and chunk_idx < len(chunk_metadatas)
+                else None
+            )
+
             # Build refinement context
             context = self.context_builder.build_refinement_context(
                 gaps=gaps,
@@ -510,6 +526,8 @@ class MultiPassExtractor:
                         self.ontology_parser.parsed_ontology,
                         nodes_kg,
                         transform_id=transform_id,
+                        chunk_metadata=cm,
+                        chunk_text=chunk_text,
                     )
                     new_nodes.extend(extracted_nodes)
                 except Exception as e:
@@ -552,6 +570,8 @@ class MultiPassExtractor:
                         self.ontology_parser.parsed_ontology,
                         existing_nodes + new_nodes,
                         rels_kg,
+                        chunk_metadata=cm,
+                        chunk_text=chunk_text,
                     )
                     new_relationships.extend(extracted_rels)
                 except Exception as e:

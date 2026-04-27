@@ -12,20 +12,26 @@ from graphora_server.utils.logger import logger
 from prefect import task
 
 
-# Pattern matches the per-page split filenames emitted by
-# graphora_server/services/transform/flows.py::split_pdf
-# (``page_<uuid>_<n>.pdf``). The trailing 1-based page index is the
-# only payload we need; uuid and prefix are positional anchors.
-_PDF_PAGE_FILENAME_RE = re.compile(r"^page_[a-f0-9]+_(\d+)\.pdf$", re.IGNORECASE)
+# Pattern matches the per-chunk split filenames emitted by
+# graphora_server/services/transform/flows.py::split_pdf:
+# ``page_<uuid4>_<last_page_index_in_chunk>.pdf``. The uuid is the
+# canonical 36-char string (8-4-4-4-12 hex with hyphens) returned by
+# ``str(uuid.uuid4())``, hence the hyphen in the character class.
+# The trailing integer is the 1-based index of the *last page in the
+# chunk* — when split_pdf runs with the default ``pages=100``, a
+# value of 50 means "the chunk that ends at page 50" (which could be
+# pages 1-50, 51-100, etc., depending on chunk size).
+_PDF_PAGE_FILENAME_RE = re.compile(r"^page_[a-f0-9-]+_(\d+)\.pdf$", re.IGNORECASE)
 
 
 def _page_number_from_path(path: Path) -> Optional[int]:
-    """Extract the 1-based page number from a PDF split filename.
+    """Extract the trailing page index from a split-pdf filename.
 
-    Returns None for any path that doesn't match the split-pdf
-    convention — non-PDF inputs, future format changes, or PDFs that
-    weren't split (e.g., single-page documents that bypass split_pdf).
-    Callers treat None as "page is unknown" rather than an error.
+    Returns the 1-based last-page-in-chunk number when the filename
+    matches the split_pdf convention, ``None`` otherwise. With
+    default split chunking this is a coarse page anchor, not a
+    per-page number — callers that need exact per-page provenance
+    should derive it from the PDF parser instead.
     """
     match = _PDF_PAGE_FILENAME_RE.match(path.name)
     if not match:
