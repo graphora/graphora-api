@@ -210,6 +210,7 @@ class MultiPassExtractor:
                     user_id,
                     pass_num,
                     chunk_metadatas=chunk_metadatas,
+                    extractor_model=extractor_model,
                 )
             )
 
@@ -240,6 +241,17 @@ class MultiPassExtractor:
                     "total_relationships": len(relationships),
                 },
             )
+
+        # Final validator pass + back-fill so any refinement-pass
+        # facts created in the last iteration (which the in-loop
+        # back-fill couldn't reach) still carry validator_score.
+        # Cheap — the validator is in-process, no LLM call.
+        # setdefault semantics in _backfill_validator_score mean
+        # already-scored facts are left alone.
+        final_validation = self.validator.validate(nodes, relationships)
+        _backfill_validator_score(
+            nodes, relationships, final_validation.overall_confidence
+        )
 
         return nodes, relationships
 
@@ -429,6 +441,7 @@ class MultiPassExtractor:
         user_id: Optional[str],
         pass_number: int,
         chunk_metadatas: Optional[List[Any]] = None,
+        extractor_model: Optional[str] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance], RefinementResult]:
         """Perform targeted refinement for identified gaps.
 
@@ -462,6 +475,7 @@ class MultiPassExtractor:
                     transform_id,
                     user_id,
                     chunk_metadatas=chunk_metadatas,
+                    extractor_model=extractor_model,
                 )
                 for chunk_gaps in gaps_by_chunk.values()
             ]
@@ -480,6 +494,7 @@ class MultiPassExtractor:
                     transform_id,
                     user_id,
                     chunk_metadatas=chunk_metadatas,
+                    extractor_model=extractor_model,
                 )
                 new_nodes.extend(chunk_nodes)
                 new_relationships.extend(chunk_rels)
@@ -500,6 +515,7 @@ class MultiPassExtractor:
         transform_id: str,
         user_id: Optional[str],
         chunk_metadatas: Optional[List[Any]] = None,
+        extractor_model: Optional[str] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Extract entities/relationships for specific gaps.
 
@@ -576,6 +592,8 @@ class MultiPassExtractor:
                         transform_id=transform_id,
                         chunk_metadata=cm,
                         chunk_text=chunk_text,
+                        extractor_model=extractor_model,
+                        prompt_version=get_prompt_version("ExtractNodesFromChunk"),
                     )
                     new_nodes.extend(extracted_nodes)
                 except Exception as e:
@@ -620,6 +638,10 @@ class MultiPassExtractor:
                         rels_kg,
                         chunk_metadata=cm,
                         chunk_text=chunk_text,
+                        extractor_model=extractor_model,
+                        prompt_version=get_prompt_version(
+                            "ExtractRelationshipsFromChunk"
+                        ),
                     )
                     new_relationships.extend(extracted_rels)
                 except Exception as e:

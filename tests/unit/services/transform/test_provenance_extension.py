@@ -299,3 +299,207 @@ def test_transform_as_nodes_backward_compat_no_decision_trail_kwargs() -> None:
     assert node.provenance.prompt_version is None
     assert "extractor_model" not in node.properties
     assert "prompt_version" not in node.properties
+
+
+# ---- 9. Refinement-pass propagation (multi-pass end-to-end) -------------
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_refinement_threads_decision_trail() -> None:
+    """Regression: refinement-pass facts must carry the same
+    extractor_model / prompt_version that initial-pass facts do.
+    Without the threading through _refinement_pass + _extract_for_gaps,
+    refined nodes silently drop these fields and fall out of the
+    Slice 1 contract.
+    """
+    from graphora_server.services.extraction.config import MultiPassConfig
+    from graphora_server.services.extraction.models import (
+        ExtractionGap,
+        GapType,
+        ValidationResult,
+    )
+    from graphora_server.services.extraction.multi_pass_extractor import (
+        MultiPassExtractor,
+    )
+
+    # Stub LLM client returns a single Person on every call.
+    class _StubLLM:
+        async def extract_nodes_from_chunk(self, *_a, **_kw):
+            return _StubEntityResult()
+
+        async def extract_relationships_from_chunk(self, *_a, **_kw):
+            class _Empty:
+                confidence_score = 0.9
+
+            return _Empty()
+
+    # Stub parser.
+    class _Parser:
+        parsed_ontology = _ONTOLOGY_PERSON
+        ontology_yaml = "v: 1\n"
+
+        def build_entities_only_model(self):
+            return object
+
+        def build_relationships_only_model(self):
+            return object
+
+    extractor = MultiPassExtractor(
+        ontology_parser=_Parser(),
+        llm_client=_StubLLM(),
+        config=MultiPassConfig(
+            max_passes=2,
+            gap_severity_threshold=0.5,
+            enable_parallel_refinement=False,
+        ),
+    )
+
+    # Force a refinement pass: make the validator say "needs
+    # refinement" once, then return False on the second call.
+    validator_call = {"n": 0}
+
+    def fake_validate(_nodes, _rels):
+        validator_call["n"] += 1
+        return ValidationResult(
+            overall_confidence=0.6,
+            gaps=(
+                [
+                    ExtractionGap(
+                        gap_type=GapType.LOW_CONFIDENCE,
+                        description="forced",
+                        severity=1.0,
+                        chunk_indices=[0],
+                    )
+                ]
+                if validator_call["n"] == 1
+                else []
+            ),
+        )
+
+    extractor.validator.validate = fake_validate  # type: ignore[assignment]
+
+    # Stub the EnhancedContextBuilder methods extract() walks.
+    class _Ctx:
+        text = ""
+        truncated = False
+        raw_length = 0
+
+    extractor.context_builder.build_relationship_aware_entity_context = (
+        lambda *_a, **_kw: _Ctx()
+    )
+    extractor.context_builder.build_relationship_context = lambda *_a, **_kw: _Ctx()
+    extractor.context_builder.build_refinement_context = lambda *_a, **_kw: ""
+    extractor.context_builder.get_expected_entity_types_from_relationships = (
+        lambda *_a, **_kw: set()
+    )
+
+    nodes, _rels = await extractor.extract(
+        chunks=["Alice joined Acme."],
+        transform_id="tx-multi",
+        extractor_model="gemini-2.5-flash",
+    )
+
+    # Both initial-pass AND refinement-pass nodes must carry the
+    # decision-trail fields. With max_passes=2 and a forced gap on
+    # pass 1, refinement runs and produces additional nodes.
+    assert len(nodes) >= 1
+    for node in nodes:
+        assert node.provenance.extractor_model == "gemini-2.5-flash", (
+            f"node {node.id} from {'refinement' if node.provenance else 'initial'} "
+            f"missing extractor_model"
+        )
+        assert node.provenance.prompt_version == "v1.0.0"
+        assert node.properties.get("extractor_model") == "gemini-2.5-flash"
+        assert node.properties.get("prompt_version") == "v1.0.0"
+
+
+@pytest.mark.asyncio
+async def test_multi_pass_validator_score_reaches_final_refinement_nodes() -> None:
+    """Regression for the second review finding: facts created in
+    the LAST refinement iteration must end up with validator_score
+    set. The in-loop back-fill happens before refinement, so without
+    the post-loop final-validator pass, those facts return None.
+    """
+    from graphora_server.services.extraction.config import MultiPassConfig
+    from graphora_server.services.extraction.models import (
+        ExtractionGap,
+        GapType,
+        ValidationResult,
+    )
+    from graphora_server.services.extraction.multi_pass_extractor import (
+        MultiPassExtractor,
+    )
+
+    class _StubLLM:
+        async def extract_nodes_from_chunk(self, *_a, **_kw):
+            return _StubEntityResult()
+
+        async def extract_relationships_from_chunk(self, *_a, **_kw):
+            class _Empty:
+                confidence_score = 0.9
+
+            return _Empty()
+
+    class _Parser:
+        parsed_ontology = _ONTOLOGY_PERSON
+        ontology_yaml = "v: 1\n"
+
+        def build_entities_only_model(self):
+            return object
+
+        def build_relationships_only_model(self):
+            return object
+
+    extractor = MultiPassExtractor(
+        ontology_parser=_Parser(),
+        llm_client=_StubLLM(),
+        config=MultiPassConfig(
+            max_passes=2,
+            gap_severity_threshold=0.5,
+            enable_parallel_refinement=False,
+        ),
+    )
+
+    # Validator always says "needs refinement" — exhausts max_passes.
+    def fake_validate(_n, _r):
+        return ValidationResult(
+            overall_confidence=0.78,
+            gaps=[
+                ExtractionGap(
+                    gap_type=GapType.LOW_CONFIDENCE,
+                    description="forced",
+                    severity=1.0,
+                    chunk_indices=[0],
+                )
+            ],
+        )
+
+    extractor.validator.validate = fake_validate  # type: ignore[assignment]
+
+    class _Ctx:
+        text = ""
+        truncated = False
+        raw_length = 0
+
+    extractor.context_builder.build_relationship_aware_entity_context = (
+        lambda *_a, **_kw: _Ctx()
+    )
+    extractor.context_builder.build_relationship_context = lambda *_a, **_kw: _Ctx()
+    extractor.context_builder.build_refinement_context = lambda *_a, **_kw: ""
+    extractor.context_builder.get_expected_entity_types_from_relationships = (
+        lambda *_a, **_kw: set()
+    )
+
+    nodes, _rels = await extractor.extract(
+        chunks=["Alice joined Acme."],
+        transform_id="tx-final",
+        extractor_model="gemini-2.5-flash",
+    )
+
+    # Final-validator back-fill must reach every node, including
+    # those created in the final refinement iteration.
+    for node in nodes:
+        assert (
+            node.provenance.validator_score == 0.78
+        ), f"node {node.id} missing validator_score from final back-fill"
+        assert node.properties.get("validator_score") == 0.78
