@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from time import perf_counter
-from typing import List, Callable, Optional, Dict, Any, Tuple
+from typing import Iterable, List, Callable, Optional, Dict, Any, Tuple
 from pydantic import BaseModel
 from graphora_server.config import settings
 from graphora_server.services.transform.models import DocumentKnowledgeGraph
@@ -573,64 +573,175 @@ def _relationship_context_sort_key(
     )
 
 
+def _block_keys_for_node(node: BaseNode) -> List[str]:
+    """Generate blocking signatures used by ``_compare_and_merge_nodes``
+    to bucket candidate match groups before the LLM resolution step.
+
+    Each returned key is type-prefixed so different entity types
+    never share blocks. A node may produce multiple keys; nodes
+    that share at least one key end up in the same candidate
+    group. This is the B2-er slice 1 blocking stage — simple,
+    property-based, no Splink/LSH dependency. Slice 2+ can layer
+    embedding-based blocking on top.
+
+    Block keys (in order of strength):
+      1. canonical_key (when present) — already computed by
+         _build_canonical_properties from canonicalization-marked
+         properties. Strong "these might be the same entity" signal.
+      2. First 3 chars of normalized name/title (lowercased,
+         alphanumerics only).
+      3. Type-only fallback — preserves the pre-blocking behaviour
+         (whole-type group goes to the LLM) for nodes without
+         either signature, so blocking can't reduce recall below
+         the old code on poor-quality inputs.
+    """
+    keys: List[str] = []
+    type_prefix = node.type or "_"
+
+    if node.canonical_key:
+        keys.append(f"{type_prefix}|canon:{node.canonical_key}")
+
+    name_value = None
+    if node.properties:
+        name_value = node.properties.get("name") or node.properties.get("title")
+    if isinstance(name_value, str) and name_value:
+        normalized = "".join(c.lower() for c in name_value if c.isalnum())[:3]
+        if normalized:
+            keys.append(f"{type_prefix}|name3:{normalized}")
+
+    if not keys:
+        keys.append(f"{type_prefix}|_all")
+
+    return keys
+
+
+def _candidate_groups_for_resolution(
+    nodes: List[BaseNode],
+    max_block_size: int = 50,
+) -> Iterable[List[BaseNode]]:
+    """Bucket nodes into candidate groups for LLM-based ER.
+
+    Each node is assigned one or more block keys via
+    ``_block_keys_for_node``; nodes sharing any key form a
+    candidate group. Singletons are not yielded (no resolution
+    work to do). Blocks larger than ``max_block_size`` are
+    broken into chunks so the LLM call stays bounded — same node
+    appearing in multiple chunks is fine because the resolver
+    works on each candidate group independently.
+
+    Each node appears in at most one yielded group per call:
+    once it's assigned to a group, subsequent blocks that would
+    have included it skip it. This keeps the ER work O(n*k)
+    rather than O(n²) when nodes share several block keys.
+
+    Caller is responsible for collecting nodes that never appear
+    in any yielded group (singletons, blocks of one) and passing
+    them through unchanged. ``_compare_and_merge_nodes`` does
+    that bookkeeping below.
+    """
+    blocks: Dict[str, List[BaseNode]] = {}
+    for node in nodes:
+        for key in _block_keys_for_node(node):
+            blocks.setdefault(key, []).append(node)
+
+    seen_ids: set = set()
+    # Sort blocks by size descending so the largest blocks fire
+    # first — gives us the most "compression" early on. Within a
+    # block, sort by id for deterministic chunking.
+    for _key, members in sorted(blocks.items(), key=lambda kv: -len(kv[1])):
+        unseen = [n for n in members if n.id not in seen_ids]
+        if len(unseen) <= 1:
+            continue
+        # Chunk oversize blocks. The last chunk may be smaller
+        # than max_block_size; that's fine.
+        for start in range(0, len(unseen), max_block_size):
+            chunk = unseen[start : start + max_block_size]
+            if len(chunk) <= 1:
+                continue
+            for n in chunk:
+                seen_ids.add(n.id)
+            yield chunk
+
+
 async def _compare_and_merge_nodes(
     nodes: List[BaseNode],
     user_id: Optional[str] = None,
     transform_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
 ) -> List[BaseNode]:
-    """Compare all nodes and resolve them using LLM."""
+    """Compare all nodes and resolve them using LLM, with a
+    blocking stage that bounds the LLM input size.
+
+    Pipeline (B2-er slice 1):
+      1. Dict-keyed dedup by node id (was O(n²) list scan).
+      2. Property-based blocking via ``_block_keys_for_node`` —
+         buckets nodes that look related (same canonical_key,
+         same name prefix, etc.) into candidate groups.
+      3. LLM resolution per candidate group via
+         ``resolve_entity_group``. Singletons skip the LLM.
+      4. Pass-through for nodes that didn't land in any
+         candidate group (e.g. a single Person with no
+         lookalikes — no resolution needed).
+
+    Recall tradeoff vs the old all-pairs path: nodes that should
+    match but never share a block key get missed. The block
+    keys are designed to over-include (canonical_key + name3 +
+    type-fallback) so this is rare in practice. Slice 2 layers
+    embedding-based blocking on top to catch the long tail.
+    """
     if not nodes or len(nodes) <= 1:
         return nodes
 
-    entity_groups = {}
+    # Step 1 — O(n) dedup by id. The pre-slice-1 code did an
+    # O(n²) list scan here.
+    by_id: Dict[str, BaseNode] = {}
     for node in nodes:
-        entity_type = node.type
-        if entity_type not in entity_groups:
-            entity_groups[entity_type] = []
-        if node.id not in [n.id for n in entity_groups[entity_type]]:
-            entity_groups[entity_type].append(node)
+        if node.id in by_id:
+            by_id[node.id] = merge_nodes(by_id[node.id], node)
         else:
-            # merge nodes with same id
-            base_node = [n for n in entity_groups[entity_type] if n.id == node.id][0]
-            entity_groups[entity_type].remove(base_node)
-            base_node = merge_nodes(base_node, node)
-            entity_groups[entity_type].append(base_node)
+            by_id[node.id] = node
+    deduped = list(by_id.values())
 
-    final_nodes = []
-    for entity_type, nodes in entity_groups.items():
-        if len(nodes) <= 1:
-            final_nodes.extend(nodes)
-            continue
+    # Step 2 + 3 — block, then resolve each candidate group via LLM.
+    final_nodes: List[BaseNode] = []
+    nodes_in_groups: set = set()
 
-        # Perform entity resolution for this group
+    for candidate_group in _candidate_groups_for_resolution(deduped):
+        # All nodes in a candidate group share an entity type
+        # (block keys are type-prefixed).
+        entity_type = candidate_group[0].type
         resolved_groups = await resolve_entity_group(
             entity_type,
-            nodes,
+            candidate_group,
             user_id=user_id,
             transform_id=transform_id,
             document_usage_id=document_usage_id,
         )
-        # Process resolved groups
         for group in resolved_groups:
             if len(group) == 1:
-                # Single node, no merging needed
                 final_nodes.append(group[0])
+                nodes_in_groups.add(group[0].id)
                 continue
-
-            # Sort by confidence score to use highest confidence node as base
+            # Sort by confidence; merge into the highest-confidence base.
             sorted_nodes = sorted(
                 group,
                 key=lambda x: x.confidence_score if x.confidence_score else 0,
                 reverse=True,
             )
-
-            # Use highest confidence node as base and merge others into it
             base_node = sorted_nodes[0]
             for other_node in sorted_nodes[1:]:
                 base_node = merge_nodes(base_node, other_node)
-
             final_nodes.append(base_node)
+            for n in group:
+                nodes_in_groups.add(n.id)
+
+    # Step 4 — pass-through for nodes that didn't appear in any
+    # candidate group (singletons in their block, or in a block
+    # that yielded only singletons).
+    for node in deduped:
+        if node.id not in nodes_in_groups:
+            final_nodes.append(node)
+
     return final_nodes
 
 
