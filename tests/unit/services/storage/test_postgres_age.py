@@ -198,13 +198,6 @@ class TestPostgresAGEStorageMethodStubs:
         )
         assert result == []
 
-    @pytest.mark.asyncio
-    async def test_create_ft_index_pending_slice_5(
-        self, storage: PostgresAGEStorage
-    ) -> None:
-        with pytest.raises(NotImplementedError, match="slice 5"):
-            await storage.create_or_replace_ft_index_for_node("ix", "Person", ["name"])
-
 
 class TestCheckpointRoundTrip:
     """Slice 2: ``update_checkpoint`` and ``get_storage_status`` move
@@ -1124,3 +1117,111 @@ class TestAdapterDoesNotWriteCheckpoint:
         # checkpoint(7) here would mislead a resume into skipping
         # nodes 0..6.
         mock_ckpt.assert_not_called()
+
+
+class TestFindNodesByPropertyValue:
+    """Slice 5: ``find_nodes_by_property_value`` is the merge-flow
+    pre-similarity lookup (services/merge/new_merger.py:1016, :1037,
+    :1052). Different from get_nodes_by_property: adds a label
+    filter and an exact_match toggle. Identifier validation guards
+    the label + property name interpolations."""
+
+    @pytest.fixture
+    def storage(self) -> PostgresAGEStorage:
+        return PostgresAGEStorage(dsn="postgresql://localhost/test")
+
+    @pytest.mark.asyncio
+    async def test_exact_match_default(self, storage: PostgresAGEStorage) -> None:
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.find_nodes_by_property_value("Person", "name", "Alice")
+        cypher = mock_exec.call_args.args[0]
+        params = mock_exec.call_args.kwargs["params"]
+        assert "MATCH (n:Person)" in cypher
+        assert "n.name = $value" in cypher
+        assert "CONTAINS" not in cypher
+        assert params["value"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_match_uses_contains(self, storage: PostgresAGEStorage) -> None:
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.find_nodes_by_property_value(
+                "Person", "name", "alic", exact_match=False
+            )
+        cypher = mock_exec.call_args.args[0]
+        # toLower wrapping on both sides for case-insensitive match.
+        assert "toLower(n.name) CONTAINS toLower($value)" in cypher
+
+    @pytest.mark.asyncio
+    async def test_validates_label(self, storage: PostgresAGEStorage) -> None:
+        # Injection attempts in either identifier must be refused.
+        with pytest.raises(CypherInjectionError):
+            await storage.find_nodes_by_property_value("Per;son", "name", "Alice")
+
+    @pytest.mark.asyncio
+    async def test_validates_property_name(self, storage: PostgresAGEStorage) -> None:
+        with pytest.raises(CypherInjectionError):
+            await storage.find_nodes_by_property_value("Person", "name; DROP", "Alice")
+
+    @pytest.mark.asyncio
+    async def test_returns_mapped_nodes(self, storage: PostgresAGEStorage) -> None:
+        rows = [
+            (
+                '{"id": 0, "label": "Person", "properties": '
+                '{"id": "n1", "name": "Alice"}}::vertex',
+            ),
+        ]
+        with patch.object(storage, "_execute_cypher", new=AsyncMock(return_value=rows)):
+            nodes = await storage.find_nodes_by_property_value(
+                "Person", "name", "Alice"
+            )
+        assert len(nodes) == 1
+        assert nodes[0].id == "n1"
+        assert nodes[0].type == "Person"
+
+
+class TestFullTextIndexDegradation:
+    """Slice 5: AGE has no native CREATE FULLTEXT INDEX; the GIN /
+    tsvector polyfill ships in slice 6. Until then both index
+    methods degrade to no-op + warning so extraction
+    (ontology_helper.py:539, :543, :589, :593 — 4+ callsites each)
+    doesn't crash on STORAGE_TYPE=postgres."""
+
+    @pytest.fixture
+    def storage(self) -> PostgresAGEStorage:
+        return PostgresAGEStorage(dsn="postgresql://localhost/test")
+
+    @pytest.mark.asyncio
+    async def test_node_index_no_op_returns_none(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # No raise, returns None (the abstract method is -> None).
+        result = await storage.create_or_replace_ft_index_for_node(
+            "ix_person_name", "Person", ["name"]
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_relationship_index_no_op_returns_none(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        result = await storage.create_or_replace_ft_index_for_relationship(
+            "ix_works_at", "Person", "WORKS_AT", "Company", ["role"]
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_node_index_does_not_call_cypher(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # Pin that the no-op doesn't accidentally hit the database;
+        # extraction calls these 4+ times per ontology and a stray
+        # round-trip per call adds up.
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.create_or_replace_ft_index_for_node("ix", "Person", ["name"])
+        mock_exec.assert_not_called()

@@ -326,13 +326,31 @@ class PostgresAGEStorage(GraphStorageInterface):
     async def create_or_replace_ft_index_for_node(
         self, index_name: str, entity_name: str, properties: List[str]
     ) -> None:
-        # AGE has no native CREATE FULLTEXT INDEX; the polyfill is a
-        # GIN index on a tsvector expression over the property bag.
-        # Lands in the index-management slice.
-        raise NotImplementedError(
-            "AGE adapter: create_or_replace_ft_index_for_node "
-            "(GIN/tsvector polyfill) — slice 5"
-        )
+        """No-op until slice 6 wires the GIN/tsvector polyfill.
+
+        AGE has no native ``CREATE FULLTEXT INDEX``. The Neo4j
+        adapter's full-text indexes power CONTAINS-style searches
+        in the merge flow's similarity fallback; the AGE equivalent
+        is a Postgres GIN index over a tsvector expression on the
+        underlying entity table (``ag_label.<graph>_<entity>`` shape).
+
+        Called 4+ times from extraction (ontology_helper.py:539,
+        :543, :589, :593) — raising here would crash extraction on
+        STORAGE_TYPE=postgres before slice 6 lands. Degrade to a
+        no-op + once-per-instance warning. Substring searches work
+        via AGE's CONTAINS in the meantime, just without index
+        acceleration.
+        """
+        if not getattr(self, "_warned_ft_index_node", False):
+            logger.warning(
+                "create_or_replace_ft_index_for_node is a no-op until "
+                "C2-postgres slice 6 wires the GIN/tsvector polyfill. "
+                "Substring searches still work via Cypher CONTAINS, "
+                "just without index acceleration. index=%s entity=%s",
+                index_name,
+                entity_name,
+            )
+            self._warned_ft_index_node = True
 
     async def create_or_replace_ft_index_for_relationship(
         self,
@@ -342,9 +360,21 @@ class PostgresAGEStorage(GraphStorageInterface):
         target_name: str,
         properties: List[str],
     ) -> None:
-        raise NotImplementedError(
-            "AGE adapter: create_or_replace_ft_index_for_relationship " "— slice 5"
-        )
+        """No-op until slice 6 wires the GIN/tsvector polyfill.
+
+        Same shape as the node variant (AGE has no native fulltext
+        index over edges either). Called 4+ times from extraction;
+        raising would crash extraction on STORAGE_TYPE=postgres.
+        """
+        if not getattr(self, "_warned_ft_index_rel", False):
+            logger.warning(
+                "create_or_replace_ft_index_for_relationship is a no-op "
+                "until C2-postgres slice 6 wires the GIN/tsvector "
+                "polyfill. index=%s rel=%s",
+                index_name,
+                rel_name,
+            )
+            self._warned_ft_index_rel = True
 
     async def store_nodes(
         self,
@@ -1040,7 +1070,58 @@ class PostgresAGEStorage(GraphStorageInterface):
         property_value: Any,
         exact_match: bool = True,
     ) -> List[Node]:
-        raise NotImplementedError("AGE adapter: find_nodes_by_property_value — slice 3")
+        """Label-scoped property search; called from the merge flow
+        (services/merge/new_merger.py:1016, :1037, :1052) ahead of
+        the similarity fallback. Different from get_nodes_by_property
+        (already shipped in slice 4): adds a label filter and the
+        ``exact_match`` toggle.
+
+        ``exact_match=True``: ``n.<property_name> = $value`` — the
+        common case. Both the label and the property name interpolate
+        into the Cypher and pass through ``_validate_identifier``.
+
+        ``exact_match=False``: case-insensitive substring match via
+        AGE's CONTAINS. The merge flow uses this for "does any
+        existing node mention this string?" queries; for now we rely
+        on AGE's built-in CONTAINS rather than a Postgres pg_trgm
+        index on the underlying entity table. Slice 6 wires the
+        index for performance; correctness is the same either way.
+        """
+        validated_label = _validate_identifier(label, "node label")
+        validated_prop = _validate_identifier(property_name, "property name")
+
+        if exact_match:
+            cypher = (
+                f"MATCH (n:{validated_label}) "
+                f"WHERE n.{validated_prop} = $value "
+                f"RETURN n"
+            )
+            params = {"value": _coerce_for_age(property_value)}
+        else:
+            # AGE CONTAINS is case-sensitive on the value; compare
+            # via toLower on both sides to mirror callers' fuzzy
+            # expectations. property_value is stringified for the
+            # comparison since CONTAINS only operates on strings.
+            cypher = (
+                f"MATCH (n:{validated_label}) "
+                f"WHERE toLower(n.{validated_prop}) CONTAINS toLower($value) "
+                f"RETURN n"
+            )
+            params = {"value": str(property_value)}
+
+        rows = await self._execute_cypher(
+            cypher,
+            params=params,
+            return_columns="(n agtype)",
+        )
+        nodes: List[Node] = []
+        for row in rows:
+            parsed = self._parse_agtype(row[0])
+            if isinstance(parsed, dict):
+                node = self._vertex_to_node(parsed)
+                if node is not None:
+                    nodes.append(node)
+        return nodes
 
     async def find_similar_nodes(
         self,
