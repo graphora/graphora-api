@@ -222,6 +222,11 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
     "sqlparse>=0.5.1",
+    # testcontainers for the C2-postgres slice 7 integration tests
+    # (apache/age in a Docker container). Tests skip cleanly when
+    # Docker isn't available, so this is dev-only ergonomics — not
+    # required to run the unit suite.
+    "testcontainers[postgres]>=4.0.0",
 ]
 
 [project.scripts]
@@ -240,6 +245,11 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
     "sqlparse>=0.5.1",
+    # testcontainers for the C2-postgres slice 7 integration tests
+    # (apache/age in a Docker container). Tests skip cleanly when
+    # Docker isn't available, so this is dev-only ergonomics — not
+    # required to run the unit suite.
+    "testcontainers[postgres]>=4.0.0",
 ]
 
 [tool.setuptools.packages.find]

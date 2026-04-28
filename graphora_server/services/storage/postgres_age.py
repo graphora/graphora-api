@@ -181,16 +181,37 @@ class PostgresAGEStorage(GraphStorageInterface):
         return self._pool
 
     async def _bootstrap_schema(self) -> None:
-        """Ensure AGE + pgvector are loaded and the named graph exists.
+        """Ensure AGE is loaded and the named graph exists.
 
         Idempotent: ``CREATE EXTENSION IF NOT EXISTS`` and
         ``ag_catalog.create_graph`` is wrapped to no-op on duplicate.
         Run once per process at first use.
+
+        ``vector`` (pgvector) is also opportunistically created for
+        slice 9+ embedding-similarity work, but we tolerate it being
+        unavailable — the apache/age Docker image doesn't ship it
+        preinstalled, and slice 6's CONTAINS-based find_similar_nodes
+        doesn't need it. When the call fails we log once and keep
+        going so the AGE-only path stays viable.
         """
         async with self._get_connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("CREATE EXTENSION IF NOT EXISTS age")
-                await cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                try:
+                    await cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                except Exception as exc:
+                    # pgvector not installed — fine for slice 6's
+                    # CONTAINS scoring path. Future embedding-similarity
+                    # work will enforce this dependency at the
+                    # callsite that actually needs vectors.
+                    logger.warning(
+                        "pgvector extension not available (%s). "
+                        "AGE adapter continues without vector support; "
+                        "embedding-similarity features will be no-ops "
+                        "until pgvector is installed.",
+                        exc,
+                    )
+                    await conn.rollback()
                 # AGE needs to be loaded into the session before
                 # cypher() is callable; SET search_path so unqualified
                 # AGE function calls resolve.
