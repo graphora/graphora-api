@@ -183,15 +183,20 @@ class TestPostgresAGEStorageMethodStubs:
         return PostgresAGEStorage(dsn="postgresql://localhost/test")
 
     @pytest.mark.asyncio
-    async def test_find_similar_nodes_pending_slice_5(
+    async def test_find_similar_nodes_returns_empty_pending_slice_5(
         self, storage: PostgresAGEStorage
     ) -> None:
-        # pgvector + pg_trgm wiring is heavier than the rest of the
-        # read path; defers to slice 5.
-        with pytest.raises(NotImplementedError, match="slice"):
-            await storage.find_similar_nodes(
-                label="Person", properties={"name": "Alice"}
-            )
+        # pgvector + pg_trgm wiring lands in slice 5. Until then the
+        # method degrades to "no matches found" rather than raising,
+        # so the live merge-flow fallback path
+        # (services/merge/new_merger.py:1068) doesn't crash on
+        # STORAGE_TYPE=postgres. Merge flow keeps unmatched nodes
+        # as-is when this returns empty — strictly less aggressive
+        # matching, not data loss.
+        result = await storage.find_similar_nodes(
+            label="Person", properties={"name": "Alice"}
+        )
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_create_ft_index_pending_slice_5(
@@ -1038,3 +1043,84 @@ class TestVertexToNode:
             PostgresAGEStorage._vertex_to_node({"label": "X", "properties": "weird"})
             is None
         )
+
+
+class TestAdapterDoesNotWriteCheckpoint:
+    """Regression for the slice-3 round-2 review finding:
+    ``store_nodes`` / ``store_relationships`` used to write the
+    checkpoint INTERNALLY before returning. That value (the batch
+    INDEX, not items_processed) conflicted with the task layer's
+    partial-failure contract: on success=False the task raises
+    before its own checkpoint write, leaving the adapter's bogus
+    value persisted and causing duplicate CREATEs on resume.
+
+    Pin that the adapter never calls update_checkpoint from inside
+    the write methods — the task layer is the canonical owner.
+    """
+
+    @pytest.fixture
+    def storage(self) -> PostgresAGEStorage:
+        return PostgresAGEStorage(dsn="postgresql://localhost/test")
+
+    @pytest.mark.asyncio
+    async def test_store_nodes_does_not_call_update_checkpoint(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        node = BaseNode(type="Person", properties={"name": "Alice"})
+        with patch.object(storage, "_execute_cypher", new=AsyncMock(return_value=[])):
+            with patch.object(
+                storage, "update_checkpoint", new=AsyncMock()
+            ) as mock_ckpt:
+                await storage.store_nodes([node], batch_index=0, transform_id="t-42")
+        mock_ckpt.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_store_relationships_does_not_call_update_checkpoint(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        rel = RelationshipInstance(
+            type="WORKS_AT",
+            source_id="s1",
+            target_id="t1",
+            source_type="Person",
+            target_type="Company",
+        )
+        with patch.object(storage, "_execute_cypher", new=AsyncMock(return_value=[])):
+            with patch.object(
+                storage, "update_checkpoint", new=AsyncMock()
+            ) as mock_ckpt:
+                await storage.store_relationships(
+                    [rel], batch_index=0, transform_id="t-42"
+                )
+        mock_ckpt.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_store_nodes_does_not_checkpoint_on_partial_failure(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # The exact scenario the review flagged: first bucket succeeds,
+        # second raises. The adapter must not stamp a checkpoint at
+        # batch_index — the task layer raises on success=False and
+        # owns the checkpoint write.
+        node_p = BaseNode(type="Person", properties={"name": "Alice"})
+        node_c = BaseNode(type="Company", properties={"name": "Acme"})
+        responses = [iter([[], RuntimeError("second bucket failed")])]
+
+        async def flaky(*args, **kwargs):
+            v = next(responses[0])
+            if isinstance(v, Exception):
+                raise v
+            return v
+
+        with patch.object(storage, "_execute_cypher", new=flaky):
+            with patch.object(
+                storage, "update_checkpoint", new=AsyncMock()
+            ) as mock_ckpt:
+                result = await storage.store_nodes(
+                    [node_p, node_c], batch_index=7, transform_id="t-42"
+                )
+        assert result.success is False
+        # The bug-shaped behaviour we're guarding against: writing
+        # checkpoint(7) here would mislead a resume into skipping
+        # nodes 0..6.
+        mock_ckpt.assert_not_called()

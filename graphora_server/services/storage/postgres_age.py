@@ -420,21 +420,17 @@ class PostgresAGEStorage(GraphStorageInterface):
                 )
                 break
 
-        if items_processed > 0:
-            try:
-                checkpoint_result = await self.update_checkpoint(
-                    transform_id, batch_index, StorageStage.NODES
-                )
-                if not checkpoint_result.success:
-                    success = False
-                    error_message = checkpoint_result.error
-                    warnings.append(
-                        f"Checkpoint update failed: {checkpoint_result.error}"
-                    )
-            except Exception as exc:
-                success = False
-                error_message = f"Failed to update checkpoint: {exc}"
-                warnings.append(error_message)
+        # Checkpoint advancement is OWNED BY THE TASK LAYER, not the
+        # adapter — see services/storage/tasks.py.store_knowledge_graph.
+        # The earlier internal call here passed ``batch_index`` (batch
+        # number, not items_processed) which the task layer
+        # interprets as a node-array index, persisting a stale value
+        # that conflicts with the task's partial-failure contract:
+        # on success=False the task raises before its own checkpoint
+        # write, leaving the adapter's bogus value in place and
+        # causing duplicate CREATEs on resume (since the task calls
+        # store_nodes with merge=False). The Neo4j adapter has the
+        # same shape of pre-existing bug; that's out of scope here.
 
         if items_processed < len(nodes):
             warnings.append(
@@ -603,21 +599,11 @@ class PostgresAGEStorage(GraphStorageInterface):
                 warnings.append(f"Failed relationship {rel.id}: {exc}")
                 break
 
-        if items_processed > 0:
-            try:
-                checkpoint_result = await self.update_checkpoint(
-                    transform_id, batch_index, StorageStage.RELATIONSHIPS
-                )
-                if not checkpoint_result.success:
-                    success = False
-                    error_message = checkpoint_result.error
-                    warnings.append(
-                        f"Checkpoint update failed: {checkpoint_result.error}"
-                    )
-            except Exception as exc:
-                success = False
-                error_message = f"Failed to update checkpoint: {exc}"
-                warnings.append(error_message)
+        # Checkpoint advancement is OWNED BY THE TASK LAYER (see
+        # the matching comment in store_nodes) — removed the earlier
+        # internal update_checkpoint call to prevent the bogus
+        # batch_index value from being persisted ahead of the task
+        # layer's items_processed-based write.
 
         if items_processed < len(relationships):
             warnings.append(
@@ -1064,14 +1050,34 @@ class PostgresAGEStorage(GraphStorageInterface):
         max_results: int = 10,
         include_relationships: bool = True,
     ) -> List[Node]:
-        # Embedding similarity via pgvector <-> operator on a sibling
-        # table; property-bag fuzzy match via pg_trgm. Slice 5 — the
-        # only merge-flow read-path method that needs the heavier
-        # pgvector wiring; the rest of the merge reads landed in
-        # slice 4.
-        raise NotImplementedError(
-            "AGE adapter: find_similar_nodes (pgvector + pg_trgm) — slice 5"
-        )
+        """Similarity search via pgvector + pg_trgm — pending slice 5.
+
+        Reached on the live merge-flow fallback path
+        (services/merge/new_merger.py:1068) when an unmatched node
+        falls through to property-similarity matching. Slice 4
+        review surfaced that raising here crashes that fallback for
+        STORAGE_TYPE=postgres before the heavy embedding wiring
+        lands.
+
+        Degrade gracefully: return an empty list and log a warning
+        once. The merge flow falls back to keeping the unmatched
+        node as-is — that's strictly less aggressive matching, not
+        data loss, and the warning surface gives operators a
+        breadcrumb when investigating why two near-identical nodes
+        didn't merge.
+        """
+        if not getattr(self, "_warned_find_similar_nodes", False):
+            logger.warning(
+                "find_similar_nodes returning empty (pgvector + pg_trgm "
+                "wiring lands in C2-postgres slice 5). Merge flow's "
+                "similarity fallback will not match nodes on AGE backend "
+                "until then. label=%s",
+                label,
+            )
+            # Once-per-instance breadcrumb keeps logs readable on
+            # large merges that call this hundreds of times.
+            self._warned_find_similar_nodes = True
+        return []
 
     async def create_node(self, label: str, properties: Dict[str, Any]) -> Node:
         raise NotImplementedError("AGE adapter: create_node — slice 3")
