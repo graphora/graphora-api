@@ -51,10 +51,12 @@ class BackendCapabilities:
     or unavailable; correctness of CONTAINS-style queries is
     preserved (they fall back to scans), only performance differs.
 
-    On AGE this is conservatively reported as the static class
-    capability; the method itself runtime-checks
-    ``_has_pg_trgm`` (set during ``_bootstrap_schema``) and
-    degrades gracefully when pg_trgm isn't installed."""
+    AGE reports this dynamically from ``_has_pg_trgm`` (set during
+    ``_bootstrap_schema``). Before bootstrap runs the flag is False
+    — the conservative default so callers that branch on it don't
+    create a real index just to discover it was never built. After
+    bootstrap the flag matches whether pg_trgm is actually
+    installed in the target Postgres instance."""
 
     similarity_search: bool
     """``find_similar_nodes`` returns real candidate matches. False
@@ -88,27 +90,36 @@ NEO4J_CAPABILITIES = BackendCapabilities(
     per_user_routing=True,
 )
 
-# AGE matches Neo4j on persistence + similarity (CONTAINS scoring,
-# slice 6) + full-text (GIN/pg_trgm polyfill, slice 8). It diverges
-# on per-user routing (single global DSN until the multi-tenant
-# Postgres routing in UserDatabaseService gets wired) and on
-# embedding similarity (waiting for pgvector + embedding-generation
-# upstream).
-AGE_CAPABILITIES = BackendCapabilities(
-    persistent=True,
-    full_text_indexes=True,
-    similarity_search=True,
-    embedding_similarity=False,
-    per_user_routing=False,
-)
+# AGE: ``full_text_indexes`` is runtime-derived from ``_has_pg_trgm``
+# (set by _bootstrap_schema based on whether pg_trgm is installed
+# in the target Postgres). The PostgresAGEStorage.capabilities
+# property constructs the BackendCapabilities instance dynamically
+# rather than returning a static constant — see the property impl
+# in graphora_server/services/storage/postgres_age.py. Tests verify
+# both branches: pg_trgm available → full_text_indexes=True,
+# unavailable / pre-bootstrap → False.
+#
+# Other AGE flags ARE static today: persistence is inherent to
+# Postgres, similarity_search via Cypher CONTAINS scoring (slice 6)
+# always works, embedding_similarity waits for pgvector wiring
+# upstream, per_user_routing waits for multi-tenant Postgres
+# extensions to UserDatabaseService.
+AGE_STATIC_CAPABILITIES = {
+    "persistent": True,
+    "similarity_search": True,
+    "embedding_similarity": False,
+    "per_user_routing": False,
+}
 
-# In-memory storage is the dev/demo path. No persistence, no
-# indexes, no similarity. Reads + writes work for the duration of
-# the process.
+# In-memory storage is the dev/demo path. No persistence (lost on
+# restart) and no full-text index concept. similarity_search IS
+# True — InMemoryStorage.find_similar_nodes runs a real fuzzy
+# match via _calculate_similarity, which makes the dev/demo path
+# behave like prod for the merge flow's similarity fallback.
 MEMORY_CAPABILITIES = BackendCapabilities(
     persistent=False,
     full_text_indexes=False,
-    similarity_search=False,
+    similarity_search=True,
     embedding_similarity=False,
     per_user_routing=False,
 )

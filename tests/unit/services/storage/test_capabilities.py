@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from graphora_server.services.storage.capabilities import (
-    AGE_CAPABILITIES,
+    AGE_STATIC_CAPABILITIES,
     MEMORY_CAPABILITIES,
     NEO4J_CAPABILITIES,
     BackendCapabilities,
@@ -65,27 +65,30 @@ class TestPerBackendConstants:
             per_user_routing=True,
         )
 
-    def test_age_capabilities(self) -> None:
-        # AGE matches Neo4j on persistence + similarity (CONTAINS
-        # scoring, slice 6) + full-text (GIN/pg_trgm polyfill,
-        # slice 8). Diverges on per-user routing (single global
-        # DSN until UserDatabaseService gets the multi-tenant
-        # Postgres extension) and embedding_similarity (waiting
-        # for pgvector + embedding-generation upstream).
-        assert AGE_CAPABILITIES == BackendCapabilities(
-            persistent=True,
-            full_text_indexes=True,
-            similarity_search=True,
-            embedding_similarity=False,
-            per_user_routing=False,
-        )
+    def test_age_static_capabilities(self) -> None:
+        # AGE's full_text_indexes is runtime-derived (depends on
+        # whether pg_trgm got installed during _bootstrap_schema),
+        # so it's NOT in AGE_STATIC_CAPABILITIES. The constant
+        # exposes only the truly static flags; the adapter's
+        # capabilities property fills in full_text_indexes from
+        # ``self._has_pg_trgm`` per call.
+        assert AGE_STATIC_CAPABILITIES == {
+            "persistent": True,
+            "similarity_search": True,
+            "embedding_similarity": False,
+            "per_user_routing": False,
+        }
+        assert "full_text_indexes" not in AGE_STATIC_CAPABILITIES
 
     def test_memory_capabilities(self) -> None:
-        # In-memory: no persistence, no indexes, no similarity.
+        # In-memory: no persistence, no FT indexes. similarity_search
+        # is True — InMemoryStorage.find_similar_nodes runs a real
+        # fuzzy match via _calculate_similarity, so the dev/demo
+        # path keeps the merge flow's similarity fallback working.
         assert MEMORY_CAPABILITIES == BackendCapabilities(
             persistent=False,
             full_text_indexes=False,
-            similarity_search=False,
+            similarity_search=True,
             embedding_similarity=False,
             per_user_routing=False,
         )
@@ -102,11 +105,41 @@ class TestAdaptersExposeCapabilities:
         storage = InMemoryStorage(user_id="test")
         assert storage.capabilities is MEMORY_CAPABILITIES
 
-    def test_postgres_age_storage_returns_age_capabilities(self) -> None:
+    def test_postgres_age_pre_bootstrap_reports_full_text_false(self) -> None:
+        # Before _bootstrap_schema runs, ``_has_pg_trgm`` is unset.
+        # capabilities defaults full_text_indexes to False so a
+        # caller branching on the flag doesn't fire an FT index
+        # call that would just no-op.
         from graphora_server.services.storage.postgres_age import PostgresAGEStorage
 
         storage = PostgresAGEStorage(dsn="postgresql://localhost/test")
-        assert storage.capabilities is AGE_CAPABILITIES
+        caps = storage.capabilities
+        assert caps.full_text_indexes is False
+        # Static fields stay matched to AGE_STATIC_CAPABILITIES.
+        assert caps.persistent is True
+        assert caps.similarity_search is True
+        assert caps.embedding_similarity is False
+        assert caps.per_user_routing is False
+
+    def test_postgres_age_with_pg_trgm_reports_full_text_true(self) -> None:
+        # After _bootstrap_schema runs and pg_trgm is available,
+        # ``_has_pg_trgm`` is True and capabilities flips
+        # full_text_indexes to match. Simulate the post-bootstrap
+        # state directly without spinning up a container.
+        from graphora_server.services.storage.postgres_age import PostgresAGEStorage
+
+        storage = PostgresAGEStorage(dsn="postgresql://localhost/test")
+        storage._has_pg_trgm = True
+        assert storage.capabilities.full_text_indexes is True
+
+    def test_postgres_age_without_pg_trgm_reports_full_text_false(self) -> None:
+        # pg_trgm absent → full_text_indexes False. Mirrors the
+        # bootstrap path that warns once and continues.
+        from graphora_server.services.storage.postgres_age import PostgresAGEStorage
+
+        storage = PostgresAGEStorage(dsn="postgresql://localhost/test")
+        storage._has_pg_trgm = False
+        assert storage.capabilities.full_text_indexes is False
 
     def test_neo4j_storage_returns_neo4j_capabilities(self) -> None:
         # Neo4jStorage's __init__ opens a sync connection to verify
@@ -138,20 +171,23 @@ class TestCapabilityBranching:
     def test_branch_on_full_text_indexes_flag(self) -> None:
         # Idiomatic caller pattern: check the flag instead of
         # introspecting the backend's class or settings.STORAGE_TYPE.
-        for caps in (NEO4J_CAPABILITIES, AGE_CAPABILITIES):
-            assert caps.full_text_indexes is True
+        # Neo4j is statically True; AGE is runtime-derived so we
+        # exercise it via the adapter property (covered by the
+        # TestAdaptersExposeCapabilities class above). Memory is
+        # statically False.
+        assert NEO4J_CAPABILITIES.full_text_indexes is True
         assert MEMORY_CAPABILITIES.full_text_indexes is False
 
     def test_branch_on_persistent_flag(self) -> None:
         # The "this won't survive restart" decision shouldn't
         # require knowing whether the backend is in-memory by name.
         assert NEO4J_CAPABILITIES.persistent is True
-        assert AGE_CAPABILITIES.persistent is True
         assert MEMORY_CAPABILITIES.persistent is False
+        assert AGE_STATIC_CAPABILITIES["persistent"] is True
 
     def test_branch_on_per_user_routing(self) -> None:
         # Important for the eventual UserDatabaseService refactor:
         # AGE doesn't carry per-user staging/prod connections today.
         assert NEO4J_CAPABILITIES.per_user_routing is True
-        assert AGE_CAPABILITIES.per_user_routing is False
         assert MEMORY_CAPABILITIES.per_user_routing is False
+        assert AGE_STATIC_CAPABILITIES["per_user_routing"] is False
