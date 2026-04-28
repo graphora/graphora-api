@@ -11,7 +11,6 @@ from graphora_server.services.storage.models import (
 )
 from graphora_server.services.storage.factory import (
     create_storage_for_user,
-    is_memory_storage_enabled,
 )
 from graphora_server.services.transform.models import DocumentKnowledgeGraph
 from graphora_server.config import settings
@@ -78,12 +77,15 @@ async def store_knowledge_graph(
     """
     logger = get_run_logger()
 
-    # Create storage using factory (supports both Neo4j and in-memory)
+    # Create storage using factory (Neo4j, Apache AGE, or in-memory)
     storage = await create_storage_for_user(user_id, use_staging=True)
     start_time = datetime.now()
 
-    # Log storage type being used
-    storage_type = "memory" if is_memory_storage_enabled() else "neo4j"
+    # Log storage type being used. Read from settings.STORAGE_TYPE
+    # rather than the old `memory or neo4j` ternary so that future
+    # backends (postgres/AGE — Gate 5) get labelled correctly in
+    # metrics without another caller fix.
+    storage_type = (settings.STORAGE_TYPE or "neo4j").lower()
     logger.info(
         f"Using {storage_type} storage for transform {transform_id}",
         extra={"transform_id": transform_id, "storage_type": storage_type},
@@ -123,7 +125,9 @@ async def store_knowledge_graph(
                         node_batch, batch_idx, transform_id, merge=False
                     )
 
-                    # Update metrics
+                    # Update metrics — items_processed is the actual
+                    # count, not the assumed batch size, so partial-
+                    # success batches show real numbers in metrics.
                     result.nodes_stored += batch_result.items_processed
                     result.metrics.nodes_processed += batch_result.items_processed
                     result.metrics.add_batch_timing(batch_result.processing_time_ms)
@@ -134,10 +138,30 @@ async def store_knowledge_graph(
                                 warning, batch_idx, StorageStage.NODES
                             )
 
-                    # Update checkpoint
+                    # Honor partial-success contract — adapters return
+                    # success=False with items_processed < len(batch)
+                    # when a sub-batch fails. Advancing the checkpoint
+                    # past the actual write head causes silent data
+                    # loss on resume, so refuse to advance and stop
+                    # the loop.
+                    if not batch_result.success:
+                        raise StorageError(
+                            f"store_nodes batch {batch_idx} reported failure: "
+                            f"{batch_result.error or 'unknown'} "
+                            f"({batch_result.items_processed} of "
+                            f"{len(node_batch)} stored)"
+                        )
+
+                    # Checkpoint at the actual write head, not the
+                    # batch tail — keeps resume correct even if the
+                    # adapter returns a partial-success state in the
+                    # future without raising.
+                    advanced_index = (
+                        batch_idx * checkpoint_size + batch_result.items_processed
+                    )
                     await storage.update_checkpoint(
                         transform_id,
-                        batch_idx * checkpoint_size + len(node_batch),
+                        advanced_index,
                         StorageStage.NODES,
                     )
                     result.metrics.checkpoint_count += 1
@@ -178,7 +202,8 @@ async def store_knowledge_graph(
                         rel_batch, batch_idx, transform_id
                     )
 
-                    # Update metrics
+                    # Update metrics with actual processed count, not
+                    # assumed batch size.
                     result.relationships_stored += batch_result.items_processed
                     result.metrics.relationships_processed += (
                         batch_result.items_processed
@@ -191,10 +216,24 @@ async def store_knowledge_graph(
                                 warning, batch_idx, StorageStage.RELATIONSHIPS
                             )
 
-                    # Update checkpoint
+                    # Honor partial-success contract — same reason as
+                    # the nodes loop above. Advancing the checkpoint
+                    # past failed writes causes silent data loss on
+                    # resume.
+                    if not batch_result.success:
+                        raise StorageError(
+                            f"store_relationships batch {batch_idx} reported "
+                            f"failure: {batch_result.error or 'unknown'} "
+                            f"({batch_result.items_processed} of "
+                            f"{len(rel_batch)} stored)"
+                        )
+
+                    advanced_index = (
+                        batch_idx * checkpoint_size + batch_result.items_processed
+                    )
                     await storage.update_checkpoint(
                         transform_id,
-                        batch_idx * checkpoint_size + len(rel_batch),
+                        advanced_index,
                         StorageStage.RELATIONSHIPS,
                     )
                     result.metrics.checkpoint_count += 1

@@ -21,6 +21,30 @@ SYSTEM_PROPERTIES = [
     VALID_FROM,
     VALID_TO,
     UPDATED,
+    # A1-prov source-span fields. Stamped onto every node/edge by
+    # services/transform/helpers.py::_attach_provenance_properties
+    # so the Explorer Evidence tab + MCP get_evidence can surface
+    # them. Listing here keeps the rest of the system (similarity
+    # scoring in find_similar_nodes, ontology-validation skip-lists
+    # in services/quality/validator.py) from treating them as
+    # user-meaningful signal — without this, two nodes from the
+    # same document score artificially similar on source_text /
+    # document_name overlap.
+    "source_chunk",
+    "source_chunk_id",
+    "source_text",
+    "source",
+    "document_id",
+    "document_name",
+    "chunk_offset",
+    "page_number",
+    "extraction_confidence",
+    # B0-prov-extend decision-trail fields. Same reasoning — these
+    # are LLM/extraction telemetry, not entity signal. Mirrors the
+    # _EVIDENCE_KEYS contract in graphora_server/mcp/server.py.
+    "extractor_model",
+    "prompt_version",
+    "validator_score",
 ]
 
 

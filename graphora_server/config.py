@@ -43,13 +43,36 @@ class Settings(BaseSettings):
     # Storage Settings
     STORAGE_TYPE: str = Field(
         default="neo4j",
-        description="Graph storage type: 'neo4j' for production or 'memory' for local dev/demos",
+        description=(
+            "Graph storage type: 'neo4j' (production), 'postgres' (Apache "
+            "AGE on PostgreSQL — Gate 5 C2-postgres; supported via shared "
+            "global POSTGRES_AGE_DSN; per-user multi-tenant Postgres "
+            "routing parallels Neo4j's stagingDb/prodDb model and lands "
+            "in slice 4 when actually requested), or 'memory' (local "
+            "dev/demos)."
+        ),
     )
     STORAGE_BATCH_SIZE: int = Field(
         default=1000, description="Batch size for storage operations"
     )
     STORAGE_RETRIES: int = Field(
         default=3, description="Number of retries for storage task"
+    )
+
+    # Apache AGE graph backend settings (Gate 5 / C2-postgres).
+    # When STORAGE_TYPE=postgres and these are unset, the AGE adapter
+    # falls back to the application Postgres connection (DATABASE_URL /
+    # POSTGRES_*). When set, the graph lives in a separate database —
+    # useful when separating OLTP app traffic from analytical graph
+    # workloads.
+    POSTGRES_AGE_DSN: Optional[str] = Field(
+        default=None,
+        description="Optional standalone DSN for Apache AGE graph storage. "
+        "Falls back to DATABASE_URL when unset.",
+    )
+    POSTGRES_AGE_GRAPH_NAME: str = Field(
+        default="graphora",
+        description="AGE graph name (single-graph-per-database model).",
     )
 
     # Chunking Settings

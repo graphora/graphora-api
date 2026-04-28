@@ -1431,6 +1431,11 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+age = [
+    { name = "pgvector" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
+]
 all = [
     { name = "anthropic", extra = ["vertex"] },
     { name = "cryptography" },
@@ -1449,6 +1454,7 @@ all = [
     { name = "ollama" },
     { name = "openai" },
     { name = "pandas" },
+    { name = "pgvector" },
     { name = "prefect" },
     { name = "psutil" },
     { name = "psycopg", extra = ["binary"] },
@@ -1483,6 +1489,7 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruff" },
     { name = "sqlparse" },
+    { name = "testcontainers" },
     { name = "vulture" },
 ]
 docling = [
@@ -1522,6 +1529,7 @@ pdf = [
     { name = "pypdf" },
 ]
 postgres = [
+    { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
 ]
@@ -1533,6 +1541,7 @@ server = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "neo4j" },
+    { name = "pgvector" },
     { name = "prefect" },
     { name = "psutil" },
     { name = "psycopg", extra = ["binary"] },
@@ -1564,6 +1573,7 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruff" },
     { name = "sqlparse" },
+    { name = "testcontainers" },
     { name = "vulture" },
 ]
 
@@ -1580,6 +1590,7 @@ requires-dist = [
     { name = "google-genai", specifier = ">=1.2.0" },
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.2.0" },
     { name = "graphora-server", extras = ["pdf", "neo4j", "postgres"], marker = "extra == 'server'" },
+    { name = "graphora-server", extras = ["postgres"], marker = "extra == 'age'" },
     { name = "graphora-server", extras = ["server", "chunking", "embeddings", "er", "pdf", "docling", "url", "neo4j", "postgres", "kuzu", "redis", "ollama", "mcp", "openai", "anthropic", "gemini", "vertexai"], marker = "extra == 'all'" },
     { name = "graphora-server", extras = ["url"], marker = "extra == 'mcp'" },
     { name = "httpx", marker = "extra == 'mcp'", specifier = ">=0.28.0" },
@@ -1597,6 +1608,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.52.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.52.0" },
     { name = "pandas", marker = "extra == 'er'", specifier = ">=2.2.2" },
+    { name = "pgvector", marker = "extra == 'postgres'", specifier = ">=0.3.0" },
     { name = "prefect", marker = "extra == 'server'", specifier = ">=3.2.7" },
     { name = "psutil", marker = "extra == 'server'", specifier = ">=5.9.8" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2.0" },
@@ -1621,6 +1633,7 @@ requires-dist = [
     { name = "slowapi", marker = "extra == 'server'", specifier = ">=0.1.9" },
     { name = "splink", marker = "extra == 'er'", specifier = "==4.0.7" },
     { name = "sqlparse", marker = "extra == 'dev'", specifier = ">=0.5.1" },
+    { name = "testcontainers", extras = ["postgres"], marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "trafilatura", marker = "extra == 'url'", specifier = ">=1.12.0" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.27.1" },
     { name = "vertexai", specifier = ">=0.0.1" },
@@ -1639,6 +1652,7 @@ dev = [
     { name = "pytest-mock", specifier = ">=3.12.0" },
     { name = "ruff", specifier = ">=0.7.0" },
     { name = "sqlparse", specifier = ">=0.5.1" },
+    { name = "testcontainers", extras = ["postgres"], specifier = ">=4.0.0" },
     { name = "vulture", specifier = ">=2.11" },
 ]
 
@@ -3570,6 +3584,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pgvector"
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/6c/6d8b4b03b958c02fa8687ec6063c49d952a189f8c91ebbe51e877dfab8f7/pgvector-0.4.2.tar.gz", hash = "sha256:322cac0c1dc5d41c9ecf782bd9991b7966685dee3a00bc873631391ed949513a", size = 31354 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/26/6cee8a1ce8c43625ec561aff19df07f9776b7525d9002c86bceb3e0ac970/pgvector-0.4.2-py3-none-any.whl", hash = "sha256:549d45f7a18593783d5eec609ea1684a724ba8405c4cb182a0b2b08aeff04e08", size = 27441 },
+]
+
+[[package]]
 name = "pillow"
 version = "12.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5287,6 +5313,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a", size = 49413 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55", size = 28926 },
+]
+
+[[package]]
+name = "testcontainers"
+version = "4.14.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "docker" },
+    { name = "python-dotenv" },
+    { name = "typing-extensions" },
+    { name = "urllib3" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ca/ac/a597c3a0e02b26cbed6dd07df68be1e57684766fd1c381dee9b170a99690/testcontainers-4.14.2.tar.gz", hash = "sha256:1340ccf16fe3acd9389a6c9e1d9ab21d9fe99a8afdf8165f89c3e69c1967d239", size = 166841 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/13/2d/26b8b30067d94339afee62c3edc9b803a6eb9332f521ba77d8aaab5de873/testcontainers-4.14.2-py3-none-any.whl", hash = "sha256:0d0522c3cd8f8d9627cda41f7a6b51b639fa57bdc492923c045117933c668d68", size = 125712 },
 ]
 
 [[package]]
