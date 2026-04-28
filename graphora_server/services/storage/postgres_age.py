@@ -197,21 +197,34 @@ class PostgresAGEStorage(GraphStorageInterface):
         async with self._get_connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("CREATE EXTENSION IF NOT EXISTS age")
+                # Wrap the optional pgvector create in a SAVEPOINT so
+                # a rollback on its failure doesn't undo the required
+                # CREATE EXTENSION age above. ``conn.rollback()`` would
+                # discard the entire transaction (including the AGE
+                # setup), then LOAD 'age' / create_graph(…) below would
+                # run against a database with AGE unregistered.
+                await cur.execute("SAVEPOINT vector_ext")
                 try:
                     await cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                    await cur.execute("RELEASE SAVEPOINT vector_ext")
                 except Exception as exc:
+                    await cur.execute("ROLLBACK TO SAVEPOINT vector_ext")
                     # pgvector not installed — fine for slice 6's
                     # CONTAINS scoring path. Future embedding-similarity
                     # work will enforce this dependency at the
                     # callsite that actually needs vectors.
-                    logger.warning(
-                        "pgvector extension not available (%s). "
-                        "AGE adapter continues without vector support; "
-                        "embedding-similarity features will be no-ops "
-                        "until pgvector is installed.",
-                        exc,
-                    )
-                    await conn.rollback()
+                    # Once-per-instance gate keeps the log readable
+                    # across repeated _bootstrap_schema calls.
+                    if not getattr(self, "_warned_no_pgvector", False):
+                        logger.warning(
+                            "pgvector extension not available (%s). "
+                            "AGE adapter continues without vector "
+                            "support; embedding-similarity features "
+                            "will be no-ops until pgvector is "
+                            "installed.",
+                            exc,
+                        )
+                        self._warned_no_pgvector = True
                 # AGE needs to be loaded into the session before
                 # cypher() is callable; SET search_path so unqualified
                 # AGE function calls resolve.

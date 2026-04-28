@@ -1447,3 +1447,111 @@ class TestFindSimilarNodes:
         params = mock_exec.call_args.kwargs["params"]
         assert params["threshold"] == 0.85
         assert params["max_results"] == 25
+
+
+class TestBootstrapSchemaPgvectorIsolation:
+    """Slice 7 round-2 review: ``_bootstrap_schema`` wraps the
+    optional pgvector CREATE EXTENSION in a SAVEPOINT so its failure
+    doesn't roll back the required CREATE EXTENSION age that ran
+    earlier in the same transaction.
+
+    Pre-fix behaviour: ``conn.rollback()`` on the vector failure
+    discarded the entire transaction (AGE registration included),
+    and the subsequent LOAD 'age' / create_graph(...) ran against a
+    database with AGE unregistered.
+    """
+
+    @pytest.fixture
+    def storage(self) -> PostgresAGEStorage:
+        return PostgresAGEStorage(dsn="postgresql://localhost/test")
+
+    @pytest.mark.asyncio
+    async def test_savepoint_isolates_pgvector_failure(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # Stub a connection with a cursor that fails on the vector
+        # CREATE EXTENSION but succeeds on everything else. Pin
+        # the SAVEPOINT/ROLLBACK TO SAVEPOINT pattern around
+        # vector — without it, conn.rollback() would have been
+        # called instead, which is the bug the review caught.
+        from contextlib import asynccontextmanager
+
+        executed: list = []
+
+        cur = MagicMock()
+
+        async def fake_execute(sql, *args, **kwargs):
+            executed.append(sql)
+            if "CREATE EXTENSION IF NOT EXISTS vector" in sql:
+                raise RuntimeError("pgvector not installed")
+
+        cur.execute = AsyncMock(side_effect=fake_execute)
+        cur.__aenter__ = AsyncMock(return_value=cur)
+        cur.__aexit__ = AsyncMock(return_value=None)
+
+        conn = MagicMock()
+        conn.cursor = MagicMock(return_value=cur)
+        conn.commit = AsyncMock()
+        conn.rollback = AsyncMock()
+
+        @asynccontextmanager
+        async def fake_connection():
+            yield conn
+
+        with patch.object(storage, "_get_connection", fake_connection):
+            await storage._bootstrap_schema()
+
+        # AGE extension setup must have happened.
+        assert any("CREATE EXTENSION IF NOT EXISTS age" in s for s in executed)
+        # Vector wrapped in a savepoint, with ROLLBACK TO SAVEPOINT
+        # on failure — NOT a full conn.rollback().
+        assert "SAVEPOINT vector_ext" in executed
+        assert "ROLLBACK TO SAVEPOINT vector_ext" in executed
+        conn.rollback.assert_not_called()
+        # Bootstrap continued past the vector failure: LOAD 'age',
+        # search_path, create_graph all ran.
+        assert "LOAD 'age'" in executed
+        assert any("create_graph" in s for s in executed)
+
+    @pytest.mark.asyncio
+    async def test_pgvector_failure_warning_logs_once(
+        self, storage: PostgresAGEStorage, caplog
+    ) -> None:
+        # Slice-7 commit message claimed "log once" but the original
+        # code had no guard — every bootstrap re-warned. Pin the
+        # once-per-instance gate so a long-running process with
+        # repeated bootstrap calls doesn't spam the log.
+        from contextlib import asynccontextmanager
+        import logging as _logging
+
+        cur = MagicMock()
+
+        async def fake_execute(sql, *args, **kwargs):
+            if "CREATE EXTENSION IF NOT EXISTS vector" in sql:
+                raise RuntimeError("pgvector not installed")
+
+        cur.execute = AsyncMock(side_effect=fake_execute)
+        cur.__aenter__ = AsyncMock(return_value=cur)
+        cur.__aexit__ = AsyncMock(return_value=None)
+
+        conn = MagicMock()
+        conn.cursor = MagicMock(return_value=cur)
+        conn.commit = AsyncMock()
+        conn.rollback = AsyncMock()
+
+        @asynccontextmanager
+        async def fake_connection():
+            yield conn
+
+        with patch.object(storage, "_get_connection", fake_connection):
+            with caplog.at_level(_logging.WARNING):
+                await storage._bootstrap_schema()
+                await storage._bootstrap_schema()
+                await storage._bootstrap_schema()
+
+        pgvector_warnings = [
+            r for r in caplog.records if "pgvector extension not available" in r.message
+        ]
+        assert (
+            len(pgvector_warnings) == 1
+        ), f"expected exactly one pgvector warning, got {len(pgvector_warnings)}"
