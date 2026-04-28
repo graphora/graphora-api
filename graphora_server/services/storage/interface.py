@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Any
+from graphora_server.services.storage.capabilities import BackendCapabilities
 from graphora_server.services.storage.models import (
     StorageBatchResult,
     StorageCheckpoint,
@@ -11,6 +12,20 @@ from graphora_server.services.transform.models import BaseNode, RelationshipInst
 
 class GraphStorageInterface(ABC):
     """Abstract interface for graph storage"""
+
+    @property
+    @abstractmethod
+    def capabilities(self) -> BackendCapabilities:
+        """Runtime feature-detection for this backend.
+
+        Callers can branch on the returned ``BackendCapabilities`` to
+        skip work that would degrade or short-circuit on this backend
+        — e.g. ``if storage.capabilities.full_text_indexes:`` before
+        invoking ``create_or_replace_ft_index_*``. See
+        graphora_server/services/storage/capabilities.py for the
+        capability schema and the per-backend constants.
+        """
+        ...
 
     @abstractmethod
     async def create_or_replace_ft_index_for_node(

@@ -116,6 +116,25 @@ class PostgresAGEStorage(GraphStorageInterface):
     before we port the 22 storage methods one at a time.
     """
 
+    @property
+    def capabilities(self):
+        # ``full_text_indexes`` is runtime-derived: the GIN/pg_trgm
+        # polyfill (slice 8) only does real work when pg_trgm is
+        # installed in the target Postgres. ``_bootstrap_schema``
+        # sets ``_has_pg_trgm`` based on what it discovers; before
+        # bootstrap the attribute may be unset, which we treat as
+        # conservatively False so a caller branching on the flag
+        # doesn't trigger an index call that no-ops.
+        from graphora_server.services.storage.capabilities import (
+            AGE_STATIC_CAPABILITIES,
+            BackendCapabilities,
+        )
+
+        return BackendCapabilities(
+            full_text_indexes=getattr(self, "_has_pg_trgm", False),
+            **AGE_STATIC_CAPABILITIES,
+        )
+
     def __init__(
         self,
         dsn: str,

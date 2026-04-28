@@ -173,6 +173,14 @@ class InMemoryStorage(GraphStorageInterface):
     Note: Data is not persisted and will be lost on restart.
     """
 
+    @property
+    def capabilities(self):
+        from graphora_server.services.storage.capabilities import (
+            MEMORY_CAPABILITIES,
+        )
+
+        return MEMORY_CAPABILITIES
+
     def __init__(self, user_id: str = "default") -> None:
         """Initialize in-memory storage.
 
