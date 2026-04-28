@@ -168,37 +168,6 @@ class TestPostgresAGEStorageInitialization:
         assert storage.max_pool_size == 20
 
 
-class TestPostgresAGEStorageMethodStubs:
-    """Stubbed GraphStorageInterface methods raise NotImplementedError
-    with a clear pointer to the slice that owns the implementation.
-
-    These tests pin the pending-method contract — when a slice lands,
-    the corresponding test here flips from "raises" to "round-trips."
-    The naming pattern lets future contributors find the stubs by
-    grepping for the slice number.
-    """
-
-    @pytest.fixture
-    def storage(self) -> PostgresAGEStorage:
-        return PostgresAGEStorage(dsn="postgresql://localhost/test")
-
-    @pytest.mark.asyncio
-    async def test_find_similar_nodes_returns_empty_pending_slice_6(
-        self, storage: PostgresAGEStorage
-    ) -> None:
-        # pgvector + pg_trgm wiring lands in slice 6. Until then the
-        # method degrades to "no matches found" rather than raising,
-        # so the live merge-flow fallback path
-        # (services/merge/new_merger.py:1068) doesn't crash on
-        # STORAGE_TYPE=postgres. Merge flow keeps unmatched nodes
-        # as-is when this returns empty — strictly less aggressive
-        # matching, not data loss.
-        result = await storage.find_similar_nodes(
-            label="Person", properties={"name": "Alice"}
-        )
-        assert result == []
-
-
 class TestCheckpointRoundTrip:
     """Slice 2: ``update_checkpoint`` and ``get_storage_status`` move
     from stubs to real Cypher.
@@ -1225,3 +1194,185 @@ class TestFullTextIndexDegradation:
         ) as mock_exec:
             await storage.create_or_replace_ft_index_for_node("ix", "Person", ["name"])
         mock_exec.assert_not_called()
+
+
+class TestFindSimilarNodes:
+    """Slice 6: real find_similar_nodes via AGE Cypher CONTAINS
+    scoring. Replaces the slice-3 round-2 degraded-to-empty
+    fallback. Merge flow's similarity fallback
+    (services/merge/new_merger.py:1068) now actually returns
+    candidates instead of always falling through to "keep unmatched."
+    """
+
+    @pytest.fixture
+    def storage(self) -> PostgresAGEStorage:
+        return PostgresAGEStorage(dsn="postgresql://localhost/test")
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_scoring_properties(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # Empty properties → no signal to score on → return empty
+        # without hitting the database.
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            result = await storage.find_similar_nodes(label="Person", properties={})
+        assert result == []
+        mock_exec.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_filters_out_system_properties(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # SYSTEM_PROPERTIES values must not enter the scoring
+        # expression — id, __tid, etc. are metadata, not signal.
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.find_similar_nodes(
+                label="Person",
+                properties={
+                    "name": "Alice",
+                    "id": "some-uuid",
+                    TRANSFORM_ID: "t-42",
+                    "confidence_score": 0.9,
+                },
+            )
+        cypher = mock_exec.call_args.args[0]
+        assert "n.name" in cypher
+        assert "n.id" not in cypher
+        assert "n.__tid" not in cypher
+        assert "n.confidence_score" not in cypher
+
+    @pytest.mark.asyncio
+    async def test_skips_when_only_system_properties_supplied(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # All-system-properties input → nothing to score → return
+        # empty without a DB hit.
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            result = await storage.find_similar_nodes(
+                label="Person",
+                properties={"id": "x", TRANSFORM_ID: "t"},
+            )
+        assert result == []
+        mock_exec.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_emits_case_insensitive_contains_score_expr(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # Pin the score-expression shape — scoring is the contract,
+        # so a refactor that drops toLower or CONTAINS should fail
+        # the test.
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.find_similar_nodes(
+                label="Person", properties={"name": "Alice"}
+            )
+        cypher = mock_exec.call_args.args[0]
+        params = mock_exec.call_args.kwargs["params"]
+        assert "MATCH (n:Person)" in cypher
+        assert "toLower(toString(coalesce(n.name, '')))" in cypher
+        assert "CONTAINS toLower($value0)" in cypher
+        assert "WHERE similarity_score >= $threshold" in cypher
+        assert "ORDER BY similarity_score DESC" in cypher
+        assert "LIMIT $max_results" in cypher
+        assert params["value0"] == "Alice"
+        assert params["threshold"] == 0.7  # default
+
+    @pytest.mark.asyncio
+    async def test_score_normalizes_by_property_count(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # Three scoring properties → score = sum / 3.0; pin the
+        # denominator so a future tweak doesn't quietly break the
+        # threshold's meaning.
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.find_similar_nodes(
+                label="Person",
+                properties={
+                    "name": "Alice",
+                    "email": "alice@example.com",
+                    "title": "engineer",
+                },
+            )
+        cypher = mock_exec.call_args.args[0]
+        # Score sum is divided by 3.0 (one per property).
+        assert "/ 3.0" in cypher
+
+    @pytest.mark.asyncio
+    async def test_returns_mapped_nodes_in_score_order(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # AGE returns rows ordered by the ORDER BY; the adapter
+        # preserves that order in the returned list.
+        rows = [
+            (
+                '{"id": 0, "label": "Person", "properties": '
+                '{"id": "n1", "name": "Alice"}}::vertex',
+                "1.0",
+            ),
+            (
+                '{"id": 1, "label": "Person", "properties": '
+                '{"id": "n2", "name": "Alic"}}::vertex',
+                "0.85",
+            ),
+        ]
+        with patch.object(storage, "_execute_cypher", new=AsyncMock(return_value=rows)):
+            nodes = await storage.find_similar_nodes(
+                label="Person", properties={"name": "Alice"}
+            )
+        assert [n.id for n in nodes] == ["n1", "n2"]
+
+    @pytest.mark.asyncio
+    async def test_dedupes_by_node_id(self, storage: PostgresAGEStorage) -> None:
+        dup = (
+            '{"id": 0, "label": "Person", "properties": '
+            '{"id": "n1", "name": "Alice"}}::vertex'
+        )
+        rows = [(dup, "1.0"), (dup, "1.0")]
+        with patch.object(storage, "_execute_cypher", new=AsyncMock(return_value=rows)):
+            nodes = await storage.find_similar_nodes(
+                label="Person", properties={"name": "Alice"}
+            )
+        assert len(nodes) == 1
+
+    @pytest.mark.asyncio
+    async def test_validates_label(self, storage: PostgresAGEStorage) -> None:
+        with pytest.raises(CypherInjectionError):
+            await storage.find_similar_nodes(
+                label="Per;son", properties={"name": "Alice"}
+            )
+
+    @pytest.mark.asyncio
+    async def test_validates_property_names(self, storage: PostgresAGEStorage) -> None:
+        with pytest.raises(CypherInjectionError):
+            await storage.find_similar_nodes(
+                label="Person", properties={"name; DROP": "Alice"}
+            )
+
+    @pytest.mark.asyncio
+    async def test_passes_threshold_and_max_results_through(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # Caller-overridable parameters reach the params payload —
+        # merge flow tunes both.
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.find_similar_nodes(
+                label="Person",
+                properties={"name": "Alice"},
+                similarity_threshold=0.85,
+                max_results=25,
+            )
+        params = mock_exec.call_args.kwargs["params"]
+        assert params["threshold"] == 0.85
+        assert params["max_results"] == 25

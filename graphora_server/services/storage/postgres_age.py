@@ -46,7 +46,7 @@ from graphora_server.services.storage.models import (
     StorageStage,
 )
 from graphora_server.services.transform.models import BaseNode, RelationshipInstance
-from graphora_server.utils.constants import MERGE_ID, TRANSFORM_ID
+from graphora_server.utils.constants import MERGE_ID, SYSTEM_PROPERTIES, TRANSFORM_ID
 
 logger = logging.getLogger(__name__)
 
@@ -1131,36 +1131,104 @@ class PostgresAGEStorage(GraphStorageInterface):
         max_results: int = 10,
         include_relationships: bool = True,
     ) -> List[Node]:
-        """Similarity search via pgvector + pg_trgm — pending slice 6.
+        """Property-similarity search using AGE Cypher CONTAINS scoring.
 
-        Reached on the live merge-flow fallback path
-        (services/merge/new_merger.py:1068) when an unmatched node
-        falls through to property-similarity matching. Slice 4
-        review surfaced that raising here crashes that fallback for
-        STORAGE_TYPE=postgres before the heavy embedding wiring
-        lands. Slice 5 closed the remaining non-similarity stubs;
-        slice 6 owns the real pgvector + GIN polyfill alongside
-        create_or_replace_ft_index_*.
+        Called from services/merge/new_merger.py:1068 as the merge
+        flow's similarity fallback. The Neo4j adapter does this with
+        ``apoc.text.distance`` (Levenshtein) + ``apoc.text.doubleMetaphone``
+        (phonetic) — APOC isn't available on AGE, so we score
+        candidates by what fraction of property values appear as
+        case-insensitive substrings in the corresponding node
+        property. That's a cheaper signal than Levenshtein but it's
+        the same shape of "fuzzy enough to catch typos and casing
+        variants" that the merge flow expects.
 
-        Degrade gracefully: return an empty list and log a warning
-        once. The merge flow falls back to keeping the unmatched
-        node as-is — that's strictly less aggressive matching, not
-        data loss, and the warning surface gives operators a
-        breadcrumb when investigating why two near-identical nodes
-        didn't merge.
+        For each candidate node:
+
+            score = (number of property values that match via
+                     CONTAINS) / (total non-system properties supplied)
+
+        Candidates with ``score >= similarity_threshold`` are
+        returned, ordered by score descending and capped at
+        ``max_results``.
+
+        Embedding-based pgvector similarity stays out of scope for
+        this slice — it needs upstream changes to where embeddings
+        are generated and persisted (a sibling table indexed by node
+        id) and isn't a per-adapter concern. ``include_relationships``
+        is currently a no-op for the same reason; slice 7+ folds in
+        relationship-pattern bonuses if the merge flow needs them.
+
+        Returns ``[]`` rather than raising on empty input — matches
+        Neo4j's behaviour and the merge flow's "fallback gives up
+        gracefully" expectation.
         """
-        if not getattr(self, "_warned_find_similar_nodes", False):
-            logger.warning(
-                "find_similar_nodes returning empty (pgvector + pg_trgm "
-                "wiring lands in C2-postgres slice 6). Merge flow's "
-                "similarity fallback will not match nodes on AGE backend "
-                "until then. label=%s",
-                label,
+        # Filter out system / metadata properties so we score on
+        # user-meaningful values only. Mirrors Neo4j's same filter
+        # (constants.SYSTEM_PROPERTIES is the shared source).
+        scoring_props = {
+            k: v
+            for k, v in (properties or {}).items()
+            if v is not None and k not in SYSTEM_PROPERTIES
+        }
+        if not scoring_props:
+            return []
+
+        validated_label = _validate_identifier(label, "node label")
+
+        # Build per-property CASE expressions in Cypher: each
+        # contributes 1.0 to the score when the candidate node's
+        # value contains the supplied value (case-insensitive).
+        # AGE Cypher supports CASE WHEN ... THEN ... ELSE END and
+        # CONTAINS; toLower wraps both sides for case-insensitive
+        # match. Property name interpolates (validated); the
+        # supplied value flows through params as $value<idx>.
+        case_expressions: List[str] = []
+        params: Dict[str, Any] = {
+            "threshold": similarity_threshold,
+            "max_results": max_results,
+        }
+        for idx, (key, value) in enumerate(scoring_props.items()):
+            validated_prop = _validate_identifier(key, "property name")
+            param_key = f"value{idx}"
+            params[param_key] = str(value)
+            case_expressions.append(
+                f"CASE WHEN toLower(toString(coalesce(n.{validated_prop}, ''))) "
+                f"CONTAINS toLower(${param_key}) THEN 1.0 ELSE 0.0 END"
             )
-            # Once-per-instance breadcrumb keeps logs readable on
-            # large merges that call this hundreds of times.
-            self._warned_find_similar_nodes = True
-        return []
+
+        score_expr = " + ".join(case_expressions)
+        denom = float(len(case_expressions))
+
+        # AGE Cypher accepts WITH … RETURN; the score is a numeric
+        # agtype that we filter and order on.
+        cypher = (
+            f"MATCH (n:{validated_label}) "
+            f"WITH n, ({score_expr}) / {denom} AS similarity_score "
+            f"WHERE similarity_score >= $threshold "
+            f"RETURN n, similarity_score "
+            f"ORDER BY similarity_score DESC "
+            f"LIMIT $max_results"
+        )
+
+        rows = await self._execute_cypher(
+            cypher,
+            params=params,
+            return_columns="(n agtype, similarity_score agtype)",
+        )
+
+        nodes: List[Node] = []
+        seen_ids: set = set()
+        for row in rows:
+            parsed = self._parse_agtype(row[0])
+            if not isinstance(parsed, dict):
+                continue
+            node = self._vertex_to_node(parsed)
+            if node is None or node.id in seen_ids:
+                continue
+            nodes.append(node)
+            seen_ids.add(node.id)
+        return nodes
 
     async def create_node(self, label: str, properties: Dict[str, Any]) -> Node:
         raise NotImplementedError("AGE adapter: create_node — slice 3")
