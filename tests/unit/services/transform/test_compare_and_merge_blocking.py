@@ -575,3 +575,156 @@ class TestEmbeddingCandidateGroups:
             ):
                 groups = list(_embedding_candidate_groups(nodes))
         assert groups == []
+
+
+class TestEmbeddingTextFiltersSystemProperties:
+    """Slice 2 round-1 review: A1-prov source-span fields and
+    B0-prov-extend decision-trail fields stamped on every node by
+    the extraction pipeline must NOT enter the embedding signal.
+    Without this filter, two unrelated nodes from the same
+    document would score artificially similar on document_name +
+    source_text overlap; real entity matches get diluted by
+    metadata-heavy text. Same shape of bug the C2-postgres slice
+    6 review caught for the AGE find_similar_nodes scoring path."""
+
+    def test_excludes_a1_prov_source_span_fields(self) -> None:
+        from graphora_server.services.transform.graph_transformer import (
+            _node_to_embedding_text,
+        )
+
+        node = BaseNode(
+            id="p1",
+            type="Person",
+            properties={
+                "name": "Alice",
+                "source_chunk_id": "chunk-7",
+                "document_name": "report.pdf",
+                "source_text": "Alice is a software engineer at Acme.",
+                "document_id": "doc-42",
+                "chunk_offset": 1024,
+                "page_number": 3,
+                "extraction_confidence": 0.87,
+            },
+        )
+        text = _node_to_embedding_text(node)
+        # Only "Alice" survives; the source-span fields are filtered.
+        segments = text.split(" | ")
+        assert segments == ["Alice"]
+        assert "report.pdf" not in text
+        assert "Alice is a software engineer" not in text
+        assert "doc-42" not in text
+
+    def test_excludes_b0_decision_trail_fields(self) -> None:
+        from graphora_server.services.transform.graph_transformer import (
+            _node_to_embedding_text,
+        )
+
+        node = BaseNode(
+            id="p1",
+            type="Person",
+            properties={
+                "name": "Alice",
+                "extractor_model": "gemini-1.5-pro",
+                "prompt_version": "v1.0.0",
+                "validator_score": 0.92,
+            },
+        )
+        text = _node_to_embedding_text(node)
+        segments = text.split(" | ")
+        assert segments == ["Alice"]
+        assert "gemini" not in text
+        assert "v1.0.0" not in text
+
+
+class TestEmbeddingThresholdHonorsSetting:
+    """Slice 2 round-1 review: the ER similarity threshold must
+    come from settings.ENTITY_RESOLUTION_SIMILARITY_THRESHOLD when
+    the caller doesn't pin one. Other embedding-based ER paths
+    (cross_document_service, splink_embedding_comparison) honor
+    it; this stage joins the convention so operators tuning the
+    setting see consistent behaviour across all four ER stages."""
+
+    def test_uses_setting_when_no_explicit_threshold(self) -> None:
+        # Setting at 0.99 → only essentially-identical embeddings
+        # pair up. The mock matrix has a 0.95 pair which would
+        # have grouped under the prior hardcoded 0.85.
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [_node("p1", name="Alice"), _node("p2", name="Alic")]
+        sim = [[1.0, 0.95], [0.95, 1.0]]
+        fake_service = MagicMock()
+        fake_service.compute_similarity_matrix = MagicMock(return_value=sim)
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = True
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_MODEL = "fake-model"
+            mock_settings.ENTITY_RESOLUTION_SIMILARITY_THRESHOLD = 0.99
+            with patch(
+                "graphora_server.services.entity_resolution.embedding_similarity.get_embedding_similarity",
+                return_value=fake_service,
+            ):
+                groups = list(_embedding_candidate_groups(nodes))
+        # 0.95 < 0.99 setting → no group.
+        assert groups == []
+
+    def test_falls_back_to_hardcoded_default_when_setting_missing(self) -> None:
+        # Defensive: if the setting attribute is missing entirely
+        # (e.g. an older config snapshot), the helper falls back
+        # to 0.85 so it still does something sensible.
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [_node("p1", name="Alice"), _node("p2", name="Alic")]
+        sim = [[1.0, 0.90], [0.90, 1.0]]
+        fake_service = MagicMock()
+        fake_service.compute_similarity_matrix = MagicMock(return_value=sim)
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = True
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_MODEL = "fake-model"
+            # Simulate "setting attribute missing" — getattr returns
+            # the default. We do this by deleting the attribute on
+            # the mock so attribute access via getattr falls back.
+            del mock_settings.ENTITY_RESOLUTION_SIMILARITY_THRESHOLD
+            with patch(
+                "graphora_server.services.entity_resolution.embedding_similarity.get_embedding_similarity",
+                return_value=fake_service,
+            ):
+                groups = list(_embedding_candidate_groups(nodes))
+        # 0.90 >= hardcoded fallback 0.85 → group of two.
+        assert len(groups) == 1
+
+    def test_explicit_threshold_overrides_setting(self) -> None:
+        # When a caller passes similarity_threshold explicitly,
+        # the setting is bypassed.
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [_node("p1", name="Alice"), _node("p2", name="Alic")]
+        sim = [[1.0, 0.50], [0.50, 1.0]]
+        fake_service = MagicMock()
+        fake_service.compute_similarity_matrix = MagicMock(return_value=sim)
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = True
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_MODEL = "fake-model"
+            mock_settings.ENTITY_RESOLUTION_SIMILARITY_THRESHOLD = 0.99
+            with patch(
+                "graphora_server.services.entity_resolution.embedding_similarity.get_embedding_similarity",
+                return_value=fake_service,
+            ):
+                groups = list(
+                    _embedding_candidate_groups(nodes, similarity_threshold=0.4)
+                )
+        # Explicit 0.4 wins over setting 0.99; 0.50 >= 0.4 → group.
+        assert len(groups) == 1

@@ -668,7 +668,20 @@ def _node_to_embedding_text(node: BaseNode) -> str:
     similarity. Mirrors entity_ledger_service._node_to_text:
     canonical properties first (highest signal), then regular
     properties; capped at 5 segments joined by `` | ``.
+
+    Filters SYSTEM_PROPERTIES from the regular-property pass so
+    A1-prov source-span fields (source_text, document_name,
+    document_id, etc.) and B0-prov-extend decision-trail fields
+    (extractor_model, prompt_version, validator_score) don't
+    leak into the embedding signal. Without this filter, two
+    unrelated nodes from the same document would score
+    artificially similar on document_name + source_text overlap,
+    and real entity matches would get diluted by metadata-heavy
+    text. Same shape of bug the C2-postgres slice 6 review caught
+    for the AGE find_similar_nodes scoring path.
     """
+    from graphora_server.utils.constants import SYSTEM_PROPERTIES
+
     parts: List[str] = []
     canonical_props = node.canonical_properties or {}
     props = node.properties or {}
@@ -676,14 +689,19 @@ def _node_to_embedding_text(node: BaseNode) -> str:
         if isinstance(value, str) and len(value) > 1:
             parts.append(value)
     for key, value in props.items():
-        if key not in canonical_props and isinstance(value, str) and len(value) > 1:
+        if (
+            key not in canonical_props
+            and key not in SYSTEM_PROPERTIES
+            and isinstance(value, str)
+            and len(value) > 1
+        ):
             parts.append(value)
     return " | ".join(parts[:5]) if parts else ""
 
 
 def _embedding_candidate_groups(
     nodes: List[BaseNode],
-    similarity_threshold: float = 0.85,
+    similarity_threshold: Optional[float] = None,
 ) -> Iterable[List[BaseNode]]:
     """Yield candidate match groups based on embedding similarity.
 
@@ -715,6 +733,17 @@ def _embedding_candidate_groups(
 
     if not getattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", False):
         return
+
+    # Resolve threshold from the configured ER setting when the
+    # caller didn't pin one explicitly. Other embedding-based ER
+    # paths (cross_document_service, splink_embedding_comparison)
+    # honor ENTITY_RESOLUTION_SIMILARITY_THRESHOLD; this stage
+    # joins the convention so operators tuning the setting see
+    # consistent behaviour across all four ER stages.
+    if similarity_threshold is None:
+        similarity_threshold = float(
+            getattr(settings, "ENTITY_RESOLUTION_SIMILARITY_THRESHOLD", 0.85)
+        )
 
     try:
         from graphora_server.services.entity_resolution.embedding_similarity import (
