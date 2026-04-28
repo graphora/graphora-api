@@ -101,6 +101,14 @@ def validate_cypher_labels(labels: List[str]) -> List[str]:
 class Neo4jStorage(GraphStorageInterface):
     """Neo4j implementation of graph storage"""
 
+    @property
+    def capabilities(self):
+        from graphora_server.services.storage.capabilities import (
+            NEO4J_CAPABILITIES,
+        )
+
+        return NEO4J_CAPABILITIES
+
     def __init__(
         self,
         uri: str,

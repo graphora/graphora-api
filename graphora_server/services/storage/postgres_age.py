@@ -116,6 +116,14 @@ class PostgresAGEStorage(GraphStorageInterface):
     before we port the 22 storage methods one at a time.
     """
 
+    @property
+    def capabilities(self):
+        from graphora_server.services.storage.capabilities import (
+            AGE_CAPABILITIES,
+        )
+
+        return AGE_CAPABILITIES
+
     def __init__(
         self,
         dsn: str,
