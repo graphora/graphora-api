@@ -15,7 +15,7 @@ function, deterministic), and the candidate-group iteration
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -287,3 +287,291 @@ class TestCompareAndMergeNodesIntegration:
         # id (or whatever merge_nodes returns — pinned by the
         # existing merge_nodes contract).
         assert result[0].id in {"p1", "p2"}
+
+
+class TestNodeToEmbeddingText:
+    """Pin the node-to-text serialization used to feed the
+    embedding service. Same recipe as
+    entity_ledger_service._node_to_text — canonical first, then
+    regular, capped at 5 segments."""
+
+    def test_returns_empty_for_no_properties(self) -> None:
+        from graphora_server.services.transform.graph_transformer import (
+            _node_to_embedding_text,
+        )
+
+        assert _node_to_embedding_text(_node("p1")) == ""
+
+    def test_canonical_properties_take_precedence(self) -> None:
+        from graphora_server.services.transform.graph_transformer import (
+            _node_to_embedding_text,
+        )
+
+        node = BaseNode(
+            id="p1",
+            type="Person",
+            properties={"name": "Alice", "title": "Engineer"},
+            canonical_properties={"name": "alice"},
+        )
+        text = _node_to_embedding_text(node)
+        # canonical_properties first, then regular (skipping
+        # already-canonicalized keys).
+        assert text.startswith("alice")
+        assert "Engineer" in text
+
+    def test_filters_short_strings_and_non_strings(self) -> None:
+        from graphora_server.services.transform.graph_transformer import (
+            _node_to_embedding_text,
+        )
+
+        node = BaseNode(
+            id="p1",
+            type="Person",
+            properties={
+                "name": "Alice",
+                "age": 30,  # Non-string — skipped
+                "code": "A",  # Single char — too short
+            },
+        )
+        text = _node_to_embedding_text(node)
+        # Only "Alice" survives the len>1 filter; check segments
+        # rather than raw substring containment ("A" is in "Alice").
+        assert text.split(" | ") == ["Alice"]
+
+    def test_caps_at_five_segments(self) -> None:
+        from graphora_server.services.transform.graph_transformer import (
+            _node_to_embedding_text,
+        )
+
+        # Eight strings → only first 5 land in the embedding text.
+        node = BaseNode(
+            id="p1",
+            type="Person",
+            properties={f"k{i}": f"value-{i}-long-enough" for i in range(8)},
+        )
+        text = _node_to_embedding_text(node)
+        assert text.count(" | ") == 4  # 5 segments → 4 separators
+
+
+class TestEmbeddingCandidateGroups:
+    """Slice 2 embedding-based candidate-pair generation. Mocks
+    the embedding service so the tests don't load a real model
+    or hit disk."""
+
+    def test_returns_empty_when_setting_disabled(self) -> None:
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [_node("p1", name="Alice"), _node("p2", name="Bob")]
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = False
+            groups = list(_embedding_candidate_groups(nodes))
+        assert groups == []
+
+    def test_returns_empty_when_embedding_extras_missing(self) -> None:
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [_node("p1", name="Alice"), _node("p2", name="Bob")]
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = True
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_MODEL = "fake-model"
+            # Make the lazy import fail → degrade to "no candidate groups"
+            import sys
+
+            sys.modules.pop(
+                "graphora_server.services.entity_resolution.embedding_similarity",
+                None,
+            )
+            with patch.dict(
+                sys.modules,
+                {
+                    "graphora_server.services.entity_resolution.embedding_similarity": None
+                },
+            ):
+                groups = list(_embedding_candidate_groups(nodes))
+        assert groups == []
+
+    def test_pairs_nodes_above_similarity_threshold(self) -> None:
+        # Two nodes of the same type with embeddings that the mock
+        # similarity matrix says are close (0.95). Should land in
+        # one candidate group.
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [
+            _node("p1", name="John Smith"),
+            _node("p2", name="Jonathan S."),
+            _node("p3", name="Bob"),
+        ]
+        # Similarity matrix: p1↔p2 = 0.95, p1↔p3 / p2↔p3 = 0.10.
+        sim = [
+            [1.0, 0.95, 0.10],
+            [0.95, 1.0, 0.10],
+            [0.10, 0.10, 1.0],
+        ]
+        fake_service = MagicMock()
+        fake_service.compute_similarity_matrix = MagicMock(return_value=sim)
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = True
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_MODEL = "fake-model"
+            with patch(
+                "graphora_server.services.entity_resolution.embedding_similarity.get_embedding_similarity",
+                return_value=fake_service,
+            ):
+                groups = list(
+                    _embedding_candidate_groups(nodes, similarity_threshold=0.85)
+                )
+
+        # One group with p1+p2; p3 is below threshold from both.
+        assert len(groups) == 1
+        ids = {n.id for n in groups[0]}
+        assert ids == {"p1", "p2"}
+
+    def test_no_groups_when_all_pairs_below_threshold(self) -> None:
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [_node("p1", name="Alice"), _node("p2", name="Bob")]
+        sim = [[1.0, 0.20], [0.20, 1.0]]
+        fake_service = MagicMock()
+        fake_service.compute_similarity_matrix = MagicMock(return_value=sim)
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = True
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_MODEL = "fake-model"
+            with patch(
+                "graphora_server.services.entity_resolution.embedding_similarity.get_embedding_similarity",
+                return_value=fake_service,
+            ):
+                groups = list(
+                    _embedding_candidate_groups(nodes, similarity_threshold=0.85)
+                )
+        assert groups == []
+
+    def test_different_types_never_share_a_group(self) -> None:
+        # Even with very high similarity, nodes of different types
+        # don't get grouped — embeddings are computed per-type.
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [
+            _node("p1", "Person", name="Acme"),
+            _node("c1", "Company", name="Acme"),
+        ]
+        # Service receives one call per type with a single text,
+        # so the matrix is 1x1 and there's no "other node" to
+        # pair with within a type.
+        fake_service = MagicMock()
+        fake_service.compute_similarity_matrix = MagicMock(return_value=[[1.0]])
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = True
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_MODEL = "fake-model"
+            with patch(
+                "graphora_server.services.entity_resolution.embedding_similarity.get_embedding_similarity",
+                return_value=fake_service,
+            ):
+                groups = list(_embedding_candidate_groups(nodes))
+        assert groups == []
+
+    def test_union_find_merges_transitive_pairs(self) -> None:
+        # p1↔p2 = 0.90, p2↔p3 = 0.90, p1↔p3 = 0.50. Direct pair-
+        # threshold would miss p1↔p3, but union-find connects them
+        # transitively through p2.
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [
+            _node("p1", name="John Smith"),
+            _node("p2", name="Jonathan Smith"),
+            _node("p3", name="J. Smith"),
+        ]
+        sim = [
+            [1.0, 0.90, 0.50],
+            [0.90, 1.0, 0.90],
+            [0.50, 0.90, 1.0],
+        ]
+        fake_service = MagicMock()
+        fake_service.compute_similarity_matrix = MagicMock(return_value=sim)
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = True
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_MODEL = "fake-model"
+            with patch(
+                "graphora_server.services.entity_resolution.embedding_similarity.get_embedding_similarity",
+                return_value=fake_service,
+            ):
+                groups = list(
+                    _embedding_candidate_groups(nodes, similarity_threshold=0.85)
+                )
+        assert len(groups) == 1
+        ids = {n.id for n in groups[0]}
+        assert ids == {"p1", "p2", "p3"}
+
+    def test_skips_nodes_with_no_embeddable_text(self) -> None:
+        # Two nodes of the same type, but only one has a string
+        # property. The other should be dropped from the embedding
+        # pass — no text to compute.
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [
+            _node("p1", name="Alice"),
+            BaseNode(id="p2", type="Person", properties={}),
+        ]
+        fake_service = MagicMock()
+        fake_service.compute_similarity_matrix = MagicMock(return_value=[[1.0]])
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = True
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_MODEL = "fake-model"
+            with patch(
+                "graphora_server.services.entity_resolution.embedding_similarity.get_embedding_similarity",
+                return_value=fake_service,
+            ):
+                groups = list(_embedding_candidate_groups(nodes))
+        # With only one valid_node after the embeddable-text filter,
+        # there's no pair to score → no groups.
+        assert groups == []
+
+    def test_resilient_to_similarity_compute_failure(self) -> None:
+        # Embedding service raises mid-flow → degrade to no groups.
+        from graphora_server.services.transform.graph_transformer import (
+            _embedding_candidate_groups,
+        )
+
+        nodes = [_node("p1", name="Alice"), _node("p2", name="Alice")]
+        fake_service = MagicMock()
+        fake_service.compute_similarity_matrix = MagicMock(
+            side_effect=RuntimeError("boom")
+        )
+        with patch(
+            "graphora_server.services.transform.graph_transformer.settings"
+        ) as mock_settings:
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED = True
+            mock_settings.ENTITY_RESOLUTION_EMBEDDING_MODEL = "fake-model"
+            with patch(
+                "graphora_server.services.entity_resolution.embedding_similarity.get_embedding_similarity",
+                return_value=fake_service,
+            ):
+                groups = list(_embedding_candidate_groups(nodes))
+        assert groups == []

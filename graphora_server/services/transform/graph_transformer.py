@@ -663,6 +663,132 @@ def _candidate_groups_for_resolution(
             yield chunk
 
 
+def _node_to_embedding_text(node: BaseNode) -> str:
+    """Compose the text representation of a node for embedding-based
+    similarity. Mirrors entity_ledger_service._node_to_text:
+    canonical properties first (highest signal), then regular
+    properties; capped at 5 segments joined by `` | ``.
+    """
+    parts: List[str] = []
+    canonical_props = node.canonical_properties or {}
+    props = node.properties or {}
+    for value in canonical_props.values():
+        if isinstance(value, str) and len(value) > 1:
+            parts.append(value)
+    for key, value in props.items():
+        if key not in canonical_props and isinstance(value, str) and len(value) > 1:
+            parts.append(value)
+    return " | ".join(parts[:5]) if parts else ""
+
+
+def _embedding_candidate_groups(
+    nodes: List[BaseNode],
+    similarity_threshold: float = 0.85,
+) -> Iterable[List[BaseNode]]:
+    """Yield candidate match groups based on embedding similarity.
+
+    B2-er slice 2: closes the recall gap slice 1's property-based
+    blocker exposed. Designed to run on nodes that the property
+    blocker left unmatched — typically because they share an entity
+    type but have varied surface forms ("John Smith" / "Jonathan S."
+    / "J. Smith") that don't share a name3 prefix or canonical_key.
+
+    Embedding cost is bounded by the property blocker's miss count,
+    not the total node count: ``_compare_and_merge_nodes`` only
+    feeds nodes here that didn't land in any property-based
+    candidate group.
+
+    Returns nothing (no candidate groups) when:
+      - settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED is False
+      - the embedding extras aren't installed
+        (ImportError on get_embedding_similarity)
+      - no nodes have embeddable text (empty
+        canonical_properties / properties)
+      - no pairs cross the similarity threshold
+
+    The function is deliberately resilient — it never raises into
+    the resolution flow. An embedding-side problem degrades to "no
+    additional candidate groups" rather than blocking extraction.
+    """
+    if not nodes or len(nodes) <= 1:
+        return
+
+    if not getattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", False):
+        return
+
+    try:
+        from graphora_server.services.entity_resolution.embedding_similarity import (
+            get_embedding_similarity,
+        )
+    except ImportError:
+        logger.debug("Embedding similarity not available; skipping ER embedding stage")
+        return
+
+    try:
+        embedding_similarity = get_embedding_similarity(
+            model_name=settings.ENTITY_RESOLUTION_EMBEDDING_MODEL,
+        )
+    except Exception as exc:  # pragma: no cover — defensive log
+        logger.warning("Embedding similarity init failed: %s", exc)
+        return
+
+    # Group by type — semantic similarity is only meaningful within
+    # type. Mirrors the type-prefix isolation the property blocker
+    # uses.
+    by_type: Dict[str, List[BaseNode]] = {}
+    for node in nodes:
+        by_type.setdefault(node.type, []).append(node)
+
+    for type_nodes in by_type.values():
+        if len(type_nodes) <= 1:
+            continue
+
+        texts: List[str] = []
+        valid_nodes: List[BaseNode] = []
+        for node in type_nodes:
+            text = _node_to_embedding_text(node)
+            if text:
+                texts.append(text)
+                valid_nodes.append(node)
+
+        if len(valid_nodes) <= 1:
+            continue
+
+        try:
+            sim_matrix = embedding_similarity.compute_similarity_matrix(texts, texts)
+        except Exception as exc:
+            logger.warning("Embedding similarity matrix failed: %s", exc)
+            continue
+
+        # Union-find: pairs above threshold merge into one group.
+        # Path-compression keeps the operation effectively linear.
+        parent = list(range(len(valid_nodes)))
+
+        def _find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def _union(a: int, b: int) -> None:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        for i in range(len(valid_nodes)):
+            for j in range(i + 1, len(valid_nodes)):
+                if float(sim_matrix[i][j]) >= similarity_threshold:
+                    _union(i, j)
+
+        groups: Dict[int, List[BaseNode]] = {}
+        for i, node in enumerate(valid_nodes):
+            groups.setdefault(_find(i), []).append(node)
+
+        for group in groups.values():
+            if len(group) > 1:
+                yield group
+
+
 async def _compare_and_merge_nodes(
     nodes: List[BaseNode],
     user_id: Optional[str] = None,
@@ -735,9 +861,41 @@ async def _compare_and_merge_nodes(
             for n in group:
                 nodes_in_groups.add(n.id)
 
+    # Step 3.5 — B2-er slice 2 embedding-based blocking on the
+    # nodes the property blocker missed. Catches semantic variants
+    # ("John Smith" / "Jonathan S.") that don't share name3 prefix
+    # or canonical_key. Bounded cost: only runs on the unblocked
+    # subset.
+    unblocked = [n for n in deduped if n.id not in nodes_in_groups]
+    for candidate_group in _embedding_candidate_groups(unblocked):
+        entity_type = candidate_group[0].type
+        resolved_groups = await resolve_entity_group(
+            entity_type,
+            candidate_group,
+            user_id=user_id,
+            transform_id=transform_id,
+            document_usage_id=document_usage_id,
+        )
+        for group in resolved_groups:
+            if len(group) == 1:
+                final_nodes.append(group[0])
+                nodes_in_groups.add(group[0].id)
+                continue
+            sorted_nodes = sorted(
+                group,
+                key=lambda x: x.confidence_score if x.confidence_score else 0,
+                reverse=True,
+            )
+            base_node = sorted_nodes[0]
+            for other_node in sorted_nodes[1:]:
+                base_node = merge_nodes(base_node, other_node)
+            final_nodes.append(base_node)
+            for n in group:
+                nodes_in_groups.add(n.id)
+
     # Step 4 — pass-through for nodes that didn't appear in any
-    # candidate group (singletons in their block, or in a block
-    # that yielded only singletons).
+    # candidate group (singletons in their block AND below the
+    # embedding-similarity threshold against any other node).
     for node in deduped:
         if node.id not in nodes_in_groups:
             final_nodes.append(node)
