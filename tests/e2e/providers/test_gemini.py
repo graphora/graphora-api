@@ -190,12 +190,32 @@ class TestGeminiProvider:
         parser = OntologyParser(yaml_path=minimal_ontology_path)
         transform_id = "e2e-gemini-" + os.urandom(4).hex()
 
-        graph = await build_graph_from_chunks(
-            ontology_parser=parser,
-            chunks=[tiny_text],
-            transform_id=transform_id,
-            user_id="e2e-test-user",
-        )
+        try:
+            graph = await build_graph_from_chunks(
+                ontology_parser=parser,
+                chunks=[tiny_text],
+                transform_id=transform_id,
+                user_id="e2e-test-user",
+            )
+        except Exception as exc:
+            # Gemini free-tier daily quota is 20 requests/day per
+            # model; CI burns through it across PR runs and the
+            # provider-e2e harness can't tell that apart from a
+            # real regression. Detect the 429 string in the BAML
+            # client error and skip rather than fail — quota
+            # exhaustion is operational (wait or upgrade), not a
+            # code problem.
+            err_text = str(exc)
+            if "429" in err_text and (
+                "quota" in err_text.lower()
+                or "RESOURCE_EXHAUSTED" in err_text
+                or "rate-limits" in err_text.lower()
+            ):
+                pytest.skip(
+                    f"Gemini free-tier quota exhausted; skipping "
+                    f"live-extraction smoke test. {err_text[:200]}"
+                )
+            raise
 
         assert graph is not None
         assert len(graph.nodes) >= 2, (
