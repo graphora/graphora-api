@@ -1152,22 +1152,25 @@ class TestFindNodesByPropertyValue:
         assert nodes[0].type == "Person"
 
 
-class TestFullTextIndexDegradation:
-    """Slice 5: AGE has no native CREATE FULLTEXT INDEX; the GIN /
-    tsvector polyfill ships in slice 6. Until then both index
-    methods degrade to no-op + warning so extraction
-    (ontology_helper.py:539, :543, :589, :593 — 4+ callsites each)
-    doesn't crash on STORAGE_TYPE=postgres."""
+class TestFullTextIndexNoPgTrgm:
+    """Slice 8: when pg_trgm is unavailable, both index methods fall
+    back to no-op + once-per-instance warning. The bootstrap_schema
+    savepoint records pg_trgm availability in ``_has_pg_trgm``;
+    these tests pin that the methods honour that flag."""
 
     @pytest.fixture
     def storage(self) -> PostgresAGEStorage:
-        return PostgresAGEStorage(dsn="postgresql://localhost/test")
+        s = PostgresAGEStorage(dsn="postgresql://localhost/test")
+        # Simulate "bootstrap ran but pg_trgm wasn't available"
+        # without actually calling _bootstrap_schema (which needs a
+        # mocked connection).
+        s._has_pg_trgm = False
+        return s
 
     @pytest.mark.asyncio
     async def test_node_index_no_op_returns_none(
         self, storage: PostgresAGEStorage
     ) -> None:
-        # No raise, returns None (the abstract method is -> None).
         result = await storage.create_or_replace_ft_index_for_node(
             "ix_person_name", "Person", ["name"]
         )
@@ -1183,17 +1186,150 @@ class TestFullTextIndexDegradation:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_node_index_does_not_call_cypher(
+    async def test_node_index_no_op_does_not_open_connection(
         self, storage: PostgresAGEStorage
     ) -> None:
         # Pin that the no-op doesn't accidentally hit the database;
         # extraction calls these 4+ times per ontology and a stray
         # round-trip per call adds up.
-        with patch.object(
-            storage, "_execute_cypher", new=AsyncMock(return_value=[])
-        ) as mock_exec:
+        with patch.object(storage, "_get_connection") as mock_conn:
             await storage.create_or_replace_ft_index_for_node("ix", "Person", ["name"])
-        mock_exec.assert_not_called()
+        mock_conn.assert_not_called()
+
+
+class TestFullTextIndexCreation:
+    """Slice 8: real GIN/pg_trgm index creation when pg_trgm is
+    available. Pin the SQL shape — DROP IF EXISTS + CREATE INDEX
+    USING GIN with gin_trgm_ops on ``(properties::text)``."""
+
+    @pytest.fixture
+    def storage(self) -> PostgresAGEStorage:
+        s = PostgresAGEStorage(dsn="postgresql://localhost/test")
+        s._has_pg_trgm = True
+        return s
+
+    @pytest.mark.asyncio
+    async def test_node_index_emits_drop_then_create(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        from contextlib import asynccontextmanager
+
+        executed: list = []
+        cur = MagicMock()
+
+        async def fake_exec(sql_obj, *args, **kwargs):
+            # psycopg.sql.SQL.format() returns a Composed object;
+            # str() renders it for inspection in the test.
+            executed.append(str(sql_obj))
+
+        cur.execute = AsyncMock(side_effect=fake_exec)
+        cur.__aenter__ = AsyncMock(return_value=cur)
+        cur.__aexit__ = AsyncMock(return_value=None)
+
+        conn = MagicMock()
+        conn.cursor = MagicMock(return_value=cur)
+        conn.commit = AsyncMock()
+
+        @asynccontextmanager
+        async def fake_connection():
+            yield conn
+
+        with patch.object(storage, "_get_connection", fake_connection):
+            await storage.create_or_replace_ft_index_for_node(
+                "ix_person_name", "Person", ["name"]
+            )
+
+        # Two SQL statements: DROP IF EXISTS, then CREATE INDEX.
+        # ``str(Composed)`` shows the AST (Identifier(...) etc.) rather
+        # than the post-rendering SQL string — that's what we get
+        # without a real connection to call ``as_string()`` against.
+        # Match on the AST so the test stays connection-free.
+        assert len(executed) == 2
+        assert "DROP INDEX IF EXISTS" in executed[0]
+        assert "Identifier('graphora')" in executed[0]
+        assert "Identifier('ix_person_name')" in executed[0]
+        assert "CREATE INDEX" in executed[1]
+        assert "USING GIN" in executed[1]
+        assert "gin_trgm_ops" in executed[1]
+        assert "(properties::text)" in executed[1]
+        assert "Identifier('Person')" in executed[1]
+        conn.commit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_relationship_index_emits_drop_then_create(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        from contextlib import asynccontextmanager
+
+        executed: list = []
+        cur = MagicMock()
+
+        async def fake_exec(sql_obj, *args, **kwargs):
+            executed.append(str(sql_obj))
+
+        cur.execute = AsyncMock(side_effect=fake_exec)
+        cur.__aenter__ = AsyncMock(return_value=cur)
+        cur.__aexit__ = AsyncMock(return_value=None)
+
+        conn = MagicMock()
+        conn.cursor = MagicMock(return_value=cur)
+        conn.commit = AsyncMock()
+
+        @asynccontextmanager
+        async def fake_connection():
+            yield conn
+
+        with patch.object(storage, "_get_connection", fake_connection):
+            await storage.create_or_replace_ft_index_for_relationship(
+                "ix_works_at", "Person", "WORKS_AT", "Company", ["role"]
+            )
+
+        assert len(executed) == 2
+        # Index lives on the rel-type table — source/target types
+        # are validated for safety but don't shape the SQL. AST
+        # comparison again because str(Composed) shows the AST.
+        assert "Identifier('WORKS_AT')" in executed[1]
+        assert "Identifier('Person')" not in executed[1]
+        assert "Identifier('Company')" not in executed[1]
+
+    @pytest.mark.asyncio
+    async def test_node_index_validates_identifiers(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # Index name + entity name + property name all interpolate
+        # via psycopg.sql.Identifier (safe), but _validate_identifier
+        # is the first-line refusal so injection attempts never
+        # reach the SQL composer.
+        with pytest.raises(CypherInjectionError):
+            await storage.create_or_replace_ft_index_for_node(
+                "bad;name", "Person", ["name"]
+            )
+        with pytest.raises(CypherInjectionError):
+            await storage.create_or_replace_ft_index_for_node("ix", "Per;son", ["name"])
+        with pytest.raises(CypherInjectionError):
+            await storage.create_or_replace_ft_index_for_node(
+                "ix", "Person", ["name; DROP"]
+            )
+
+    @pytest.mark.asyncio
+    async def test_relationship_index_validates_identifiers(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # source/target types still validated even though they don't
+        # shape the SQL — defense-in-depth contract from the method
+        # docstring.
+        with pytest.raises(CypherInjectionError):
+            await storage.create_or_replace_ft_index_for_relationship(
+                "ix", "Person", "BAD;TYPE", "Company", []
+            )
+        with pytest.raises(CypherInjectionError):
+            await storage.create_or_replace_ft_index_for_relationship(
+                "ix", "BAD;TYPE", "WORKS_AT", "Company", []
+            )
+        with pytest.raises(CypherInjectionError):
+            await storage.create_or_replace_ft_index_for_relationship(
+                "ix", "Person", "WORKS_AT", "BAD;TYPE", []
+            )
 
 
 class TestFindSimilarNodes:

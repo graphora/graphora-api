@@ -225,6 +225,30 @@ class PostgresAGEStorage(GraphStorageInterface):
                             exc,
                         )
                         self._warned_no_pgvector = True
+                # pg_trgm — same savepoint-isolated optional
+                # bootstrap as vector. Used by slice 8's GIN-index
+                # polyfill for create_or_replace_ft_index_*.
+                # Adapter remembers availability so the index
+                # methods can fall back to no-op cleanly when the
+                # extension isn't present.
+                self._has_pg_trgm = False
+                await cur.execute("SAVEPOINT pg_trgm_ext")
+                try:
+                    await cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+                    await cur.execute("RELEASE SAVEPOINT pg_trgm_ext")
+                    self._has_pg_trgm = True
+                except Exception as exc:
+                    await cur.execute("ROLLBACK TO SAVEPOINT pg_trgm_ext")
+                    if not getattr(self, "_warned_no_pg_trgm", False):
+                        logger.warning(
+                            "pg_trgm extension not available (%s). "
+                            "Full-text index methods will fall back "
+                            "to no-op until pg_trgm is installed; "
+                            "CONTAINS-based searches still work, "
+                            "just without GIN acceleration.",
+                            exc,
+                        )
+                        self._warned_no_pg_trgm = True
                 # AGE needs to be loaded into the session before
                 # cypher() is callable; SET search_path so unqualified
                 # AGE function calls resolve.
@@ -360,31 +384,85 @@ class PostgresAGEStorage(GraphStorageInterface):
     async def create_or_replace_ft_index_for_node(
         self, index_name: str, entity_name: str, properties: List[str]
     ) -> None:
-        """No-op until slice 6 wires the GIN/tsvector polyfill.
+        """Create a Postgres GIN index over the AGE-managed vertex
+        table for ``entity_name`` to accelerate CONTAINS-style
+        substring searches (the merge-flow similarity-fallback
+        pattern in find_similar_nodes / find_nodes_by_property_value).
 
-        AGE has no native ``CREATE FULLTEXT INDEX``. The Neo4j
-        adapter's full-text indexes power CONTAINS-style searches
-        in the merge flow's similarity fallback; the AGE equivalent
-        is a Postgres GIN index over a tsvector expression on the
-        underlying entity table (``ag_label.<graph>_<entity>`` shape).
+        AGE has no native ``CREATE FULLTEXT INDEX``. The polyfill is a
+        GIN index using the ``pg_trgm`` ``gin_trgm_ops`` operator
+        class on the agtype properties column cast to text:
 
-        Called 4+ times from extraction (ontology_helper.py:539,
-        :543, :589, :593) — raising here would crash extraction on
-        STORAGE_TYPE=postgres before slice 6 lands. Degrade to a
-        no-op + once-per-instance warning. Substring searches work
-        via AGE's CONTAINS in the meantime, just without index
-        acceleration.
+            CREATE INDEX <name>
+              ON <graph>.<entity>
+              USING GIN ((properties::text) gin_trgm_ops);
+
+        Idempotent via ``DROP INDEX IF EXISTS`` + ``CREATE INDEX``
+        — matches Neo4j's ``DROP INDEX ... IF EXISTS`` + ``CREATE
+        FULLTEXT INDEX`` shape so the "or replace" semantics stay
+        the same across backends.
+
+        Falls back to a no-op + one warning when ``pg_trgm`` isn't
+        installed (the bootstrap_schema savepoint pattern records
+        availability in ``self._has_pg_trgm``). CONTAINS searches
+        keep working without the index, just without acceleration.
+
+        ``properties`` is ignored for the GIN index because we index
+        the whole properties bag — same pattern as the Neo4j adapter
+        passing ``ON EACH [props]`` to the fulltext index. AGE's
+        agtype-to-text cast linearizes all property values together,
+        so a substring match on any property value is accelerated.
         """
-        if not getattr(self, "_warned_ft_index_node", False):
-            logger.warning(
-                "create_or_replace_ft_index_for_node is a no-op until "
-                "C2-postgres slice 6 wires the GIN/tsvector polyfill. "
-                "Substring searches still work via Cypher CONTAINS, "
-                "just without index acceleration. index=%s entity=%s",
-                index_name,
-                entity_name,
-            )
-            self._warned_ft_index_node = True
+        validated_index = _validate_identifier(index_name, "index name")
+        validated_entity = _validate_identifier(entity_name, "entity name")
+        for prop in properties:
+            _validate_identifier(prop, "property name")
+
+        if not getattr(self, "_has_pg_trgm", False):
+            if not getattr(self, "_warned_ft_index_node", False):
+                logger.warning(
+                    "create_or_replace_ft_index_for_node is a no-op "
+                    "because pg_trgm is unavailable (see "
+                    "_bootstrap_schema warning). Install pg_trgm and "
+                    "re-bootstrap to enable GIN index acceleration. "
+                    "index=%s entity=%s",
+                    index_name,
+                    entity_name,
+                )
+                self._warned_ft_index_node = True
+            return
+
+        # AGE creates one table per vertex label under the graph's
+        # schema, named ``<graph_name>.<label>`` — use psycopg.sql
+        # for safe identifier composition since the index name +
+        # schema + label all interpolate.
+        from psycopg import sql
+
+        async with self._get_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    sql.SQL("DROP INDEX IF EXISTS {schema}.{idx}").format(
+                        schema=sql.Identifier(self.graph_name),
+                        idx=sql.Identifier(validated_index),
+                    )
+                )
+                await cur.execute(
+                    sql.SQL(
+                        "CREATE INDEX {idx} ON {schema}.{table} "
+                        "USING GIN ((properties::text) gin_trgm_ops)"
+                    ).format(
+                        idx=sql.Identifier(validated_index),
+                        schema=sql.Identifier(self.graph_name),
+                        table=sql.Identifier(validated_entity),
+                    )
+                )
+                await conn.commit()
+                logger.debug(
+                    "Created GIN index %s on %s.%s",
+                    validated_index,
+                    self.graph_name,
+                    validated_entity,
+                )
 
     async def create_or_replace_ft_index_for_relationship(
         self,
@@ -394,21 +472,67 @@ class PostgresAGEStorage(GraphStorageInterface):
         target_name: str,
         properties: List[str],
     ) -> None:
-        """No-op until slice 6 wires the GIN/tsvector polyfill.
+        """Same shape as the node variant — AGE creates one table
+        per edge label. The polyfill is a GIN index over the
+        properties column on ``<graph_name>.<rel_name>``.
 
-        Same shape as the node variant (AGE has no native fulltext
-        index over edges either). Called 4+ times from extraction;
-        raising would crash extraction on STORAGE_TYPE=postgres.
+        ``source_name`` / ``target_name`` are part of the abstract
+        contract (Neo4j wires them into the relationship pattern of
+        ``CREATE FULLTEXT INDEX FOR ()-[r:TYPE]->()``), but on the
+        AGE side every edge with a given label lands in the same
+        underlying table regardless of endpoint types — so we
+        index the table directly and ignore source/target. Documented
+        here so the contract drift is intentional, not a bug.
         """
-        if not getattr(self, "_warned_ft_index_rel", False):
-            logger.warning(
-                "create_or_replace_ft_index_for_relationship is a no-op "
-                "until C2-postgres slice 6 wires the GIN/tsvector "
-                "polyfill. index=%s rel=%s",
-                index_name,
-                rel_name,
-            )
-            self._warned_ft_index_rel = True
+        validated_index = _validate_identifier(index_name, "index name")
+        validated_rel = _validate_identifier(rel_name, "relationship type")
+        # source/target validated for defense-in-depth even though
+        # they don't shape the SQL — keeps the injection-safety
+        # contract uniform across both index methods.
+        _validate_identifier(source_name, "source type")
+        _validate_identifier(target_name, "target type")
+        for prop in properties:
+            _validate_identifier(prop, "property name")
+
+        if not getattr(self, "_has_pg_trgm", False):
+            if not getattr(self, "_warned_ft_index_rel", False):
+                logger.warning(
+                    "create_or_replace_ft_index_for_relationship is a "
+                    "no-op because pg_trgm is unavailable. index=%s "
+                    "rel=%s",
+                    index_name,
+                    rel_name,
+                )
+                self._warned_ft_index_rel = True
+            return
+
+        from psycopg import sql
+
+        async with self._get_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    sql.SQL("DROP INDEX IF EXISTS {schema}.{idx}").format(
+                        schema=sql.Identifier(self.graph_name),
+                        idx=sql.Identifier(validated_index),
+                    )
+                )
+                await cur.execute(
+                    sql.SQL(
+                        "CREATE INDEX {idx} ON {schema}.{table} "
+                        "USING GIN ((properties::text) gin_trgm_ops)"
+                    ).format(
+                        idx=sql.Identifier(validated_index),
+                        schema=sql.Identifier(self.graph_name),
+                        table=sql.Identifier(validated_rel),
+                    )
+                )
+                await conn.commit()
+                logger.debug(
+                    "Created GIN index %s on %s.%s",
+                    validated_index,
+                    self.graph_name,
+                    validated_rel,
+                )
 
     async def store_nodes(
         self,
