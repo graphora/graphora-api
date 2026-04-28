@@ -562,31 +562,54 @@ class PostgresAGEStorage(GraphStorageInterface):
         error_message: Optional[str] = None
         warnings: List[str] = []
 
-        # Bucket by validated entity type. Nodes that fail
-        # validation get warned and skipped rather than raising —
-        # matches Neo4j's resilience for partial-batch failures.
-        by_type: Dict[str, List[Dict[str, Any]]] = {}
+        # Bucket by (validated_type, frozenset(prop_keys)) — AGE
+        # rejects ``SET n += $param`` (parameter on the RHS isn't a
+        # map type), so we have to interpolate property keys into
+        # the Cypher SET clause statically. Nodes that share the
+        # same type AND key shape go into one UNWIND batch, which
+        # preserves bulk-write efficiency for the common case (most
+        # nodes of a given type have the same schema). Nodes with
+        # an unusual key set fall into their own bucket — a one-row
+        # batch is fine; correctness over micro-optimization.
+        #
+        # All property keys go through ``_validate_identifier``
+        # before they reach the Cypher string. Values stay in the
+        # params channel as ``row.<key>``, never interpolated.
+        by_bucket: Dict[tuple, List[Dict[str, Any]]] = {}
         for node in nodes:
             try:
                 node_id, node_type, props = self._extract_node_writepath_fields(
                     node, transform_id, merge_id
                 )
                 validated_type = _validate_identifier(node_type, "node type")
+                # Validate every key that will interpolate; refuse
+                # the whole node if any key would be unsafe.
+                for k in props.keys():
+                    _validate_identifier(k, "property name")
             except (CypherInjectionError, ValueError) as exc:
                 warnings.append(f"Skipping node: {exc}")
                 continue
-            by_type.setdefault(validated_type, []).append(
-                {"id": node_id, "props": props}
-            )
+            key_shape = frozenset(props.keys())
+            bucket_key = (validated_type, key_shape)
+            # Build a flat row dict: each property keyed by its own
+            # name (no nested "props" sub-map, since AGE can't
+            # destructure ``row.props`` into a SET statement).
+            row = {"id": node_id, **props}
+            by_bucket.setdefault(bucket_key, []).append(row)
 
         op = "MERGE" if merge else "CREATE"
-        for node_type, batch in by_type.items():
+        for (node_type, key_shape), batch in by_bucket.items():
+            sorted_keys = sorted(key_shape)
+            if sorted_keys:
+                set_clause = "SET " + ", ".join(f"n.{k} = row.{k}" for k in sorted_keys)
+            else:
+                set_clause = ""
             cypher = (
                 f"UNWIND $batch AS row "
                 f"{op} (n:{node_type} {{id: row.id}}) "
-                f"SET n += row.props "
+                f"{set_clause} "
                 f"RETURN n.id AS node_id"
-            )
+            ).strip()
             try:
                 await self._execute_cypher(
                     cypher,
@@ -754,21 +777,47 @@ class PostgresAGEStorage(GraphStorageInterface):
                     props.setdefault(k, v)
             props = _coerce_for_age(props)
 
+            # Validate every property key — they interpolate into
+            # the SET clause. Same reason as store_nodes: AGE
+            # rejects ``SET r += $param`` with a parameter on the
+            # RHS, so the keys go inline (validated) and values
+            # flow through the params channel as ``$prop_<key>``
+            # to avoid collision with $source_id / $target_id.
+            try:
+                validated_keys = {
+                    k: _validate_identifier(k, "property name") for k in props.keys()
+                }
+            except CypherInjectionError as exc:
+                warnings.append(
+                    f"Skipping relationship {rel.id}: invalid property key ({exc})"
+                )
+                continue
+
+            params: Dict[str, Any] = {
+                "source_id": rel.source_id,
+                "target_id": rel.target_id,
+            }
+            if validated_keys:
+                set_pieces = []
+                for original_key, validated_key in sorted(validated_keys.items()):
+                    param_name = f"prop_{validated_key}"
+                    set_pieces.append(f"r.{validated_key} = ${param_name}")
+                    params[param_name] = props[original_key]
+                set_clause = "SET " + ", ".join(set_pieces)
+            else:
+                set_clause = ""
+
             cypher = (
                 f"MATCH (s:{source_type} {{id: $source_id}}) "
                 f"MATCH (t:{target_type} {{id: $target_id}}) "
                 f"{op} (s)-[r:{rel_type}]->(t) "
-                f"SET r += $props "
+                f"{set_clause} "
                 f"RETURN r"
-            )
+            ).strip()
             try:
                 await self._execute_cypher(
                     cypher,
-                    params={
-                        "source_id": rel.source_id,
-                        "target_id": rel.target_id,
-                        "props": props,
-                    },
+                    params=params,
                     return_columns="(r agtype)",
                 )
                 items_processed += 1

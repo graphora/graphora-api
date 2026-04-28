@@ -305,47 +305,82 @@ class TestCheckpointRoundTrip:
 
 
 class TestFactoryDispatch:
-    """STORAGE_TYPE='postgres' is gated at the factory until slice 9
-    fixes the AGE Cypher 'SET n += $param' incompatibility. Both
-    entry points (create_storage / create_storage_for_user) call
-    _build_age_storage which raises NotImplementedError so an
-    operator can't accidentally land on a half-working backend.
-
-    The adapter code stays in the tree (and the unit tests stay
-    green) so slice 9 can iterate on the real Cypher fix without
-    re-shipping the foundation work.
+    """Slice 9: STORAGE_TYPE='postgres' un-gated after the AGE
+    Cypher 'SET n += $param' fix. Both factory entry points
+    construct a real PostgresAGEStorage. Per-user Postgres
+    routing (parallel to Neo4j's stagingDb / prodDb shape) stays
+    deferred — both entry points share global POSTGRES_AGE_DSN.
     """
 
     @pytest.mark.asyncio
-    async def test_create_storage_postgres_is_gated(self) -> None:
+    async def test_create_storage_constructs_postgres_age_storage(self) -> None:
+        from graphora_server.services.storage import factory
         from graphora_server.services.storage.factory import (
             StorageConfig,
             create_storage,
         )
 
-        config = StorageConfig(storage_type="postgres")
-        with pytest.raises(NotImplementedError, match="slice 9"):
-            await create_storage(config)
+        with patch.object(factory.settings, "POSTGRES_AGE_DSN", "postgresql://fake/db"):
+            with patch.object(factory.settings, "POSTGRES_AGE_GRAPH_NAME", "graphora"):
+                config = StorageConfig(storage_type="postgres")
+                storage = await create_storage(config)
+        assert isinstance(storage, PostgresAGEStorage)
+        assert storage.dsn == "postgresql://fake/db"
+        assert storage.graph_name == "graphora"
 
     @pytest.mark.asyncio
-    async def test_create_storage_for_user_postgres_is_gated(self) -> None:
-        from graphora_server.services.storage import factory
-
-        with patch.object(factory.settings, "STORAGE_TYPE", "postgres"):
-            with pytest.raises(NotImplementedError, match="slice 9"):
-                await factory.create_storage_for_user(user_id="u1", use_staging=True)
-
-    @pytest.mark.asyncio
-    async def test_create_storage_for_user_postgres_gated_for_prod_too(
+    async def test_create_storage_for_user_constructs_postgres_age_storage(
         self,
     ) -> None:
-        # Both staging and prod paths flow through _build_age_storage,
-        # so use_staging=False is gated the same way.
         from graphora_server.services.storage import factory
 
         with patch.object(factory.settings, "STORAGE_TYPE", "postgres"):
-            with pytest.raises(NotImplementedError, match="slice 9"):
-                await factory.create_storage_for_user(user_id="u1", use_staging=False)
+            with patch.object(
+                factory.settings, "POSTGRES_AGE_DSN", "postgresql://fake/db"
+            ):
+                storage = await factory.create_storage_for_user(
+                    user_id="u1", use_staging=True
+                )
+        assert isinstance(storage, PostgresAGEStorage)
+
+    @pytest.mark.asyncio
+    async def test_create_storage_falls_back_to_database_url(self) -> None:
+        from graphora_server.services.storage import factory
+        from graphora_server.services.storage.factory import (
+            StorageConfig,
+            create_storage,
+        )
+
+        with patch.object(factory.settings, "POSTGRES_AGE_DSN", None):
+            with patch.object(
+                type(factory.settings),
+                "resolved_database_url",
+                new_callable=lambda: property(
+                    lambda self: "postgresql://app-db/graphora"
+                ),
+            ):
+                config = StorageConfig(storage_type="postgres")
+                storage = await create_storage(config)
+        assert isinstance(storage, PostgresAGEStorage)
+        assert storage.dsn == "postgresql://app-db/graphora"
+
+    @pytest.mark.asyncio
+    async def test_create_storage_rejects_when_no_dsn_available(self) -> None:
+        from graphora_server.services.storage import factory
+        from graphora_server.services.storage.factory import (
+            StorageConfig,
+            create_storage,
+        )
+
+        with patch.object(factory.settings, "POSTGRES_AGE_DSN", None):
+            with patch.object(
+                type(factory.settings),
+                "resolved_database_url",
+                new_callable=lambda: property(lambda self: ""),
+            ):
+                config = StorageConfig(storage_type="postgres")
+                with pytest.raises(ValueError, match="POSTGRES_AGE_DSN"):
+                    await create_storage(config)
 
 
 class TestExecuteCypher:
@@ -501,12 +536,21 @@ class TestStoreNodes:
                     nodes, batch_index=0, transform_id="t-42"
                 )
 
-        # Two type buckets in input → two cypher calls (Person + Company).
+        # Slice 9: bucketed by (validated_type, frozenset(prop_keys)).
+        # Person nodes share key shape {name}, Company shares {name},
+        # so two buckets → two cypher() calls.
         assert mock_exec.call_count == 2
         cyphers = [c.args[0] for c in mock_exec.call_args_list]
         assert any("MERGE (n:Person {id: row.id})" in c for c in cyphers)
         assert any("MERGE (n:Company {id: row.id})" in c for c in cyphers)
         assert all("UNWIND $batch AS row" in c for c in cyphers)
+        # Slice 9: SET clause now per-key (AGE rejects ``SET n += $param``).
+        # Each row is flat — ``row.<key>`` instead of nested ``row.props.<key>``.
+        # Keys sort alphabetically; __tid metadata is also in the property
+        # bag, so look for the per-property assignment substring rather
+        # than expecting "SET" immediately before "n.name".
+        assert any("n.name = row.name" in c for c in cyphers)
+        assert all("row.props" not in c for c in cyphers)
         assert result.success is True
         assert result.items_processed == 3
 
@@ -674,13 +718,18 @@ class TestStoreRelationships:
         assert "MATCH (s:Person {id: $source_id})" in cypher
         assert "MATCH (t:Company {id: $target_id})" in cypher
         assert "MERGE (s)-[r:WORKS_AT]->(t)" in cypher
-        assert "SET r += $props" in cypher
-        # Source/target ids passed through params, not interpolated.
+        # Slice 9: per-property SET (AGE rejects ``SET r += $param``).
+        # Property keys interpolate, values flow through prefixed
+        # params (``$prop_<key>``) to avoid collision with
+        # $source_id / $target_id.
+        assert "r.role = $prop_role" in cypher
+        assert f"r.{TRANSFORM_ID} = $prop_{TRANSFORM_ID}" in cypher
+        assert "$props" not in cypher
         params = mock_exec.call_args.kwargs["params"]
         assert params["source_id"] == "s1"
         assert params["target_id"] == "t1"
-        assert params["props"]["role"] == "engineer"
-        assert params["props"][TRANSFORM_ID] == "t-42"
+        assert params["prop_role"] == "engineer"
+        assert params[f"prop_{TRANSFORM_ID}"] == "t-42"
         assert result.items_processed == 1
 
     @pytest.mark.asyncio
