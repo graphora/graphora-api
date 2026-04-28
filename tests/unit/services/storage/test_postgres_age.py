@@ -305,116 +305,47 @@ class TestCheckpointRoundTrip:
 
 
 class TestFactoryDispatch:
-    """Slice 3: STORAGE_TYPE='postgres' wired at BOTH factory entry
-    points, sharing the ``_build_age_storage`` helper so they stay
-    in lockstep — the asymmetric wiring slice 2 first attempted was
-    the contract bug flagged in review.
+    """STORAGE_TYPE='postgres' is gated at the factory until slice 9
+    fixes the AGE Cypher 'SET n += $param' incompatibility. Both
+    entry points (create_storage / create_storage_for_user) call
+    _build_age_storage which raises NotImplementedError so an
+    operator can't accidentally land on a half-working backend.
 
-    Per-user Postgres routing (parallel to Neo4j's stagingDb / prodDb)
-    is intentionally out of scope for slice 3; both entry points use
-    the same global ``POSTGRES_AGE_DSN``. ``use_staging`` is a no-op
-    for postgres and just emits a debug warning. Slice 4 wires
-    multi-tenant Postgres routing if/when there's actual demand.
+    The adapter code stays in the tree (and the unit tests stay
+    green) so slice 9 can iterate on the real Cypher fix without
+    re-shipping the foundation work.
     """
 
     @pytest.mark.asyncio
-    async def test_create_storage_constructs_postgres_age_storage(self) -> None:
-        from graphora_server.services.storage import factory
+    async def test_create_storage_postgres_is_gated(self) -> None:
         from graphora_server.services.storage.factory import (
             StorageConfig,
             create_storage,
         )
 
-        with patch.object(factory.settings, "POSTGRES_AGE_DSN", "postgresql://fake/db"):
-            with patch.object(factory.settings, "POSTGRES_AGE_GRAPH_NAME", "graphora"):
-                config = StorageConfig(storage_type="postgres")
-                storage = await create_storage(config)
-
-        assert isinstance(storage, PostgresAGEStorage)
-        assert storage.dsn == "postgresql://fake/db"
-        assert storage.graph_name == "graphora"
+        config = StorageConfig(storage_type="postgres")
+        with pytest.raises(NotImplementedError, match="slice 9"):
+            await create_storage(config)
 
     @pytest.mark.asyncio
-    async def test_create_storage_for_user_constructs_postgres_age_storage(
-        self,
-    ) -> None:
-        # Real-app paths (tasks.py, api/quality.py, services/merge/...)
-        # enter through create_storage_for_user, so this is the
-        # entry point that has to actually work for STORAGE_TYPE=postgres
-        # to be usable end-to-end. Pinned here.
+    async def test_create_storage_for_user_postgres_is_gated(self) -> None:
         from graphora_server.services.storage import factory
 
         with patch.object(factory.settings, "STORAGE_TYPE", "postgres"):
-            with patch.object(
-                factory.settings, "POSTGRES_AGE_DSN", "postgresql://fake/db"
-            ):
-                storage = await factory.create_storage_for_user(
-                    user_id="u1", use_staging=True
-                )
-
-        assert isinstance(storage, PostgresAGEStorage)
+            with pytest.raises(NotImplementedError, match="slice 9"):
+                await factory.create_storage_for_user(user_id="u1", use_staging=True)
 
     @pytest.mark.asyncio
-    async def test_create_storage_falls_back_to_database_url(self) -> None:
-        # When POSTGRES_AGE_DSN is unset, the AGE adapter rides on
-        # the application Postgres connection (resolved_database_url).
-        from graphora_server.services.storage import factory
-        from graphora_server.services.storage.factory import (
-            StorageConfig,
-            create_storage,
-        )
-
-        with patch.object(factory.settings, "POSTGRES_AGE_DSN", None):
-            with patch.object(
-                type(factory.settings),
-                "resolved_database_url",
-                new_callable=lambda: property(
-                    lambda self: "postgresql://app-db/graphora"
-                ),
-            ):
-                config = StorageConfig(storage_type="postgres")
-                storage = await create_storage(config)
-
-        assert isinstance(storage, PostgresAGEStorage)
-        assert storage.dsn == "postgresql://app-db/graphora"
-
-    @pytest.mark.asyncio
-    async def test_create_storage_rejects_when_no_dsn_available(self) -> None:
-        from graphora_server.services.storage import factory
-        from graphora_server.services.storage.factory import (
-            StorageConfig,
-            create_storage,
-        )
-
-        with patch.object(factory.settings, "POSTGRES_AGE_DSN", None):
-            with patch.object(
-                type(factory.settings),
-                "resolved_database_url",
-                new_callable=lambda: property(lambda self: ""),
-            ):
-                config = StorageConfig(storage_type="postgres")
-                with pytest.raises(ValueError, match="POSTGRES_AGE_DSN"):
-                    await create_storage(config)
-
-    @pytest.mark.asyncio
-    async def test_create_storage_for_user_use_staging_false_still_works(
+    async def test_create_storage_for_user_postgres_gated_for_prod_too(
         self,
     ) -> None:
-        # Per-user Postgres routing is slice 4 work — for now
-        # use_staging=False on postgres returns the same shared AGE
-        # storage and emits a warning rather than refusing. Pin
-        # the behaviour so callers (merge flow) keep working.
+        # Both staging and prod paths flow through _build_age_storage,
+        # so use_staging=False is gated the same way.
         from graphora_server.services.storage import factory
 
         with patch.object(factory.settings, "STORAGE_TYPE", "postgres"):
-            with patch.object(
-                factory.settings, "POSTGRES_AGE_DSN", "postgresql://fake/db"
-            ):
-                storage = await factory.create_storage_for_user(
-                    user_id="u1", use_staging=False
-                )
-
-        assert isinstance(storage, PostgresAGEStorage)
+            with pytest.raises(NotImplementedError, match="slice 9"):
+                await factory.create_storage_for_user(user_id="u1", use_staging=False)
 
 
 class TestExecuteCypher:

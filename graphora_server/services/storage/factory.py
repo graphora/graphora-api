@@ -15,43 +15,42 @@ logger = logging.getLogger(__name__)
 
 
 def _build_age_storage() -> GraphStorageInterface:
-    """Construct the Apache AGE adapter from global settings.
+    """STORAGE_TYPE='postgres' is gated until the AGE Cypher fix
+    in slice 9 lands.
 
-    Shared between ``create_storage()`` and ``create_storage_for_user()``
-    so they stay in lockstep — pulling them apart was the bug
-    flagged in slice 2 review (asymmetric dispatch made the env var
-    pass unit tests but break real extraction flows).
+    Background: slices 1-8 shipped a complete-looking AGE adapter
+    that passed every mocked unit test, but the post-merge CI run
+    on commit e0372ca surfaced a real AGE limitation that the
+    mocks couldn't catch — AGE's openCypher subset rejects
+    ``SET n += $param`` with::
 
-    Per-user Postgres connections (parallel to Neo4j's per-user
-    stagingDb / prodDb config) are out of scope for slice 3 — every
-    user shares the same Postgres+AGE database identified by
-    ``POSTGRES_AGE_DSN`` (or ``DATABASE_URL`` as fallback). When a
-    multi-tenant Postgres backend is actually requested, slice 4 can
-    extend ``UserDatabaseService`` with a Postgres equivalent.
+        SET clause expects a map
+        LINE 1: ...UNWIND $batch AS row MERGE (n:Person {id: row.id})
+                                              SET n += row.p...
+                                                       ^
+
+    That breaks ``store_nodes`` and ``store_relationships`` against
+    real AGE despite all unit tests being green. Until slice 9
+    refactors the Cypher to a pattern AGE actually accepts (per-
+    property SET or ``agtype_build_map``-based map construction),
+    constructing the adapter is a footgun: an operator who flips
+    the env var would see startup succeed and writes fail mid-
+    extraction.
+
+    The hotfix raises NotImplementedError here so neither factory
+    entry point ever returns a working PostgresAGEStorage. The
+    adapter code itself stays in main, the unit tests stay green,
+    and slice 9 can iterate on the Cypher with the testcontainers
+    suite (run with -m integration; default CI excludes it).
     """
-    dsn = settings.POSTGRES_AGE_DSN or settings.resolved_database_url
-    if not dsn:
-        raise ValueError(
-            "STORAGE_TYPE='postgres' requires either POSTGRES_AGE_DSN or "
-            "the application Postgres connection (DATABASE_URL or "
-            "POSTGRES_HOST/USER/DB) to be configured."
-        )
-
-    try:
-        from graphora_server.services.storage.postgres_age import PostgresAGEStorage
-    except ImportError as exc:  # pragma: no cover — exercised without [age]
-        raise ImportError(
-            "Apache AGE storage requires the [age] extra. "
-            "Install with: pip install 'graphora-server[age]'"
-        ) from exc
-
-    logger.info(
-        f"Creating Apache AGE storage at {dsn} "
-        f"(graph={settings.POSTGRES_AGE_GRAPH_NAME})"
-    )
-    return PostgresAGEStorage(
-        dsn=dsn,
-        graph_name=settings.POSTGRES_AGE_GRAPH_NAME,
+    raise NotImplementedError(
+        "STORAGE_TYPE='postgres' is gated until C2-postgres slice 9 "
+        "fixes the AGE Cypher 'SET n += $param' incompatibility "
+        "surfaced in the e0372ca post-merge CI run. The adapter is "
+        "code-complete and unit-tested but fails against real AGE "
+        "on every write path; opting in now would corrupt mid-"
+        "extraction. Track progress in feature/c2-postgres-slice9 "
+        "or use STORAGE_TYPE=neo4j / 'memory' until slice 9 ships."
     )
 
 
