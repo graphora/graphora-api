@@ -204,7 +204,7 @@ class TestCompareAndMergeNodesIntegration:
         n_dup2 = _node("p1", name="Alice")
         with patch(
             "graphora_server.services.transform.graph_transformer.resolve_entity_group",
-            new=AsyncMock(side_effect=lambda *a, **kw: [[a[1][0]]]),
+            new=AsyncMock(side_effect=lambda *a, **_: [[a[1][0]]]),
         ) as mock_resolve:
             result = await _compare_and_merge_nodes([n_first, n_dup1, n_dup2])
         # Three id-duplicates → one merged node out.
