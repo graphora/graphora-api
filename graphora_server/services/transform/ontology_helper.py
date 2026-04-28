@@ -454,47 +454,93 @@ class OntologyParser:
 
         logger = logging.getLogger(__name__)
 
-        # Get user's database configurations
-        user_config = await UserDatabaseService.get_user_config(user_id)
+        # Route to whichever backend STORAGE_TYPE selects. Pre-slice-8
+        # this method hard-wired Neo4jStorage and ignored
+        # STORAGE_TYPE=postgres entirely, so the AGE adapter's GIN
+        # polyfill (slice 8) wasn't on a live codepath. The slice-8
+        # review caught that — this dispatch puts both staging and
+        # prod through the configured backend.
+        from graphora_server.config import settings
 
+        storage_type = (settings.STORAGE_TYPE or "neo4j").lower()
         staging_storage = None
         prod_storage = None
 
-        # Create storage for staging if configured
-        if user_config.stagingDb is not None:
-            from graphora_server.services.storage.neo4j import Neo4jStorage
-
-            staging_storage = Neo4jStorage(
-                uri=user_config.stagingDb.uri,
-                username=user_config.stagingDb.username,
-                password=user_config.stagingDb.password,
-                database="neo4j",
-            )
+        if storage_type == "memory":
+            # In-memory storage has no full-text index concept;
+            # skip entirely. Returns silently rather than calling
+            # InMemoryStorage's no-op so we don't construct a
+            # transient instance per ontology change.
             logger.info(
-                f"Will create full-text indexes on staging DB for user {user_id}"
+                "In-memory storage mode: skipping full-text index "
+                "creation for user %s",
+                user_id,
+            )
+            return
+
+        if storage_type == "postgres":
+            # Per-user Postgres routing (parallel to Neo4j's
+            # stagingDb / prodDb shape) is slice 9+ work — for now
+            # both staging and prod share the same global
+            # POSTGRES_AGE_DSN, mirroring the factory's
+            # create_storage_for_user behaviour. The merge contract
+            # ("indexes exist on both staging and prod") is
+            # preserved because the same adapter satisfies both
+            # roles; idempotent DROP IF EXISTS + CREATE INDEX in
+            # the AGE polyfill makes the duplicate calls safe.
+            from graphora_server.services.storage.factory import _build_age_storage
+
+            age_storage = _build_age_storage()
+            staging_storage = age_storage
+            prod_storage = age_storage
+            logger.info(
+                "Will create full-text indexes on Apache AGE backend "
+                "for user %s (shared staging+prod until slice 9 wires "
+                "per-user Postgres routing)",
+                user_id,
             )
         else:
-            logger.info(
-                f"No staging DB configured for user {user_id}, skipping staging indexes"
-            )
+            # Neo4j path — preserve the existing dual-DB shape so
+            # operators with separate staging/prod Neo4j clusters
+            # keep working unchanged. Get user's database
+            # configurations.
+            user_config = await UserDatabaseService.get_user_config(user_id)
 
-        # Create storage for production if configured
-        if user_config.prodDb is not None:
-            from graphora_server.services.storage.neo4j import Neo4jStorage
+            # Create storage for staging if configured
+            if user_config.stagingDb is not None:
+                from graphora_server.services.storage.neo4j import Neo4jStorage
 
-            prod_storage = Neo4jStorage(
-                uri=user_config.prodDb.uri,
-                username=user_config.prodDb.username,
-                password=user_config.prodDb.password,
-                database="neo4j",
-            )
-            logger.info(
-                f"Will create full-text indexes on production DB for user {user_id}"
-            )
-        else:
-            logger.info(
-                f"No production DB configured for user {user_id}, skipping production indexes"
-            )
+                staging_storage = Neo4jStorage(
+                    uri=user_config.stagingDb.uri,
+                    username=user_config.stagingDb.username,
+                    password=user_config.stagingDb.password,
+                    database="neo4j",
+                )
+                logger.info(
+                    f"Will create full-text indexes on staging DB for user {user_id}"
+                )
+            else:
+                logger.info(
+                    f"No staging DB configured for user {user_id}, skipping staging indexes"
+                )
+
+            # Create storage for production if configured
+            if user_config.prodDb is not None:
+                from graphora_server.services.storage.neo4j import Neo4jStorage
+
+                prod_storage = Neo4jStorage(
+                    uri=user_config.prodDb.uri,
+                    username=user_config.prodDb.username,
+                    password=user_config.prodDb.password,
+                    database="neo4j",
+                )
+                logger.info(
+                    f"Will create full-text indexes on production DB for user {user_id}"
+                )
+            else:
+                logger.info(
+                    f"No production DB configured for user {user_id}, skipping production indexes"
+                )
 
         # If neither DB is configured, nothing to do
         if staging_storage is None and prod_storage is None:

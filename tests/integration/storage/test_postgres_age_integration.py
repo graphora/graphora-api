@@ -185,3 +185,82 @@ async def test_provenance_fields_round_trip(age_storage):
     assert fetched.properties.get("extractor_model") == "gemini-1.5-pro"
     assert fetched.properties.get("prompt_version") == "v1.0.0"
     assert fetched.properties.get("validator_score") == 0.92
+
+
+@pytest.mark.asyncio
+async def test_create_or_replace_ft_index_for_node_real(age_storage):
+    """Real GIN/pg_trgm DDL against AGE-managed entity table.
+
+    Pre-condition: at least one node of the target type must
+    exist before the index can be created (AGE creates the
+    underlying ag_label table lazily on first insert).
+    """
+    transform_id = "round-trip-ft-index"
+    alice = BaseNode(type="Person", properties={"name": "Alice Smith"})
+    await age_storage.store_nodes([alice], batch_index=0, transform_id=transform_id)
+
+    # First call creates the GIN index. Second call (same name,
+    # same shape) exercises the DROP IF EXISTS + CREATE idempotency.
+    await age_storage.create_or_replace_ft_index_for_node(
+        "ix_person_name_test", "Person", ["name"]
+    )
+    await age_storage.create_or_replace_ft_index_for_node(
+        "ix_person_name_test", "Person", ["name"]
+    )
+
+    # Verify the index actually exists in the catalog. Skip the
+    # check if pg_trgm wasn't bootstrapped (apache/age:latest may
+    # not ship it; the adapter's already-warned no-op path took
+    # over and left no index to find).
+    if not age_storage._has_pg_trgm:
+        pytest.skip("pg_trgm not available in this AGE container")
+
+    async with age_storage._get_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT indexname FROM pg_indexes "
+                "WHERE schemaname = %s AND indexname = %s",
+                (age_storage.graph_name, "ix_person_name_test"),
+            )
+            rows = await cur.fetchall()
+    assert len(rows) == 1, "expected GIN index to be present in pg_indexes"
+
+
+@pytest.mark.asyncio
+async def test_create_or_replace_ft_index_for_relationship_real(age_storage):
+    """Same shape for the relationship variant."""
+    transform_id = "round-trip-ft-rel-index"
+    alice = BaseNode(type="Person", properties={"name": "Alice"})
+    acme = BaseNode(type="Company", properties={"name": "Acme"})
+    await age_storage.store_nodes(
+        [alice, acme], batch_index=0, transform_id=transform_id
+    )
+
+    rel = RelationshipInstance(
+        type="WORKS_AT",
+        source_id=alice.id,
+        target_id=acme.id,
+        source_type="Person",
+        target_type="Company",
+        properties={"role": "engineer"},
+    )
+    await age_storage.store_relationships(
+        [rel], batch_index=0, transform_id=transform_id
+    )
+
+    await age_storage.create_or_replace_ft_index_for_relationship(
+        "ix_works_at_role_test", "Person", "WORKS_AT", "Company", ["role"]
+    )
+
+    if not age_storage._has_pg_trgm:
+        pytest.skip("pg_trgm not available in this AGE container")
+
+    async with age_storage._get_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT indexname FROM pg_indexes "
+                "WHERE schemaname = %s AND indexname = %s",
+                (age_storage.graph_name, "ix_works_at_role_test"),
+            )
+            rows = await cur.fetchall()
+    assert len(rows) == 1
