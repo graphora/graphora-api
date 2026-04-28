@@ -1131,14 +1131,16 @@ class PostgresAGEStorage(GraphStorageInterface):
         max_results: int = 10,
         include_relationships: bool = True,
     ) -> List[Node]:
-        """Similarity search via pgvector + pg_trgm — pending slice 5.
+        """Similarity search via pgvector + pg_trgm — pending slice 6.
 
         Reached on the live merge-flow fallback path
         (services/merge/new_merger.py:1068) when an unmatched node
         falls through to property-similarity matching. Slice 4
         review surfaced that raising here crashes that fallback for
         STORAGE_TYPE=postgres before the heavy embedding wiring
-        lands.
+        lands. Slice 5 closed the remaining non-similarity stubs;
+        slice 6 owns the real pgvector + GIN polyfill alongside
+        create_or_replace_ft_index_*.
 
         Degrade gracefully: return an empty list and log a warning
         once. The merge flow falls back to keeping the unmatched
@@ -1150,7 +1152,7 @@ class PostgresAGEStorage(GraphStorageInterface):
         if not getattr(self, "_warned_find_similar_nodes", False):
             logger.warning(
                 "find_similar_nodes returning empty (pgvector + pg_trgm "
-                "wiring lands in C2-postgres slice 5). Merge flow's "
+                "wiring lands in C2-postgres slice 6). Merge flow's "
                 "similarity fallback will not match nodes on AGE backend "
                 "until then. label=%s",
                 label,

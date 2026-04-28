@@ -183,10 +183,10 @@ class TestPostgresAGEStorageMethodStubs:
         return PostgresAGEStorage(dsn="postgresql://localhost/test")
 
     @pytest.mark.asyncio
-    async def test_find_similar_nodes_returns_empty_pending_slice_5(
+    async def test_find_similar_nodes_returns_empty_pending_slice_6(
         self, storage: PostgresAGEStorage
     ) -> None:
-        # pgvector + pg_trgm wiring lands in slice 5. Until then the
+        # pgvector + pg_trgm wiring lands in slice 6. Until then the
         # method degrades to "no matches found" rather than raising,
         # so the live merge-flow fallback path
         # (services/merge/new_merger.py:1068) doesn't crash on
