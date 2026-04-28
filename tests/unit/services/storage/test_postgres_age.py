@@ -1243,6 +1243,77 @@ class TestFindSimilarNodes:
         assert "n.name" in cypher
         assert "n.id" not in cypher
         assert "n.__tid" not in cypher
+
+    @pytest.mark.asyncio
+    async def test_filters_out_a1_prov_source_span_properties(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # A1-prov source-span fields stamped on every node by
+        # services/transform/helpers.py::_attach_provenance_properties
+        # are metadata, not entity signal. Without filtering, two
+        # nodes extracted from the same document would score
+        # artificially similar on source_text / document_name
+        # overlap — that's the merge-contract bug the slice-6 review
+        # caught.
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.find_similar_nodes(
+                label="Person",
+                properties={
+                    "name": "Alice",
+                    "source_chunk_id": "chunk-7",
+                    "document_name": "report.pdf",
+                    "source_text": "Alice is a software engineer at Acme.",
+                    "document_id": "doc-42",
+                    "chunk_offset": 1024,
+                    "page_number": 3,
+                    "extraction_confidence": 0.87,
+                },
+            )
+        cypher = mock_exec.call_args.args[0]
+        assert "n.name" in cypher
+        for leaked in (
+            "n.source_chunk_id",
+            "n.document_name",
+            "n.source_text",
+            "n.document_id",
+            "n.chunk_offset",
+            "n.page_number",
+            "n.extraction_confidence",
+        ):
+            assert leaked not in cypher, f"{leaked} should not enter scoring"
+        # Score normalizes by 1 (only "name" is a real entity field).
+        assert "/ 1.0" in cypher
+
+    @pytest.mark.asyncio
+    async def test_filters_out_b0_decision_trail_properties(
+        self, storage: PostgresAGEStorage
+    ) -> None:
+        # B0-prov-extend decision-trail fields are LLM telemetry, not
+        # entity signal. Two nodes extracted by the same model would
+        # otherwise score artificially similar on extractor_model /
+        # prompt_version overlap.
+        with patch.object(
+            storage, "_execute_cypher", new=AsyncMock(return_value=[])
+        ) as mock_exec:
+            await storage.find_similar_nodes(
+                label="Person",
+                properties={
+                    "name": "Alice",
+                    "extractor_model": "gemini-1.5-pro",
+                    "prompt_version": "v1.0.0",
+                    "validator_score": 0.92,
+                },
+            )
+        cypher = mock_exec.call_args.args[0]
+        assert "n.name" in cypher
+        for leaked in (
+            "n.extractor_model",
+            "n.prompt_version",
+            "n.validator_score",
+        ):
+            assert leaked not in cypher, f"{leaked} should not enter scoring"
         assert "n.confidence_score" not in cypher
 
     @pytest.mark.asyncio
