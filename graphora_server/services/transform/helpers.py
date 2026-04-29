@@ -467,6 +467,26 @@ def transform_as_nodes(
                     entity_type,
                 )
                 continue
+            # Capture the LLM-side positional id BEFORE we mint our
+            # own UUID. Gemini's extract_relationships_from_pdf
+            # references entities by these positional ids
+            # ('company_0', 'business_0', ...) instead of honoring
+            # the UUIDs we put in the context block. Stamping the
+            # original id on the node lets transform_as_relationships
+            # bridge the gap. Defensive: only keep non-empty strings
+            # — Gemini has been known to emit ints / nulls here.
+            #
+            # Stored as a list because merge_nodes unions aliases
+            # across merges (see BaseNode.original_extraction_ids
+            # docstring). At extraction time we have at most one
+            # alias per node; the list grows as entity resolution
+            # merges duplicates downstream.
+            raw_extraction_id = raw_properties.get("id")
+            original_extraction_ids = (
+                [raw_extraction_id]
+                if isinstance(raw_extraction_id, str) and raw_extraction_id
+                else []
+            )
             fallback_hint = f"{entity_type}:{item_index}"
             canonical_properties = _build_canonical_properties(
                 ontology,
@@ -495,6 +515,7 @@ def transform_as_nodes(
                 canonical_properties=canonical_properties,
                 canonical_key=node_key,
                 canonical_id=canonical_id,
+                original_extraction_ids=original_extraction_ids,
                 provenance=NodeProvenance(
                     chunk_ids=(
                         [chunk_metadata.chunk_id]
@@ -561,6 +582,51 @@ def transform_as_relationships(
     node_by_canonical_key = {
         node.canonical_key: node for node in nodes if node.canonical_key
     }
+
+    # Original-extraction-id fallback. Gemini's
+    # extract_relationships_from_pdf typically emits positional ids
+    # ('company_0', 'business_0') instead of the UUIDs we feed via
+    # the relationships-context block. We resolve those by matching
+    # against the per-node ``original_extraction_id`` captured during
+    # transform_as_nodes.
+    #
+    # Scoping: positional ids are NOT unique across chunks
+    # (chunk-1's 'company_0' might be Apple while chunk-2's
+    # 'company_0' is Microsoft). When the caller passed
+    # ``chunk_metadata`` we prefer a node whose provenance includes
+    # this chunk_id, falling through to a global match only if no
+    # in-chunk node carries that original id. The unscoped fallback
+    # preserves behaviour for callsites that don't thread chunk
+    # metadata through.
+    chunk_id_for_scope = (
+        chunk_metadata.chunk_id if chunk_metadata and chunk_metadata.chunk_id else None
+    )
+
+    def _find_by_original_id(raw_id: Optional[str]) -> Optional[BaseNode]:
+        if not raw_id:
+            return None
+        scoped_match: Optional[BaseNode] = None
+        unscoped_match: Optional[BaseNode] = None
+        for n in nodes:
+            # Membership rather than equality: merge_nodes unions
+            # aliases across merged-away duplicates, so a node may
+            # carry several positional ids (one per chunk where the
+            # same logical entity was extracted under a different
+            # `<type>_<n>` name).
+            ids = n.original_extraction_ids or []
+            if raw_id not in ids:
+                continue
+            if unscoped_match is None:
+                unscoped_match = n
+            if (
+                chunk_id_for_scope
+                and n.provenance
+                and chunk_id_for_scope in (n.provenance.chunk_ids or [])
+            ):
+                scoped_match = n
+                break  # in-chunk match always wins
+        return scoped_match or unscoped_match
+
     for field_name in dir(relationship_result):
         if (
             field_name.endswith("_list")
@@ -624,11 +690,15 @@ def transform_as_relationships(
                 source_node = node_by_canonical_id.get(
                     raw_source_id
                 ) or node_by_canonical_key.get(raw_source_id)
+            if not source_node:
+                source_node = _find_by_original_id(raw_source_id)
             target_node = node_by_id.get(raw_target_id)
             if not target_node:
                 target_node = node_by_canonical_id.get(
                     raw_target_id
                 ) or node_by_canonical_key.get(raw_target_id)
+            if not target_node:
+                target_node = _find_by_original_id(raw_target_id)
 
             if not source_node or not target_node:
                 logger.warning(
@@ -1266,6 +1336,25 @@ def merge_nodes(existing_node: BaseNode, new_node: BaseNode) -> BaseNode:
             merged_node.provenance.chunk_ids = list(
                 set(merged_node.provenance.chunk_ids)
             )
+
+    # Union original_extraction_ids — preserves the alias the
+    # merged-away node carried so a later relationship lookup can
+    # still resolve `source_id='company_1'` (chunk-2 alias) onto a
+    # node merged from chunk-1's `company_0`. Without this, the
+    # base node's single alias wins and the merged-away alias is
+    # silently dropped — exactly the regression a reviewer would
+    # catch with a chunk-1+chunk-2 merge fixture.
+    if (
+        hasattr(new_node, "original_extraction_ids")
+        and new_node.original_extraction_ids
+    ):
+        if not getattr(merged_node, "original_extraction_ids", None):
+            merged_node.original_extraction_ids = []
+        seen = set(merged_node.original_extraction_ids)
+        for alias in new_node.original_extraction_ids:
+            if alias not in seen:
+                merged_node.original_extraction_ids.append(alias)
+                seen.add(alias)
 
     # Merge properties
     if hasattr(new_node, "properties") and new_node.properties:

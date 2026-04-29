@@ -830,3 +830,355 @@ class TestExtractProperties:
 
         assert props["name"] == "test"
         # Optional field may or may not be included based on implementation
+
+
+class TestOriginalExtractionIdFallback:
+    """B-fix: Gemini's extract_relationships_from_pdf emits positional
+    ids ('company_0', 'business_0') in source_id/target_id, ignoring
+    the UUIDs we feed via the relationships-context block. The
+    BaseNode.original_extraction_ids field captures Gemini's positional
+    id during nodes extraction; transform_as_relationships uses it as
+    a fallback when the UUID and canonical lookups miss. The field is
+    a list (not a single string) so merge_nodes can union aliases
+    across pre-relationship merges — see
+    test_merged_node_resolves_via_unioned_aliases below.
+
+    Without this fallback every relationship Gemini emits gets
+    rejected as 'Invalid source_id ... or target_id ...' (helpers.py
+    rejection path) — exactly the symptom the user hit on
+    transform_0d5967ec... where 39 nodes landed but 0 relationships.
+    """
+
+    def _ontology(self):
+        # Entity-keyed relationships shape (matches what
+        # OntologyParser produces in production — confirmed against
+        # logs showing relationships_def: {'HAS_BUSINESS': {...}}).
+        return {
+            "entities": {
+                "Company": {
+                    "properties": {
+                        "name": {"type": "string", "required": True},
+                    },
+                    "relationships": {
+                        "HAS_BUSINESS": {"target": "Business"},
+                    },
+                },
+                "Business": {
+                    "properties": {
+                        "name": {"type": "string", "required": True},
+                    },
+                },
+            },
+        }
+
+    def test_transform_as_nodes_stamps_original_extraction_id(self):
+        """Gemini's positional id from raw_properties['id'] must
+        land on the BaseNode so the relationships pass can resolve
+        cross-call references."""
+        from pydantic import BaseModel
+        from graphora_server.services.transform.helpers import transform_as_nodes
+
+        class _Company(BaseModel):
+            id: str
+            name: str
+
+        class _NodesResult(BaseModel):
+            Company_list: list
+            confidence_score: float = 1.0
+
+        result = _NodesResult(
+            Company_list=[_Company(id="company_0", name="Apple")],
+        )
+        nodes = transform_as_nodes(self._ontology(), result)
+        assert len(nodes) == 1
+        # node.id must be the freshly-minted UUID, not the positional
+        # id (the latter would defeat the purpose of UUID assignment).
+        assert nodes[0].id != "company_0"
+        # But the positional id is captured for the relationship
+        # fallback. Stored as a list — merge_nodes unions aliases
+        # later, so the singular value goes in as a one-element list.
+        assert nodes[0].original_extraction_ids == ["company_0"]
+
+    def test_transform_as_relationships_resolves_via_original_id(self):
+        """Relationship with source_id='company_0' / target_id=
+        'business_0' resolves to the correct nodes via the
+        original_extraction_ids fallback when the UUID lookup misses.
+
+        Pre-fix: the relationship was rejected with 'Invalid
+        source_id company_0 or target_id business_0'. Post-fix: it
+        builds correctly with the node UUIDs filled in."""
+        from pydantic import BaseModel
+        from graphora_server.services.transform.helpers import (
+            transform_as_relationships,
+        )
+        from graphora_server.services.transform.models import BaseNode
+
+        company = BaseNode(
+            id="company-uuid-xxx",
+            type="Company",
+            properties={"name": "Apple"},
+            original_extraction_ids=["company_0"],
+        )
+        business = BaseNode(
+            id="business-uuid-yyy",
+            type="Business",
+            properties={"name": "Apple Stores"},
+            original_extraction_ids=["business_0"],
+        )
+
+        class _RelItem(BaseModel):
+            source_id: str
+            target_id: str
+
+        class _RelResult(BaseModel):
+            # Field shape mirrors the parsing convention in
+            # transform_as_relationships: <Source>_<Rel>_<Target>
+            # (no _list suffix — that one is reserved for the
+            # nodes-extraction schema).
+            Company_HAS_BUSINESS_Business: list
+            confidence_score: float = 1.0
+
+        rels_payload = _RelResult(
+            Company_HAS_BUSINESS_Business=[
+                _RelItem(source_id="company_0", target_id="business_0")
+            ],
+        )
+
+        rels = transform_as_relationships(
+            self._ontology(),
+            [company, business],
+            rels_payload,
+        )
+        assert len(rels) == 1, (
+            f"expected 1 relationship resolved via original_extraction_id; "
+            f"got {len(rels)}"
+        )
+        assert rels[0].source_id == "company-uuid-xxx"
+        assert rels[0].target_id == "business-uuid-yyy"
+        assert rels[0].type == "HAS_BUSINESS"
+
+    def test_chunk_scoped_lookup_disambiguates_collisions(self):
+        """Two chunks both have a node Gemini named 'company_0'
+        (Apple in chunk-1, Microsoft in chunk-2) that did NOT get
+        merged by entity resolution (different entities). When
+        relationships from chunk-1 reference 'company_0', the
+        in-chunk node wins even though both carry the same alias.
+        Distinct from the merge-then-relationship case below — here
+        the nodes stay separate."""
+        from pydantic import BaseModel
+        from graphora_server.services.transform.helpers import (
+            transform_as_relationships,
+        )
+        from graphora_server.services.transform.models import (
+            BaseNode,
+            NodeProvenance,
+        )
+        from graphora_server.services.chunking.models import ChunkMetadata
+
+        apple_chunk1 = BaseNode(
+            id="apple-uuid",
+            type="Company",
+            properties={"name": "Apple"},
+            original_extraction_ids=["company_0"],
+            provenance=NodeProvenance(chunk_ids=["chunk-1"]),
+        )
+        microsoft_chunk2 = BaseNode(
+            id="microsoft-uuid",
+            type="Company",
+            properties={"name": "Microsoft"},
+            original_extraction_ids=["company_0"],  # collision!
+            provenance=NodeProvenance(chunk_ids=["chunk-2"]),
+        )
+        apple_business = BaseNode(
+            id="apple-business-uuid",
+            type="Business",
+            properties={"name": "Apple Stores"},
+            original_extraction_ids=["business_0"],
+            provenance=NodeProvenance(chunk_ids=["chunk-1"]),
+        )
+
+        class _RelItem(BaseModel):
+            source_id: str
+            target_id: str
+
+        class _RelResult(BaseModel):
+            Company_HAS_BUSINESS_Business: list
+            confidence_score: float = 1.0
+
+        chunk1_payload = _RelResult(
+            Company_HAS_BUSINESS_Business=[
+                _RelItem(source_id="company_0", target_id="business_0")
+            ],
+        )
+
+        rels = transform_as_relationships(
+            self._ontology(),
+            [apple_chunk1, microsoft_chunk2, apple_business],
+            chunk1_payload,
+            chunk_metadata=ChunkMetadata(
+                transform_id="t-1",
+                chunk_id="chunk-1",
+                source_file="apple-10k.pdf",
+            ),
+        )
+        assert len(rels) == 1
+        # Must bind to chunk-1's Apple, NOT chunk-2's Microsoft —
+        # even though both share original_extraction_id='company_0'.
+        assert rels[0].source_id == "apple-uuid"
+        assert rels[0].target_id == "apple-business-uuid"
+
+    def test_unscoped_fallback_when_no_chunk_metadata(self):
+        """Backward-compat: callers that don't thread chunk_metadata
+        through still get the fallback — just unscoped (first match
+        wins, may collide across chunks but better than the previous
+        all-rejections behaviour). Pins the contract that the fix
+        doesn't regress callsites without chunk plumbing."""
+        from pydantic import BaseModel
+        from graphora_server.services.transform.helpers import (
+            transform_as_relationships,
+        )
+        from graphora_server.services.transform.models import BaseNode
+
+        company = BaseNode(
+            id="company-uuid",
+            type="Company",
+            properties={"name": "Apple"},
+            original_extraction_ids=["company_0"],
+        )
+        business = BaseNode(
+            id="business-uuid",
+            type="Business",
+            properties={"name": "Apple Stores"},
+            original_extraction_ids=["business_0"],
+        )
+
+        class _RelItem(BaseModel):
+            source_id: str
+            target_id: str
+
+        class _RelResult(BaseModel):
+            Company_HAS_BUSINESS_Business: list
+            confidence_score: float = 1.0
+
+        payload = _RelResult(
+            Company_HAS_BUSINESS_Business=[
+                _RelItem(source_id="company_0", target_id="business_0")
+            ],
+        )
+        # No chunk_metadata kwarg.
+        rels = transform_as_relationships(
+            self._ontology(),
+            [company, business],
+            payload,
+        )
+        assert len(rels) == 1
+        assert rels[0].source_id == "company-uuid"
+        assert rels[0].target_id == "business-uuid"
+
+    def test_merged_node_resolves_via_unioned_aliases(self):
+        """Reviewer-flagged regression: chunk-1 emits the same
+        logical company as ``company_0``, chunk-2 emits it as
+        ``company_1``. Entity resolution
+        (``_compare_and_merge_nodes``) merges them BEFORE the
+        relationship pass runs. A subsequent chunk-2 relationship
+        with ``source_id='company_1'`` must resolve to the merged
+        node — even though the merge base node only carried the
+        chunk-1 alias before the merge.
+
+        Pre-fix: BaseNode.original_extraction_id was a single
+        string, so merge_nodes silently dropped the chunk-2 alias
+        and the relationship lookup returned None. This test
+        exercises the full path: produce the merged node via
+        ``merge_nodes`` (the same primitive
+        ``_compare_and_merge_nodes`` calls), then run
+        ``transform_as_relationships`` against it.
+        """
+        from pydantic import BaseModel
+        from graphora_server.services.transform.helpers import (
+            transform_as_relationships,
+            merge_nodes,
+        )
+        from graphora_server.services.transform.models import (
+            BaseNode,
+            NodeProvenance,
+        )
+        from graphora_server.services.chunking.models import ChunkMetadata
+
+        # Same logical Apple, extracted under different positional
+        # ids in two chunks. Different ``id`` UUIDs — entity
+        # resolution will collapse them based on canonical_key.
+        apple_chunk1 = BaseNode(
+            id="apple-chunk1-uuid",
+            type="Company",
+            properties={"name": "Apple"},
+            original_extraction_ids=["company_0"],
+            confidence_score=0.8,
+            provenance=NodeProvenance(chunk_ids=["chunk-1"]),
+        )
+        apple_chunk2 = BaseNode(
+            id="apple-chunk2-uuid",
+            type="Company",
+            properties={"name": "Apple Inc."},
+            original_extraction_ids=["company_1"],
+            confidence_score=0.7,
+            provenance=NodeProvenance(chunk_ids=["chunk-2"]),
+        )
+
+        # Simulate _compare_and_merge_nodes: merge into the higher-
+        # confidence base. The merged node's id keeps chunk-1's
+        # uuid, but its alias list MUST union both positional ids.
+        merged_apple = merge_nodes(apple_chunk1, apple_chunk2)
+        assert merged_apple.id == "apple-chunk1-uuid"
+        assert set(merged_apple.original_extraction_ids) == {
+            "company_0",
+            "company_1",
+        }, (
+            f"merge_nodes must union aliases from merged-away node; "
+            f"got {merged_apple.original_extraction_ids}"
+        )
+
+        business_chunk2 = BaseNode(
+            id="business-chunk2-uuid",
+            type="Business",
+            properties={"name": "Apple Stores"},
+            original_extraction_ids=["business_0"],
+            provenance=NodeProvenance(chunk_ids=["chunk-2"]),
+        )
+
+        # Chunk-2 relationship referring to the chunk-2 alias of
+        # the (now-merged) Apple node.
+        class _RelItem(BaseModel):
+            source_id: str
+            target_id: str
+
+        class _RelResult(BaseModel):
+            Company_HAS_BUSINESS_Business: list
+            confidence_score: float = 1.0
+
+        chunk2_payload = _RelResult(
+            Company_HAS_BUSINESS_Business=[
+                _RelItem(source_id="company_1", target_id="business_0")
+            ],
+        )
+
+        rels = transform_as_relationships(
+            self._ontology(),
+            [merged_apple, business_chunk2],
+            chunk2_payload,
+            chunk_metadata=ChunkMetadata(
+                transform_id="t-1",
+                chunk_id="chunk-2",
+                source_file="apple-10k.pdf",
+            ),
+        )
+        # Pre-fix this would be 0; post-fix it's 1 because the
+        # merged node's alias list includes 'company_1'.
+        assert len(rels) == 1, (
+            f"merged node must resolve via unioned alias; got "
+            f"{len(rels)} relationships"
+        )
+        # Resolved to the merged node's UUID (the merge-base's
+        # uuid wins, but the alias from the merged-away chunk-2
+        # node is what enabled the lookup).
+        assert rels[0].source_id == "apple-chunk1-uuid"
+        assert rels[0].target_id == "business-chunk2-uuid"

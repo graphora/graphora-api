@@ -105,6 +105,25 @@ class BaseNode(BaseModel):
     canonical_properties: Dict[str, Any] = Field(default_factory=dict)
     canonical_key: Optional[str] = None
     canonical_id: Optional[str] = None
+    # Gemini's PDF-binary extraction emits positional IDs in the
+    # `id` field (e.g. 'company_0', 'business_0') and tends to
+    # ignore the UUIDs we feed it via the relationships-context
+    # block. Capturing the positional id here lets
+    # transform_as_relationships resolve `source_id='company_0'` /
+    # `target_id='business_0'` back to the BaseNode the
+    # nodes-extraction call produced — without forcing the LLM to
+    # adopt our UUID space.
+    #
+    # List (not single value) because entity resolution merges
+    # nodes BEFORE relationship extraction runs (slices 1+2+3 in
+    # _compare_and_merge_nodes). When chunk-1's ``company_0`` and
+    # chunk-2's ``company_1`` both refer to the same logical
+    # entity and get merged, the merged node must remember BOTH
+    # aliases so a chunk-2 relationship with source_id='company_1'
+    # still resolves. ``merge_nodes`` unions the lists. Empty
+    # default for cached/older payloads keeps lookups falling
+    # through gracefully.
+    original_extraction_ids: List[str] = Field(default_factory=list)
     provenance: Optional[NodeProvenance] = None
     confidence_score: Optional[float] = None
 
