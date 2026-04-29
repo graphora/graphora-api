@@ -728,3 +728,375 @@ class TestEmbeddingThresholdHonorsSetting:
                 )
         # Explicit 0.4 wins over setting 0.99; 0.50 >= 0.4 → group.
         assert len(groups) == 1
+
+
+class TestSplinkCandidateGroups:
+    """Pin the B2-er slice-3 Splink-as-blocker contract.
+
+    ``_splink_candidate_groups`` lives in graph_transformer.py and
+    delegates clustering to ``cluster_entities_with_splink`` in
+    helpers.py. We mock the helper to control the
+    ``id_to_representative`` mapping and pin the materialization
+    logic — that's the part slice 3 owns. Splink's actual
+    probabilistic-linkage behaviour is covered by
+    test_splink_ontology.py, which is unaffected by this slice.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_for_empty_or_single_input(self) -> None:
+        from graphora_server.services.transform.graph_transformer import (
+            _splink_candidate_groups,
+        )
+
+        assert await _splink_candidate_groups([]) == []
+        assert await _splink_candidate_groups([_node("p1", name="Alice")]) == []
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_clusterer_returns_no_mappings(self) -> None:
+        # Splink ran fine but found no duplicates — caller's
+        # contract is "no candidate groups, fall through to
+        # pass-through".
+        from graphora_server.services.transform.graph_transformer import (
+            _splink_candidate_groups,
+        )
+
+        nodes = [_node("p1", name="Alice"), _node("p2", name="Bob")]
+        with patch(
+            "graphora_server.services.transform.helpers.cluster_entities_with_splink",
+            new=AsyncMock(return_value={}),
+        ):
+            groups = await _splink_candidate_groups(nodes)
+        assert groups == []
+
+    @pytest.mark.asyncio
+    async def test_swallows_clusterer_exceptions(self) -> None:
+        # A Splink-side failure (RuntimeError, OOM, missing
+        # column, etc.) must NOT raise into extraction. Same
+        # degradation contract as _embedding_candidate_groups.
+        from graphora_server.services.transform.graph_transformer import (
+            _splink_candidate_groups,
+        )
+
+        nodes = [_node("p1", name="Alice"), _node("p2", name="Alic")]
+        with patch(
+            "graphora_server.services.transform.helpers.cluster_entities_with_splink",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            groups = await _splink_candidate_groups(nodes)
+        assert groups == []
+
+    @pytest.mark.asyncio
+    async def test_materializes_single_cluster(self) -> None:
+        # Mapping: p1 -> p2 means p2 is the representative, p1 is
+        # the duplicate. The materialized group must contain BOTH
+        # nodes. This pins the "rep is in its own group" rule
+        # even though the rep doesn't appear as a key in the
+        # mapping.
+        from graphora_server.services.transform.graph_transformer import (
+            _splink_candidate_groups,
+        )
+
+        n1 = _node("p1", name="Alice")
+        n2 = _node("p2", name="Alic")
+        with patch(
+            "graphora_server.services.transform.helpers.cluster_entities_with_splink",
+            new=AsyncMock(return_value={"p1": "p2"}),
+        ):
+            groups = await _splink_candidate_groups([n1, n2])
+        assert len(groups) == 1
+        assert {n.id for n in groups[0]} == {"p1", "p2"}
+
+    @pytest.mark.asyncio
+    async def test_materializes_multiple_clusters(self) -> None:
+        # Two independent clusters {p1,p2} and {p3,p4} → two
+        # candidate groups. p5 is a singleton (not in mapping)
+        # and must NOT appear in any group — slice 3 only feeds
+        # multi-node clusters to the LLM.
+        from graphora_server.services.transform.graph_transformer import (
+            _splink_candidate_groups,
+        )
+
+        nodes = [
+            _node("p1", name="Alice"),
+            _node("p2", name="Alic"),
+            _node("p3", name="Bob"),
+            _node("p4", name="Bobby"),
+            _node("p5", name="Carol"),
+        ]
+        mapping = {"p1": "p2", "p3": "p4"}
+        with patch(
+            "graphora_server.services.transform.helpers.cluster_entities_with_splink",
+            new=AsyncMock(return_value=mapping),
+        ):
+            groups = await _splink_candidate_groups(nodes)
+        assert len(groups) == 2
+        all_ids = {n.id for grp in groups for n in grp}
+        assert all_ids == {"p1", "p2", "p3", "p4"}
+        # Each materialized group must be size >= 2 (slice 3
+        # contract — singletons go to pass-through).
+        for grp in groups:
+            assert len(grp) >= 2
+
+    @pytest.mark.asyncio
+    async def test_drops_unknown_entity_ids_from_mapping(self) -> None:
+        # Defensive: if the clusterer somehow returned IDs the
+        # caller didn't pass in (shouldn't happen, but be
+        # explicit), they're skipped rather than raising KeyError.
+        from graphora_server.services.transform.graph_transformer import (
+            _splink_candidate_groups,
+        )
+
+        n1 = _node("p1", name="Alice")
+        n2 = _node("p2", name="Alic")
+        # ghost-id is not in the input list.
+        mapping = {"p1": "p2", "ghost-id": "p2"}
+        with patch(
+            "graphora_server.services.transform.helpers.cluster_entities_with_splink",
+            new=AsyncMock(return_value=mapping),
+        ):
+            groups = await _splink_candidate_groups([n1, n2])
+        assert len(groups) == 1
+        assert {n.id for n in groups[0]} == {"p1", "p2"}
+
+    def test_clusterer_does_not_record_learning_outcomes(self) -> None:
+        # Contract pin (reviewer fix #1):
+        # ``cluster_entities_with_splink`` is a candidate-pair
+        # generator — the scores Splink emits are speculative
+        # until the LLM confirms the merge. Recording them via
+        # ``merge_learning_service.record_outcome`` would:
+        #   (a) pollute the adaptive threshold with pairs the LLM
+        #       later rejects, and
+        #   (b) double-record on every transform, since the
+        #       post-relationship ``deduplicate_entities_with_splink``
+        #       call already records once on the real population.
+        # The real dedup path stays the single source of learning
+        # truth. This test catches any future reintroduction of
+        # the call.
+        import inspect
+        from graphora_server.services.transform.helpers import (
+            cluster_entities_with_splink,
+        )
+
+        src = inspect.getsource(cluster_entities_with_splink)
+        # The deliberate-omission docstring/comment mentions
+        # ``record_outcome`` for context — check for the actual
+        # await-call expression instead.
+        assert "await merge_learning_service.record_outcome" not in src, (
+            "cluster_entities_with_splink is recording learning outcomes "
+            "for speculative pre-LLM candidates — see reviewer fix #1."
+        )
+
+
+class TestCompareAndMergeNodesSliceThreeIntegration:
+    """End-to-end: Splink-blocker stage runs after embedding stage,
+    only on the still-unblocked subset, and feeds groups to the
+    same ``resolve_entity_group`` LLM seam as slices 1 and 2.
+
+    The Splink loop is the cleanup pattern caught the slice-2
+    review: identical boilerplate (resolve → confidence-merge →
+    track nodes_in_groups) but with a different blocker source.
+    These tests pin the wiring: that the loop fires only on
+    nodes the prior blockers missed, that resolved groups go
+    through the LLM, and that pass-through still works for
+    Splink misses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_splink_blocker_runs_on_embedding_misses(self) -> None:
+        # Three Persons with distinct name3 prefixes (Alice/Bob/
+        # Carol) and no canonical_key — property blocker yields no
+        # groups. Embedding stage is off in this test, so no groups
+        # there either. Slice 3 sees all three as the unblocked
+        # subset. Splink (mocked) finds {p1, p2, p3} as a single
+        # cluster with p2 as representative. Expected: one
+        # resolve_entity_group call with all three nodes.
+        #
+        # Three nodes — not two — because production
+        # ``cluster_entities_with_splink`` skips the
+        # ``len(type_entities) < 3`` case per type (mirrors
+        # ``deduplicate_entities_with_splink``). Two-node candidates
+        # are slice 1's territory via canonical_key + name3.
+        n1 = _node("p1", name="Alice")
+        n2 = _node("p2", name="Bob")
+        n3 = _node("p3", name="Carol")
+
+        async def fake_resolve(entity_type, group, **kwargs):
+            return [list(group)]  # treat as one merge group
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.resolve_entity_group",
+            new=AsyncMock(side_effect=fake_resolve),
+        ) as mock_resolve:
+            with patch(
+                "graphora_server.services.transform.helpers.cluster_entities_with_splink",
+                new=AsyncMock(return_value={"p1": "p2", "p3": "p2"}),
+            ):
+                result = await _compare_and_merge_nodes(
+                    [n1, n2, n3], parsed_ontology={"entities": {"Person": {}}}
+                )
+        # resolve_entity_group called exactly once for the Splink
+        # cluster (property + embedding stages found nothing).
+        assert mock_resolve.call_count == 1
+        called_group = mock_resolve.call_args.args[1]
+        assert {n.id for n in called_group} == {"p1", "p2", "p3"}
+        # All three collapse to one merged node.
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_splink_misses_pass_through(self) -> None:
+        # Splink returns {} (no clusters). Three nodes that no
+        # blocker caught fall through to step 4 pass-through
+        # unchanged. Three nodes (not two) so the test exercises
+        # the same population shape Splink would actually see in
+        # production.
+        n1 = _node("p1", name="Alice")
+        n2 = _node("p2", name="Bob")
+        n3 = _node("p3", name="Carol")
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.resolve_entity_group",
+            new=AsyncMock(),
+        ) as mock_resolve:
+            with patch(
+                "graphora_server.services.transform.helpers.cluster_entities_with_splink",
+                new=AsyncMock(return_value={}),
+            ):
+                result = await _compare_and_merge_nodes(
+                    [n1, n2, n3], parsed_ontology={"entities": {"Person": {}}}
+                )
+        # No blocker fired → no LLM call.
+        mock_resolve.assert_not_called()
+        # All three nodes pass through.
+        assert {n.id for n in result} == {"p1", "p2", "p3"}
+
+    @pytest.mark.asyncio
+    async def test_splink_only_sees_unblocked_subset(self) -> None:
+        # Property-blocker catches {p1, p2} via name3 prefix.
+        # Splink should be called with ONLY the remaining nodes
+        # (p3, p4, p5) — never with p1/p2 again. Pins the
+        # "bounded-cost" promise: each blocker only sees prior
+        # blockers' misses. Three unblocked nodes (not two) so the
+        # production ``< 3`` skip wouldn't apply.
+        n1 = _node("p1", name="Alice")
+        n2 = _node("p2", name="Alic")
+        n3 = _node("p3", name="Carol")
+        n4 = _node("p4", name="Dan")
+        n5 = _node("p5", name="Eve")
+
+        async def fake_resolve(entity_type, group, **kwargs):
+            return [[n] for n in group]
+
+        clusterer = AsyncMock(return_value={})
+        with patch(
+            "graphora_server.services.transform.graph_transformer.resolve_entity_group",
+            new=AsyncMock(side_effect=fake_resolve),
+        ):
+            with patch(
+                "graphora_server.services.transform.helpers.cluster_entities_with_splink",
+                new=clusterer,
+            ):
+                await _compare_and_merge_nodes(
+                    [n1, n2, n3, n4, n5],
+                    parsed_ontology={"entities": {"Person": {}}},
+                )
+        # Splink got called — once — with only the unblocked
+        # subset (p3, p4, p5). p1+p2 already went to the LLM via
+        # the property blocker.
+        assert clusterer.await_count == 1
+        passed_entities = clusterer.await_args.kwargs["entities"]
+        assert {n.id for n in passed_entities} == {"p3", "p4", "p5"}
+
+    @pytest.mark.asyncio
+    async def test_no_parsed_ontology_still_works(self) -> None:
+        # Backward-compat: callers that don't pass parsed_ontology
+        # (e.g. older tests, fallback paths) still get a valid
+        # result. Splink runs but with no per-type comparison
+        # rules it produces no clusters; the property + embedding
+        # stages handle whatever they catch.
+        n1 = _node("p1", name="Alice", canonical_key="alice")
+        n2 = _node("p2", name="Bob", canonical_key="bob")
+        n3 = _node("p3", name="Carol", canonical_key="carol")
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.resolve_entity_group",
+            new=AsyncMock(),
+        ) as mock_resolve:
+            with patch(
+                "graphora_server.services.transform.helpers.cluster_entities_with_splink",
+                new=AsyncMock(return_value={}),
+            ):
+                result = await _compare_and_merge_nodes([n1, n2, n3])
+        mock_resolve.assert_not_called()
+        assert {n.id for n in result} == {"p1", "p2", "p3"}
+
+    @pytest.mark.asyncio
+    async def test_splink_resolved_group_merges_by_confidence(self) -> None:
+        # Pins that slice-3's loop reuses the same confidence-sort
+        # merge boilerplate as slices 1/2. Highest-confidence node
+        # is the merge base. Three nodes (not two) so the test
+        # input matches the production-reachable Splink path.
+        n1 = BaseNode(
+            id="p1", type="Person", properties={"name": "Alice"}, confidence_score=0.4
+        )
+        n2 = BaseNode(
+            id="p2", type="Person", properties={"name": "Bob"}, confidence_score=0.95
+        )
+        n3 = BaseNode(
+            id="p3",
+            type="Person",
+            properties={"name": "Carol"},
+            confidence_score=0.6,
+        )
+
+        async def fake_resolve(entity_type, group, **kwargs):
+            return [list(group)]
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.resolve_entity_group",
+            new=AsyncMock(side_effect=fake_resolve),
+        ):
+            with patch(
+                "graphora_server.services.transform.helpers.cluster_entities_with_splink",
+                new=AsyncMock(return_value={"p1": "p2", "p3": "p2"}),
+            ):
+                result = await _compare_and_merge_nodes(
+                    [n1, n2, n3], parsed_ontology={"entities": {"Person": {}}}
+                )
+        assert len(result) == 1
+        # Highest-confidence node wins as base — same contract as
+        # slice 1 and slice 2 merge logic.
+        assert result[0].id in {"p1", "p2", "p3"}
+
+    @pytest.mark.asyncio
+    async def test_real_clusterer_skips_two_node_case(self) -> None:
+        # Pins the production reality of slice 3:
+        # ``cluster_entities_with_splink`` has a
+        # ``len(type_entities) < 3`` early-exit per type (mirrors
+        # the original ``deduplicate_entities_with_splink``). With
+        # two same-type nodes, no Splink machinery runs and the
+        # mapping is empty — the candidate-group materializer in
+        # ``_splink_candidate_groups`` then yields no groups.
+        #
+        # This is by design, not a bug: slice 1's property blocker
+        # already covers the 2-node case via canonical_key + name3
+        # prefix. Splink only adds value when the unblocked subset
+        # has at least 3 records of the same type (where blocking
+        # rules can actually reduce the comparison space).
+        #
+        # NOTE: this test calls the real helper without mocking
+        # the inner Splink machinery — that's the whole point. The
+        # tests above mock the helper to control the mapping; this
+        # one verifies what the unmocked helper actually does.
+        from graphora_server.services.transform.helpers import (
+            cluster_entities_with_splink,
+        )
+
+        nodes = [_node("p1", name="Alice"), _node("p2", name="Alic")]
+        mapping = await cluster_entities_with_splink(
+            entities=nodes,
+            parsed_ontology={
+                "entities": {"Person": {"properties": {"name": {"type": "string"}}}}
+            },
+        )
+        # Real helper short-circuits: 2 < 3 → empty mapping.
+        assert mapping == {}

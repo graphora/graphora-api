@@ -355,18 +355,20 @@ async def _build_graph_from(
     if user_id:
         await entity_ledger_service.hydrate_nodes(user_id, nodes)
 
-    # Step 2: Compare & merge entities, then deduplicate with Splink hints.
+    # Step 2: Compare & merge entities. Splink blocking runs inside
+    # _compare_and_merge_nodes as the slice-3 stage of the four-stage
+    # pipeline (property → embedding → Splink → LLM). The standalone
+    # post-call deduplicate_entities_with_splink invocation that used
+    # to live here was removed in slice 3 — its work now happens
+    # inside the candidate-group pipeline. The post-relationships
+    # call below (Step 4) stays because it does relationship-rewriting
+    # which slice 3 doesn't replace.
     nodes = await _compare_and_merge_nodes(
         nodes,
         user_id=user_id,
         transform_id=transform_id,
         document_usage_id=document_usage_id,
-    )
-    nodes, _ = await deduplicate_entities_with_splink(
-        nodes,
-        None,
         parsed_ontology=ontology_parser.parsed_ontology,
-        user_id=user_id,
     )
     logger.info(f"Nodes after comparison: {nodes}")
 
@@ -818,31 +820,113 @@ def _embedding_candidate_groups(
                 yield group
 
 
+async def _splink_candidate_groups(
+    nodes: List[BaseNode],
+    parsed_ontology: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+) -> List[List[BaseNode]]:
+    """Yield candidate match groups from Splink probabilistic
+    record-linkage.
+
+    B2-er slice 3: closes the recall gap that property-based
+    blocking (slice 1) and embedding-based blocking (slice 2)
+    leave on the table. Splink's m/u-probability scoring with
+    learned comparisons (JaroWinkler / Levenshtein on ID-like
+    columns, ExactMatch on canonical fields, etc.) catches pairs
+    that share neither block keys nor embedding similarity but
+    still match according to the probabilistic model.
+
+    Operates on the SUBSET that earlier blockers missed, so the
+    cost is bounded relative to total node count. Mirrors the
+    ``_embedding_candidate_groups`` contract: returns ``[]`` on
+    every failure mode rather than raising into extraction.
+
+    Returns nothing when:
+      - the [er] extra (splink + pandas) isn't installed
+      - the underlying clustering helper raises mid-flow
+      - no Splink clusters of size >= 2 are found
+
+    The function is async because Splink's threshold lookup
+    talks to ``merge_learning_service`` (DB-backed in production).
+    """
+    if not nodes or len(nodes) < 2:
+        return []
+
+    try:
+        from graphora_server.services.transform.helpers import (
+            cluster_entities_with_splink,
+        )
+    except ImportError:
+        logger.debug("Splink extra not installed; skipping ER Splink stage")
+        return []
+
+    try:
+        id_to_representative = await cluster_entities_with_splink(
+            entities=nodes,
+            parsed_ontology=parsed_ontology,
+            user_id=user_id,
+        )
+    except Exception as exc:  # pragma: no cover — defensive log
+        logger.warning("Splink candidate-group blocker failed: %s", exc)
+        return []
+
+    if not id_to_representative:
+        return []
+
+    by_id: Dict[str, BaseNode] = {n.id: n for n in nodes}
+    by_rep: Dict[str, List[BaseNode]] = {}
+    for entity_id, rep_id in id_to_representative.items():
+        node = by_id.get(entity_id)
+        if node is None:
+            # Splink may have seen entities the caller didn't pass
+            # in (shouldn't happen with our usage, but be defensive).
+            continue
+        by_rep.setdefault(rep_id, []).append(node)
+
+    # Ensure each representative is itself in its group — the
+    # mapping convention is "duplicate -> representative" with the
+    # representative's own self-mapping omitted.
+    for rep_id in list(by_rep.keys()):
+        rep_node = by_id.get(rep_id)
+        if rep_node and rep_node not in by_rep[rep_id]:
+            by_rep[rep_id].append(rep_node)
+
+    return [grp for grp in by_rep.values() if len(grp) >= 2]
+
+
 async def _compare_and_merge_nodes(
     nodes: List[BaseNode],
     user_id: Optional[str] = None,
     transform_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
+    parsed_ontology: Optional[Dict[str, Any]] = None,
 ) -> List[BaseNode]:
     """Compare all nodes and resolve them using LLM, with a
-    blocking stage that bounds the LLM input size.
+    layered blocking stack that bounds the LLM input size.
 
-    Pipeline (B2-er slice 1):
+    Pipeline (B2-er slices 1, 2, 3):
       1. Dict-keyed dedup by node id (was O(n²) list scan).
       2. Property-based blocking via ``_block_keys_for_node`` —
          buckets nodes that look related (same canonical_key,
          same name prefix, etc.) into candidate groups.
       3. LLM resolution per candidate group via
          ``resolve_entity_group``. Singletons skip the LLM.
-      4. Pass-through for nodes that didn't land in any
-         candidate group (e.g. a single Person with no
-         lookalikes — no resolution needed).
+      4. Embedding-based blocking on slice-2's misses
+         (``_embedding_candidate_groups``) — catches semantic
+         variants ("John Smith" / "Jonathan S.") that don't
+         share property signals. LLM resolves the new groups.
+      5. Splink probabilistic blocking on slice-3's misses
+         (``_splink_candidate_groups``) — catches pairs the
+         property and embedding stages both missed but that
+         Splink's m/u-probability comparisons recognize. LLM
+         resolves the new groups.
+      6. Pass-through for nodes that didn't land in any
+         candidate group from any blocker (genuine singletons).
 
-    Recall tradeoff vs the old all-pairs path: nodes that should
-    match but never share a block key get missed. The block
-    keys are designed to over-include (canonical_key + name3 +
-    type-fallback) so this is rare in practice. Slice 2 layers
-    embedding-based blocking on top to catch the long tail.
+    Each blocker only sees nodes the prior blockers missed, so
+    cost stays bounded as we add stages. ``parsed_ontology``
+    (slice 3) is needed for Splink's per-type comparison rules;
+    earlier blockers are ontology-agnostic.
     """
     if not nodes or len(nodes) <= 1:
         return nodes
@@ -922,9 +1006,47 @@ async def _compare_and_merge_nodes(
             for n in group:
                 nodes_in_groups.add(n.id)
 
+    # Step 3.75 — B2-er slice 3 Splink probabilistic blocking on
+    # the nodes both prior blockers missed. Splink's m/u-probability
+    # scoring catches pairs that share neither block keys nor
+    # embedding similarity but match on learned property
+    # comparisons. Same boilerplate as the embedding loop; only
+    # the candidate-group source changes.
+    unblocked = [n for n in deduped if n.id not in nodes_in_groups]
+    splink_groups = await _splink_candidate_groups(
+        unblocked,
+        parsed_ontology=parsed_ontology,
+        user_id=user_id,
+    )
+    for candidate_group in splink_groups:
+        entity_type = candidate_group[0].type
+        resolved_groups = await resolve_entity_group(
+            entity_type,
+            candidate_group,
+            user_id=user_id,
+            transform_id=transform_id,
+            document_usage_id=document_usage_id,
+        )
+        for group in resolved_groups:
+            if len(group) == 1:
+                final_nodes.append(group[0])
+                nodes_in_groups.add(group[0].id)
+                continue
+            sorted_nodes = sorted(
+                group,
+                key=lambda x: x.confidence_score if x.confidence_score else 0,
+                reverse=True,
+            )
+            base_node = sorted_nodes[0]
+            for other_node in sorted_nodes[1:]:
+                base_node = merge_nodes(base_node, other_node)
+            final_nodes.append(base_node)
+            for n in group:
+                nodes_in_groups.add(n.id)
+
     # Step 4 — pass-through for nodes that didn't appear in any
-    # candidate group (singletons in their block AND below the
-    # embedding-similarity threshold against any other node).
+    # candidate group (genuine singletons: missed by property,
+    # embedding, AND Splink stages).
     for node in deduped:
         if node.id not in nodes_in_groups:
             final_nodes.append(node)
@@ -1053,12 +1175,18 @@ async def _build_graph_with_multi_pass(
     if user_id:
         await entity_ledger_service.hydrate_nodes(user_id, nodes)
 
-    # Apply entity resolution and deduplication
+    # Apply entity resolution and deduplication. Splink blocking
+    # runs inside _compare_and_merge_nodes (slice 3). The follow-up
+    # deduplicate_entities_with_splink call stays — it threads
+    # relationships through and rewrites their source/target IDs
+    # whenever node merges happen. Slice 3 doesn't replace that
+    # relationship-rewriting side-effect.
     nodes = await _compare_and_merge_nodes(
         nodes,
         user_id=user_id,
         transform_id=transform_id,
         document_usage_id=document_usage_id,
+        parsed_ontology=ontology_parser.parsed_ontology,
     )
     nodes, relationships = await deduplicate_entities_with_splink(
         entities=nodes,

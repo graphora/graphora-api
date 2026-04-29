@@ -693,6 +693,152 @@ def transform_as_relationships(
     return relationships
 
 
+async def cluster_entities_with_splink(
+    entities: List[BaseNode | Node],
+    parsed_ontology: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    threshold: float = 0.95,
+    use_embedding_similarity: Optional[bool] = None,
+) -> Dict[str, str]:
+    """Splink probabilistic-linkage clustering only — does NOT
+    merge entities or rewrite relationships.
+
+    Returns ``id_to_representative`` mapping for entities Splink
+    decided are duplicates of one another above ``threshold``.
+    Singleton entities (and their identity self-mappings) are
+    excluded from the result.
+
+    Used by B2-er slice 3's ``_splink_candidate_groups`` in
+    graph_transformer.py to feed Splink-discovered candidate
+    pairs into the ``resolve_entity_group`` LLM stage inside
+    ``_compare_and_merge_nodes``. The slice-1 property blocker
+    already covers the ``_deduplicate_small_entity_group``
+    heuristic ground, so this function deliberately skips
+    heuristics — slice 3 only sees nodes both earlier blockers
+    missed, where Splink's m/u-probability scoring is the
+    relevant signal.
+
+    Resilient on every standard Splink early-exit branch (no
+    comparison columns, no comparisons, no blocking rules, no
+    duplicates found): returns ``{}`` and the caller treats
+    those nodes as unblocked. Top-level exceptions are logged
+    and swallowed so a Splink failure can't break extraction.
+    """
+    if use_embedding_similarity is None:
+        use_embedding_similarity = settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED
+
+    if not entities or len(entities) < 2:
+        return {}
+
+    entities_by_type: Dict[str, List[BaseNode | Node]] = {}
+    for e in entities:
+        if not hasattr(e, "type"):
+            continue
+        entities_by_type.setdefault(e.type, []).append(e)
+
+    all_mappings: Dict[str, str] = {}
+
+    try:
+        for current_type, type_entities in entities_by_type.items():
+            if len(type_entities) < 3:
+                continue
+
+            effective_threshold = await merge_learning_service.get_threshold(
+                user_id, current_type, threshold
+            )
+
+            entities_data = _prepare_entities_for_deduplication(
+                type_entities, None, parsed_ontology
+            )
+
+            entity_def = (
+                (parsed_ontology or {}).get("entities", {}).get(current_type, {})
+            )
+            property_defs = entity_def.get("properties", {}) if entity_def else {}
+            allowed_properties = set(property_defs.keys()) if property_defs else None
+            if allowed_properties is not None and len(allowed_properties) == 0:
+                allowed_properties = None
+
+            df, comparison_columns = _create_splink_dataframe(
+                entities_data,
+                SYSTEM_PROPERTIES,
+                allowed_properties=allowed_properties,
+            )
+            if not comparison_columns:
+                continue
+
+            comparisons, text_columns = _create_splink_comparisons(
+                comparison_columns,
+                df,
+                len(df),
+                current_type,
+                parsed_ontology,
+            )
+
+            if use_embedding_similarity and text_columns:
+                try:
+                    from graphora_server.services.entity_resolution.splink_embedding_comparison import (
+                        EmbeddingAwareComparisonFactory,
+                    )
+
+                    embedding_factory = EmbeddingAwareComparisonFactory()
+                    df, _ = embedding_factory.prepare_dataframe_with_embeddings(
+                        df, text_columns
+                    )
+                except ImportError as exc:
+                    logging.warning(
+                        "Embedding similarity not available for clustering: %s",
+                        str(exc),
+                    )
+                except Exception as exc:
+                    logging.warning(
+                        "Embedding signature step failed for clustering: %s",
+                        str(exc),
+                    )
+
+            if not comparisons:
+                continue
+
+            blocking_rules = _create_blocking_rules(
+                comparison_columns,
+                df,
+                len(df),
+                current_type,
+                parsed_ontology,
+            )
+            if not blocking_rules:
+                continue
+
+            id_to_representative, _match_scores = _run_splink_deduplication_batched(
+                entities_data, df, comparisons, blocking_rules, effective_threshold
+            )
+
+            # Deliberately do NOT call merge_learning_service.record_outcome
+            # here. This function is a candidate-pair generator for slice 3 —
+            # the scores Splink emits are speculative until the LLM stage
+            # confirms the merge. Recording them now would
+            #   (a) pollute the adaptive threshold with pairs the LLM later
+            #       rejects (false positives become "observed outcomes"), and
+            #   (b) double-record on every transform, since the post-
+            #       relationship deduplicate_entities_with_splink call already
+            #       records once on the real (post-LLM, post-relationship-
+            #       extraction) population.
+            # The real dedup path remains the single source of learning truth.
+
+            if not id_to_representative:
+                continue
+
+            for entity_id, rep_id in id_to_representative.items():
+                if entity_id != rep_id:
+                    all_mappings[entity_id] = rep_id
+    except Exception as exc:
+        logging.error("Splink clustering failed: %s", str(exc))
+        logging.debug("Splink clustering details: %s", traceback.format_exc())
+        return {}
+
+    return all_mappings
+
+
 async def deduplicate_entities_with_splink(
     entities: List[BaseNode | Node],
     relationships: List[RelationshipInstance | Edge] = None,
