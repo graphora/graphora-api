@@ -34,6 +34,7 @@ SYSTEM_PROPERTIES = [
     "source_chunk_id",
     "source_text",
     "source",
+    "source_file",
     "document_id",
     "document_name",
     "chunk_offset",

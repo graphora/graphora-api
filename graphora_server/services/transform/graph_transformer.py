@@ -549,9 +549,36 @@ def _build_relationships_context_envelope(
 
 
 def _format_properties(properties: Optional[Dict[str, Any]]) -> str:
+    """Render node/relationship properties for the LLM context block.
+
+    Filters SYSTEM_PROPERTIES out before serializing — A1-prov and
+    B0-prov-extend stamp many provenance fields onto node.properties
+    (source_chunk_id, document_name, page_number, source_text up to
+    ~1000 chars, extractor_model, prompt_version, validator_score,
+    extraction_timestamp, ...). Dumping all of them into the context
+    block ballooned the relationship-extraction prompt from ~16k
+    tokens to ~81k on the Apple 10K, drowned Gemini in metadata
+    noise, and slashed relationship recall (only 2-7 rels surviving
+    instead of the historical baseline).
+
+    SYSTEM_PROPERTIES is the centralized "internal/metadata, not
+    user-meaningful" list — same set the similarity scorer and
+    ontology-validation skip-lists already filter on. Keeping the
+    LLM-context formatter aligned with that list restores prompt
+    size and extraction quality.
+    """
     if not properties:
         return "{}"
-    return json.dumps(properties, sort_keys=True, default=str)
+    from graphora_server.utils.constants import SYSTEM_PROPERTIES
+
+    user_props = {
+        k: v
+        for k, v in properties.items()
+        if k not in SYSTEM_PROPERTIES and v not in (None, "")
+    }
+    if not user_props:
+        return "{}"
+    return json.dumps(user_props, sort_keys=True, default=str)
 
 
 def _node_context_sort_key(node: BaseNode) -> Tuple[str, str, str]:
