@@ -613,6 +613,106 @@ class TestOrphanPruning:
         # Both nodes should remain
         assert len(graph.nodes) == 2
 
+    def test_prune_keeps_orphans_with_real_ontology_properties(self):
+        """Regression test: prune_orphaned_nodes must NOT drop a
+        node whose properties contain ontology-defined values, even
+        when no relationship references it.
+
+        Pre-fix bug: when the relationship pass produced ANY edges
+        (so the early-return at the top of prune_orphaned_nodes was
+        bypassed), every orphan that couldn't auto-link got pruned,
+        regardless of whether it carried real extracted data. On a
+        live Apple 10K transform this dropped 33 of 39 nodes
+        (BusinessSegments, RiskFactors, RiskCategories, Products
+        with real names) just because Gemini produced relationships
+        for only a subset.
+
+        Fix: the implementation now matches the docstring's promise
+        ("Remove nodes with no ontology-defined properties that
+        aren't referenced in any relationship"). A node carrying
+        real ontology-defined property values survives whether or
+        not any edge points at it.
+        """
+        from graphora_server.services.transform.helpers import prune_orphaned_nodes
+        from graphora_server.services.transform.models import (
+            BaseNode,
+            RelationshipInstance,
+            DocumentKnowledgeGraph,
+        )
+
+        ontology = {
+            "entities": {
+                "Company": {
+                    "properties": {
+                        "name": {"type": "string"},
+                        "ticker": {"type": "string"},
+                    }
+                },
+                "Product": {"properties": {"name": {"type": "string"}}},
+                "Junk": {"properties": {}},
+            },
+        }
+
+        # Connected via a Company → Product edge
+        company = BaseNode(
+            id="c1",
+            type="Company",
+            properties={"name": "Apple", "ticker": "AAPL"},
+        )
+        product = BaseNode(
+            id="prod-1",
+            type="Product",
+            properties={"name": "iPhone"},
+        )
+        edge = RelationshipInstance(
+            id="r1",
+            type="HAS_PRODUCT",
+            source_id="c1",
+            target_id="prod-1",
+            source_type="Company",
+            target_type="Product",
+        )
+        # Orphan WITH ontology-defined props — should survive
+        orphan_with_data = BaseNode(
+            id="prod-2",
+            type="Product",
+            properties={"name": "Apple Watch"},
+        )
+        # Orphan with ONLY system / non-ontology props — should be pruned
+        orphan_metadata_only = BaseNode(
+            id="ghost-1",
+            type="Product",
+            properties={"__tid": "transform_x", "extraction_timestamp": "..."},
+        )
+        # Orphan with no props at all and no ontology props — should be pruned
+        orphan_empty = BaseNode(id="j1", type="Junk", properties={})
+
+        graph = DocumentKnowledgeGraph(
+            nodes=[
+                company,
+                product,
+                orphan_with_data,
+                orphan_metadata_only,
+                orphan_empty,
+            ],
+            relationships=[edge],
+        )
+        prune_orphaned_nodes(ontology, graph)
+
+        survived = {n.id for n in graph.nodes}
+        # Connected nodes always survive.
+        assert "c1" in survived
+        assert "prod-1" in survived
+        # The crucial regression assertion: orphan with real data is kept.
+        assert "prod-2" in survived, (
+            "Orphaned node carrying ontology-defined props (name='Apple Watch') "
+            "must survive prune — pre-fix this was dropped silently."
+        )
+        # Truly empty orphans are still pruned (preserves the
+        # original purpose of the function).
+        assert "ghost-1" not in survived
+        assert "j1" not in survived
+
 
 # ============================================================
 # Entity Deduplication Preparation Tests

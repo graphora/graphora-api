@@ -1464,6 +1464,33 @@ def prune_orphaned_nodes(
     orphaned_nodes = []
     for node in all_nodes:
         if node.id not in nodes_in_relationships:
+            # Match the function's documented contract: keep nodes
+            # that carry ontology-defined property values, even when
+            # no relationship references them. A node with real
+            # extracted data ("name=Apple Inc., ticker=AAPL") is
+            # legitimate output regardless of whether the LLM also
+            # extracted a relationship for it.
+            #
+            # Until this guard, the implementation pruned every
+            # orphan that couldn't auto-link — silently dropping
+            # ~85% of legitimately extracted entities the moment
+            # the relationship-extraction pass produced even a few
+            # edges. Pre-9191684 this was masked: the relationship
+            # bug meant relationships=[] → the early-return at the
+            # top of this function fired and nothing got pruned.
+            entity_def = ontology.get("entities", {}).get(node.type, {}) or {}
+            ontology_prop_names = set(entity_def.get("properties", {}).keys())
+            node_props = node.properties or {}
+            has_ontology_props = any(
+                k in ontology_prop_names
+                and k not in SYSTEM_PROPERTIES
+                and v not in (None, "", [])
+                for k, v in node_props.items()
+            )
+            if has_ontology_props:
+                # Real extracted entity — keep it.
+                continue
+
             # Check if this node type has only one possible relationship type in ontology
             node_type = node.type
             possible_rels = _get_possible_relationships_for_type(ontology, node_type)
