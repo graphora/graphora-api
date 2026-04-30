@@ -286,20 +286,26 @@ class LLMClient:
                 response.usage_metadata.candidates_token_count * 100
             ) / response.usage_metadata.total_token_count
 
-        # Handle empty responses gracefully
+        # Handle empty responses gracefully. Do NOT cache the empty
+        # result — Gemini's parser failures are transient (truncated
+        # output, rate-limit JSON, etc.). Caching them would poison
+        # the cache permanently for this (pdf_hash + ontology_hash +
+        # context_hash) tuple, silently returning empty forever even
+        # after the underlying transient issue resolves. Let the
+        # next call retry the live API.
         if response.parsed is None:
             logger.warning(
                 "Gemini PDF entity extraction returned no parseable response, "
-                "returning empty model. This may indicate ontology-document mismatch.",
+                "returning empty model (NOT cached — will retry next call). "
+                "This may indicate ontology-document mismatch or a transient "
+                "Gemini parse failure.",
                 extra={
                     "transform_id": transform_id,
                     "file": filepath.name,
                     "output_percentage": output_perc,
                 },
             )
-            empty_result = response_model()
-            await _PDF_NODE_CACHE.set(cache_key, empty_result.model_dump(mode="json"))
-            return empty_result
+            return response_model()
 
         if output_perc < 4:
             logger.warning(
@@ -465,21 +471,30 @@ class LLMClient:
                 response.usage_metadata.candidates_token_count * 100
             ) / response.usage_metadata.total_token_count
 
-        # For relationship extraction, empty responses are valid - ontology may not match document
+        # Empty/unparseable responses are NOT cached. Gemini sometimes
+        # returns parsed=None on transient failures (output truncation,
+        # rate-limit JSON, structured-output validator hiccups). If we
+        # cache the empty model under this cache_key, every subsequent
+        # call with the same (pdf_hash + ontology_hash + context_hash)
+        # returns empty from cache forever — relationships never come
+        # back even after the transient issue resolves.
+        #
+        # Concrete incident this guard remediates: a single transient
+        # parse failure silently turned 7 relationships into 0 across
+        # every retry of the same Apple 10K transform.
         if response.parsed is None:
             logger.warning(
                 "Gemini PDF relationship extraction returned no parseable response, "
-                "returning empty model. This may indicate ontology-document mismatch.",
+                "returning empty model (NOT cached — will retry next call). "
+                "This may indicate ontology-document mismatch or a transient "
+                "Gemini parse failure.",
                 extra={
                     "transform_id": transform_id,
                     "file": filepath.name,
                     "output_percentage": output_perc,
                 },
             )
-            # Return empty model instance instead of failing
-            empty_result = response_model()
-            await _PDF_REL_CACHE.set(cache_key, empty_result.model_dump(mode="json"))
-            return empty_result
+            return response_model()
 
         if output_perc < 4:
             logger.warning(
