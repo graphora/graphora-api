@@ -163,6 +163,219 @@ def _log_chunk_metrics(metrics: List[ChunkExtractionMetric]) -> None:
             )
 
 
+def _build_orphan_focused_context(
+    orphans: List[BaseNode],
+    candidates: List[BaseNode],
+) -> str:
+    """Render a small, labeled context block for the orphan pass.
+
+    The first call's context lists every node + every edge accepted
+    so far; on a 40-node doc that is the bulk of the prompt. For the
+    second pass we only need the LLM to look at the orphans + their
+    same-chunk counterparts, so we drop everything else. Labeling the
+    sections makes the ask explicit ("connect THESE if you can").
+    """
+    orphan_ids = {n.id for n in orphans}
+    other_candidates = [c for c in candidates if c.id not in orphan_ids]
+
+    lines: List[str] = []
+    lines.append(
+        "These entities were extracted from this chunk but have no "
+        "relationships yet. Identify any relationships that involve "
+        "them, drawing on the entities listed below as candidate "
+        "counterparts when applicable."
+    )
+    lines.append("")
+    lines.append("Entities needing relationships:")
+    for node in sorted(orphans, key=_node_context_sort_key):
+        lines.append(
+            f"({node.type}:{{'id': '{node.id}', "
+            f"'properties': {_format_properties(node.properties)}}})"
+        )
+
+    if other_candidates:
+        lines.append("")
+        lines.append("Other entities from the same chunk (candidate counterparts):")
+        for node in sorted(other_candidates, key=_node_context_sort_key):
+            lines.append(
+                f"({node.type}:{{'id': '{node.id}', "
+                f"'properties': {_format_properties(node.properties)}}})"
+            )
+
+    raw = "\n".join(lines) + "\n"
+    return _make_context_envelope(raw, stage="relationships").text
+
+
+async def _orphan_relationship_pass(
+    *,
+    nodes: List[BaseNode],
+    relationships: List[RelationshipInstance],
+    chunks_or_pdf_paths: List[Any],
+    chunk_metadatas: Optional[List[Any]],
+    relationship_extractor: Callable[..., Any],
+    relationships_only_ontology: type,
+    ontology_parser: OntologyParser,
+    parsed_ontology: Dict[str, Any],
+    treat_chunks_as_text: bool,
+    user_id: Optional[str],
+    transform_id: Optional[str],
+    document_usage_id: Optional[str],
+    extractor_model: Optional[str],
+    rel_baml_function: Optional[str],
+) -> List[RelationshipInstance]:
+    """Second-pass relationship extraction targeting orphan nodes.
+
+    After the per-chunk relationship sweep, some nodes may still
+    carry no incoming/outgoing edge — either the LLM missed a
+    relationship the source mentions, or the chunk genuinely doesn't
+    mention one. We re-call the relationship extractor for each
+    chunk that produced an orphan, this time with a *focused*
+    context that lists only the orphans plus their same-chunk
+    candidate counterparts. Any new edges the LLM emits are deduped
+    against the existing set and appended.
+
+    Why per chunk and not whole-graph: the chunk is the only window
+    in which the LLM has the original source text in scope. A single
+    cross-chunk pass would force us to either resend every chunk
+    (expensive) or rely on context strings alone (which is exactly
+    what just produced the gap). Re-asking on the chunk that
+    produced the orphan is the cheapest way to give the model a
+    second look with full context.
+    """
+    if not nodes or not chunks_or_pdf_paths:
+        return relationships
+
+    connected_ids = set()
+    for rel in relationships:
+        connected_ids.add(rel.source_id)
+        connected_ids.add(rel.target_id)
+
+    orphans = [n for n in nodes if n.id not in connected_ids]
+    if not orphans:
+        return relationships
+
+    chunk_id_to_index: Dict[str, int] = {}
+    if chunk_metadatas:
+        for idx, cm in enumerate(chunk_metadatas):
+            chunk_id = getattr(cm, "chunk_id", None) if cm else None
+            if chunk_id:
+                chunk_id_to_index[chunk_id] = idx
+
+    orphans_by_chunk_index: Dict[int, List[BaseNode]] = {}
+    for orphan in orphans:
+        chunk_ids = (orphan.provenance.chunk_ids or []) if orphan.provenance else []
+        for chunk_id in chunk_ids:
+            idx = chunk_id_to_index.get(chunk_id)
+            if idx is None:
+                continue
+            bucket = orphans_by_chunk_index.setdefault(idx, [])
+            if all(existing.id != orphan.id for existing in bucket):
+                bucket.append(orphan)
+
+    if not orphans_by_chunk_index:
+        logger.info(
+            "Orphan re-extraction skipped: %d orphans found but none "
+            "could be mapped back to a known chunk",
+            len(orphans),
+        )
+        return relationships
+
+    chunk_ids_for_node: Dict[str, set] = {
+        n.id: set((n.provenance.chunk_ids or []) if n.provenance else [])
+        for n in nodes
+    }
+
+    new_relationships: List[RelationshipInstance] = []
+
+    for idx, orphan_list in orphans_by_chunk_index.items():
+        cm = chunk_metadatas[idx] if chunk_metadatas else None
+        chunk_id = getattr(cm, "chunk_id", None) if cm else None
+
+        candidate_ids = {n.id for n in orphan_list}
+        candidates: List[BaseNode] = list(orphan_list)
+        if chunk_id:
+            for n in nodes:
+                if n.id in candidate_ids:
+                    continue
+                if chunk_id in chunk_ids_for_node.get(n.id, set()):
+                    candidates.append(n)
+                    candidate_ids.add(n.id)
+
+        focused_context = _build_orphan_focused_context(orphan_list, candidates)
+
+        chunk_text_for_props = (
+            chunks_or_pdf_paths[idx]
+            if treat_chunks_as_text and isinstance(chunks_or_pdf_paths[idx], str)
+            else None
+        )
+
+        try:
+            relationships_only_kg, _duration = await _timed_call(
+                relationship_extractor,
+                chunks_or_pdf_paths[idx],
+                response_model=relationships_only_ontology,
+                context=focused_context,
+                ontology_yaml=ontology_parser.ontology_yaml,
+                user_id=user_id,
+                transform_id=transform_id,
+                document_usage_id=document_usage_id,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "Orphan re-extraction call failed for chunk_index=%s: %s",
+                idx,
+                exc,
+            )
+            continue
+
+        # Pass full node list so transform_as_relationships can resolve
+        # any IDs the model might emit (including cross-chunk edges).
+        rels = transform_as_relationships(
+            parsed_ontology,
+            nodes,
+            relationships_only_kg,
+            chunk_metadata=cm,
+            chunk_text=chunk_text_for_props,
+            extractor_model=extractor_model,
+            prompt_version=(
+                _resolve_prompt_version(rel_baml_function)
+                if rel_baml_function
+                else None
+            ),
+        )
+
+        for rel in rels:
+            if any(
+                _is_duplicate_relationship(existing, rel)
+                for existing in relationships
+            ):
+                continue
+            if any(
+                _is_duplicate_relationship(existing, rel)
+                for existing in new_relationships
+            ):
+                continue
+            new_relationships.append(rel)
+
+    if new_relationships:
+        logger.info(
+            "Orphan re-extraction added %d new relationship(s) across "
+            "%d chunk(s); orphans before=%d",
+            len(new_relationships),
+            len(orphans_by_chunk_index),
+            len(orphans),
+        )
+    else:
+        logger.info(
+            "Orphan re-extraction produced no new relationships "
+            "(orphans=%d, chunks_revisited=%d)",
+            len(orphans),
+            len(orphans_by_chunk_index),
+        )
+
+    return relationships + new_relationships
+
+
 async def build_graph_from_chunks(
     ontology_parser: OntologyParser,
     chunks: List[str],
@@ -460,6 +673,28 @@ async def _build_graph_from(
         relationships=relationships,
         parsed_ontology=ontology_parser.parsed_ontology,
         user_id=user_id,
+    )
+
+    # Step 4.5: Orphan re-extraction. Give the LLM a focused second
+    # look at any node that ended up with no edges, scoped to the
+    # chunk(s) it was extracted from. Keeps the prune-guard's intent
+    # ("don't drop real entities") while plugging the missed-edge
+    # failure mode rather than the fabricated-entity one.
+    relationships = await _orphan_relationship_pass(
+        nodes=nodes,
+        relationships=relationships,
+        chunks_or_pdf_paths=chunks_or_pdf_paths,
+        chunk_metadatas=chunk_metadatas,
+        relationship_extractor=relationship_extractor,
+        relationships_only_ontology=relationships_only_ontology,
+        ontology_parser=ontology_parser,
+        parsed_ontology=ontology_parser.parsed_ontology,
+        treat_chunks_as_text=treat_chunks_as_text,
+        user_id=user_id,
+        transform_id=transform_id,
+        document_usage_id=document_usage_id,
+        extractor_model=extractor_model,
+        rel_baml_function=rel_baml_function,
     )
 
     if user_id:
