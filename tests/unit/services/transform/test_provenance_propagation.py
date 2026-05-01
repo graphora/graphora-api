@@ -322,8 +322,18 @@ class TestPdfBinaryPathProvenance:
     desired-state table:
       * source_chunk_id   ← cm.chunk_id (split filename)
       * document_name     ← cm.source_file (original PDF filename)
-      * source_text       ← cm.source_text (excerpt extracted by
-                             DocumentParser at split time)
+      * source_text       ← cm.source_text WHEN PROVIDED. The helper's
+                             propagation path is unconditional: any
+                             string the caller puts on the metadata
+                             flows onto the node. flows.py currently
+                             leaves it None on the binary path
+                             (pymupdf/pypdf produced garbled text on
+                             multi-column 10K-style PDFs and the
+                             Evidence tab gracefully falls back to
+                             "no source text"); this test stays
+                             pinned on the helper contract so a
+                             future layout-aware extractor can be
+                             wired in without rewriting it.
       * extraction_confidence ← LLM confidence_score
       * page_number       INTENTIONALLY ABSENT — split filename's
                           trailing integer is the chunk's last-page
@@ -343,11 +353,18 @@ class TestPdfBinaryPathProvenance:
     async def test_pdf_binary_path_writes_source_text_from_chunk_metadata(
         self,
     ) -> None:
-        """Closes the brief's contract gap: binary PDF nodes need
-        source_text. flows.py pre-extracts text per split via
-        DocumentParser, stores on ChunkMetadata.source_text, and the
-        helper picks it up even though the chunk_text arg is None
-        (the binary path passes treat_chunks_as_text=False)."""
+        """Pin the helper's source_text propagation contract on the
+        binary path: when ChunkMetadata.source_text is populated, the
+        node carries it through even though chunk_text arg is None
+        (the binary path passes treat_chunks_as_text=False).
+
+        flows.py no longer populates source_text on this path because
+        the pymupdf/pypdf backends produced garbled text on real-
+        world 10K filings; this test still passes the field through
+        directly so the helper's *capability* stays exercised — the
+        moment a layout-aware extractor lands, flows.py just starts
+        setting source_text again and downstream behavior is
+        already pinned by this test."""
         from graphora_server.services.transform import graph_transformer
         from graphora_server.services.transform.ontology_helper import (
             OntologyParser,
