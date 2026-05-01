@@ -281,8 +281,7 @@ async def _orphan_relationship_pass(
         return relationships
 
     chunk_ids_for_node: Dict[str, set] = {
-        n.id: set((n.provenance.chunk_ids or []) if n.provenance else [])
-        for n in nodes
+        n.id: set((n.provenance.chunk_ids or []) if n.provenance else []) for n in nodes
     }
 
     new_relationships: List[RelationshipInstance] = []
@@ -346,8 +345,7 @@ async def _orphan_relationship_pass(
 
         for rel in rels:
             if any(
-                _is_duplicate_relationship(existing, rel)
-                for existing in relationships
+                _is_duplicate_relationship(existing, rel) for existing in relationships
             ):
                 continue
             if any(

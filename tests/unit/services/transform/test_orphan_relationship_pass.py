@@ -199,9 +199,7 @@ class TestOrphanRelationshipPass:
         """An orphan with a known chunk_id causes one extractor call,
         scoped to that chunk, with a context naming the orphan."""
         orphan = _make_node("a", "Apple", chunk_ids=["c1"])
-        partner = _make_node(
-            "b", "Apple Stores", type_="Business", chunk_ids=["c1"]
-        )
+        partner = _make_node("b", "Apple Stores", type_="Business", chunk_ids=["c1"])
 
         extractor = AsyncMock(return_value=_RelResult())
 
