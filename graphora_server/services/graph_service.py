@@ -75,13 +75,30 @@ class GraphService:
             GraphResponse containing nodes and edges
         """
         try:
-            # First get total counts
+            # First get total counts.
+            #
+            # Pre-fix this query was:
+            #   MATCH (n) WHERE n.{TRANSFORM_ID} = $transform_id
+            #   WITH count(n) as node_count
+            #   OPTIONAL MATCH (n)-[r]-()
+            #   RETURN node_count, count(DISTINCT r) as edge_count
+            # The bug: ``WITH count(n) as node_count`` drops ``n`` from
+            # scope, so the OPTIONAL MATCH rebinds ``n`` to ANY node in
+            # the database and ``r`` matches every edge in the graph.
+            # On a 49-edge transform the FE saw total_edges in the
+            # hundreds because the count crossed transform boundaries.
+            #
+            # Fix: count nodes and edges with their own transform-id
+            # filter (relationships carry __tid too — stamped at
+            # storage/neo4j.py:543,572), joined via OPTIONAL MATCH so
+            # we still return a row when edge_count is zero.
             count_query = f"""
             MATCH (n)
             WHERE n.{TRANSFORM_ID} = $transform_id
             WITH count(n) as node_count
-            OPTIONAL MATCH (n)-[r]-()
-            RETURN node_count, count(DISTINCT r) as edge_count
+            OPTIONAL MATCH ()-[r]->()
+            WHERE r.{TRANSFORM_ID} = $transform_id
+            RETURN node_count, count(r) as edge_count
             """
 
             with self.driver.session() as session:
