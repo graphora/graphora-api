@@ -107,14 +107,25 @@ class GraphService:
                 total_nodes = count_data["node_count"]
                 total_edges = count_data["edge_count"]
 
-                # Now get the actual data with pagination
+                # Now get the actual data with pagination.
+                #
+                # Same family of bug as the count query above: the
+                # OPTIONAL MATCH (n)-[r]-(m) clause was unfiltered on
+                # the relationship, so an edge created by a *different*
+                # transform that happens to touch one of our nodes
+                # (entity-ledger cross-linking, schema reuse on the
+                # same Neo4j instance) snuck into the relationships
+                # collection and made the response disagree with
+                # total_edges. Filter r by its own __tid to keep the
+                # data fetch transform-scoped.
                 query = f"""
                 MATCH (n)
                 WHERE n.{TRANSFORM_ID} = $transform_id
                 WITH n ORDER BY n.id
                 SKIP $skip LIMIT $limit
                 OPTIONAL MATCH (n)-[r]-(m)
-                RETURN 
+                WHERE r.{TRANSFORM_ID} = $transform_id
+                RETURN
                     collect(DISTINCT n) as nodes,
                     collect(DISTINCT r) as relationships,
                     collect(DISTINCT m) as connected_nodes

@@ -821,12 +821,23 @@ class Neo4jStorage(GraphStorageInterface):
     async def get_transformation_data(self, transform_id: str) -> GraphResponse:
         """Get all nodes and relationships for a transformation"""
         try:
+            # Both queries below previously leaked across transforms:
+            #   * the count_query bound n via WITH count(n), then
+            #     OPTIONAL MATCH (n)-[r]-() rebound n to ANY node so
+            #     the relationship counter spanned the whole DB.
+            #   * the data query then collected those cross-transform
+            #     edges into the relationships list.
+            # Both are now scoped via the relationship's own __tid
+            # property (storage stamps it at MERGE time — see
+            # neo4j.py:543, 572). Same fix applied to the GraphService
+            # callsite in graph_service.py.
             count_query = f"""
             MATCH (n)
             WHERE n.{TRANSFORM_ID} = $transform_id
             WITH count(n) as node_count
-            OPTIONAL MATCH (n)-[r]-()
-            RETURN node_count, count(DISTINCT r) as edge_count
+            OPTIONAL MATCH ()-[r]->()
+            WHERE r.{TRANSFORM_ID} = $transform_id
+            RETURN node_count, count(r) as edge_count
             """
 
             async with self.driver.session() as session:
@@ -840,7 +851,8 @@ class Neo4jStorage(GraphStorageInterface):
                 WHERE n.{TRANSFORM_ID} = $transform_id
                 WITH n ORDER BY n.id
                 OPTIONAL MATCH (n)-[r]-(m)
-                RETURN 
+                WHERE r.{TRANSFORM_ID} = $transform_id
+                RETURN
                     collect(DISTINCT n) as nodes,
                     collect(DISTINCT r) as relationships,
                     collect(DISTINCT m) as connected_nodes
