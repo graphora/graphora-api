@@ -158,9 +158,7 @@ def _stub_neo4j_storage_session(storage):
     storage.driver = fake_driver
 
     count_result = MagicMock()
-    count_result.single = AsyncMock(
-        return_value={"node_count": 0, "edge_count": 0}
-    )
+    count_result.single = AsyncMock(return_value={"node_count": 0, "edge_count": 0})
     data_result = MagicMock()
     data_result.single = AsyncMock(
         return_value={
