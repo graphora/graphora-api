@@ -966,12 +966,28 @@ class Neo4jStorage(GraphStorageInterface):
     async def get_merge_data(self, merge_id: str) -> GraphResponse:
         """Get all nodes and relationships for a merge"""
         try:
+            # Same family of bug as get_transformation_data:
+            #   * the count_query bound n via WITH count(n), then
+            #     OPTIONAL MATCH (n)-[r]-() rebound n to ANY node so
+            #     the relationship counter spanned the whole DB.
+            #   * the data query filtered r by validity (__valid_to
+            #     IS NULL) but not by merge id, so an active edge
+            #     hanging off one of our merged nodes that belonged
+            #     to a *different* merge sneaked into the
+            #     relationships collection.
+            # Both are now scoped via the relationship's own
+            # MERGE_ID — storage/neo4j.py:544,573 stamp __mid on
+            # every relationship written under a merge. The active
+            # filter (__valid_to IS NULL) is mirrored from the data
+            # query into the count query so the FE's edge_count and
+            # len(returned edges) stay consistent.
             count_query = f"""
             MATCH (n)
             WHERE n.{MERGE_ID} = $merge_id
             WITH count(n) as node_count
-            OPTIONAL MATCH (n)-[r]-()
-            RETURN node_count, count(DISTINCT r) as edge_count
+            OPTIONAL MATCH ()-[r]->()
+            WHERE r.{MERGE_ID} = $merge_id AND r.{VALID_TO} IS NULL
+            RETURN node_count, count(r) as edge_count
             """
 
             async with self.driver.session() as session:
@@ -985,8 +1001,8 @@ class Neo4jStorage(GraphStorageInterface):
                 WHERE n.{MERGE_ID} = $merge_id
                 WITH n ORDER BY n.id
                 OPTIONAL MATCH (n)-[r]-(m)
-                WHERE r.{VALID_TO} IS NULL 
-                RETURN 
+                WHERE r.{MERGE_ID} = $merge_id AND r.{VALID_TO} IS NULL
+                RETURN
                     collect(DISTINCT n) as nodes,
                     collect(DISTINCT r) as relationships,
                     collect(DISTINCT m) as connected_nodes

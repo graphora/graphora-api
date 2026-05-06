@@ -223,3 +223,80 @@ class TestNeo4jStorageTransformationDataCountQuery:
             "transform_id; the relationships collection will include "
             "cross-transform edges."
         )
+
+
+class TestNeo4jStorageMergeDataQueries:
+    """Same regression family as get_transformation_data, but on the
+    merge axis. Relationships carry __mid (storage stamps it at
+    MERGE-time, neo4j.py:544/573); both the count and the data
+    query must filter by it. The data query also keeps its
+    temporal filter (__valid_to IS NULL) so we only return the
+    currently-active version of each edge — and the count query
+    mirrors that filter so total_edges agrees with len(edges) on
+    the FE."""
+
+    async def test_count_query_applies_merge_id_filter_on_relationship(
+        self,
+    ) -> None:
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        session = _stub_neo4j_storage_session(storage)
+
+        await storage.get_merge_data("merge-fixed-bug")
+
+        count_query = session.run.call_args_list[0].args[0]
+        assert "r.__mid = $merge_id" in count_query, (
+            "get_merge_data count query no longer filters relationships "
+            "by merge_id; total_edges will span the whole DB."
+        )
+
+    async def test_count_query_keeps_active_validity_filter(self) -> None:
+        """The count must mirror the data query's __valid_to IS NULL
+        filter, otherwise total_edges (counting all temporal versions)
+        diverges from len(returned edges) (active versions only)."""
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        session = _stub_neo4j_storage_session(storage)
+
+        await storage.get_merge_data("merge-fixed-bug")
+
+        count_query = session.run.call_args_list[0].args[0]
+        assert "r.__valid_to IS NULL" in count_query, (
+            "get_merge_data count query stopped filtering by validity; "
+            "it will count superseded edge versions and disagree with "
+            "the data query's payload."
+        )
+
+    async def test_count_query_does_not_use_undefined_n_after_with(self) -> None:
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        session = _stub_neo4j_storage_session(storage)
+
+        await storage.get_merge_data("merge-fixed-bug")
+
+        count_query = session.run.call_args_list[0].args[0]
+        assert "OPTIONAL MATCH (n)-[r]-()" not in count_query, (
+            "get_merge_data count query is back to the n-after-WITH "
+            "form that scopes across the whole DB; restore the "
+            "relationship-side merge_id filter."
+        )
+
+    async def test_data_query_applies_merge_id_filter_on_relationship(
+        self,
+    ) -> None:
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        session = _stub_neo4j_storage_session(storage)
+
+        await storage.get_merge_data("merge-fixed-bug")
+
+        data_query = session.run.call_args_list[1].args[0]
+        assert "r.__mid = $merge_id" in data_query, (
+            "get_merge_data data query no longer filters relationships "
+            "by merge_id; the relationships collection will include "
+            "edges from other merges that touch one of our nodes."
+        )
