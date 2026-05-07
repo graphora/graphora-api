@@ -54,3 +54,279 @@ async def test_entity_ledger_ignore_missing_user():
     await service.hydrate_nodes(None, [node])
     await service.record_nodes(None, [node])
     # no exceptions
+
+
+# --------------------------------------------------------------
+# Slice 1: embedding persistence + stored-embedding similarity.
+# Pin the new contract so a refactor can't quietly skip the
+# embedding write or revert to the per-call recomputation that
+# was the dominant cost pre-slice-1.
+# --------------------------------------------------------------
+
+
+def _node_with_canonical(name: str, canonical_key: str) -> BaseNode:
+    """Helper: build a node with all the fields record_nodes needs.
+    The canonical_id mirrors what _make_canonical_node_id produces
+    so the dedup key stays stable across hydrate / record cycles."""
+    return BaseNode(
+        id=f"local-{name.lower()}",
+        type="Company",
+        properties={"name": name},
+        canonical_properties={"name": name.lower()},
+        canonical_key=canonical_key,
+        canonical_id=_make_canonical_node_id(canonical_key),
+        confidence_score=0.9,
+    )
+
+
+class _FakeEmbedder:
+    """Minimal stand-in for EmbeddingSimilarity. Real embedder pulls
+    sentence-transformers (which pulls pandas, which the test conftest
+    stubs to a non-functional shim — so the real path can't run here).
+    The fake returns deterministic vectors per text, with an optional
+    explicit mapping so tests can pin expected similarity outcomes
+    without depending on the choice of model."""
+
+    def __init__(self, mapping: dict | None = None, dim: int = 384):
+        import numpy as np
+
+        self._np = np
+        self._mapping = mapping or {}
+        self.dim = dim
+        self.calls: list[list[str]] = []
+
+    def _vec_from_text(self, text: str):
+        np = self._np
+        if text in self._mapping:
+            return np.array(self._mapping[text], dtype=np.float32)
+        seed = abs(hash(text)) % (2**32)
+        rng = np.random.RandomState(seed)
+        v = rng.randn(self.dim).astype(np.float32)
+        return v / (np.linalg.norm(v) + 1e-12)
+
+    def get_embeddings_batch(self, texts):
+        np = self._np
+        self.calls.append(list(texts))
+        return np.array([self._vec_from_text(t) for t in texts], dtype=np.float32)
+
+
+def _patch_embedder(monkeypatch, fake: _FakeEmbedder):
+    """Wire the fake into the import path entity_ledger_service uses."""
+    from graphora_server.services.entity_resolution import embedding_similarity
+
+    monkeypatch.setattr(
+        embedding_similarity,
+        "get_embedding_similarity",
+        lambda *args, **kwargs: fake,
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_nodes_persists_embedding_when_enabled(
+    monkeypatch,
+):
+    """When ENTITY_RESOLUTION_EMBEDDING_ENABLED is on, record_nodes
+    should compute and store an embedding + the active model name
+    on the in-memory entry. This is the write side of slice 1 —
+    without it the read-side (find_similar_entities) has nothing
+    to consume."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+    fake = _FakeEmbedder()
+    _patch_embedder(monkeypatch, fake)
+
+    service = EntityLedgerService(memory_store={})
+    node = _node_with_canonical("Acme", "Company:name=acme")
+
+    await service.record_nodes("user-1", [node])
+
+    key = ("user-1", "Company", "Company:name=acme")
+    entry = service._memory_store[key]
+    assert entry.embedding is not None, (
+        "record_nodes did not populate entry.embedding — slice 1 storage "
+        "side is broken; find_similar_entities will see nothing."
+    )
+    assert isinstance(entry.embedding, list)
+    assert len(entry.embedding) == fake.dim
+    assert entry.embedding_model == "all-MiniLM-L6-v2"
+    # Confirm the embedder was actually invoked for the right text.
+    assert any("acme" in (t or "").lower() for t in fake.calls[0])
+
+
+@pytest.mark.asyncio
+async def test_record_nodes_skips_embedding_when_disabled(monkeypatch):
+    """The embedding compute is the slowest part of record_nodes
+    (loads sentence-transformers on first call). When the operator
+    disables it, we should skip the work entirely — pin that the
+    feature flag actually short-circuits."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", False)
+
+    service = EntityLedgerService(memory_store={})
+    node = _node_with_canonical("Acme", "Company:name=acme")
+
+    await service.record_nodes("user-1", [node])
+
+    entry = service._memory_store[("user-1", "Company", "Company:name=acme")]
+    assert entry.embedding is None
+    assert entry.embedding_model is None
+
+
+@pytest.mark.asyncio
+async def test_find_similar_entities_uses_stored_embedding(monkeypatch):
+    """End-to-end: record a node (which embeds + stores), then ask
+    find_similar_entities to look up a near-identical node by
+    semantic similarity. Pre-slice-1 this would have re-embedded
+    the stored entry every call; post-slice-1 the stored embedding
+    is reused so only the query-side embedding is computed.
+
+    The fake embedder pins identical vectors for the two texts so
+    the assertion is on the *plumbing* — that the stored vector
+    survives the round-trip and gets used in the similarity step.
+    The real embedder's choice of representation isn't exercised
+    here (deferred to integration tests once pandas isn't stubbed)."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+
+    # The two text representations the service produces for these
+    # nodes (via _node_to_text). Pin both to the same unit vector
+    # so cosine similarity = 1.0 — this isolates the test from the
+    # real embedder's behaviour and verifies only the plumbing.
+    import numpy as np
+
+    same_vec = np.zeros(384, dtype=np.float32)
+    same_vec[0] = 1.0
+    # _node_to_text emits only the canonical-properties values when the
+    # regular property keys overlap (which they do here). Both nodes
+    # collapse to a single token so the mapping keys stay simple.
+    fake = _FakeEmbedder(
+        mapping={
+            "acme inc": same_vec.tolist(),
+            "acme incorporated": same_vec.tolist(),
+        }
+    )
+    _patch_embedder(monkeypatch, fake)
+
+    service = EntityLedgerService(memory_store={})
+    stored = _node_with_canonical("Acme Inc", "Company:name=acme-inc")
+    await service.record_nodes("user-1", [stored])
+
+    # Different canonical_key (so exact-match lookup misses) but
+    # the fake embedder maps both to the same vector → match.
+    query = _node_with_canonical("Acme Incorporated", "Company:name=acme-incorporated")
+
+    matches = await service.find_similar_entities("user-1", [query], threshold=0.6)
+    assert query.id in matches, (
+        "find_similar_entities returned no match — either the stored "
+        "embedding wasn't read back (slice 1 read path broken) or the "
+        "similarity computation is using the wrong representation."
+    )
+    assert matches[query.id]["canonical_id"] == stored.canonical_id
+    # Score must be > threshold; with identical mocked vectors it's 1.0
+    # subject to floating-point clip.
+    assert matches[query.id]["similarity"] >= 0.99
+
+
+@pytest.mark.asyncio
+async def test_find_similar_entities_skips_legacy_unembedded_entries(
+    monkeypatch,
+):
+    """Pre-slice-1 ledger rows have embedding=NULL. The reader must
+    skip them silently rather than crashing or treating NULL as a
+    zero vector (which would always look perfectly similar)."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+
+    service = EntityLedgerService(memory_store={})
+
+    # Manually plant a legacy entry: no embedding, no embedding_model.
+    from graphora_server.services.entity_ledger_service import EntityLedgerEntry
+
+    legacy = EntityLedgerEntry(
+        user_id="user-1",
+        entity_type="Company",
+        canonical_key="Company:name=legacy",
+        canonical_id=_make_canonical_node_id("Company:name=legacy"),
+        features={},
+        confidence=1.0,
+    )
+    service._memory_store[("user-1", "Company", "Company:name=legacy")] = legacy
+
+    query = _node_with_canonical("Anything", "Company:name=anything")
+    matches = await service.find_similar_entities("user-1", [query], threshold=0.5)
+
+    # No usable embeddings -> no matches; must NOT crash.
+    assert matches == {}
+
+
+@pytest.mark.asyncio
+async def test_find_similar_entities_skips_model_mismatch(monkeypatch):
+    """An entry embedded under a different model produces vectors
+    in a different vector space; mixing them returns garbage scores.
+    Pin that the reader skips them rather than letting them poison
+    the similarity computation."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+
+    service = EntityLedgerService(memory_store={})
+
+    from graphora_server.services.entity_ledger_service import EntityLedgerEntry
+
+    foreign = EntityLedgerEntry(
+        user_id="user-1",
+        entity_type="Company",
+        canonical_key="Company:name=foreign",
+        canonical_id=_make_canonical_node_id("Company:name=foreign"),
+        features={},
+        confidence=1.0,
+        # Plausible-shaped vector but produced by a different model.
+        embedding=[0.1] * 768,
+        embedding_model="all-mpnet-base-v2",
+    )
+    service._memory_store[("user-1", "Company", "Company:name=foreign")] = foreign
+
+    query = _node_with_canonical("Foreign", "Company:name=foreign-query")
+    matches = await service.find_similar_entities("user-1", [query], threshold=0.5)
+
+    assert matches == {}
+
+
+@pytest.mark.asyncio
+async def test_record_nodes_handles_embedder_import_failure(
+    monkeypatch,
+):
+    """sentence-transformers is an optional dependency. If the
+    operator hasn't installed it, the embedding step should fail
+    quietly and the rest of record_nodes (the canonical-key upsert)
+    should still complete — pin the graceful-degradation contract."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+
+    # Force the embedder import to look missing without uninstalling
+    # the real package. monkeypatching sys.modules makes the import
+    # statement inside _populate_embeddings_inplace raise ImportError.
+    import sys
+
+    monkeypatch.setitem(
+        sys.modules,
+        "graphora_server.services.entity_resolution.embedding_similarity",
+        None,
+    )
+
+    service = EntityLedgerService(memory_store={})
+    node = _node_with_canonical("Acme", "Company:name=acme")
+
+    # Must not raise.
+    await service.record_nodes("user-1", [node])
+
+    # Canonical-key upsert still happened.
+    entry = service._memory_store[("user-1", "Company", "Company:name=acme")]
+    assert entry.canonical_id == node.canonical_id
+    # Embedding stayed None because the embedder couldn't load.
+    assert entry.embedding is None

@@ -28,6 +28,13 @@ class EntityLedgerEntry:
     updated_at: Optional[str] = None
     # Enhanced fields for cross-document resolution
     embedding: Optional[List[float]] = None
+    # The sentence-transformer model used to produce ``embedding``.
+    # Recorded so the similarity reader can ignore entries embedded
+    # under a different model — mixing 384-dim MiniLM vectors with
+    # 768-dim MPNet vectors silently returns garbage scores. Older
+    # callers that don't set the field default to None and the
+    # reader treats them as "unknown model -> skip".
+    embedding_model: Optional[str] = None
     match_count: int = 1
     document_ids: Optional[List[str]] = None
     last_matched_at: Optional[str] = None
@@ -70,15 +77,26 @@ class EntityLedgerService:
         user_id: Optional[str],
         nodes: Iterable[BaseNode],
     ) -> None:
-        """Upsert canonical fingerprints for the supplied nodes."""
+        """Upsert canonical fingerprints for the supplied nodes.
+
+        When ``ENTITY_RESOLUTION_EMBEDDING_ENABLED`` is set, this also
+        precomputes a sentence-transformer embedding per node and
+        stores it on the ledger row so the similarity-search path
+        (``find_similar_entities``) doesn't have to re-embed every
+        stored entry on every transform — that recomputation was the
+        dominant cost of the lookup pre-slice-1."""
 
         if not user_id:
             return
 
         nodes = list(nodes)
         timestamp = datetime.now(timezone.utc).isoformat()
-        records: List[Dict[str, object]] = []
 
+        # Pair (record dict, source node) so we can compute embeddings
+        # in one batched call after filtering. Storing the node
+        # alongside lets the embedding step read from it without
+        # tracking parallel index lists.
+        pairs: List[tuple[Dict[str, object], BaseNode]] = []
         for node in nodes:
             if not node.canonical_key or not node.canonical_id:
                 continue
@@ -92,11 +110,16 @@ class EntityLedgerService:
                 "confidence": node.confidence_score,
                 "first_seen_at": timestamp,
                 "updated_at": timestamp,
+                "embedding": None,
+                "embedding_model": None,
             }
-            records.append(record)
+            pairs.append((record, node))
 
-        if not records:
+        if not pairs:
             return
+
+        self._populate_embeddings_inplace(pairs)
+        records = [pair[0] for pair in pairs]
 
         if self._enabled:
             try:
@@ -110,15 +133,21 @@ class EntityLedgerService:
                         features,
                         confidence,
                         first_seen_at,
-                        updated_at
+                        updated_at,
+                        embedding,
+                        embedding_model
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (user_id, entity_type, canonical_key)
                     DO UPDATE SET
                         canonical_id = EXCLUDED.canonical_id,
                         features = EXCLUDED.features,
                         confidence = EXCLUDED.confidence,
-                        updated_at = EXCLUDED.updated_at
+                        updated_at = EXCLUDED.updated_at,
+                        embedding = COALESCE(EXCLUDED.embedding, entity_ledger.embedding),
+                        embedding_model = COALESCE(
+                            EXCLUDED.embedding_model, entity_ledger.embedding_model
+                        )
                 """
                 for idx in range(0, len(records), chunk_size):
                     chunk = records[idx : idx + chunk_size]
@@ -132,6 +161,12 @@ class EntityLedgerService:
                             record.get("confidence"),
                             record["first_seen_at"],
                             record["updated_at"],
+                            (
+                                Json(record["embedding"])
+                                if record["embedding"] is not None
+                                else None
+                            ),
+                            record.get("embedding_model"),
                         )
                         for record in chunk
                     ]
@@ -151,17 +186,80 @@ class EntityLedgerService:
                     existing.features = record["features"]  # type: ignore[assignment]
                     existing.confidence = record.get("confidence")
                     existing.updated_at = timestamp
+                    # Only overwrite embedding if we have a fresh one.
+                    # Mirrors the COALESCE on the SQL side so disabling
+                    # embeddings mid-stream doesn't wipe the cache.
+                    if record["embedding"] is not None:
+                        existing.embedding = record["embedding"]  # type: ignore[assignment]
+                        existing.embedding_model = record["embedding_model"]  # type: ignore[assignment]
                 else:
                     self._memory_store[key] = EntityLedgerEntry(
-                        user_id=record["user_id"],
-                        entity_type=record["entity_type"],
-                        canonical_key=record["canonical_key"],
-                        canonical_id=record["canonical_id"],
-                        features=record["features"],
-                        confidence=record.get("confidence"),
+                        user_id=record["user_id"],  # type: ignore[arg-type]
+                        entity_type=record["entity_type"],  # type: ignore[arg-type]
+                        canonical_key=record["canonical_key"],  # type: ignore[arg-type]
+                        canonical_id=record["canonical_id"],  # type: ignore[arg-type]
+                        features=record["features"],  # type: ignore[arg-type]
+                        confidence=record.get("confidence"),  # type: ignore[arg-type]
                         first_seen_at=timestamp,
                         updated_at=timestamp,
+                        embedding=record["embedding"],  # type: ignore[arg-type]
+                        embedding_model=record["embedding_model"],  # type: ignore[arg-type]
                     )
+
+    def _populate_embeddings_inplace(
+        self,
+        pairs: List[tuple[Dict[str, object], BaseNode]],
+    ) -> None:
+        """Compute one batched embedding per record and stamp it onto
+        the record dict (in-place). Silent no-op when embeddings are
+        disabled, when the dependency is missing, or when no node has
+        text to embed — those failure modes shouldn't break the main
+        ledger write path."""
+        if not settings.ENTITY_RESOLUTION_EMBEDDING_ENABLED:
+            return
+
+        try:
+            from graphora_server.services.entity_resolution.embedding_similarity import (
+                get_embedding_similarity,
+            )
+
+            embedder = get_embedding_similarity(
+                model_name=settings.ENTITY_RESOLUTION_EMBEDDING_MODEL,
+            )
+        except ImportError:
+            logger.debug(
+                "sentence-transformers not available; ledger embeddings skipped"
+            )
+            return
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to initialize embedding model: %s", exc)
+            return
+
+        texts: List[str] = []
+        embeddable_indices: List[int] = []
+        for idx, (_record, node) in enumerate(pairs):
+            text = self._node_to_text(node)
+            if text:
+                texts.append(text)
+                embeddable_indices.append(idx)
+
+        if not texts:
+            return
+
+        try:
+            embeddings = embedder.get_embeddings_batch(texts)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "Embedding batch failed; ledger entries kept un-embedded: %s", exc
+            )
+            return
+
+        for emb_idx, record_idx in enumerate(embeddable_indices):
+            embedding_array = embeddings[emb_idx]
+            pairs[record_idx][0]["embedding"] = embedding_array.tolist()
+            pairs[record_idx][0][
+                "embedding_model"
+            ] = settings.ENTITY_RESOLUTION_EMBEDDING_MODEL
 
     async def hydrate_nodes_with_similarity(
         self,
@@ -232,6 +330,19 @@ class EntityLedgerService:
     ) -> Dict[str, Dict[str, object]]:
         """Find similar entities using embedding similarity.
 
+        Pre-slice-1 this function recomputed an embedding for every
+        stored ledger entry on every call — the dominant cost. Now
+        we read the embedding column populated by ``record_nodes``
+        and only compute embeddings for the query-side nodes (which
+        are necessarily new).
+
+        Entries embedded under a different model than the active
+        ``ENTITY_RESOLUTION_EMBEDDING_MODEL`` are skipped — mixing
+        vector spaces (e.g. 384-dim MiniLM with 768-dim MPNet)
+        produces meaningless similarity scores. Pre-slice-1 entries
+        with embedding=NULL are also skipped; they'll get
+        backfilled the next time their canonical_key is upserted.
+
         Args:
             user_id: User ID for isolation.
             nodes: Nodes to find matches for.
@@ -245,7 +356,6 @@ class EntityLedgerService:
             from graphora_server.services.entity_resolution.embedding_similarity import (
                 get_embedding_similarity,
             )
-            from graphora_server.config import settings
 
             embedding_similarity = get_embedding_similarity(
                 model_name=settings.ENTITY_RESOLUTION_EMBEDDING_MODEL,
@@ -254,6 +364,9 @@ class EntityLedgerService:
             logger.warning("Embedding similarity not available for entity ledger")
             return {}
 
+        import numpy as np
+
+        active_model = settings.ENTITY_RESOLUTION_EMBEDDING_MODEL
         matches: Dict[str, Dict[str, object]] = {}
 
         # Group nodes by type for efficient lookup
@@ -262,46 +375,50 @@ class EntityLedgerService:
             nodes_by_type.setdefault(node.type, []).append(node)
 
         for entity_type, type_nodes in nodes_by_type.items():
-            # Get all entries of this type from ledger (in-memory for now)
             existing_entries = await self._get_entries_by_type(user_id, entity_type)
             if not existing_entries:
                 continue
 
-            # Compute embeddings for query nodes
-            node_texts = []
+            # Keep only entries with a usable, model-matched embedding.
+            # The skip is by design — see the docstring.
+            usable_entries: List[EntityLedgerEntry] = []
+            stored_vectors: List[List[float]] = []
+            for entry in existing_entries.values():
+                if not entry.embedding:
+                    continue
+                if entry.embedding_model and entry.embedding_model != active_model:
+                    continue
+                usable_entries.append(entry)
+                stored_vectors.append(entry.embedding)
+
+            if not usable_entries:
+                continue
+
+            # Query-side: embed only the candidate nodes (always new).
+            node_texts: List[str] = []
             for node in type_nodes:
-                text = self._node_to_text(node)
-                node_texts.append(text)
-
-            if not node_texts:
+                node_texts.append(self._node_to_text(node))
+            if not any(node_texts):
                 continue
 
-            _query_embeddings = embedding_similarity.get_embeddings_batch(node_texts)
-
-            # Compute embeddings for existing entries
-            entry_texts = []
-            entry_list = list(existing_entries.values())
-            for entry in entry_list:
-                text = self._entry_to_text(entry)
-                entry_texts.append(text)
-
-            if not entry_texts:
-                continue
-
-            _entry_embeddings = embedding_similarity.get_embeddings_batch(entry_texts)
-
-            # Compute similarity matrix and find best matches
-            similarity_matrix = embedding_similarity.compute_similarity_matrix(
-                node_texts, entry_texts
+            query_embeddings = embedding_similarity.get_embeddings_batch(node_texts)
+            stored_matrix = np.array(stored_vectors, dtype=np.float32)
+            # Both sides are L2-normalized by EmbeddingSimilarity (the
+            # default config), so dot product = cosine similarity. We
+            # clip to [0, 1] to mirror EmbeddingSimilarity.compute_
+            # similarity_matrix's contract for downstream callers.
+            similarity_matrix = np.clip(
+                np.dot(query_embeddings, stored_matrix.T), 0.0, 1.0
             )
 
             for i, node in enumerate(type_nodes):
+                if not node_texts[i]:
+                    continue
                 similarities = similarity_matrix[i]
-                best_idx = similarities.argmax()
+                best_idx = int(similarities.argmax())
                 best_similarity = float(similarities[best_idx])
-
                 if best_similarity >= threshold:
-                    best_entry = entry_list[best_idx]
+                    best_entry = usable_entries[best_idx]
                     matches[node.id] = {
                         "canonical_id": best_entry.canonical_id,
                         "similarity": best_similarity,
@@ -313,7 +430,12 @@ class EntityLedgerService:
     async def _get_entries_by_type(
         self, user_id: str, entity_type: str
     ) -> Dict[str, EntityLedgerEntry]:
-        """Get all ledger entries of a specific type for a user."""
+        """Get all ledger entries of a specific type for a user.
+
+        Includes the persisted embedding + model when present —
+        ``find_similar_entities`` reads these directly to skip the
+        recomputation cost. Older rows (pre-slice-1) come back with
+        embedding=None and the similarity reader skips them."""
         results: Dict[str, EntityLedgerEntry] = {}
 
         if self._enabled:
@@ -321,7 +443,7 @@ class EntityLedgerService:
                 rows = await db.fetch(
                     """
                     SELECT canonical_key, canonical_id, features, confidence,
-                           first_seen_at, updated_at
+                           first_seen_at, updated_at, embedding, embedding_model
                     FROM entity_ledger
                     WHERE user_id = %s AND entity_type = %s
                     LIMIT 1000
@@ -339,6 +461,8 @@ class EntityLedgerService:
                         confidence=row.get("confidence"),
                         first_seen_at=row.get("first_seen_at"),
                         updated_at=row.get("updated_at"),
+                        embedding=row.get("embedding"),
+                        embedding_model=row.get("embedding_model"),
                     )
             except Exception as exc:
                 logger.error("Failed to fetch entries by type: %s", exc)
@@ -402,7 +526,7 @@ class EntityLedgerService:
                     rows = await db.fetch(
                         """
                         SELECT canonical_key, canonical_id, features, confidence,
-                               first_seen_at, updated_at
+                               first_seen_at, updated_at, embedding, embedding_model
                         FROM entity_ledger
                         WHERE user_id = %s AND entity_type = %s AND canonical_key = ANY(%s)
                         """,
@@ -421,6 +545,8 @@ class EntityLedgerService:
                                 confidence=row.get("confidence"),
                                 first_seen_at=row.get("first_seen_at"),
                                 updated_at=row.get("updated_at"),
+                                embedding=row.get("embedding"),
+                                embedding_model=row.get("embedding_model"),
                             )
                         )
             except Exception as exc:  # pragma: no cover - defensive
