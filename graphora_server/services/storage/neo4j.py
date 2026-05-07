@@ -534,7 +534,26 @@ class Neo4jStorage(GraphStorageInterface):
                                 await self._close_existing_relationship(
                                     session, existing_rel
                                 )
-                                # Merge properties and create new version
+                                # Merge properties and create new version.
+                                #
+                                # CREATE (not MERGE) because MERGE on
+                                # (s)-[r:TYPE]->(t) would match the just-
+                                # closed v1 (it still has the same
+                                # endpoints + type — only its __valid_to
+                                # changed) and the SET would overwrite v1
+                                # back to active state, silently undoing
+                                # the close. Result: history is lost and
+                                # the "version on prop change" contract
+                                # is a no-op. Reviewer caught this on the
+                                # integration-test commit (ce22727); the
+                                # weak assertion didn't surface it.
+                                #
+                                # CREATE always makes a NEW edge; combined
+                                # with merge=False below (which gives the
+                                # new version a fresh UUID) the closed v1
+                                # and active v2 coexist as distinct edges,
+                                # tied together by shared (source, target,
+                                # type) but addressable by id independently.
                                 merged_props = {
                                     **existing_props,
                                     **new_props,
@@ -545,7 +564,7 @@ class Neo4jStorage(GraphStorageInterface):
                                 }
                                 query, params = self._build_relationship_query(
                                     rel,
-                                    merge=True,
+                                    merge=False,
                                     properties=merged_props,
                                     transform_id=transform_id,
                                     merge_id=merge_id,
@@ -831,12 +850,24 @@ class Neo4jStorage(GraphStorageInterface):
             # property (storage stamps it at MERGE time — see
             # neo4j.py:543, 572). Same fix applied to the GraphService
             # callsite in graph_service.py.
+            #
+            # ``r.__valid_to IS NULL`` filters to only the ACTIVE
+            # version of each edge. The relationship versioning path
+            # (store_relationships above) closes the prior version by
+            # setting __valid_to and creates a new active edge; a
+            # non-filtering query would double-count, returning both
+            # historical and current versions for any edge that's
+            # been re-stored with different properties. Reviewer
+            # caught this on integration-test commit ce22727 —
+            # get_merge_data already had this filter (b1edc7c) but
+            # get_transformation_data didn't, so transform reads
+            # diverged from merge reads on the same data.
             count_query = f"""
             MATCH (n)
             WHERE n.{TRANSFORM_ID} = $transform_id
             WITH count(n) as node_count
             OPTIONAL MATCH ()-[r]->()
-            WHERE r.{TRANSFORM_ID} = $transform_id
+            WHERE r.{TRANSFORM_ID} = $transform_id AND r.{VALID_TO} IS NULL
             RETURN node_count, count(r) as edge_count
             """
 
@@ -851,7 +882,7 @@ class Neo4jStorage(GraphStorageInterface):
                 WHERE n.{TRANSFORM_ID} = $transform_id
                 WITH n ORDER BY n.id
                 OPTIONAL MATCH (n)-[r]-(m)
-                WHERE r.{TRANSFORM_ID} = $transform_id
+                WHERE r.{TRANSFORM_ID} = $transform_id AND r.{VALID_TO} IS NULL
                 RETURN
                     collect(DISTINCT n) as nodes,
                     collect(DISTINCT r) as relationships,

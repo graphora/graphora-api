@@ -224,6 +224,34 @@ class TestNeo4jStorageTransformationDataCountQuery:
             "cross-transform edges."
         )
 
+    async def test_count_and_data_queries_filter_active_only(self) -> None:
+        """Reviewer-flagged on the integration-test commit (ce22727):
+        get_transformation_data lacked ``r.__valid_to IS NULL``, so a
+        relationship that's been versioned (closed v1 + active v2)
+        would be double-counted by total_edges and double-listed in
+        the relationships payload. get_merge_data already had this
+        filter (b1edc7c); pin the same shape here so the two readers
+        stay in sync."""
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        session = _stub_neo4j_storage_session(storage)
+
+        await storage.get_transformation_data("tx-fixed-bug")
+
+        count_query = session.run.call_args_list[0].args[0]
+        data_query = session.run.call_args_list[1].args[0]
+        assert "r.__valid_to IS NULL" in count_query, (
+            "Count query stopped filtering by validity; will count "
+            "superseded edge versions and disagree with the data "
+            "query's payload (which DID filter)."
+        )
+        assert "r.__valid_to IS NULL" in data_query, (
+            "Data query stopped filtering by validity; the relationships "
+            "payload will include closed historical versions alongside "
+            "the active edge."
+        )
+
 
 class TestNeo4jStorageMergeDataQueries:
     """Same regression family as get_transformation_data, but on the

@@ -29,20 +29,20 @@ import pytest
 
 _GATING_ENV_VAR = "GRAPHORA_TEST_REAL_NEO4J"
 
-try:  # pragma: no cover — ImportError path is the skip
-    from testcontainers.neo4j import Neo4jContainer
-except ImportError as exc:  # pragma: no cover
-    Neo4jContainer = None  # type: ignore[assignment]
-    _IMPORT_ERROR = str(exc)
-else:
-    _IMPORT_ERROR = ""
-
-
 # Pin the Neo4j image to a 5.x release. testcontainers' default
 # (``neo4j:latest``) drifts and can pull a major version that
 # breaks driver compatibility — pinning here keeps CI deterministic.
 # Override with ``NEO4J_TEST_IMAGE`` for local experiments.
 _NEO4J_IMAGE = os.environ.get("NEO4J_TEST_IMAGE", "neo4j:5.20-community")
+
+# Import testcontainers lazily inside the fixture (not at module
+# load) — the testcontainers.neo4j module imports the real neo4j
+# Python driver at module load, which crashes against the unit-suite
+# pandas stub before our fixture-level env-var skips can run.
+# Reviewer-flagged on the integration-test infra commit (ce22727):
+# `GRAPHORA_TEST_REAL_NEO4J=1` alone (without GRAPHORA_TEST_REAL_DEPS)
+# would hit this pandas crash instead of getting a clean skip
+# message.
 
 
 def _ensure_real_neo4j_driver() -> None:
@@ -90,13 +90,17 @@ def neo4j_container():
             "suite pandas stub doesn't implement. "
             "`make test-integration` sets both."
         )
-    if Neo4jContainer is None:
-        pytest.skip(f"testcontainers[neo4j] not installed: {_IMPORT_ERROR}")
-
-    # Purge the stub before the container starts. The container
-    # itself doesn't import neo4j, but as soon as a test fixture
-    # touches Neo4jStorage we need the real driver in sys.modules.
+    # Purge the stub BEFORE importing testcontainers.neo4j — that
+    # package imports the real neo4j driver at module load and would
+    # otherwise crash on the pandas-stub's missing pd.NA. The env
+    # gates above guaranteed we have the real pandas + intent to use
+    # the real driver.
     _ensure_real_neo4j_driver()
+
+    try:
+        from testcontainers.neo4j import Neo4jContainer
+    except ImportError as exc:
+        pytest.skip(f"testcontainers[neo4j] not installed: {exc}")
 
     try:
         container = Neo4jContainer(image=_NEO4J_IMAGE)

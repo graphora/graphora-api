@@ -214,15 +214,20 @@ async def test_relationship_versioning_keeps_active_only_in_count(
     neo4j_storage,
 ):
     """When the SAME relationship is stored twice with different
-    properties, the adapter versions the existing one (sets
-    __valid_to) and creates a new active version. The transform
-    read should return only the active version.
+    properties, the adapter must:
+      1. Set __valid_to on the existing edge (close v1)
+      2. Create a NEW edge alongside (active v2)
+      3. get_transformation_data must return only v2 (active),
+         filtered by r.__valid_to IS NULL.
 
-    Pins commit b1edc7c's contract: get_transformation_data and
-    get_merge_data must filter by ``r.__valid_to IS NULL`` so
-    superseded edge versions don't double-count. Pre-fix, this
-    integration test would have surfaced as 'edge_count = 2 but
-    len(edges) = 1'."""
+    Reviewer-flagged on commit ce22727: pre-fix this test only
+    asserted (3) and could pass even when (1) and (2) didn't
+    actually create a closed version — the production code's
+    MERGE pattern was overwriting v1 in place rather than
+    preserving history. The raw-DB assertions below pin all three
+    so a regression to the overwrite-in-place behaviour fails
+    loud, and strip the active-only filter from
+    get_transformation_data fails the count assertion."""
     transform_id = "round-trip-versioning"
     alice = BaseNode(type="Person", properties={"name": "Alice"})
     acme = BaseNode(type="Company", properties={"name": "Acme"})
@@ -242,7 +247,10 @@ async def test_relationship_versioning_keeps_active_only_in_count(
         [rel_v1], batch_index=0, transform_id=transform_id
     )
 
-    # Same relationship, different role → triggers versioning path.
+    # Same logical edge (s, t, type), different role → triggers
+    # the versioning path. rel.id is reused intentionally so the
+    # adapter has to recognise this as 'same edge, new version'
+    # rather than 'fresh edge'.
     rel_v2 = RelationshipInstance(
         id=rel_v1.id,
         type="WORKS_AT",
@@ -256,9 +264,59 @@ async def test_relationship_versioning_keeps_active_only_in_count(
         [rel_v2], batch_index=1, transform_id=transform_id
     )
 
+    # (1) + (2): raw DB assertion. Two edges of the same type
+    # exist between alice and acme — one closed (__valid_to set)
+    # and one active (__valid_to NULL). Pre-fix the adapter would
+    # MERGE-overwrite v1 in place, leaving exactly one edge with
+    # __valid_to NULL — which would fail the closed-count assert
+    # below. This is the assertion the reviewer specifically asked
+    # for ('Add a raw DB assertion for one closed + one active
+    # rel').
+    async with neo4j_storage._get_session() as session:
+        active_result = await session.run(
+            "MATCH (s {id: $sid})-[r:WORKS_AT]->(t {id: $tid}) "
+            "WHERE r.__valid_to IS NULL RETURN count(r) AS n",
+            sid=alice.id,
+            tid=acme.id,
+        )
+        active_count = (await active_result.single())["n"]
+
+        closed_result = await session.run(
+            "MATCH (s {id: $sid})-[r:WORKS_AT]->(t {id: $tid}) "
+            "WHERE r.__valid_to IS NOT NULL RETURN count(r) AS n",
+            sid=alice.id,
+            tid=acme.id,
+        )
+        closed_count = (await closed_result.single())["n"]
+
+    assert active_count == 1, (
+        f"Expected exactly one ACTIVE WORKS_AT edge after versioning; "
+        f"got {active_count}. The versioning path likely created an "
+        f"edge without overwriting __valid_to=NULL."
+    )
+    assert closed_count == 1, (
+        f"Expected exactly one CLOSED (versioned) WORKS_AT edge; got "
+        f"{closed_count}. The MERGE-then-SET pattern in "
+        f"_build_relationship_query was probably re-matching and "
+        f"overwriting v1 instead of preserving history. Switch the "
+        f"versioning call site in store_relationships to merge=False "
+        f"so CREATE makes a distinct edge."
+    )
+
+    # (3): get_transformation_data must apply r.__valid_to IS NULL
+    # in BOTH count and data queries. Pre-fix it filtered only by
+    # r.__tid; with versioning now actually working, that would
+    # double-count the closed edge.
     response = await neo4j_storage.get_transformation_data(transform_id)
-    # Only one ACTIVE version of the edge in the response.
-    assert response.total_edges == 1
-    assert len(response.edges) == 1
-    # And it's the latest property set.
+    assert response.total_edges == 1, (
+        f"get_transformation_data returned total_edges={response.total_edges}, "
+        f"expected 1 active. Likely lost the r.__valid_to IS NULL "
+        f"filter on the count query."
+    )
+    assert len(response.edges) == 1, (
+        f"get_transformation_data returned {len(response.edges)} edges, "
+        f"expected 1 active. Likely lost the r.__valid_to IS NULL "
+        f"filter on the data query."
+    )
+    # And the surviving edge in the payload is the latest version.
     assert response.edges[0].properties.get("role") == "principal-engineer"
