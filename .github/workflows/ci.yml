@@ -52,6 +52,12 @@ jobs:
       - name: Dead code scan
         run: make deadcode
 
+      # Static check for the WITH count(n) ... MATCH (n) Cypher
+      # anti-pattern (commits e96c15c, 16c8ecb, b1edc7c — three
+      # production-visible incidents from the same root cause).
+      - name: Cypher anti-pattern check
+        run: make cypher-check
+
       # Smoke test: fresh venv with base install only must succeed,
       # the package must import, and the console script must be
       # registered. Catches regressions that break

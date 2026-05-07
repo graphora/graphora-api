@@ -185,6 +185,13 @@ format:
 deadcode:
 	PYTHONPATH=. uv run python scripts/find_dead_code.py
 
+# Static check for the `WITH count(n) as ...` / `MATCH (n)`
+# anti-pattern that silently scopes Cypher queries across the whole
+# DB. The bug bit this codebase three times in two review rounds;
+# this target is the preventive.
+cypher-check:
+	uv run python scripts/check_cypher_patterns.py
+
 openapi-snapshot:
 	PYTHONPATH=. uv run python scripts/openapi_snapshot.py
 
