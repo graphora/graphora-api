@@ -506,9 +506,25 @@ class Neo4jStorage(GraphStorageInterface):
 
                         if existing_rel:
                             # Case 1: Existing with no properties beyond valid_from/valid_to/transform_id/merge_id
+                            #
+                            # ``existing_rel`` is a neo4j-driver
+                            # Relationship object, NOT a dict. Properties
+                            # live directly on it — ``rel.items()`` /
+                            # ``rel[key]`` access the property bag.
+                            # ``rel.get("properties")`` looks up a
+                            # property literally named "properties"
+                            # (which doesn't exist) and returns the
+                            # default {}. Pre-fix this branch always
+                            # returned {} for existing_props, so the
+                            # 'no meaningful properties' early-return
+                            # below ALWAYS fired and the versioning
+                            # path was unreachable. Reviewer caught
+                            # this on commit c347f9c (the integration
+                            # test that would surface it can't run
+                            # without Docker).
                             existing_props = {
                                 k: v
-                                for k, v in existing_rel.get("properties", {}).items()
+                                for k, v in existing_rel.items()
                                 if k
                                 not in {VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID}
                             }

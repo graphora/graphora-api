@@ -543,6 +543,136 @@ class TestNeo4jStorageRelationshipOperations:
         session.assert_query_executed("MERGE", times=1)
 
     @pytest.mark.asyncio
+    async def test_versioning_path_reads_properties_via_items_not_get(self):
+        """Reviewer-flagged on commit c347f9c: ``existing_rel`` is a
+        neo4j-driver Relationship object, not a dict — properties
+        live directly on the object, accessed via ``.items()`` /
+        ``[key]``. Pre-fix, the code did
+        ``existing_rel.get('properties', {}).items()`` which on a
+        Relationship returns the value of the literal property
+        ``properties`` (which doesn't exist) and falls back to {}.
+        Result: the versioning path's 'differing properties' check
+        always saw {} for existing_props, the 'no meaningful
+        properties' early-return ALWAYS fired, and a changed edge
+        never closed v1 / created v2.
+
+        The integration test pins the end-to-end behaviour but
+        requires Docker; this unit test pins the reading pattern
+        directly so a regression to ``existing_rel.get('properties')``
+        fails loud on every CI run."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        class _FakeNeo4jRelationship:
+            """Duck-typed Relationship: ``items()`` exposes the
+            property bag, but ``get('properties')`` returns {} —
+            mirroring the real driver object's behaviour. If the
+            production code ever reverts to .get('properties'),
+            this fake produces empty existing_props and the
+            versioning path silently skips, which the assertion
+            below catches."""
+
+            def __init__(self, properties):
+                self._props = dict(properties)
+
+            def items(self):
+                return self._props.items()
+
+            def __getitem__(self, key):
+                return self._props[key]
+
+            def get(self, key, default=None):
+                return self._props.get(key, default)
+
+        # Construct a Neo4jStorage without invoking __init__ (which
+        # tries to dial a real driver). We only need the
+        # store_relationships method body to run.
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        # Mock the async session context. session.run captures every
+        # query so we can later assert which path the code took.
+        executed: list[str] = []
+
+        async def fake_run(query, *args, **kwargs):
+            executed.append(query)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=session)
+        session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        # The existing relationship has 'role: engineer' as its meaningful
+        # property. The new relationship has 'role: principal-engineer'.
+        # If existing_props is read correctly via .items(), the
+        # versioning branch fires and we see _close_existing_relationship's
+        # SET r.__valid_to query in `executed`. If existing_props comes
+        # back as {} (the bug), the early-return fires and no SET
+        # query gets issued.
+        fake_existing = _FakeNeo4jRelationship(
+            {
+                "id": "existing-rel-id",
+                "role": "engineer",
+                "__tid": "old-tx",
+                "__valid_from": "2026-01-01T00:00:00",
+                "__valid_to": None,
+            }
+        )
+
+        new_rel = RelationshipInstance(
+            id="new-rel-id",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={"role": "principal-engineer"},
+        )
+
+        with patch.object(
+            storage,
+            "_find_existing_relationship",
+            new=AsyncMock(return_value=fake_existing),
+        ):
+            await storage.store_relationships(
+                [new_rel], batch_index=0, transform_id="new-tx"
+            )
+
+        # Versioning fired iff one of the queries SETs __valid_to —
+        # that's the close_existing_relationship signature. Pre-fix
+        # this branch was unreachable.
+        close_queries = [q for q in executed if "__valid_to" in q and "SET" in q]
+        assert close_queries, (
+            "Versioning path didn't fire — _close_existing_relationship "
+            "was never called. existing_props was probably empty because "
+            "the production code reverted to existing_rel.get('properties') "
+            "which returns {} on a Relationship object. Use "
+            "existing_rel.items() instead."
+        )
+
+    @pytest.mark.asyncio
     async def test_store_relationships_should_validate_relationship_type(self):
         """Relationship type should be validated for Cypher injection."""
         from graphora_server.services.storage.neo4j import (
