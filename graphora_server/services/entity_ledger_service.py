@@ -57,9 +57,26 @@ class EntityLedgerService:
     async def hydrate_nodes(
         self, user_id: Optional[str], nodes: Iterable[BaseNode]
     ) -> None:
-        """Populate canonical_id overrides from the ledger if available."""
+        """Populate canonical_id overrides from the ledger if available.
+
+        Slice 2 of cross-document linking: when
+        ``ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED`` is set, this
+        method dispatches to ``hydrate_nodes_with_similarity`` (Stage 1
+        exact-key + Stage 2 embedding similarity). When the flag is
+        off, the legacy exact-key-only path runs unchanged. Routing
+        through the same public method keeps the existing call sites
+        and their tests stable while letting operators opt in to the
+        new behaviour without code changes."""
 
         if not user_id or not nodes:
+            return
+
+        if settings.ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED:
+            await self.hydrate_nodes_with_similarity(
+                user_id,
+                nodes,
+                similarity_threshold=settings.ENTITY_RESOLUTION_SIMILARITY_THRESHOLD,
+            )
             return
 
         nodes = list(nodes)
@@ -281,10 +298,12 @@ class EntityLedgerService:
             return
 
         nodes = list(nodes)
+        total = len(nodes)
 
         # Stage 1: Exact key match (fast path)
         lookup_map = await self._fetch_entries(user_id, nodes)
         unmatched_nodes = []
+        exact_matches = 0
 
         for node in nodes:
             if not node.canonical_key:
@@ -294,11 +313,18 @@ class EntityLedgerService:
             entry = lookup_map.get((node.type, node.canonical_key))
             if entry:
                 node.canonical_id = entry.canonical_id
+                exact_matches += 1
             else:
                 unmatched_nodes.append(node)
 
         if not unmatched_nodes:
-            logger.debug("All %d nodes matched via exact key lookup", len(nodes))
+            self._log_hydrate_summary(
+                user_id=user_id,
+                total=total,
+                exact_matches=exact_matches,
+                similarity_matches=0,
+                threshold=similarity_threshold,
+            )
             return
 
         # Stage 2: Similarity search for unmatched nodes
@@ -311,16 +337,62 @@ class EntityLedgerService:
             user_id, unmatched_nodes, similarity_threshold
         )
 
+        similarity_match_count = 0
         for node in unmatched_nodes:
             match = similar_matches.get(node.id)
             if match:
                 node.canonical_id = match["canonical_id"]
+                similarity_match_count += 1
                 logger.debug(
                     "Similarity match for node %s: %s (score: %.3f)",
                     node.id,
                     match["canonical_id"],
                     match["similarity"],
                 )
+
+        self._log_hydrate_summary(
+            user_id=user_id,
+            total=total,
+            exact_matches=exact_matches,
+            similarity_matches=similarity_match_count,
+            threshold=similarity_threshold,
+        )
+
+    def _log_hydrate_summary(
+        self,
+        *,
+        user_id: str,
+        total: int,
+        exact_matches: int,
+        similarity_matches: int,
+        threshold: float,
+    ) -> None:
+        """One-line INFO summary of the cross-document hydrate pass.
+
+        Operators reading the log timeline need to see whether the
+        feature is doing useful work without grep-ing debug-level
+        output. Structured ``extra`` fields make the line tractable
+        for log aggregation pipelines (Loki/CloudWatch/etc.) — one
+        log entry per transform's hydrate call, with counts that
+        sum to ``total``."""
+        unmatched = total - exact_matches - similarity_matches
+        logger.info(
+            "Cross-doc hydrate: %d nodes, %d exact, %d similarity, "
+            "%d unmatched (threshold=%.2f)",
+            total,
+            exact_matches,
+            similarity_matches,
+            unmatched,
+            threshold,
+            extra={
+                "user_id": user_id,
+                "ledger_total": total,
+                "ledger_exact_matches": exact_matches,
+                "ledger_similarity_matches": similarity_matches,
+                "ledger_unmatched": unmatched,
+                "ledger_threshold": threshold,
+            },
+        )
 
     async def find_similar_entities(
         self,

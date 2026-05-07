@@ -388,6 +388,151 @@ async def test_get_entries_by_type_orders_and_caps_at_10k(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_hydrate_nodes_dispatches_to_similarity_when_flag_on(
+    monkeypatch,
+):
+    """Slice 2: with ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED=True,
+    hydrate_nodes routes to hydrate_nodes_with_similarity. The legacy
+    exact-key-only path must NOT run when the flag is on. Pin the
+    dispatch so a refactor can't silently lose the cross-document
+    feature."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED", True)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_SIMILARITY_THRESHOLD", 0.85)
+
+    service = EntityLedgerService(memory_store={})
+
+    seen: dict[str, object] = {}
+
+    async def fake_with_similarity(user_id, nodes, similarity_threshold=0.85):
+        seen["called"] = True
+        seen["user_id"] = user_id
+        seen["threshold"] = similarity_threshold
+        seen["nodes"] = list(nodes)
+
+    monkeypatch.setattr(service, "hydrate_nodes_with_similarity", fake_with_similarity)
+
+    node = _node_with_canonical("Acme", "Company:name=acme")
+    await service.hydrate_nodes("user-1", [node])
+
+    assert seen.get("called") is True
+    assert seen["user_id"] == "user-1"
+    assert seen["threshold"] == 0.85
+    assert len(seen["nodes"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_hydrate_nodes_uses_legacy_path_when_flag_off(monkeypatch):
+    """Mirror of the above: with the flag off, the similarity path
+    must NOT run — operators who haven't opted in should see
+    bit-identical behaviour to the pre-slice-2 codebase. Pin this
+    so a future refactor can't accidentally make similarity the
+    default path."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED", False)
+
+    service = EntityLedgerService(memory_store={})
+
+    called = {"value": False}
+
+    async def fail_if_called(*args, **kwargs):
+        called["value"] = True
+
+    monkeypatch.setattr(service, "hydrate_nodes_with_similarity", fail_if_called)
+
+    # Stash an exact-key match so we can verify the legacy path still runs.
+    canonical_key = "Company:name=acme"
+    canonical_id = _make_canonical_node_id(canonical_key)
+    service._memory_store[("user-1", "Company", canonical_key)] = __import__(
+        "graphora_server.services.entity_ledger_service",
+        fromlist=["EntityLedgerEntry"],
+    ).EntityLedgerEntry(
+        user_id="user-1",
+        entity_type="Company",
+        canonical_key=canonical_key,
+        canonical_id=canonical_id,
+        features={},
+        confidence=1.0,
+    )
+
+    fresh_node = BaseNode(
+        id="local-fresh",
+        type="Company",
+        properties={"name": "Acme"},
+        canonical_properties={"name": "acme"},
+        canonical_key=canonical_key,
+    )
+    await service.hydrate_nodes("user-1", [fresh_node])
+
+    assert called["value"] is False
+    # Legacy exact-key match still landed on the fresh node.
+    assert fresh_node.canonical_id == canonical_id
+
+
+@pytest.mark.asyncio
+async def test_hydrate_summary_log_emitted_with_match_counts(monkeypatch, caplog):
+    """Telemetry contract: each cross-doc hydrate call must emit one
+    INFO summary line with structured ledger_* fields naming the
+    counts. Operators rely on this to spot weird match rates without
+    enabling debug-level logging."""
+    import logging
+
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED", True)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_SIMILARITY_THRESHOLD", 0.85)
+
+    service = EntityLedgerService(memory_store={})
+
+    canonical_key = "Company:name=acme"
+    canonical_id = _make_canonical_node_id(canonical_key)
+    from graphora_server.services.entity_ledger_service import EntityLedgerEntry
+
+    service._memory_store[("user-1", "Company", canonical_key)] = EntityLedgerEntry(
+        user_id="user-1",
+        entity_type="Company",
+        canonical_key=canonical_key,
+        canonical_id=canonical_id,
+        features={},
+        confidence=1.0,
+    )
+
+    matched = BaseNode(
+        id="m1",
+        type="Company",
+        properties={"name": "Acme"},
+        canonical_key=canonical_key,
+    )
+    unmatched = BaseNode(
+        id="u1",
+        type="Company",
+        properties={"name": "Other"},
+        canonical_key="Company:name=other",
+    )
+
+    fake = _FakeEmbedder()
+    _patch_embedder(monkeypatch, fake)
+
+    with caplog.at_level(
+        logging.INFO, logger="graphora_server.services.entity_ledger_service"
+    ):
+        await service.hydrate_nodes("user-1", [matched, unmatched])
+
+    summary_records = [
+        r for r in caplog.records if "Cross-doc hydrate" in r.getMessage()
+    ]
+    assert len(summary_records) == 1, (
+        "expected exactly one INFO summary per hydrate call; "
+        f"got {len(summary_records)}: {[r.getMessage() for r in summary_records]}"
+    )
+    record = summary_records[0]
+    # Structured fields make the line greppable in log aggregators.
+    assert getattr(record, "ledger_total", None) == 2
+    assert getattr(record, "ledger_exact_matches", None) == 1
+    # No similarity match because the unmatched node has no candidate
+    # to match against (the only stored entry was already claimed by
+    # the exact-key stage).
+    assert getattr(record, "ledger_similarity_matches", None) == 0
+    assert getattr(record, "ledger_unmatched", None) == 1
+
+
+@pytest.mark.asyncio
 async def test_record_nodes_handles_embedder_import_failure(
     monkeypatch,
 ):

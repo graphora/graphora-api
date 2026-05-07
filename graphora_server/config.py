@@ -169,8 +169,16 @@ class Settings(BaseSettings):
         description="Minimum similarity threshold for entity matching",
     )
     ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED: bool = Field(
-        default=True,
-        description="Enable cross-document entity linking via entity store",
+        default=False,
+        description=(
+            "Enable cross-document entity linking via the entity_ledger "
+            "embedding-similarity reader. When True, hydrate_nodes "
+            "performs a two-stage lookup (exact canonical_key, then "
+            "embedding similarity). When False, only the exact-key "
+            "stage runs — the historical default. Slice 2 default is "
+            "False (opt-in) until match-rate telemetry validates the "
+            "behaviour at scale; slice 4 will flip to True."
+        ),
     )
     ENTITY_RESOLUTION_BATCH_SIZE: int = Field(
         default=500,
