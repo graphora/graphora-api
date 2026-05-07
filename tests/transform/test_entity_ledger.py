@@ -973,6 +973,72 @@ async def test_disambiguate_skipped_when_payload_exceeds_cap(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_telemetry_distinguishes_llm_failed_from_llm_rejected(
+    monkeypatch, caplog
+):
+    """Slice-3 follow-up: a BAML failure used to be counted as
+    'rejected', which broke the metric for threshold tuning — the
+    rejection rate would spike whenever BAML was flaky and operators
+    would tighten thresholds chasing a phantom signal.
+
+    Pin the split: when the LLM call raises, the corresponding
+    review-tier nodes count as ``llm_failed``, not ``llm_rejected``.
+    Operators reading the telemetry can tell 'LLM said no' (signal
+    about thresholds) from 'LLM never answered' (signal about infra)
+    without having to cross-reference logs."""
+    import logging
+
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED", True)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_SIMILARITY_REVIEW_THRESHOLD", 0.70)
+
+    service = EntityLedgerService(memory_store={})
+    _seed_ledger_entry(service)
+
+    import numpy as np
+
+    angled = np.zeros(384, dtype=np.float32)
+    angled[0] = 0.71
+    angled[1] = 0.71
+    fake = _FakeEmbedder(mapping={"acme": angled.tolist()})
+    _patch_embedder(monkeypatch, fake)
+
+    query = _node_with_canonical("Acme", "Company:name=acme")
+
+    class _Failing:
+        async def resolve_entities(self, **kwargs):
+            raise RuntimeError("BAML server unreachable")
+
+    from graphora_server.services.llm import client as llm_client_module
+
+    monkeypatch.setattr(llm_client_module, "LLMClient", lambda: _Failing())
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="graphora_server.services.entity_ledger_service",
+    ):
+        await service.hydrate_nodes("user-1", [query])
+
+    summary = next(r for r in caplog.records if "Cross-doc hydrate" in r.getMessage())
+    # The critical assertion: the failure lands on the 'failed'
+    # counter, not on 'rejected'. If this regresses, threshold
+    # tuning is silently broken.
+    assert getattr(summary, "ledger_llm_failed", None) == 1, (
+        "LLM runtime failure should count as ledger_llm_failed; "
+        "the metric is wrong otherwise — see _DisambiguationResult "
+        "docstring for the rationale."
+    )
+    assert getattr(summary, "ledger_llm_rejected", None) == 0, (
+        "LLM runtime failure was counted as 'rejected', which "
+        "conflates infra failures with threshold-tuning signal. "
+        "Reviewer caught this on slice 3 — don't regress."
+    )
+
+
+@pytest.mark.asyncio
 async def test_disambiguate_llm_failure_degrades_to_no_match(monkeypatch):
     """Same graceful-degradation contract as slice-2: a runtime
     failure in the LLM call must NOT propagate. Auto-tier matches
@@ -1061,6 +1127,7 @@ async def test_hydrate_summary_log_includes_llm_counts(monkeypatch, caplog):
     record = summary_records[0]
     assert getattr(record, "ledger_llm_resolved", None) == 1
     assert getattr(record, "ledger_llm_rejected", None) == 0
+    assert getattr(record, "ledger_llm_failed", None) == 0
     assert getattr(record, "ledger_llm_skipped_for_cap", None) == 0
 
 

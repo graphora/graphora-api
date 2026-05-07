@@ -18,6 +18,39 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class _DisambiguationResult:
+    """Outcome of a cross-doc LLM disambiguation pass.
+
+    Slice-3 follow-up (reviewer finding): pre-fix,
+    ``_disambiguate_review_candidates`` returned ``{}`` for both 'LLM
+    said no' and 'LLM call raised', and the caller couldn't tell them
+    apart. The telemetry counted both as ``ledger_llm_rejected``,
+    which made the metric useless for threshold tuning — operators
+    looking at 'LLM rejected most gray-zone matches' couldn't tell
+    if the threshold was wrong or if BAML was down.
+
+    The three fields below distinguish the verdict shape:
+      * ``confirmed`` — LLM responded and grouped the query with a
+        candidate. Apply the canonical_id, count as ``llm_resolved``.
+      * ``failed_types`` — LLM call raised for this entity_type
+        (BAML server unreachable, rate limit, parse error). Queries
+        of this type are counted as ``llm_failed`` — the LLM never
+        produced a verdict.
+      * ``skipped_for_cap`` — total payload exceeded the cost cap.
+        All review candidates count as ``llm_skipped_for_cap``, not
+        rejected (we didn't ask).
+
+    Anything in ``review_node_ids`` not classified above is a true
+    LLM rejection — counted as ``llm_rejected``, which is the only
+    bucket that's meaningful for threshold tuning.
+    """
+
+    confirmed: Dict[str, Dict[str, object]]
+    failed_types: set
+    skipped_for_cap: bool
+
+
+@dataclass
 class EntityLedgerEntry:
     user_id: str
     entity_type: str
@@ -369,28 +402,42 @@ class EntityLedgerService:
         # all review-tier candidates. Failures degrade silently —
         # auto-tier matches stay applied, review-tier candidates
         # just don't get linked.
+        #
+        # Telemetry split (slice-3 follow-up): the four buckets are
+        # mutually exclusive over review_node_ids:
+        #   * resolved      — LLM grouped query with a candidate
+        #   * rejected      — LLM responded but produced no match
+        #                     (the only bucket that means anything
+        #                     for threshold tuning)
+        #   * failed        — LLM call raised, no verdict produced
+        #   * skipped_cap   — payload exceeded the cost cap, never
+        #                     called the LLM at all
+        # Conflating any of these into one counter (as pre-fix code
+        # did with rejected vs failed) makes operators chase the
+        # wrong knob when the metric drifts.
         llm_resolved_count = 0
         llm_rejected_count = 0
+        llm_failed_count = 0
         llm_skipped_for_cap = 0
         if review_node_ids:
-            confirmed = await self._disambiguate_review_candidates(
+            disambig = await self._disambiguate_review_candidates(
                 user_id=user_id,
                 review_matches={nid: similar_matches[nid] for nid in review_node_ids},
                 nodes_by_id=nodes_by_id,
             )
-            for nid in review_node_ids:
-                if nid in confirmed:
-                    nodes_by_id[nid].canonical_id = confirmed[nid]["canonical_id"]
-                    llm_resolved_count += 1
-                else:
-                    llm_rejected_count += 1
-            # ``confirmed`` is empty if the cap fired — distinguish so
-            # the telemetry helps an operator distinguish 'LLM said no'
-            # from 'we didn't even try'.
-            if confirmed.get("__skipped_for_cap__"):
-                llm_skipped_for_cap = llm_rejected_count
-                llm_rejected_count = 0
-                confirmed.pop("__skipped_for_cap__", None)
+            if disambig.skipped_for_cap:
+                llm_skipped_for_cap = len(review_node_ids)
+            else:
+                for nid in review_node_ids:
+                    if nid in disambig.confirmed:
+                        nodes_by_id[nid].canonical_id = disambig.confirmed[nid][
+                            "canonical_id"
+                        ]
+                        llm_resolved_count += 1
+                    elif nodes_by_id[nid].type in disambig.failed_types:
+                        llm_failed_count += 1
+                    else:
+                        llm_rejected_count += 1
 
         self._log_hydrate_summary(
             user_id=user_id,
@@ -399,6 +446,7 @@ class EntityLedgerService:
             similarity_matches=auto_match_count,
             llm_resolved=llm_resolved_count,
             llm_rejected=llm_rejected_count,
+            llm_failed=llm_failed_count,
             llm_skipped_for_cap=llm_skipped_for_cap,
             threshold=similarity_threshold,
         )
@@ -413,6 +461,7 @@ class EntityLedgerService:
         threshold: float,
         llm_resolved: int = 0,
         llm_rejected: int = 0,
+        llm_failed: int = 0,
         llm_skipped_for_cap: int = 0,
     ) -> None:
         """One-line INFO summary of the cross-document hydrate pass.
@@ -424,33 +473,42 @@ class EntityLedgerService:
         log entry per transform's hydrate call, with counts that
         sum to ``total``.
 
-        Slice 3 added the LLM disambiguation buckets:
+        Slice 3 added the LLM disambiguation buckets, and the
+        slice-3 follow-up split 'failed' from 'rejected':
           * ``llm_resolved``      — LLM said 'yes, same entity'
-          * ``llm_rejected``      — LLM said 'no, different entity'
-          * ``llm_skipped_for_cap`` — disambiguation skipped because
-            the gray-zone candidate count exceeded the per-call cap
-            (operator hit the cost-bound)
-        Operators tuning thresholds use these to spot 'LLM is
-        rejecting 90% of gray-zone candidates' (threshold may be too
-        permissive) or 'cap fires often' (raise cap or tighten
-        threshold)."""
+          * ``llm_rejected``      — LLM responded but said 'no'
+                                    (the only bucket meaningful for
+                                    similarity-threshold tuning)
+          * ``llm_failed``        — LLM call raised (BAML down,
+                                    rate limit, parse error). The
+                                    LLM produced no verdict, so this
+                                    says nothing about threshold
+                                    quality — surfaces infra issues
+          * ``llm_skipped_for_cap`` — payload exceeded cost cap, no
+                                    LLM call was made
+        Pre-fix code conflated 'failed' and 'rejected' which made
+        the rejection rate spike whenever BAML was flaky — operators
+        would chase the threshold knob when the real problem was
+        upstream. The split keeps each metric semantically clean."""
         unmatched = (
             total
             - exact_matches
             - similarity_matches
             - llm_resolved
             - llm_rejected
+            - llm_failed
             - llm_skipped_for_cap
         )
         logger.info(
             "Cross-doc hydrate: %d nodes, %d exact, %d similarity, "
-            "%d llm-resolved, %d llm-rejected, %d llm-skipped, "
-            "%d unmatched (threshold=%.2f)",
+            "%d llm-resolved, %d llm-rejected, %d llm-failed, "
+            "%d llm-skipped, %d unmatched (threshold=%.2f)",
             total,
             exact_matches,
             similarity_matches,
             llm_resolved,
             llm_rejected,
+            llm_failed,
             llm_skipped_for_cap,
             unmatched,
             threshold,
@@ -461,6 +519,7 @@ class EntityLedgerService:
                 "ledger_similarity_matches": similarity_matches,
                 "ledger_llm_resolved": llm_resolved,
                 "ledger_llm_rejected": llm_rejected,
+                "ledger_llm_failed": llm_failed,
                 "ledger_llm_skipped_for_cap": llm_skipped_for_cap,
                 "ledger_unmatched": unmatched,
                 "ledger_threshold": threshold,
@@ -473,7 +532,7 @@ class EntityLedgerService:
         user_id: str,
         review_matches: Dict[str, Dict[str, object]],
         nodes_by_id: Dict[str, BaseNode],
-    ) -> Dict[str, Dict[str, object]]:
+    ) -> _DisambiguationResult:
         """Slice 3: ask the LLM yes/no on gray-zone similarity matches.
 
         Per entity_type we make ONE batched call to the BAML
@@ -489,24 +548,25 @@ class EntityLedgerService:
 
         Cost guards:
           * Per-call cap on (queries + candidates). Beyond this the
-            entire pass is skipped — a marker key is added to the
-            return dict so the caller can distinguish 'cap fired'
+            entire pass is skipped — the result's ``skipped_for_cap``
+            flag is True so the caller can distinguish 'cap fired'
             from 'LLM said no' for telemetry.
           * Each entity_type's call is wrapped in try/except. A
             failure for one type doesn't poison the others — same
             graceful-degradation contract as the embedding-side fix.
 
         Returns:
-            ``{node_id: match_info}`` for queries the LLM confirmed,
-            mirroring the ``find_similar_entities`` shape so
-            ``hydrate_nodes_with_similarity`` can apply them
-            uniformly. Empty dict means no LLM matches landed —
-            either because the LLM said no, the call failed, or the
-            cap fired (caller checks the ``__skipped_for_cap__``
-            marker for the latter).
+            ``_DisambiguationResult`` with three buckets — see its
+            docstring for the rationale. The structured return type
+            replaces an earlier dict-with-magic-keys design that
+            conflated 'LLM said no' with 'LLM call failed' in the
+            telemetry counters.
         """
+        empty = _DisambiguationResult(
+            confirmed={}, failed_types=set(), skipped_for_cap=False
+        )
         if not review_matches or not nodes_by_id:
-            return {}
+            return empty
 
         # Group queries + candidates by entity_type so each LLM call
         # asks about one type. The LLM is type-aware via the
@@ -538,7 +598,9 @@ class EntityLedgerService:
                 total_payload,
                 cap,
             )
-            return {"__skipped_for_cap__": True}
+            return _DisambiguationResult(
+                confirmed={}, failed_types=set(), skipped_for_cap=True
+            )
 
         try:
             from graphora_server.services.llm.client import LLMClient
@@ -547,11 +609,19 @@ class EntityLedgerService:
         except ImportError:
             logger.warning(
                 "LLM client unavailable for cross-doc disambiguation; "
-                "review-tier matches dropped"
+                "review-tier matches dropped (treated as failed, not "
+                "rejected — see telemetry contract)"
             )
-            return {}
+            # Every type is 'failed' here — the import problem is
+            # environmental, not specific to one entity_type.
+            return _DisambiguationResult(
+                confirmed={},
+                failed_types=set(queries_by_type.keys()),
+                skipped_for_cap=False,
+            )
 
         confirmed: Dict[str, Dict[str, object]] = {}
+        failed_types: set = set()
 
         for entity_type, qnodes in queries_by_type.items():
             cands = candidates_by_type.get(entity_type, {})
@@ -600,10 +670,11 @@ class EntityLedgerService:
                 logger.warning(
                     "Cross-doc disambiguation LLM call failed "
                     "(entity_type=%s): %s; review-tier matches for "
-                    "this type dropped",
+                    "this type counted as 'llm_failed', not rejected",
                     entity_type,
                     exc,
                 )
+                failed_types.add(entity_type)
                 continue
 
             candidate_id_set = set(cands.keys())
@@ -641,7 +712,11 @@ class EntityLedgerService:
                             result.explanation,
                         )
 
-        return confirmed
+        return _DisambiguationResult(
+            confirmed=confirmed,
+            failed_types=failed_types,
+            skipped_for_cap=False,
+        )
 
     async def find_similar_entities(
         self,
