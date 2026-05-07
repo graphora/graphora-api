@@ -87,6 +87,62 @@ async def _should_pre_extract_pdfs(user_id: str) -> bool:
         return False
 
 
+async def _resolve_evidence_source_text(
+    parser, split_path: str, max_chars: int
+) -> Optional[str]:
+    """Apply the Evidence-tab source_text contract to one binary
+    PDF split.
+
+    Two checks gate whether we populate ``ChunkMetadata.source_text``
+    for a split:
+      1. The layout-aware parser succeeds (parse_pdf_layout_only
+         returns a string) — pymupdf4llm not installed, or any
+         per-document failure, returns None.
+      2. The parsed Markdown is short enough that the helpers.py
+         1000-char source_text truncation isn't misleading. Splits
+         are up to 100 pages each (split_pdf with pages=100); a
+         100-page parse can be ~50KB of Markdown, of which the
+         truncation keeps only the first ~2 pages — entities
+         extracted from page 60 would show evidence text from
+         page 1, which is wrong provenance for a user-facing
+         surface.
+
+    When (2) fails we leave source_text=None and operators fall
+    back to source_chunk_id (the split filename) for provenance —
+    the MCP get_evidence path still resolves it via the original
+    split file. Per-page evidence (Gate 4) will replace this
+    all-or-nothing gate with proper per-fact provenance.
+
+    Extracted to a module-level helper so the gate is testable in
+    isolation (the binary-PDF flow path that uses it lives inside
+    a long ingest function); kept here rather than on
+    DocumentParser because the size policy is the caller's concern,
+    not a property of the parser.
+    """
+    try:
+        full_text = await parser.parse_pdf_layout_only(split_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "Layout-aware parse failed for %s: %s; " "leaving source_text=None",
+            split_path,
+            exc,
+        )
+        return None
+    if full_text is None:
+        return None
+    if len(full_text) > max_chars:
+        logger.debug(
+            "Layout-aware parse of %s produced %d chars (> %d); "
+            "leaving source_text=None to avoid misleading-truncation "
+            "evidence on multi-page splits",
+            split_path,
+            len(full_text),
+            max_chars,
+        )
+        return None
+    return full_text
+
+
 async def _pdf_to_text_file(pdf_path: str, output_dir: Path) -> Optional[str]:
     """Extract a PDF to a sibling .txt file using DocumentParser.
 
@@ -401,27 +457,33 @@ async def document_transformation_flow(
                     # (the split filename) on every emitted node and
                     # edge.
                     #
-                    # source_text capture is gated on the layout-aware
-                    # PDF backend (pymupdf4llm) being available, AND
-                    # uses the strict-quality parse_pdf_layout_only
-                    # method that has NO raw-text fallback. The
-                    # raw-text backends (pymupdf/pypdf/pdfplumber)
-                    # produce garbled output on real-world PDFs with
-                    # multi-column layouts, tables, and footnotes
-                    # (10K filings, research papers) — the Evidence
-                    # tab ended up surfacing jumbled letters with
-                    # words reordered across columns. Commit beafa92
-                    # disabled source_text entirely as a first fix;
-                    # 920b8f9 re-enabled it gated on the layout-aware
-                    # backend BUT routed through parse_file, which
-                    # falls back to raw-text on a per-document
-                    # pymupdf4llm failure — reintroducing the same
-                    # garbled-output regression for unusual PDFs.
-                    # parse_pdf_layout_only closes that hole: any
-                    # pymupdf4llm failure leaves source_text=None,
-                    # never raw-text. 'No source text' is better
-                    # than 'misleading source text' on a surface
-                    # users read directly.
+                    # source_text capture is gated on TWO conditions:
+                    #   (a) the layout-aware PDF backend (pymupdf4llm)
+                    #       is available — the raw-text backends
+                    #       garble multi-column docs, see
+                    #       beafa92 / 920b8f9.
+                    #   (b) the parsed Markdown is small enough that
+                    #       the helpers.py 1000-char source_text
+                    #       truncation isn't misleading. Splits are
+                    #       up to 100 pages each (split_pdf above);
+                    #       a 100-page parse would be ~50KB of
+                    #       Markdown, of which the truncation keeps
+                    #       only the first ~2 pages — entities
+                    #       extracted from page 60 would show
+                    #       evidence text from page 1, which is
+                    #       misleading provenance. f1596f3 lifted
+                    #       the 5-page parser cap (so the parsed
+                    #       text is honest), but this gate is what
+                    #       prevents truncation-after-parse from
+                    #       making the user-facing evidence wrong.
+                    #
+                    # When (b) fails we leave source_text=None and
+                    # operators fall back to source_chunk_id (the
+                    # split filename) for provenance — the
+                    # MCP get_evidence path still resolves it via
+                    # the original split file. Per-page evidence
+                    # (Gate 4) will replace this all-or-nothing
+                    # gate with proper per-fact provenance.
                     #
                     # page_number is intentionally NOT set here.
                     # split_pdf's filename trailing integer is the
@@ -434,6 +496,17 @@ async def document_transformation_flow(
                     from graphora_server.services.document_parser import (
                         DocumentParser,
                     )
+                    from graphora_server.services.transform.helpers import (
+                        _SOURCE_TEXT_PROPERTY_LIMIT,
+                    )
+
+                    # 2x the truncation budget: a parsed text up to
+                    # this size means the first 1000 chars covers at
+                    # least 50% of the actual content — biased toward
+                    # the start, but honest as a 'sample' rather than
+                    # a 'first 1% of the doc' fragment. Larger parses
+                    # produce too-misleading truncations.
+                    EVIDENCE_TEXT_MAX_CHARS = 2 * _SOURCE_TEXT_PROPERTY_LIMIT
 
                     layout_aware = DocumentParser.has_layout_aware_backend()
                     parser = DocumentParser() if layout_aware else None
@@ -442,18 +515,9 @@ async def document_transformation_flow(
                         split_name = Path(split_path).name
                         split_text: Optional[str] = None
                         if parser is not None:
-                            try:
-                                split_text = await parser.parse_pdf_layout_only(
-                                    split_path
-                                )
-                            except Exception as exc:  # pragma: no cover
-                                logger.warning(
-                                    "Layout-aware parse failed for %s: %s; "
-                                    "leaving source_text=None",
-                                    split_path,
-                                    exc,
-                                )
-                                split_text = None
+                            split_text = await _resolve_evidence_source_text(
+                                parser, split_path, EVIDENCE_TEXT_MAX_CHARS
+                            )
                         pdf_metadatas.append(
                             ChunkMetadata(
                                 transform_id=transform_id,
