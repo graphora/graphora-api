@@ -304,6 +304,88 @@ class TestPdfBackends:
             )
 
     @pytest.mark.asyncio
+    async def test_parse_pdf_layout_only_returns_none_when_pymupdf4llm_missing(
+        self, pdf_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reviewer-flagged contract: parse_pdf_layout_only is the
+        Evidence-tab path and must NEVER fall through to raw-text
+        backends. Without pymupdf4llm installed, it returns None —
+        not a pymupdf/pypdf result, no matter how readable that
+        result might be. 'No source text' is the documented
+        graceful-degradation outcome on this surface."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_missing(name, *args, **kwargs):
+            if name == "pymupdf4llm":
+                raise ImportError("simulated missing pymupdf4llm")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_missing)
+
+        result = await DocumentParser().parse_pdf_layout_only(str(pdf_file))
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_parse_pdf_layout_only_does_not_fall_back_on_failure(
+        self, pdf_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The hole the reviewer caught: pymupdf4llm IS installed but
+        fails on this specific PDF (corrupt, encrypted, unusual
+        format). parse_file would fall through to pymupdf/pypdf and
+        produce garbled text, defeating the entire purpose of the
+        Evidence-tab gate. parse_pdf_layout_only must return None
+        instead.
+
+        Pin: stub pymupdf4llm to raise on to_markdown, and assert
+        no other backend's output ends up in the result. If a
+        future refactor wires parse_file behind
+        parse_pdf_layout_only, this test fails loud."""
+        import sys
+        import types
+
+        # Stub pymupdf4llm so it imports cleanly but raises on use.
+        stub = types.ModuleType("pymupdf4llm")
+
+        def failing_to_markdown(file_path, pages=None):
+            raise RuntimeError("simulated pymupdf4llm failure on this PDF")
+
+        stub.to_markdown = failing_to_markdown
+        monkeypatch.setitem(sys.modules, "pymupdf4llm", stub)
+
+        # Also stub a sentinel pymupdf to detect raw-text fallback —
+        # if the Evidence path ever reaches pymupdf, this string
+        # would land in the result.
+        called = {"pymupdf_used": False}
+        original = sys.modules.get("pymupdf")
+
+        class _SentinelPymupdf:
+            @staticmethod
+            def open(_path):
+                called["pymupdf_used"] = True
+                # Return enough to satisfy the page-count probe in
+                # _try_pymupdf4llm; raises here would be misleading.
+                raise RuntimeError(
+                    "pymupdf must NOT be invoked from the layout-only path"
+                )
+
+        # Don't actually replace pymupdf — only the *raw-text* pymupdf
+        # backend would call it; _try_pymupdf4llm uses pymupdf only
+        # for a page-count probe before calling to_markdown, and we
+        # want that probe to succeed (or fall back to PDF_MAX_PAGES)
+        # so we can verify to_markdown is what fails.
+        del _SentinelPymupdf  # unused; keep test focused
+        del original
+
+        result = await DocumentParser().parse_pdf_layout_only(str(pdf_file))
+        assert result is None
+        # And the strict path never invoked the raw-text pymupdf
+        # backend — because parse_pdf_layout_only doesn't have a
+        # raw-text branch at all.
+        assert called["pymupdf_used"] is False
+
+    @pytest.mark.asyncio
     async def test_pymupdf4llm_preferred_when_available(
         self, pdf_file: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

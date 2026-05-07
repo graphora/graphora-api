@@ -113,6 +113,31 @@ class DocumentParser:
             return False
         return True
 
+    async def parse_pdf_layout_only(self, file_path: str) -> Optional[str]:
+        """Layout-aware PDF parse with NO raw-text fallback.
+
+        Reviewer-flagged hole on the original Evidence-tab fix
+        (commit 920b8f9): flows.py was calling ``parse_file`` after
+        gating on ``has_layout_aware_backend``, but parse_file's PDF
+        chain falls through to pymupdf/pypdf/pdfplumber when
+        pymupdf4llm fails on a specific document — so a corrupt or
+        unusual PDF still produced garbled raw-text output and
+        landed in source_text, exactly what beafa92 was designed
+        to prevent.
+
+        This method is the strict-quality variant: pymupdf4llm
+        succeeds → return its Markdown; pymupdf4llm not installed
+        OR fails on this file → return None. The raw-text backends
+        are unreachable from here.
+
+        Schema inference still uses ``parse_file`` (with the
+        full fallback chain) because there 'rough text' is better
+        than 'no text' — the LLM tolerates lossy input. Evidence
+        tab needs the opposite trade-off: 'no text' is better than
+        'wrong text' because users read it directly.
+        """
+        return self._try_pymupdf4llm(file_path)
+
     async def _parse_pdf_file(self, file_path: str) -> Optional[str]:
         """Extract text from a PDF file.
 

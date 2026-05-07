@@ -221,8 +221,12 @@ vertexai = [
 ]
 
 # Convenience union. Use this for a runnable server with all features.
+# Every feature-extra goes here — even meta-aliases like [age] (which
+# is just [postgres] under another name) — so an `[all]` install is
+# the literal union of everything documented as a user-facing surface.
+# Pinned by tests/unit/test_pyproject_extras.py.
 all = [
-    "graphora-server[server,chunking,embeddings,er,pdf,docling,url,neo4j,postgres,kuzu,redis,ollama,mcp,openai,anthropic,gemini,vertexai]",
+    "graphora-server[server,chunking,embeddings,er,pdf,pdf-llm,docling,url,neo4j,postgres,age,kuzu,redis,ollama,mcp,openai,anthropic,gemini,vertexai]",
 ]
 
 # Developer tooling. Named `dev` to mirror the locked taxonomy; kept

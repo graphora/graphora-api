@@ -402,19 +402,26 @@ async def document_transformation_flow(
                     # edge.
                     #
                     # source_text capture is gated on the layout-aware
-                    # PDF backend (pymupdf4llm) being available. The
+                    # PDF backend (pymupdf4llm) being available, AND
+                    # uses the strict-quality parse_pdf_layout_only
+                    # method that has NO raw-text fallback. The
                     # raw-text backends (pymupdf/pypdf/pdfplumber)
                     # produce garbled output on real-world PDFs with
                     # multi-column layouts, tables, and footnotes
                     # (10K filings, research papers) — the Evidence
                     # tab ended up surfacing jumbled letters with
                     # words reordered across columns. Commit beafa92
-                    # disabled source_text entirely as a fix; this
-                    # path re-enables it ONLY when pymupdf4llm is
-                    # installed (the [pdf-llm] extra). Operators on
-                    # the raw-text backends keep the post-beafa92
-                    # behaviour (source_text=None) — better an empty
-                    # Evidence tab than a misleading one.
+                    # disabled source_text entirely as a first fix;
+                    # 920b8f9 re-enabled it gated on the layout-aware
+                    # backend BUT routed through parse_file, which
+                    # falls back to raw-text on a per-document
+                    # pymupdf4llm failure — reintroducing the same
+                    # garbled-output regression for unusual PDFs.
+                    # parse_pdf_layout_only closes that hole: any
+                    # pymupdf4llm failure leaves source_text=None,
+                    # never raw-text. 'No source text' is better
+                    # than 'misleading source text' on a surface
+                    # users read directly.
                     #
                     # page_number is intentionally NOT set here.
                     # split_pdf's filename trailing integer is the
@@ -436,7 +443,9 @@ async def document_transformation_flow(
                         split_text: Optional[str] = None
                         if parser is not None:
                             try:
-                                split_text = await parser.parse_file(split_path)
+                                split_text = await parser.parse_pdf_layout_only(
+                                    split_path
+                                )
                             except Exception as exc:  # pragma: no cover
                                 logger.warning(
                                     "Layout-aware parse failed for %s: %s; "
