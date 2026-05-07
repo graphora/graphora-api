@@ -114,29 +114,31 @@ class DocumentParser:
         return True
 
     async def parse_pdf_layout_only(self, file_path: str) -> Optional[str]:
-        """Layout-aware PDF parse with NO raw-text fallback.
+        """Layout-aware PDF parse with NO raw-text fallback and NO
+        page cap.
 
-        Reviewer-flagged hole on the original Evidence-tab fix
-        (commit 920b8f9): flows.py was calling ``parse_file`` after
-        gating on ``has_layout_aware_backend``, but parse_file's PDF
-        chain falls through to pymupdf/pypdf/pdfplumber when
-        pymupdf4llm fails on a specific document — so a corrupt or
-        unusual PDF still produced garbled raw-text output and
-        landed in source_text, exactly what beafa92 was designed
-        to prevent.
+        Two strict-quality contracts vs. the schema-inference path:
+          1. NO fallback to raw-text backends. pymupdf4llm fails →
+             return None, never raw-text. Reviewer-flagged hole on
+             the original layout-aware rewire (commit 920b8f9):
+             flows.py was calling ``parse_file``, which falls
+             through to pymupdf/pypdf/pdfplumber when pymupdf4llm
+             fails on a specific document — exactly what beafa92
+             was designed to prevent.
+          2. NO PDF_MAX_PAGES cap. flows.py's split_pdf produces
+             splits up to 100 pages each. Capping at 5 here meant
+             entities extracted from page 60 of a split would show
+             Evidence text from only pages 1-5 — misleading
+             provenance on the user-facing surface. Reviewer-flagged
+             on the layout-only follow-up (commit e117ce5).
 
-        This method is the strict-quality variant: pymupdf4llm
-        succeeds → return its Markdown; pymupdf4llm not installed
-        OR fails on this file → return None. The raw-text backends
-        are unreachable from here.
-
-        Schema inference still uses ``parse_file`` (with the
-        full fallback chain) because there 'rough text' is better
-        than 'no text' — the LLM tolerates lossy input. Evidence
-        tab needs the opposite trade-off: 'no text' is better than
-        'wrong text' because users read it directly.
+        Schema inference still uses ``parse_file`` with both the
+        full fallback chain and the 5-page cap because there 'rough
+        text' beats 'no text' (the LLM tolerates lossy input) and
+        a 100-page sample bloats the ontology-inference prompt
+        without improving quality.
         """
-        return self._try_pymupdf4llm(file_path)
+        return self._try_pymupdf4llm(file_path, max_pages=None)
 
     async def _parse_pdf_file(self, file_path: str) -> Optional[str]:
         """Extract text from a PDF file.
@@ -153,7 +155,11 @@ class DocumentParser:
         are installed, a clear install-hint is logged and None is
         returned.
         """
-        text = self._try_pymupdf4llm(file_path)
+        # Schema-inference path: cap at PDF_MAX_PAGES (5) — the LLM
+        # prompt for ontology inference doesn't benefit from more.
+        # The Evidence-tab path uses parse_pdf_layout_only with
+        # max_pages=None (full document) for per-split provenance.
+        text = self._try_pymupdf4llm(file_path, max_pages=self.PDF_MAX_PAGES)
         if text is not None:
             return text
         text = self._try_pymupdf(file_path)
@@ -173,40 +179,64 @@ class DocumentParser:
         )
         return None
 
-    def _try_pymupdf4llm(self, file_path: str) -> Optional[str]:
+    def _try_pymupdf4llm(
+        self,
+        file_path: str,
+        max_pages: Optional[int] = None,
+    ) -> Optional[str]:
         """Extract via pymupdf4llm. Returns Markdown that respects
         column boundaries, tables, and heading hierarchy — the layout
         cues are exactly what pymupdf/pypdf raw-text extraction
         loses. Returns None if not installed.
 
-        We cap pages at PDF_MAX_PAGES for parity with the other
-        backends (schema-inference doesn't need more), but the
-        cap is per-call: flows.py's Evidence-tab capture passes
-        single-split files and consumes the full output."""
+        ``max_pages`` controls the page-count cap:
+          * Default (``PDF_MAX_PAGES`` via the schema-inference
+            path) — keeps the LLM prompt small for ontology
+            inference. Five pages is a representative sample;
+            more is wasted tokens.
+          * ``None`` (Evidence-tab path) — process the full
+            document. Splits are up to 100 pages each (see
+            flows.py's split_pdf call); capping at 5 here would
+            mean entities extracted from page 60 of a split show
+            Evidence text from only pages 1-5, which is
+            misleading provenance for the user-facing surface.
+
+        Reviewer-flagged on the original layout-aware rewire:
+        flows.py's parse_pdf_layout_only inherited the 5-page cap
+        from this helper's hard-coded default, which produced
+        evidence-vs-extraction-page misalignment on multi-page
+        splits."""
         try:
             import pymupdf4llm  # type: ignore
         except ImportError:
             return None
 
         try:
-            # to_markdown's ``pages`` arg takes a list of page
-            # indices when set. Without it, all pages are processed.
-            try:
-                import pymupdf  # type: ignore
-
-                doc = pymupdf.open(file_path)
+            kwargs: dict = {}
+            if max_pages is not None:
+                # Probe the page count so we don't ask pymupdf4llm
+                # for indices beyond the doc (it raises). When
+                # pymupdf isn't available we fall back to passing
+                # the requested cap directly — pymupdf4llm depends
+                # on pymupdf so this branch only runs in pathological
+                # installs and will surface a clear error from
+                # pymupdf4llm itself.
                 try:
-                    page_count = doc.page_count
-                finally:
-                    doc.close()
-            except Exception:
-                page_count = self.PDF_MAX_PAGES
+                    import pymupdf  # type: ignore
 
-            max_pages = min(self.PDF_MAX_PAGES, page_count)
-            return pymupdf4llm.to_markdown(
-                file_path,
-                pages=list(range(max_pages)),
-            )
+                    doc = pymupdf.open(file_path)
+                    try:
+                        page_count = doc.page_count
+                    finally:
+                        doc.close()
+                except Exception:
+                    page_count = max_pages
+
+                effective = min(max_pages, page_count)
+                kwargs["pages"] = list(range(effective))
+            # max_pages=None → don't pass `pages` → pymupdf4llm
+            # processes the entire document.
+            return pymupdf4llm.to_markdown(file_path, **kwargs)
         except Exception as e:
             logger.warning("pymupdf4llm failed on %s: %s; falling back", file_path, e)
             return None

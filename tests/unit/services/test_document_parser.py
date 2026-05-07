@@ -386,6 +386,93 @@ class TestPdfBackends:
         assert called["pymupdf_used"] is False
 
     @pytest.mark.asyncio
+    async def test_parse_pdf_layout_only_passes_no_page_cap(
+        self, pdf_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reviewer-flagged on the layout-only follow-up: the
+        Evidence-tab path runs on splits up to 100 pages each.
+        Capping the parse at PDF_MAX_PAGES=5 (the schema-inference
+        default) means entities extracted from page 60 of a split
+        show source_text from only pages 1-5 — misleading evidence
+        on the user-facing surface.
+
+        Pin: parse_pdf_layout_only must call pymupdf4llm.to_markdown
+        WITHOUT the ``pages`` kwarg (= process the entire document).
+        Stub the call and check the kwargs."""
+        import sys
+        import types
+
+        captured: dict[str, object] = {}
+
+        def fake_to_markdown(file_path, **kwargs):
+            captured["file_path"] = file_path
+            captured["kwargs"] = kwargs
+            return "# layout output"
+
+        stub = types.ModuleType("pymupdf4llm")
+        stub.to_markdown = fake_to_markdown
+        monkeypatch.setitem(sys.modules, "pymupdf4llm", stub)
+
+        result = await DocumentParser().parse_pdf_layout_only(str(pdf_file))
+        assert result == "# layout output"
+        assert "pages" not in captured["kwargs"], (
+            "parse_pdf_layout_only is passing a `pages` cap to "
+            "pymupdf4llm.to_markdown — the Evidence-tab path will "
+            "produce truncated source_text on multi-page splits. "
+            "max_pages=None (no kwarg) is the contract."
+        )
+
+    @pytest.mark.asyncio
+    async def test_parse_file_keeps_5_page_cap_for_schema_inference(
+        self, pdf_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mirror of the above: the schema-inference path (parse_file
+        → _parse_pdf_file → _try_pymupdf4llm) MUST keep the
+        PDF_MAX_PAGES cap. Without it, ontology inference on a
+        large PDF would dump 100+ pages into the LLM prompt and
+        bloat token usage without improving the inferred schema.
+
+        Pin the kwarg shape so the cap stays opt-in for schema
+        inference and opt-out only for the Evidence path."""
+        import sys
+        import types
+
+        captured: dict[str, object] = {}
+
+        def fake_to_markdown(file_path, **kwargs):
+            captured["kwargs"] = kwargs
+            return "# schema sample"
+
+        # Stub pymupdf4llm. Stub pymupdf too so the page-count probe
+        # returns a controllable value larger than the cap, ensuring
+        # the cap actually fires (rather than the probe returning a
+        # smaller doc and shadowing the test).
+        stub_4llm = types.ModuleType("pymupdf4llm")
+        stub_4llm.to_markdown = fake_to_markdown
+        monkeypatch.setitem(sys.modules, "pymupdf4llm", stub_4llm)
+
+        stub_pymupdf = types.ModuleType("pymupdf")
+
+        class _FakeDoc:
+            page_count = 100  # bigger than PDF_MAX_PAGES so the cap fires
+
+            def close(self):
+                pass
+
+        stub_pymupdf.open = lambda _path: _FakeDoc()
+        monkeypatch.setitem(sys.modules, "pymupdf", stub_pymupdf)
+
+        result = await DocumentParser().parse_file(str(pdf_file))
+        assert result == "# schema sample"
+        assert captured["kwargs"].get("pages") == list(
+            range(DocumentParser.PDF_MAX_PAGES)
+        ), (
+            "Schema-inference path lost its PDF_MAX_PAGES cap — "
+            "ontology inference on large PDFs will burn tokens. The "
+            "cap is the contract for the parse_file PDF chain."
+        )
+
+    @pytest.mark.asyncio
     async def test_pymupdf4llm_preferred_when_available(
         self, pdf_file: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
