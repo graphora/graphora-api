@@ -381,12 +381,21 @@ class EntityLedgerService:
 
             # Keep only entries with a usable, model-matched embedding.
             # The skip is by design — see the docstring.
+            #
+            # ``embedding_model is None`` is also a skip: it means the
+            # vector was written by an older code path that didn't
+            # record the producing model. We can't safely assume the
+            # embedding came from active_model — different models can
+            # have different dimensions and different vector spaces, so
+            # mixing them either crashes the dot product or silently
+            # returns garbage. The guard is "match the model exactly,
+            # or skip" rather than "skip on known mismatch".
             usable_entries: List[EntityLedgerEntry] = []
             stored_vectors: List[List[float]] = []
             for entry in existing_entries.values():
                 if not entry.embedding:
                     continue
-                if entry.embedding_model and entry.embedding_model != active_model:
+                if entry.embedding_model != active_model:
                     continue
                 usable_entries.append(entry)
                 stored_vectors.append(entry.embedding)
@@ -440,13 +449,29 @@ class EntityLedgerService:
 
         if self._enabled:
             try:
+                # ORDER BY updated_at DESC + LIMIT keeps the cap
+                # deterministic when it's hit: we keep the most-recently-
+                # touched entries, which are the most likely to match
+                # newly-extracted nodes (reflect the current world). The
+                # 10000 cap matches the migration-13 docstring ("ledger
+                # sizes <= ~10k entries per (user, type), linear scan
+                # <100ms"); pre-slice-1 the cap was 1000 with no order,
+                # which (a) silently dropped candidates beyond the first
+                # 1000 rows the planner happened to return and (b) made
+                # different reads return different subsets. Slice 1
+                # turned this query into the persisted similarity index,
+                # so non-determinism here = non-deterministic match
+                # outcomes downstream. NULLS LAST so rows missing the
+                # column (defensive — shouldn't happen but cheap to
+                # cover) sort to the end rather than the front.
                 rows = await db.fetch(
                     """
                     SELECT canonical_key, canonical_id, features, confidence,
                            first_seen_at, updated_at, embedding, embedding_model
                     FROM entity_ledger
                     WHERE user_id = %s AND entity_type = %s
-                    LIMIT 1000
+                    ORDER BY updated_at DESC NULLS LAST
+                    LIMIT 10000
                     """,
                     user_id,
                     entity_type,

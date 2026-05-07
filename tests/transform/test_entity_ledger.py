@@ -299,6 +299,95 @@ async def test_find_similar_entities_skips_model_mismatch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_find_similar_entities_skips_unknown_model_with_embedding(
+    monkeypatch,
+):
+    """An entry that has an embedding but no recorded model is the
+    ambiguous case: we can't tell whether the vector is from the
+    active model or a different one. Without skipping it we'd
+    either silently mix vector spaces (garbage scores) or crash on
+    a dimension mismatch in np.dot. Pin the conservative skip — see
+    reviewer P2 finding on entity_ledger_service.py:389."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+
+    service = EntityLedgerService(memory_store={})
+
+    from graphora_server.services.entity_ledger_service import EntityLedgerEntry
+
+    # Embedding present, model column NULL — possible after the
+    # migration runs against rows written by an even-older code
+    # path that populated embedding via some other means.
+    legacy_with_vec = EntityLedgerEntry(
+        user_id="user-1",
+        entity_type="Company",
+        canonical_key="Company:name=legacy-vec",
+        canonical_id=_make_canonical_node_id("Company:name=legacy-vec"),
+        features={},
+        confidence=1.0,
+        # Wrong dimension on purpose — if the skip fails, the dot
+        # product will crash and the test surfaces that loud.
+        embedding=[0.1] * 100,
+        embedding_model=None,
+    )
+    service._memory_store[("user-1", "Company", "Company:name=legacy-vec")] = (
+        legacy_with_vec
+    )
+
+    fake = _FakeEmbedder()
+    _patch_embedder(monkeypatch, fake)
+    query = _node_with_canonical("Query", "Company:name=query")
+
+    # Must not crash on dimension mismatch; must return no match.
+    matches = await service.find_similar_entities("user-1", [query], threshold=0.5)
+    assert matches == {}
+
+
+@pytest.mark.asyncio
+async def test_get_entries_by_type_orders_and_caps_at_10k(monkeypatch):
+    """Slice 1 made the per-type fetch the persisted similarity
+    index. The pre-fix query had LIMIT 1000 with no ORDER BY, so
+    rows beyond the first 1000 the planner returned were silently
+    dropped and which 1000 won varied across reads. Pin the new
+    contract: ORDER BY updated_at DESC + LIMIT 10000 — see reviewer
+    P2 finding on entity_ledger_service.py:449."""
+    captured_query: list[str] = []
+
+    class _StubDb:
+        async def fetch(self, query, *params):
+            captured_query.append(query)
+            return []
+
+        async def executemany(self, query, params):
+            pass
+
+    from graphora_server.services import entity_ledger_service as ledger_module
+
+    monkeypatch.setattr(ledger_module, "db", _StubDb())
+
+    service = EntityLedgerService(memory_store={})
+    # Force the DB-enabled path even though the autouse fixture
+    # disables DATABASE_URL — the stub above doesn't care about
+    # connection strings.
+    service._enabled = True
+
+    await service._get_entries_by_type("user-1", "Company")
+    assert captured_query, "_get_entries_by_type didn't issue a fetch"
+    sql = captured_query[0]
+    assert "ORDER BY updated_at DESC" in sql, (
+        "Per-type fetch must order by updated_at DESC so the LIMIT is "
+        "deterministic and biased toward fresh entries."
+    )
+    assert "LIMIT 10000" in sql, (
+        "Per-type fetch cap was bumped from 1000 to 10000 to match the "
+        "migration-13 docstring; bringing it back below 10k re-introduces "
+        "the silent-drop regression."
+    )
+
+
+@pytest.mark.asyncio
 async def test_record_nodes_handles_embedder_import_failure(
     monkeypatch,
 ):
