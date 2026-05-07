@@ -532,6 +532,132 @@ async def test_hydrate_summary_log_emitted_with_match_counts(monkeypatch, caplog
     assert getattr(record, "ledger_unmatched", None) == 1
 
 
+class _FailingEmbedder:
+    """Stand-in for an embedder that imports cleanly but raises at
+    runtime — mirrors the model-load-fails / GPU-OOM / corrupted-
+    weights case the lazy-load path makes possible. Slice 2's
+    catch-and-degrade contract on find_similar_entities is what
+    keeps a transform from becoming a 500 when the operator opts
+    into cross-doc linking on a misconfigured runtime."""
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+
+    def get_embeddings_batch(self, texts):
+        raise self._exc
+
+
+@pytest.mark.asyncio
+async def test_find_similar_entities_returns_empty_on_runtime_failure(
+    monkeypatch,
+):
+    """The ImportError branch was the only safety net pre-fix; this
+    pins the post-fix runtime-error branch. Without this, a
+    misconfigured model (HF unreachable, missing weights, CUDA OOM)
+    propagates a RuntimeError up to the caller and the entire
+    transform fails — exactly the worst failure mode for a feature
+    that's supposed to be additive on top of legacy exact-key
+    resolution. Pin: any runtime exception → return {}, log
+    warning, no propagation."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+
+    failing = _FailingEmbedder(RuntimeError("model load failed"))
+    _patch_embedder(monkeypatch, failing)
+
+    service = EntityLedgerService(memory_store={})
+
+    # Plant a usable entry with a matched-model embedding so the
+    # filter loop reaches the runtime call. Without this, the
+    # function short-circuits at the no-usable-entries check and we
+    # never exercise the failing get_embeddings_batch path.
+    from graphora_server.services.entity_ledger_service import EntityLedgerEntry
+
+    service._memory_store[("user-1", "Company", "Company:name=stored")] = (
+        EntityLedgerEntry(
+            user_id="user-1",
+            entity_type="Company",
+            canonical_key="Company:name=stored",
+            canonical_id=_make_canonical_node_id("Company:name=stored"),
+            features={},
+            confidence=1.0,
+            embedding=[0.5] * 384,
+            embedding_model="all-MiniLM-L6-v2",
+        )
+    )
+
+    query = _node_with_canonical("QueryCo", "Company:name=queryco")
+
+    # Must NOT raise; must return empty matches.
+    result = await service.find_similar_entities("user-1", [query], threshold=0.5)
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_hydrate_with_similarity_preserves_stage1_on_runtime_failure(
+    monkeypatch,
+):
+    """End-to-end of the degradation contract: when Stage 2
+    (similarity) crashes, Stage 1 (exact-key) matches that already
+    landed on node.canonical_id must survive. This is what makes
+    'degrade to exact-key only' actually meaningful — without it
+    we'd be wiping legitimately-resolved nodes whenever the
+    embedding runtime sneezed."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED", True)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+
+    service = EntityLedgerService(memory_store={})
+
+    # Stored entry with both an exact key and an embedding under
+    # the active model — so both stages have something to match.
+    canonical_key = "Company:name=acme"
+    canonical_id = _make_canonical_node_id(canonical_key)
+    from graphora_server.services.entity_ledger_service import EntityLedgerEntry
+
+    service._memory_store[("user-1", "Company", canonical_key)] = EntityLedgerEntry(
+        user_id="user-1",
+        entity_type="Company",
+        canonical_key=canonical_key,
+        canonical_id=canonical_id,
+        features={},
+        confidence=1.0,
+        embedding=[0.5] * 384,
+        embedding_model="all-MiniLM-L6-v2",
+    )
+
+    # Force the Stage 2 model call to fail.
+    failing = _FailingEmbedder(RuntimeError("CUDA out of memory"))
+    _patch_embedder(monkeypatch, failing)
+
+    matched = BaseNode(
+        id="m1",
+        type="Company",
+        properties={"name": "Acme"},
+        canonical_key=canonical_key,
+    )
+    unmatched = BaseNode(
+        id="u1",
+        type="Company",
+        properties={"name": "Other"},
+        canonical_key="Company:name=other",
+    )
+
+    # Must NOT raise.
+    await service.hydrate_nodes("user-1", [matched, unmatched])
+
+    # Stage 1 hit: matched.canonical_id was overridden by the ledger.
+    assert matched.canonical_id == canonical_id
+    # Stage 2 failed: the unmatched node carries no canonical_id
+    # (None or empty — it never had one to begin with). The point
+    # is that the failure didn't blow up the call.
+    assert not unmatched.canonical_id
+
+
 @pytest.mark.asyncio
 async def test_record_nodes_handles_embedder_import_failure(
     monkeypatch,

@@ -432,11 +432,10 @@ class EntityLedgerService:
             embedding_similarity = get_embedding_similarity(
                 model_name=settings.ENTITY_RESOLUTION_EMBEDDING_MODEL,
             )
+            import numpy as np
         except ImportError:
             logger.warning("Embedding similarity not available for entity ledger")
             return {}
-
-        import numpy as np
 
         active_model = settings.ENTITY_RESOLUTION_EMBEDDING_MODEL
         matches: Dict[str, Dict[str, object]] = {}
@@ -482,15 +481,42 @@ class EntityLedgerService:
             if not any(node_texts):
                 continue
 
-            query_embeddings = embedding_similarity.get_embeddings_batch(node_texts)
-            stored_matrix = np.array(stored_vectors, dtype=np.float32)
-            # Both sides are L2-normalized by EmbeddingSimilarity (the
-            # default config), so dot product = cosine similarity. We
-            # clip to [0, 1] to mirror EmbeddingSimilarity.compute_
-            # similarity_matrix's contract for downstream callers.
-            similarity_matrix = np.clip(
-                np.dot(query_embeddings, stored_matrix.T), 0.0, 1.0
-            )
+            # Runtime guard: the import succeeded, but the model load
+            # itself is lazy — first call to ``get_embeddings_batch``
+            # downloads weights, which can fail (HuggingFace
+            # unreachable, missing/corrupted weights, GPU/CUDA error,
+            # bad model name in settings). The dot/clip step can also
+            # fail if a stored vector has an unexpected shape. We MUST
+            # NOT let those propagate, because find_similar_entities
+            # is called from inside hydrate_nodes — a transform
+            # turning into a 500 because cross-doc resolution failed
+            # is the worst possible failure mode for a feature that
+            # is supposed to be additive on top of the legacy exact-
+            # key path. Log and degrade: Stage 1 exact-key matches
+            # already landed on nodes' canonical_id before we got
+            # here, so returning {} preserves them; the caller just
+            # doesn't get the Stage 2 boost.
+            try:
+                query_embeddings = embedding_similarity.get_embeddings_batch(node_texts)
+                stored_matrix = np.array(stored_vectors, dtype=np.float32)
+                # Both sides are L2-normalized by EmbeddingSimilarity
+                # (the default config), so dot product = cosine
+                # similarity. We clip to [0, 1] to mirror
+                # EmbeddingSimilarity.compute_similarity_matrix's
+                # contract for downstream callers.
+                similarity_matrix = np.clip(
+                    np.dot(query_embeddings, stored_matrix.T), 0.0, 1.0
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Cross-document similarity failed at runtime "
+                    "(model=%s, entity_type=%s): %s; degrading to "
+                    "exact-key only for this hydrate call",
+                    active_model,
+                    entity_type,
+                    exc,
+                )
+                return {}
 
             for i, node in enumerate(type_nodes):
                 if not node_texts[i]:
