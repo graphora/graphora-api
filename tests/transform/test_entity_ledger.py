@@ -658,6 +658,412 @@ async def test_hydrate_with_similarity_preserves_stage1_on_runtime_failure(
     assert not unmatched.canonical_id
 
 
+# --------------------------------------------------------------
+# Slice 3: gray-zone tiering + LLM disambiguation. Pin the
+# auto/review tier split, the LLM resolver behaviour, and the
+# cost-cap + graceful-degradation contracts.
+# --------------------------------------------------------------
+
+
+def _stub_resolved_entities(matching_ids, confidence=0.9, explanation="ok"):
+    """Build a minimal stand-in for the ResolvedEntities BAML model.
+    The real type is generated from BAML schema; we only need the
+    three attributes _disambiguate_review_candidates reads."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        matching_ids=list(matching_ids),
+        confidence_score=confidence,
+        explanation=explanation,
+    )
+
+
+def _seed_ledger_entry(
+    service,
+    *,
+    user_id="user-1",
+    entity_type="Company",
+    canonical_key="Company:name=stored",
+    embedding=None,
+    embedding_model="all-MiniLM-L6-v2",
+    canonical_properties=None,
+):
+    from graphora_server.services.entity_ledger_service import EntityLedgerEntry
+
+    if embedding is None:
+        # Pin the stored vector so test math is deterministic.
+        # 384-dim with a single non-zero leading entry — combined
+        # with the FakeEmbedder's zero-leading vectors we get a
+        # controllable cosine similarity.
+        import numpy as np
+
+        v = np.zeros(384, dtype=np.float32)
+        v[0] = 1.0
+        embedding = v.tolist()
+
+    entry = EntityLedgerEntry(
+        user_id=user_id,
+        entity_type=entity_type,
+        canonical_key=canonical_key,
+        canonical_id=_make_canonical_node_id(canonical_key),
+        features={"canonical_properties": canonical_properties or {}},
+        confidence=1.0,
+        embedding=embedding,
+        embedding_model=embedding_model,
+    )
+    service._memory_store[(user_id, entity_type, canonical_key)] = entry
+    return entry
+
+
+@pytest.mark.asyncio
+async def test_find_similar_entities_tags_auto_tier_above_threshold(
+    monkeypatch,
+):
+    """Pin the auto-tier contract: a match at or above the
+    similarity threshold gets ``tier='auto'`` and is the only kind
+    hydrate_nodes_with_similarity applies without an LLM check.
+    Without this pin, a future refactor could drop the tier field
+    and break the gray-zone routing silently."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+
+    service = EntityLedgerService(memory_store={})
+    _seed_ledger_entry(service)
+
+    # Fake produces unit-length vectors with v[0]=1 for our test
+    # query text → cosine sim with the stored v=[1,0,...] vector is 1.0.
+    import numpy as np
+
+    same_vec = np.zeros(384, dtype=np.float32)
+    same_vec[0] = 1.0
+    fake = _FakeEmbedder(mapping={"acme": same_vec.tolist()})
+    _patch_embedder(monkeypatch, fake)
+
+    query = _node_with_canonical("Acme", "Company:name=acme")
+    matches = await service.find_similar_entities(
+        "user-1", [query], threshold=0.85, review_threshold=0.70
+    )
+
+    assert query.id in matches
+    assert matches[query.id]["tier"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_find_similar_entities_tags_review_tier_in_gray_zone(
+    monkeypatch,
+):
+    """Pin the gray-zone contract: a match in [review_threshold,
+    threshold) gets ``tier='review'`` instead of being auto-applied.
+    This is what gates the LLM disambiguation step — without the
+    review tier, gray-zone candidates would be silently dropped (as
+    they were pre-slice-3) and the LLM check would never run."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+
+    service = EntityLedgerService(memory_store={})
+    _seed_ledger_entry(service)
+
+    # Fake produces a vector at 45° to the stored one → cosine = ~0.71
+    # which lands in [0.70, 0.85).
+    import numpy as np
+
+    angled = np.zeros(384, dtype=np.float32)
+    angled[0] = 0.71
+    angled[1] = 0.71  # 0.71^2 + 0.71^2 ≈ 1 → unit length
+    fake = _FakeEmbedder(mapping={"acme": angled.tolist()})
+    _patch_embedder(monkeypatch, fake)
+
+    query = _node_with_canonical("Acme", "Company:name=acme")
+    matches = await service.find_similar_entities(
+        "user-1", [query], threshold=0.85, review_threshold=0.70
+    )
+
+    assert query.id in matches
+    assert matches[query.id]["tier"] == "review"
+    sim = matches[query.id]["similarity"]
+    assert 0.70 <= sim < 0.85, f"score {sim} should land in gray zone"
+
+
+@pytest.mark.asyncio
+async def test_find_similar_entities_drops_below_review_threshold(
+    monkeypatch,
+):
+    """Pin the cost-saving lower bound: matches below
+    review_threshold get dropped outright — no auto, no review,
+    no LLM call. Asking the LLM about a 0.3-similarity candidate
+    is wasted tokens; the embedding score already says they're
+    different entities."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+
+    service = EntityLedgerService(memory_store={})
+    _seed_ledger_entry(service)
+
+    # Orthogonal vectors → cosine = 0.0.
+    import numpy as np
+
+    orthogonal = np.zeros(384, dtype=np.float32)
+    orthogonal[5] = 1.0
+    fake = _FakeEmbedder(mapping={"acme": orthogonal.tolist()})
+    _patch_embedder(monkeypatch, fake)
+
+    query = _node_with_canonical("Acme", "Company:name=acme")
+    matches = await service.find_similar_entities(
+        "user-1", [query], threshold=0.85, review_threshold=0.70
+    )
+
+    assert query.id not in matches
+
+
+@pytest.mark.asyncio
+async def test_disambiguate_review_candidates_accepts_llm_yes(
+    monkeypatch,
+):
+    """End-to-end: a review-tier candidate confirmed by the LLM
+    lands on the query's canonical_id. The fake LLM returns a
+    group containing both the query.id and the candidate's
+    canonical_id, which the helper interprets as 'same entity'."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED", True)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_SIMILARITY_THRESHOLD", 0.85)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_SIMILARITY_REVIEW_THRESHOLD", 0.70)
+
+    service = EntityLedgerService(memory_store={})
+    stored = _seed_ledger_entry(service)
+
+    import numpy as np
+
+    angled = np.zeros(384, dtype=np.float32)
+    angled[0] = 0.71
+    angled[1] = 0.71
+    fake = _FakeEmbedder(mapping={"acme": angled.tolist()})
+    _patch_embedder(monkeypatch, fake)
+
+    query = _node_with_canonical("Acme", "Company:name=acme")
+
+    # Stub the LLM to confirm the match.
+    captured_calls: list[dict] = []
+
+    class _Stub:
+        async def resolve_entities(self, **kwargs):
+            captured_calls.append(kwargs)
+            return [
+                _stub_resolved_entities(matching_ids=[query.id, stored.canonical_id])
+            ]
+
+    from graphora_server.services.llm import client as llm_client_module
+
+    monkeypatch.setattr(llm_client_module, "LLMClient", lambda: _Stub())
+
+    await service.hydrate_nodes("user-1", [query])
+
+    assert query.canonical_id == stored.canonical_id
+    # Sanity: LLM was indeed asked, with the right entity_type.
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["entity_type"] == "Company"
+    # The query node and the candidate canonical_id BOTH appear in
+    # the JSON payload — pin the shape so a refactor can't drop one.
+    payload = captured_calls[0]["node_dicts_str"]
+    assert query.id in payload
+    assert stored.canonical_id in payload
+
+
+@pytest.mark.asyncio
+async def test_disambiguate_review_candidates_rejects_llm_no(monkeypatch):
+    """Mirror of the above: the LLM returns no group containing
+    both query and candidate (or returns []) → query stays
+    unmatched. Pin the rejection path so a permissive default
+    can't accidentally let through what the LLM said no to."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED", True)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_SIMILARITY_REVIEW_THRESHOLD", 0.70)
+
+    service = EntityLedgerService(memory_store={})
+    _seed_ledger_entry(service)
+
+    import numpy as np
+
+    angled = np.zeros(384, dtype=np.float32)
+    angled[0] = 0.71
+    angled[1] = 0.71
+    fake = _FakeEmbedder(mapping={"acme": angled.tolist()})
+    _patch_embedder(monkeypatch, fake)
+
+    query = _node_with_canonical("Acme", "Company:name=acme")
+
+    class _Stub:
+        async def resolve_entities(self, **kwargs):
+            return []  # LLM said: nothing matches
+
+    from graphora_server.services.llm import client as llm_client_module
+
+    monkeypatch.setattr(llm_client_module, "LLMClient", lambda: _Stub())
+
+    await service.hydrate_nodes("user-1", [query])
+
+    # canonical_id was NOT overridden — query stays as-is. (Pre-
+    # hydrate canonical_id was set by _node_with_canonical helper;
+    # we assert it didn't get clobbered with the stored entry's id.)
+    stored_id = _make_canonical_node_id("Company:name=stored")
+    assert query.canonical_id != stored_id
+
+
+@pytest.mark.asyncio
+async def test_disambiguate_skipped_when_payload_exceeds_cap(monkeypatch):
+    """Cost cap: if the gray-zone payload exceeds the cap, the LLM
+    is NOT called and nothing in the review tier gets confirmed.
+    Pin the cap so a transform with hundreds of borderline matches
+    can't quietly burn unbounded LLM tokens."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED", True)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_SIMILARITY_REVIEW_THRESHOLD", 0.70)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_DISAMBIGUATION_CAP", 1)
+
+    service = EntityLedgerService(memory_store={})
+
+    # 1 query + 1 best candidate = 2 total payload, which exceeds
+    # cap=1. find_similar_entities only returns the single BEST
+    # match per query (argmax over the candidate matrix), so even
+    # planting 5 entries doesn't change the payload — the cap
+    # protects against many concurrent queries each producing one
+    # gray-zone candidate, not many candidates per query.
+    _seed_ledger_entry(service)
+
+    import numpy as np
+
+    angled = np.zeros(384, dtype=np.float32)
+    angled[0] = 0.71
+    angled[1] = 0.71
+    fake = _FakeEmbedder(mapping={"acme": angled.tolist()})
+    _patch_embedder(monkeypatch, fake)
+
+    query = _node_with_canonical("Acme", "Company:name=acme")
+
+    llm_called = {"n": 0}
+
+    class _Stub:
+        async def resolve_entities(self, **kwargs):
+            llm_called["n"] += 1
+            return []
+
+    from graphora_server.services.llm import client as llm_client_module
+
+    monkeypatch.setattr(llm_client_module, "LLMClient", lambda: _Stub())
+
+    await service.hydrate_nodes("user-1", [query])
+
+    assert llm_called["n"] == 0, (
+        "LLM was called despite payload exceeding cap — cost guard " "regressed."
+    )
+
+
+@pytest.mark.asyncio
+async def test_disambiguate_llm_failure_degrades_to_no_match(monkeypatch):
+    """Same graceful-degradation contract as slice-2: a runtime
+    failure in the LLM call must NOT propagate. Auto-tier matches
+    that already landed are preserved; review-tier matches just
+    don't get confirmed for the failing entity_type."""
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED", True)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_SIMILARITY_REVIEW_THRESHOLD", 0.70)
+
+    service = EntityLedgerService(memory_store={})
+    _seed_ledger_entry(service)
+
+    import numpy as np
+
+    angled = np.zeros(384, dtype=np.float32)
+    angled[0] = 0.71
+    angled[1] = 0.71
+    fake = _FakeEmbedder(mapping={"acme": angled.tolist()})
+    _patch_embedder(monkeypatch, fake)
+
+    query = _node_with_canonical("Acme", "Company:name=acme")
+
+    class _Stub:
+        async def resolve_entities(self, **kwargs):
+            raise RuntimeError("BAML server unreachable")
+
+    from graphora_server.services.llm import client as llm_client_module
+
+    monkeypatch.setattr(llm_client_module, "LLMClient", lambda: _Stub())
+
+    # Must not raise.
+    await service.hydrate_nodes("user-1", [query])
+
+
+@pytest.mark.asyncio
+async def test_hydrate_summary_log_includes_llm_counts(monkeypatch, caplog):
+    """Slice 3 telemetry: the INFO summary line gains
+    ledger_llm_resolved / ledger_llm_rejected / ledger_llm_skipped_for_cap
+    so operators can spot 'LLM is rejecting most gray-zone matches'
+    or 'cap is firing often' without enabling debug logging."""
+    import logging
+
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED", True)
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_EMBEDDING_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "ENTITY_RESOLUTION_EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+    )
+    monkeypatch.setattr(settings, "ENTITY_RESOLUTION_SIMILARITY_REVIEW_THRESHOLD", 0.70)
+
+    service = EntityLedgerService(memory_store={})
+    stored = _seed_ledger_entry(service)
+
+    import numpy as np
+
+    angled = np.zeros(384, dtype=np.float32)
+    angled[0] = 0.71
+    angled[1] = 0.71
+    fake = _FakeEmbedder(mapping={"acme": angled.tolist()})
+    _patch_embedder(monkeypatch, fake)
+
+    query = _node_with_canonical("Acme", "Company:name=acme")
+
+    class _Stub:
+        async def resolve_entities(self, **kwargs):
+            return [
+                _stub_resolved_entities(matching_ids=[query.id, stored.canonical_id])
+            ]
+
+    from graphora_server.services.llm import client as llm_client_module
+
+    monkeypatch.setattr(llm_client_module, "LLMClient", lambda: _Stub())
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="graphora_server.services.entity_ledger_service",
+    ):
+        await service.hydrate_nodes("user-1", [query])
+
+    summary_records = [
+        r for r in caplog.records if "Cross-doc hydrate" in r.getMessage()
+    ]
+    assert len(summary_records) == 1
+    record = summary_records[0]
+    assert getattr(record, "ledger_llm_resolved", None) == 1
+    assert getattr(record, "ledger_llm_rejected", None) == 0
+    assert getattr(record, "ledger_llm_skipped_for_cap", None) == 0
+
+
 @pytest.mark.asyncio
 async def test_record_nodes_handles_embedder_import_failure(
     monkeypatch,

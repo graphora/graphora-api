@@ -166,7 +166,35 @@ class Settings(BaseSettings):
     )
     ENTITY_RESOLUTION_SIMILARITY_THRESHOLD: float = Field(
         default=0.85,
-        description="Minimum similarity threshold for entity matching",
+        description=(
+            "Auto-accept similarity threshold for entity matching. "
+            "Matches at or above this score are linked without LLM "
+            "disambiguation."
+        ),
+    )
+    ENTITY_RESOLUTION_SIMILARITY_REVIEW_THRESHOLD: float = Field(
+        default=0.70,
+        description=(
+            "Slice 3: similarity matches in [REVIEW_THRESHOLD, "
+            "SIMILARITY_THRESHOLD) are sent to the LLM for "
+            "yes/no disambiguation rather than auto-accepted or "
+            "auto-rejected. Matches below REVIEW_THRESHOLD are "
+            "rejected outright (saves LLM cost on obviously-different "
+            "entities). The gray zone is where most false-positive / "
+            "false-negative pairs cluster, which is why an LLM check "
+            "is worth the cost there but not above SIMILARITY_THRESHOLD "
+            "(over-confident) or below REVIEW_THRESHOLD (waste)."
+        ),
+    )
+    ENTITY_RESOLUTION_DISAMBIGUATION_CAP: int = Field(
+        default=50,
+        description=(
+            "Hard cap on total entities (queries + candidates) sent "
+            "to the LLM in a single hydrate call's disambiguation "
+            "pass. Beyond this, disambiguation is skipped and only "
+            "auto-tier matches land — bounds worst-case LLM cost on "
+            "transforms with very many gray-zone candidates."
+        ),
     )
     ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED: bool = Field(
         default=False,
