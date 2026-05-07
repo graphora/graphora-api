@@ -1528,6 +1528,10 @@ pdf = [
     { name = "pymupdf" },
     { name = "pypdf" },
 ]
+pdf-llm = [
+    { name = "pymupdf" },
+    { name = "pymupdf4llm" },
+]
 postgres = [
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
@@ -1617,6 +1621,8 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'server'", specifier = ">=2.9.0" },
     { name = "pymupdf", marker = "extra == 'pdf'", specifier = ">=1.24.0" },
+    { name = "pymupdf", marker = "extra == 'pdf-llm'", specifier = ">=1.24.0" },
+    { name = "pymupdf4llm", marker = "extra == 'pdf-llm'", specifier = ">=0.0.17" },
     { name = "pypdf", marker = "extra == 'pdf'", specifier = ">=4.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.5" },
@@ -4279,6 +4285,39 @@ wheels = [
 ]
 
 [[package]]
+name = "pymupdf-layout"
+version = "1.27.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "networkx" },
+    { name = "numpy" },
+    { name = "onnxruntime" },
+    { name = "pymupdf" },
+    { name = "pyyaml" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/65/dd/4a9769b17661c1ee1b5bdeac28c832c9c7cc1ef425eb2088b5b5bd982bcc/pymupdf_layout-1.27.2.2-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:7b8f0d94d5675802c67e4af321214dcfce2de3d963926459dc6fc138607366cd", size = 15799842 },
+    { url = "https://files.pythonhosted.org/packages/ce/14/3ed13138449a002ab6957789019da5951fc8ba07ab8f1faf27a14c274717/pymupdf_layout-1.27.2.2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:bef82a3ff5c05212c806333153cece2b9d972eed173d2352f0c514bb3f1faf54", size = 15795217 },
+    { url = "https://files.pythonhosted.org/packages/f7/20/487a2b1422999113ecc8b117cf50e72915992d0a7ef247164989396cf8db/pymupdf_layout-1.27.2.2-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:d610359e1eb8013124531431f3b8c77818070e7869500b92c9b25bd78ea7ef7f", size = 15805238 },
+    { url = "https://files.pythonhosted.org/packages/02/45/35c67a1b1956618f69674b9823cc78e96787de37fe22a2b217581a1770a9/pymupdf_layout-1.27.2.2-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:df503eab9c28cfaadb847970f39093958e7a2ebf79fc47426dbd91b9f9064d6c", size = 15806267 },
+    { url = "https://files.pythonhosted.org/packages/82/56/97fad0cd00869e934f7a130f251b21e3534ec0fcffaa3459286fbf3daf32/pymupdf_layout-1.27.2.2-cp310-abi3-win_amd64.whl", hash = "sha256:efc66387833f085b9e9a77089c748c88c4c96485772d7dfe0139eaa6efc2f444", size = 15809705 },
+]
+
+[[package]]
+name = "pymupdf4llm"
+version = "1.27.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pymupdf" },
+    { name = "pymupdf-layout" },
+    { name = "tabulate" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f0/e7/8b97bf223ea2fd72efd862af3210ae3aa2fb15b39b55767de9e0a2fd0985/pymupdf4llm-1.27.2.2.tar.gz", hash = "sha256:f95e113d434958f8c63393c836fe965ad398d1fc07e7807c0a627c9ec1946e9f", size = 72877 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/fc/a4977b84f9a7e70aac4c9beed55d4693b985cef89fab7d49c896335bf158/pymupdf4llm-1.27.2.2-py3-none-any.whl", hash = "sha256:ec3bbceed21c6f86289155f29c557aa54ae1c8282c4a45d6de984f16fb4c90cb", size = 84294 },
+]
+
+[[package]]
 name = "pypdf"
 version = "6.10.2"
 source = { registry = "https://pypi.org/simple" }
@@ -5304,6 +5343,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353 },
+]
+
+[[package]]
+name = "tabulate"
+version = "0.10.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/46/58/8c37dea7bbf769b20d58e7ace7e5edfe65b849442b00ffcdd56be88697c6/tabulate-0.10.0.tar.gz", hash = "sha256:e2cfde8f79420f6deeffdeda9aaec3b6bc5abce947655d17ac662b126e48a60d", size = 91754 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/99/55/db07de81b5c630da5cbf5c7df646580ca26dfaefa593667fc6f2fe016d2e/tabulate-0.10.0-py3-none-any.whl", hash = "sha256:f0b0622e567335c8fabaaa659f1b33bcb6ddfe2e496071b743aa113f8774f2d3", size = 39814 },
 ]
 
 [[package]]

@@ -401,22 +401,20 @@ async def document_transformation_flow(
                     # (the split filename) on every emitted node and
                     # edge.
                     #
-                    # source_text is intentionally left unset on this
-                    # path. We previously called DocumentParser
-                    # (pymupdf/pypdf) to extract a per-split text
-                    # excerpt, but those backends produce garbled
-                    # output on real-world PDFs with multi-column
-                    # layouts, tables, and footnotes (10K filings,
-                    # research papers, etc.) — the Evidence tab ended
-                    # up showing jumbled letters that reordered words
-                    # across columns. Gemini sees the raw PDF binary
-                    # in the extraction call, so we don't need our
-                    # own text copy for the LLM; the Evidence tab
-                    # falls back to "no source text" gracefully when
-                    # source_text is None. Until we ship a layout-
-                    # aware extractor (pymupdf4llm / docling) it's
-                    # better to surface "no excerpt available" than a
-                    # misleading garbled one.
+                    # source_text capture is gated on the layout-aware
+                    # PDF backend (pymupdf4llm) being available. The
+                    # raw-text backends (pymupdf/pypdf/pdfplumber)
+                    # produce garbled output on real-world PDFs with
+                    # multi-column layouts, tables, and footnotes
+                    # (10K filings, research papers) — the Evidence
+                    # tab ended up surfacing jumbled letters with
+                    # words reordered across columns. Commit beafa92
+                    # disabled source_text entirely as a fix; this
+                    # path re-enables it ONLY when pymupdf4llm is
+                    # installed (the [pdf-llm] extra). Operators on
+                    # the raw-text backends keep the post-beafa92
+                    # behaviour (source_text=None) — better an empty
+                    # Evidence tab than a misleading one.
                     #
                     # page_number is intentionally NOT set here.
                     # split_pdf's filename trailing integer is the
@@ -426,15 +424,33 @@ async def document_transformation_flow(
                     # pages. Per-page page_number requires the LLM
                     # emitting it during extraction, deferred to
                     # Gate 4.
+                    from graphora_server.services.document_parser import (
+                        DocumentParser,
+                    )
+
+                    layout_aware = DocumentParser.has_layout_aware_backend()
+                    parser = DocumentParser() if layout_aware else None
                     original_name = Path(processed_path).name
                     for split_path in pdf_splits:
                         split_name = Path(split_path).name
+                        split_text: Optional[str] = None
+                        if parser is not None:
+                            try:
+                                split_text = await parser.parse_file(split_path)
+                            except Exception as exc:  # pragma: no cover
+                                logger.warning(
+                                    "Layout-aware parse failed for %s: %s; "
+                                    "leaving source_text=None",
+                                    split_path,
+                                    exc,
+                                )
+                                split_text = None
                         pdf_metadatas.append(
                             ChunkMetadata(
                                 transform_id=transform_id,
                                 chunk_id=split_name,
                                 source_file=original_name,
-                                source_text=None,
+                                source_text=split_text,
                             )
                         )
                     pdf_files.extend(pdf_splits)

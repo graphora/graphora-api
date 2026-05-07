@@ -10,9 +10,17 @@ Supported surfaces:
 
 - Plain text (`.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html`) —
   base install, no extras.
-- PDF (`.pdf`) — tries `pymupdf` first (preferred, layout-aware),
-  falls back to `pypdf` (tiny pure-Python). Install with
-  `graphora-server[pdf]` to get both.
+- PDF (`.pdf`) — tries backends in this order:
+    1. `pymupdf4llm` (preferred, layout-aware Markdown). Install
+       with `graphora-server[pdf-llm]` — handles multi-column,
+       tables, and heading hierarchy correctly. Used by the
+       Evidence-tab source_text capture in flows.py.
+    2. `pymupdf` (raw text, no layout awareness). `[pdf]` extra.
+    3. `pypdf` (pure-Python fallback). Also `[pdf]`.
+    4. `pdfplumber` (legacy fallback). Client-extras.
+  ``has_layout_aware_backend()`` reports whether (1) is available
+  so callers like flows.py can decide whether the output quality
+  is acceptable for their use case.
 - Office (`.docx`, `.xlsx`, `.pptx`) — via Microsoft's MarkItDown.
   Install with `graphora-server[docling]`.
 - URL — `parse_url()` method, via trafilatura. Install with
@@ -92,16 +100,37 @@ class DocumentParser:
                 logger.error(f"Failed to read text file with fallback encoding: {e}")
                 return None
 
+    @classmethod
+    def has_layout_aware_backend(cls) -> bool:
+        """Whether the layout-aware PDF backend (pymupdf4llm) is
+        importable. Callers like flows.py gate Evidence-tab source_text
+        capture on this — without the layout-aware backend, raw-text
+        backends (pymupdf/pypdf) garble multi-column 10K-style PDFs
+        and the wrong text is worse than no text."""
+        try:
+            import pymupdf4llm  # noqa: F401
+        except ImportError:
+            return False
+        return True
+
     async def _parse_pdf_file(self, file_path: str) -> Optional[str]:
         """Extract text from a PDF file.
 
         Preference order:
-            1. pymupdf (faster, layout-aware, handles columns + tables)
-            2. pypdf (fallback, pure-Python, smaller dep)
+            1. pymupdf4llm (preferred, layout-aware Markdown — handles
+               multi-column / tables / heading hierarchy). Install
+               with `graphora-server[pdf-llm]`.
+            2. pymupdf (raw text, no layout awareness).
+            3. pypdf (pure-Python fallback).
+            4. pdfplumber (legacy fallback).
 
-        Both are declared in `graphora-server[pdf]`. If neither is
-        installed, a clear install-hint is logged and None is returned.
+        (2) and (3) ship in `graphora-server[pdf]`. If none of (1-4)
+        are installed, a clear install-hint is logged and None is
+        returned.
         """
+        text = self._try_pymupdf4llm(file_path)
+        if text is not None:
+            return text
         text = self._try_pymupdf(file_path)
         if text is not None:
             return text
@@ -114,9 +143,48 @@ class DocumentParser:
 
         logger.warning(
             "No PDF backend available. "
-            "Install with: pip install 'graphora-server[pdf]'"
+            "Install with: pip install 'graphora-server[pdf-llm]' "
+            "(layout-aware) or 'graphora-server[pdf]' (raw-text)"
         )
         return None
+
+    def _try_pymupdf4llm(self, file_path: str) -> Optional[str]:
+        """Extract via pymupdf4llm. Returns Markdown that respects
+        column boundaries, tables, and heading hierarchy — the layout
+        cues are exactly what pymupdf/pypdf raw-text extraction
+        loses. Returns None if not installed.
+
+        We cap pages at PDF_MAX_PAGES for parity with the other
+        backends (schema-inference doesn't need more), but the
+        cap is per-call: flows.py's Evidence-tab capture passes
+        single-split files and consumes the full output."""
+        try:
+            import pymupdf4llm  # type: ignore
+        except ImportError:
+            return None
+
+        try:
+            # to_markdown's ``pages`` arg takes a list of page
+            # indices when set. Without it, all pages are processed.
+            try:
+                import pymupdf  # type: ignore
+
+                doc = pymupdf.open(file_path)
+                try:
+                    page_count = doc.page_count
+                finally:
+                    doc.close()
+            except Exception:
+                page_count = self.PDF_MAX_PAGES
+
+            max_pages = min(self.PDF_MAX_PAGES, page_count)
+            return pymupdf4llm.to_markdown(
+                file_path,
+                pages=list(range(max_pages)),
+            )
+        except Exception as e:
+            logger.warning("pymupdf4llm failed on %s: %s; falling back", file_path, e)
+            return None
 
     def _try_pymupdf(self, file_path: str) -> Optional[str]:
         """Extract via PyMuPDF (preferred). Returns None if not installed."""

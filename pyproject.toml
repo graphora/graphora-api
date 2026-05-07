@@ -100,6 +100,26 @@ pdf = [
     "pymupdf>=1.24.0",
 ]
 
+# Layout-aware PDF parsing. pymupdf4llm produces Markdown output
+# from PDFs that respects column boundaries, table structure, and
+# heading hierarchy — much higher quality than the pymupdf/pypdf
+# raw-text extraction in [pdf]. This is the path the
+# DocumentParser tries FIRST when available; the [pdf] backends
+# stay as fallbacks for operators who can't install the heavier
+# layout-analysis dependency.
+#
+# Why a separate extra rather than rolling into [pdf]: pymupdf4llm
+# pulls in a layout-analysis pipeline that's noticeably heavier
+# than plain pymupdf, and the schema-inference path (the main
+# DocumentParser caller) does fine with raw text. flows.py's
+# binary-PDF source_text capture is the case where layout matters
+# (the Evidence tab user-facing surface) — it gates on the
+# layout-aware backend being present and stays None otherwise.
+pdf-llm = [
+    "pymupdf>=1.24.0",
+    "pymupdf4llm>=0.0.17",
+]
+
 # Office / "broad document" parsing via Microsoft's MarkItDown.
 # Covers docx/xlsx/pptx/epub/rtf/odt and normalizes everything to
 # Markdown — matches the README's "Word docs" promise.

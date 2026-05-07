@@ -244,11 +244,11 @@ class TestPdfBackends:
     async def test_no_pdf_backend_logs_install_hint(
         self, pdf_file: Path, monkeypatch: pytest.MonkeyPatch, caplog
     ) -> None:
-        """Both pdf backends missing → returns None + logs install hint."""
+        """All pdf backends missing → returns None + logs install hint."""
         import builtins
 
         real_import = builtins.__import__
-        missing = {"pymupdf", "pypdf", "pdfplumber"}
+        missing = {"pymupdf4llm", "pymupdf", "pypdf", "pdfplumber"}
 
         def fake_import(name, *args, **kwargs):
             if name in missing:
@@ -260,7 +260,82 @@ class TestPdfBackends:
         with caplog.at_level("WARNING"):
             result = await DocumentParser().parse_file(str(pdf_file))
         assert result is None
-        assert any("graphora-server[pdf]" in r.message for r in caplog.records)
+        # The hint covers both [pdf-llm] (preferred) and [pdf]
+        # (raw-text fallback) so operators see the full menu.
+        warnings = " ".join(r.message for r in caplog.records)
+        assert "graphora-server[pdf-llm]" in warnings
+        assert "graphora-server[pdf]" in warnings
+
+    def test_has_layout_aware_backend_reports_pymupdf4llm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pin the contract callers like flows.py rely on: when
+        pymupdf4llm is importable, ``has_layout_aware_backend()``
+        is True; when it's not, it's False. flows.py gates Evidence-
+        tab source_text capture on this — the wrong answer either
+        re-introduces the garbled-output regression (false True)
+        or silently disables a working install (false False)."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_missing(name, *args, **kwargs):
+            if name == "pymupdf4llm":
+                raise ImportError("simulated missing pymupdf4llm")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_missing)
+        assert DocumentParser.has_layout_aware_backend() is False
+
+        # And when the import succeeds — undo the patch and check
+        # the truthy branch. This relies on pymupdf4llm being
+        # available in the test env when [pdf-llm] is installed; if
+        # it's not, the test falls back to skipping the truthy half.
+        monkeypatch.undo()
+        try:
+            import pymupdf4llm  # noqa: F401
+
+            assert DocumentParser.has_layout_aware_backend() is True
+        except ImportError:
+            pytest.skip(
+                "pymupdf4llm not installed in this test env; "
+                "the True-branch of has_layout_aware_backend can't "
+                "be exercised here. Provider E2E covers it."
+            )
+
+    @pytest.mark.asyncio
+    async def test_pymupdf4llm_preferred_when_available(
+        self, pdf_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pin the preference order: when pymupdf4llm is available,
+        the parser uses it FIRST and never falls through to pymupdf
+        (which produces lower-quality text on multi-column docs).
+        Without this pin, a refactor that re-orders the backend
+        chain would silently revert to the garbled raw-text path
+        for everyone with [pdf-llm] installed."""
+        import sys
+        import types
+
+        # Stub pymupdf4llm so we can detect whether _try_pymupdf4llm
+        # got called. The real module isn't required for this test —
+        # we only care about the branch ordering inside _parse_pdf_file.
+        called = {"to_markdown": False}
+
+        stub = types.ModuleType("pymupdf4llm")
+
+        def fake_to_markdown(file_path, pages=None):
+            called["to_markdown"] = True
+            return "# Stubbed pymupdf4llm output\n\nbody"
+
+        stub.to_markdown = fake_to_markdown
+        monkeypatch.setitem(sys.modules, "pymupdf4llm", stub)
+
+        result = await DocumentParser().parse_file(str(pdf_file))
+        assert called["to_markdown"] is True, (
+            "Layout-aware backend was NOT called even though it was "
+            "available — preference order regressed."
+        )
+        assert "Stubbed pymupdf4llm output" in (result or "")
 
 
 def _real_pandas_available() -> bool:
