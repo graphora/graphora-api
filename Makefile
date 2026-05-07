@@ -131,8 +131,18 @@ test:
 test-unit:
 	uv run pytest -m "not integration"
 
+# Two env vars unblock the unit-suite stubs that would otherwise
+# break integration tests:
+#   GRAPHORA_TEST_REAL_NEO4J=1 — bypasses the Neo4j driver stub
+#     (tests/conftest.py:_install_neo4j_stub).
+#   GRAPHORA_TEST_REAL_DEPS=1  — bypasses the pandas/langchain/splink/
+#     redis stubs (tests/conftest.py:_install_langchain_and_splink_stubs).
+#     The real neo4j driver imports pandas at module load (pd.NA in
+#     its packstream codec), so without the real pandas the driver
+#     crashes on import. Setting it here so `make test-integration`
+#     Just Works when Docker is up.
 test-integration:
-	uv run pytest -m integration
+	GRAPHORA_TEST_REAL_NEO4J=1 GRAPHORA_TEST_REAL_DEPS=1 uv run pytest -m integration
 
 test-cov:
 	uv run pytest --cov=app --cov-report=html --cov-report=term-missing
