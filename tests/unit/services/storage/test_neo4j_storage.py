@@ -1710,6 +1710,122 @@ class TestNeo4jStorageRelationshipOperations:
         assert existing_lookup == {}
         assert find_failed_types == set()
 
+    @pytest.mark.asyncio
+    async def test_in_batch_duplicate_logical_rels_dont_create_two_active_edges(
+        self,
+    ):
+        """Storage perf #2 follow-up — reviewer-flagged.
+
+        The batched pre-fetch is a single snapshot taken before the
+        write loop. Pre-fix, two rels in the same batch sharing
+        ``(type, source_id, target_id)`` but with different ``rel.id``
+        values would BOTH read the empty snapshot, BOTH miss, BOTH go
+        through Case 3, and BOTH MERGE on ``{id: $rel_id, __tid:
+        $transform_id}`` — which keys on rel_id, so the second MERGE
+        creates a SECOND active edge for the same logical pair.
+
+        Pre-batched-find (per-rel _find_existing_relationship inside
+        the loop) didn't have this hole: by the time the second rel
+        was processed, the DB already held the first rel's edge and
+        the per-rel finder matched it, sending the second rel down
+        the versioning path.
+
+        Fix: after each successful write, register the just-written
+        edge into ``existing_lookup`` so subsequent rels in the same
+        batch see it. This pin asserts the contract by sending two
+        identical-pair rels with identical user properties — the
+        second must hit Case 1 unchanged-skip, NOT a second Case 3
+        MERGE. If the post-write lookup update is dropped, this
+        fires loud."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        executed: list[str] = []
+
+        async def fake_run(query, *args, **kwargs):
+            executed.append(query)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        # Two logical-duplicate rels: same (type, source, target),
+        # same user props, distinct caller-supplied ids.
+        rel_a = RelationshipInstance(
+            id="rel-a",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={"role": "engineer"},
+        )
+        rel_b = RelationshipInstance(
+            id="rel-b",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={"role": "engineer"},
+        )
+
+        # Empty pre-batch snapshot — the bug surfaces precisely
+        # because both rels start out unseen by the lookup.
+        with patch.object(
+            storage,
+            "_batched_find_existing_relationships",
+            new=AsyncMock(return_value=({}, set())),
+        ):
+            await storage.store_relationships(
+                [rel_a, rel_b], batch_index=0, transform_id="tx-dupe"
+            )
+
+        # Case 3 MERGE shape — production string includes
+        # ``MERGE (s)-[r:`<TYPE>`]->(t)`` with the predicate-bearing
+        # pattern. Count exactly those.
+        case3_merges = [q for q in executed if "MERGE (s)-[r:" in q and "WORKS_AT" in q]
+        assert len(case3_merges) == 1, (
+            f"Expected exactly 1 Case 3 MERGE (the second logical-dupe "
+            f"should hit Case 1 unchanged-skip), got {len(case3_merges)}. "
+            f"If this is 2 the post-write lookup update is missing — "
+            f"the second rel re-read the empty pre-batch snapshot and "
+            f"created a duplicate active edge. Queries: {case3_merges!r}"
+        )
+
+        # Belt-and-braces: also assert no CREATE-only versioning
+        # query fired (would mean Case 2 versioning ran, which is
+        # only correct on prop divergence — both rels here have
+        # identical user props).
+        version_creates = [q for q in executed if "CREATE" in q and "WORKS_AT" in q]
+        assert version_creates == [], (
+            f"Unexpected versioning CREATE on identical-prop dupe: "
+            f"{version_creates!r}. Identical-prop second rel must "
+            f"land on Case 1 unchanged-skip, not Case 2 versioning."
+        )
+
 
 # ============================================================
 # Query Operation Tests

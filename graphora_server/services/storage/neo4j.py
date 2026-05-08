@@ -870,6 +870,28 @@ class Neo4jStorage(GraphStorageInterface):
                                 )
                                 await session.run(query, params)
                                 stored_rels.add(rel.id)
+                                # Storage perf #2 follow-up: register the
+                                # just-created v2 as the active edge for
+                                # this (type, source, target) pair so
+                                # later rels in the SAME batch that share
+                                # the pair see it instead of a stale
+                                # snapshot. Without this, a duplicate
+                                # logical rel later in the batch would
+                                # read the empty pre-batch lookup, hit
+                                # Case 3, and create a SECOND active
+                                # edge — pre-batched-find behaviour
+                                # versioned the second one against the
+                                # first.
+                                if rel.type not in find_failed_types:
+                                    pair_key = (
+                                        rel.type,
+                                        rel.source_id,
+                                        rel.target_id,
+                                    )
+                                    existing_lookup[pair_key] = {
+                                        **merged_props,
+                                        "id": versioned_rel.id,
+                                    }
                             else:
                                 logger.debug(
                                     f"Relationship {rel.id} properties unchanged, keeping existing"
@@ -926,6 +948,27 @@ class Neo4jStorage(GraphStorageInterface):
                             )
                             await session.run(query, params)
                             stored_rels.add(rel.id)
+                            # Storage perf #2 follow-up: see the matching
+                            # update in the Case 2 branch above. The
+                            # batched pre-fetch is a snapshot taken
+                            # before the write loop, so we maintain it
+                            # in-memory as we write to keep in-batch
+                            # duplicates of the same logical edge from
+                            # bypassing versioning. Skip the update
+                            # when the type fell into the per-rel
+                            # fallback path — that path queries the DB
+                            # live and naturally observes the edge we
+                            # just wrote.
+                            if rel.type not in find_failed_types:
+                                pair_key = (
+                                    rel.type,
+                                    rel.source_id,
+                                    rel.target_id,
+                                )
+                                existing_lookup[pair_key] = {
+                                    **props_with_metadata,
+                                    "id": rel.id,
+                                }
 
                 await self._execute_with_retry(_execute_relationship)
                 items_processed += 1
