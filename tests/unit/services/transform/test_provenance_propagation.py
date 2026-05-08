@@ -726,3 +726,190 @@ class TestTransformAsNodesPropagatesPerFactExcerpt:
         nodes = transform_as_nodes(self._ontology(), result)
         assert len(nodes) == 1
         assert nodes[0].properties.get("source_text") is None
+
+
+class TestPerFactExcerptValidation:
+    """Gate 4 slice 2: validate that LLM-emitted excerpts are
+    actually substrings of the source text. Hallucinated quotes
+    are dropped (fall back to chunk-level) — a fabricated quote
+    on the Evidence tab is worse than no quote because users
+    trust what they read.
+
+    These tests pin both the validation helper itself and the
+    end-to-end behaviour: a hallucinated excerpt arriving via the
+    LLM response shouldn't make it onto node properties."""
+
+    def test_validate_helper_passes_substring_match(self) -> None:
+        from graphora_server.services.transform.helpers import (
+            _validate_per_fact_excerpt,
+        )
+
+        assert _validate_per_fact_excerpt(
+            "Alice joined Acme",
+            "Alice joined Acme in 2019. Bob followed in 2020.",
+        )
+
+    def test_validate_helper_rejects_hallucinated_quote(self) -> None:
+        from graphora_server.services.transform.helpers import (
+            _validate_per_fact_excerpt,
+        )
+
+        assert not _validate_per_fact_excerpt(
+            "Alice was the CEO of Globex",
+            "Alice joined Acme in 2019. Bob followed in 2020.",
+        )
+
+    def test_validate_helper_normalizes_whitespace(self) -> None:
+        """LLMs often emit minor whitespace differences (newlines
+        collapsed to spaces, runs of spaces collapsed to one) even
+        when the underlying quote is correct. Pin the leniency."""
+        from graphora_server.services.transform.helpers import (
+            _validate_per_fact_excerpt,
+        )
+
+        assert _validate_per_fact_excerpt(
+            "Alice  joined   Acme",  # multiple spaces
+            "Alice joined Acme in 2019.",
+        )
+        assert _validate_per_fact_excerpt(
+            "Alice\njoined\nAcme",  # newlines instead of spaces
+            "Alice joined Acme in 2019.",
+        )
+
+    def test_validate_helper_normalizes_case(self) -> None:
+        """OCR'd PDFs frequently produce case drift between source
+        and quote. The substring check is case-insensitive."""
+        from graphora_server.services.transform.helpers import (
+            _validate_per_fact_excerpt,
+        )
+
+        assert _validate_per_fact_excerpt(
+            "ALICE JOINED ACME",
+            "Alice joined Acme in 2019.",
+        )
+
+    def test_validate_helper_skips_when_source_unavailable(self) -> None:
+        """When the storage layer doesn't have access to the source
+        the LLM saw (typical PDF-binary path with too-large splits),
+        validation can't run. Pin the trust-by-default fallthrough
+        — rejecting all excerpts in those cases would defeat Gate 4
+        for the binary path."""
+        from graphora_server.services.transform.helpers import (
+            _validate_per_fact_excerpt,
+        )
+
+        assert _validate_per_fact_excerpt("any quote", None)
+
+    def test_validate_helper_rejects_empty_excerpt(self) -> None:
+        from graphora_server.services.transform.helpers import (
+            _validate_per_fact_excerpt,
+        )
+
+        assert not _validate_per_fact_excerpt("", "source text")
+        assert not _validate_per_fact_excerpt("   ", "source text")
+        assert not _validate_per_fact_excerpt(None, "source text")
+
+    def test_hallucinated_excerpt_falls_back_to_chunk_level(self) -> None:
+        """End-to-end: an LLM that fabricates a quote shouldn't get
+        its quote on node.properties. The chunk-level fallback
+        kicks in instead."""
+        from pydantic import BaseModel
+
+        from graphora_server.services.transform.helpers import transform_as_nodes
+
+        class _Person(BaseModel):
+            id: str
+            name: str
+            source_excerpt: str
+
+        class _NodesResult(BaseModel):
+            Person_list: list
+            confidence_score: float = 1.0
+
+        result = _NodesResult(
+            Person_list=[
+                _Person(
+                    id="p_0",
+                    name="Alice",
+                    source_excerpt="Alice was the President of Globex.",
+                )
+            ],
+        )
+        nodes = transform_as_nodes(
+            {
+                "entities": {
+                    "Person": {
+                        "properties": {"name": {"type": "string", "required": True}}
+                    }
+                }
+            },
+            result,
+            chunk_text="Alice joined Acme in 2019.",
+        )
+        assert len(nodes) == 1
+        # The hallucinated quote was rejected; chunk_text won.
+        assert nodes[0].properties.get("source_text") == "Alice joined Acme in 2019."
+
+    def test_telemetry_log_emits_per_call_summary(self, caplog) -> None:
+        """One INFO line per transform_as_nodes call carrying the
+        validation breakdown. Operators read these via log
+        aggregation (Loki/CloudWatch); the structured ``extra``
+        keys are the queryable surface."""
+        import logging
+
+        from pydantic import BaseModel
+
+        from graphora_server.services.transform.helpers import transform_as_nodes
+
+        class _Person(BaseModel):
+            id: str
+            name: str
+            source_excerpt: str
+
+        class _NodesResult(BaseModel):
+            Person_list: list
+            confidence_score: float = 1.0
+
+        result = _NodesResult(
+            Person_list=[
+                _Person(
+                    id="p_0",
+                    name="Alice",
+                    source_excerpt="Alice joined Acme",  # valid
+                ),
+                _Person(
+                    id="p_1",
+                    name="Bob",
+                    source_excerpt="Bob owned Globex",  # hallucinated
+                ),
+            ],
+        )
+
+        with caplog.at_level(
+            logging.INFO,
+            logger="graphora_server.services.transform.helpers",
+        ):
+            transform_as_nodes(
+                {
+                    "entities": {
+                        "Person": {
+                            "properties": {"name": {"type": "string", "required": True}}
+                        }
+                    }
+                },
+                result,
+                chunk_text="Alice joined Acme. Bob joined Beta.",
+            )
+
+        summary_records = [
+            r for r in caplog.records if "Per-fact excerpt:" in r.getMessage()
+        ]
+        assert (
+            len(summary_records) == 1
+        ), f"Expected 1 telemetry log; got {len(summary_records)}"
+        record = summary_records[0]
+        assert getattr(record, "extraction_total_nodes", None) == 2
+        assert getattr(record, "extraction_with_excerpt", None) == 2
+        assert getattr(record, "extraction_excerpt_validated", None) == 1
+        assert getattr(record, "extraction_excerpt_rejected", None) == 1
+        assert getattr(record, "extraction_excerpt_skip_no_source", None) == 0

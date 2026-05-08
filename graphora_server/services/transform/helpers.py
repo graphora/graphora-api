@@ -222,6 +222,48 @@ def _basic_canonical_value(value: Any) -> Optional[str]:
 _SOURCE_TEXT_PROPERTY_LIMIT = 1000
 
 
+def _validate_per_fact_excerpt(
+    excerpt: Optional[str],
+    source_text: Optional[str],
+) -> bool:
+    """Verify that an LLM-emitted ``source_excerpt`` is actually a
+    substring of the source text the model was given.
+
+    Gate 4 follow-up (slice 2): the prompt instructs the LLM to
+    emit a verbatim quote, but models occasionally fabricate (or
+    paraphrase) — a hallucinated quote on the Evidence tab is worse
+    than no quote, since users trust what they read. Validating the
+    quote is in the source catches this cheaply.
+
+    Normalizes whitespace and case before comparing — LLMs often
+    emit minor differences (newlines vs spaces, multiple spaces
+    collapsed, capitalisation drift especially after OCR'd PDFs)
+    that aren't fabrication, just lossy round-trip. The substring
+    check is intentionally lenient.
+
+    Returns True (validation passes) in two cases:
+      1. The normalized excerpt is a substring of the normalized
+         source — the LLM quoted faithfully (modulo whitespace).
+      2. ``source_text`` is None — the storage layer doesn't have
+         access to what the LLM saw (typically PDF-binary path
+         with splits too large for the truncation budget). We
+         trust the LLM rather than reject all excerpts in those
+         cases. ``transform_as_nodes`` logs the validation-skipped
+         count separately so operators can see how often this
+         happens.
+
+    Returns False when there's source text and the excerpt isn't
+    in it — definite hallucination, fall back to chunk-level.
+    """
+    if not excerpt or not excerpt.strip():
+        return False
+    if source_text is None:
+        return True
+    normalized_excerpt = " ".join(excerpt.lower().split())
+    normalized_source = " ".join(source_text.lower().split())
+    return normalized_excerpt in normalized_source
+
+
 def _attach_provenance_properties(
     node_or_edge: Union[BaseNode, RelationshipInstance],
     chunk_metadata: Optional[ChunkMetadata] = None,
@@ -467,6 +509,28 @@ def transform_as_nodes(
     chunk_node_registry = {}
     use_deterministic_ids = settings.DETERMINISTIC_MODE and bool(transform_id)
 
+    # Gate 4 slice 2 telemetry: track per-fact excerpt outcomes so
+    # operators can see how often the LLM emits a useful excerpt
+    # and how often the model is fabricating quotes. Counters reset
+    # per call; one INFO line emitted at function exit. Buckets are
+    # mutually exclusive over the entities that produced a node.
+    excerpt_telemetry = {
+        "total_nodes": 0,
+        "with_excerpt": 0,
+        "validated": 0,
+        "rejected": 0,
+        "skip_no_source": 0,
+    }
+
+    # The source-of-truth text the LLM saw (text-chunk path) or the
+    # split-level Markdown if the PDF-binary path managed to capture
+    # it (otherwise None). Used as the ground truth for excerpt
+    # validation. None disables validation — see
+    # _validate_per_fact_excerpt's docstring for why.
+    validation_source = chunk_text or (
+        chunk_metadata.source_text if chunk_metadata else None
+    )
+
     # Process entities
     for field_name in dir(entity_result):
         if not field_name.endswith("_list") or field_name.startswith("_"):
@@ -566,12 +630,39 @@ def transform_as_nodes(
             # alongside the entity properties. Read it from
             # raw_properties (the unfiltered dict — _normalize_entity_
             # properties drops anything not in the ontology, which
-            # includes source_excerpt). When set, it lands on
+            # includes source_excerpt). When set AND validated as a
+            # substring of the source the model saw, it lands on
             # node.properties["source_text"] via the helper, replacing
-            # the chunk-level fallback and giving the Evidence tab
-            # per-fact provenance instead of per-chunk text.
+            # the chunk-level fallback. Hallucinated quotes
+            # (excerpts not in the source) are dropped — fall back
+            # to chunk-level rather than risk showing fabricated
+            # evidence to users.
+            excerpt_telemetry["total_nodes"] += 1
             raw_excerpt = raw_properties.get("source_excerpt")
-            per_fact_excerpt = raw_excerpt if isinstance(raw_excerpt, str) else None
+            candidate_excerpt = (
+                raw_excerpt
+                if isinstance(raw_excerpt, str) and raw_excerpt.strip()
+                else None
+            )
+            per_fact_excerpt: Optional[str] = None
+            if candidate_excerpt is not None:
+                excerpt_telemetry["with_excerpt"] += 1
+                if validation_source is None:
+                    excerpt_telemetry["skip_no_source"] += 1
+                    per_fact_excerpt = candidate_excerpt
+                elif _validate_per_fact_excerpt(candidate_excerpt, validation_source):
+                    excerpt_telemetry["validated"] += 1
+                    per_fact_excerpt = candidate_excerpt
+                else:
+                    excerpt_telemetry["rejected"] += 1
+                    logger.debug(
+                        "Rejected per-fact excerpt for %s/%s — not a substring "
+                        "of source: %r",
+                        entity_type,
+                        node_id,
+                        candidate_excerpt[:120],
+                    )
+                    per_fact_excerpt = None  # fall back to chunk-level
             _attach_provenance_properties(
                 node,
                 chunk_metadata=chunk_metadata,
@@ -581,6 +672,31 @@ def transform_as_nodes(
             )
             chunk_node_registry[entity_type][node_key] = node_id
             nodes.append(node)
+
+    if excerpt_telemetry["total_nodes"] > 0:
+        # One INFO line per transform_as_nodes call. Operators
+        # tracking Gate-4 quality use these counters via
+        # log-aggregation pipelines (Loki/CloudWatch); the
+        # structured ``extra`` keys are the queryable surface,
+        # the human-readable message is for tail-watching.
+        logger.info(
+            "Per-fact excerpt: %d/%d entities, %d validated, %d rejected, "
+            "%d skip-no-source",
+            excerpt_telemetry["with_excerpt"],
+            excerpt_telemetry["total_nodes"],
+            excerpt_telemetry["validated"],
+            excerpt_telemetry["rejected"],
+            excerpt_telemetry["skip_no_source"],
+            extra={
+                "extraction_total_nodes": excerpt_telemetry["total_nodes"],
+                "extraction_with_excerpt": excerpt_telemetry["with_excerpt"],
+                "extraction_excerpt_validated": excerpt_telemetry["validated"],
+                "extraction_excerpt_rejected": excerpt_telemetry["rejected"],
+                "extraction_excerpt_skip_no_source": (
+                    excerpt_telemetry["skip_no_source"]
+                ),
+            },
+        )
     return nodes
 
 
@@ -608,6 +724,19 @@ def transform_as_relationships(
     logger.debug("nodes: %s", nodes)
     logger.debug("%s", "#" * 30)
     relationships = []
+
+    # Gate 4 slice 2 telemetry — same shape as transform_as_nodes.
+    excerpt_telemetry = {
+        "total_rels": 0,
+        "with_excerpt": 0,
+        "validated": 0,
+        "rejected": 0,
+        "skip_no_source": 0,
+    }
+    validation_source = chunk_text or (
+        chunk_metadata.source_text if chunk_metadata else None
+    )
+
     node_by_id = {node.id: node for node in nodes}
     node_by_canonical_id = {
         node.canonical_id: node for node in nodes if node.canonical_id
@@ -789,13 +918,36 @@ def transform_as_relationships(
             # directly on the rel_model (next to source_id /
             # target_id) — not inside the nested properties bag —
             # so we read it from rel_item.source_excerpt rather
-            # than rel_item.properties.source_excerpt. See
-            # transform_as_nodes for the same shape on the entity
-            # side.
+            # than rel_item.properties.source_excerpt. Validation +
+            # telemetry mirrors the entity side; see
+            # transform_as_nodes for the rationale.
+            excerpt_telemetry["total_rels"] += 1
             raw_rel_excerpt = getattr(rel_item, "source_excerpt", None)
-            per_fact_rel_excerpt = (
-                raw_rel_excerpt if isinstance(raw_rel_excerpt, str) else None
+            candidate_rel_excerpt = (
+                raw_rel_excerpt
+                if isinstance(raw_rel_excerpt, str) and raw_rel_excerpt.strip()
+                else None
             )
+            per_fact_rel_excerpt: Optional[str] = None
+            if candidate_rel_excerpt is not None:
+                excerpt_telemetry["with_excerpt"] += 1
+                if validation_source is None:
+                    excerpt_telemetry["skip_no_source"] += 1
+                    per_fact_rel_excerpt = candidate_rel_excerpt
+                elif _validate_per_fact_excerpt(
+                    candidate_rel_excerpt, validation_source
+                ):
+                    excerpt_telemetry["validated"] += 1
+                    per_fact_rel_excerpt = candidate_rel_excerpt
+                else:
+                    excerpt_telemetry["rejected"] += 1
+                    logger.debug(
+                        "Rejected per-fact excerpt for %s relationship — "
+                        "not a substring of source: %r",
+                        rel_type,
+                        candidate_rel_excerpt[:120],
+                    )
+                    per_fact_rel_excerpt = None
             _attach_provenance_properties(
                 rel,
                 chunk_metadata=chunk_metadata,
@@ -804,6 +956,26 @@ def transform_as_relationships(
                 per_fact_excerpt=per_fact_rel_excerpt,
             )
             relationships.append(rel)
+
+    if excerpt_telemetry["total_rels"] > 0:
+        logger.info(
+            "Per-fact excerpt (rels): %d/%d relationships, %d validated, "
+            "%d rejected, %d skip-no-source",
+            excerpt_telemetry["with_excerpt"],
+            excerpt_telemetry["total_rels"],
+            excerpt_telemetry["validated"],
+            excerpt_telemetry["rejected"],
+            excerpt_telemetry["skip_no_source"],
+            extra={
+                "extraction_total_rels": excerpt_telemetry["total_rels"],
+                "extraction_rel_with_excerpt": excerpt_telemetry["with_excerpt"],
+                "extraction_rel_excerpt_validated": (excerpt_telemetry["validated"]),
+                "extraction_rel_excerpt_rejected": (excerpt_telemetry["rejected"]),
+                "extraction_rel_excerpt_skip_no_source": (
+                    excerpt_telemetry["skip_no_source"]
+                ),
+            },
+        )
 
     return relationships
 
