@@ -174,7 +174,7 @@ class DecisionLogService:
                     ORDER BY created_at ASC
                 """
                 rows = await db.fetch(query, transform_id, target_id)
-                return [self._row_to_decision(row) for row in rows]
+                return self._rows_to_decisions(rows)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Failed to fetch decisions for target: %s", exc)
                 return []
@@ -201,7 +201,7 @@ class DecisionLogService:
                     ORDER BY created_at ASC
                 """
                 rows = await db.fetch(query, transform_id)
-                return [self._row_to_decision(row) for row in rows]
+                return self._rows_to_decisions(rows)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Failed to fetch decisions for transform: %s", exc)
                 return []
@@ -212,13 +212,46 @@ class DecisionLogService:
 
     # Helpers --------------------------------------------------------------------
 
+    @classmethod
+    def _rows_to_decisions(cls, rows: List[Dict[str, Any]]) -> List[Decision]:
+        """Per-row conversion with isolation: one malformed row (e.g.
+        a stale ``decision_type`` from a rolled-back deploy, an enum
+        value the running code doesn't yet know about) gets logged
+        and skipped instead of poisoning the whole query result.
+
+        Reviewer-flagged on commit 8cbc76b: pre-fix we did
+        ``[self._row_to_decision(row) for row in rows]`` inside an
+        outer try/except, so a single ``ValueError`` from
+        ``DecisionType(unknown)`` would blank the entire Decision
+        Log for that target/transform. Combined with the new DB-side
+        CHECK constraints (migration 14), this gives defence in
+        depth: the constraints prevent malformed rows landing in the
+        first place, and per-row isolation contains any that slip
+        through (e.g. across rolling deploys with mismatched code
+        and schema).
+        """
+        decisions: List[Decision] = []
+        for row in rows:
+            try:
+                decisions.append(cls._row_to_decision(row))
+            except (ValueError, KeyError, TypeError) as exc:
+                logger.warning(
+                    "Skipping malformed extraction_decisions row " "(id=%s): %s",
+                    row.get("id") if isinstance(row, dict) else None,
+                    exc,
+                )
+        return decisions
+
     @staticmethod
     def _row_to_decision(row: Dict[str, Any]) -> Decision:
-        """Convert a Postgres row dict into a typed Decision. Tolerates
-        unknown enum values by raising — the alternative (silently
-        downgrading to the string) would let stale prod rows render
-        as opaque tokens in the Evidence tab. Forcing a code change
-        when the enum drifts is the right tradeoff."""
+        """Convert a single Postgres row dict into a typed Decision.
+
+        Raises ``ValueError`` on unknown enum values — that's the
+        signal _rows_to_decisions uses to skip the row. The
+        alternative (silently downgrading to the string) would let
+        stale prod rows render as opaque tokens in the Evidence tab;
+        forcing a code change when the enum legitimately drifts is
+        the right tradeoff."""
         return Decision(
             id=str(row["id"]),
             transform_id=row["transform_id"],

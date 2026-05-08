@@ -390,3 +390,81 @@ async def test_postgres_for_transform_runs_indexed_query(postgres_service):
     assert "target_id" not in where_block
     assert "ORDER BY created_at ASC" in query
     assert mock_fetch.await_args.args[1:] == ("tx-1",)
+
+
+@pytest.mark.asyncio
+async def test_postgres_malformed_row_isolates_does_not_blank_query(
+    postgres_service,
+):
+    """Reviewer-flagged on commit 8cbc76b. Pre-fix the row→Decision
+    conversion ran inside a list-comprehension wrapped in a single
+    outer try/except, so a single bad row (e.g. a stale
+    ``decision_type`` value the running code doesn't yet know about
+    after a rollback or rolling deploy) raised ``ValueError`` and
+    the whole for_target/for_transform call returned ``[]`` —
+    blanking the Decision Log for that target.
+
+    Post-fix: per-row try/except isolates the bad row, logs it, and
+    keeps the good rows. Combined with the DB-side CHECK
+    constraints (migration 14), this is defence in depth: the
+    constraints prevent malformed rows landing, and per-row
+    isolation contains any that slip through (e.g. cross-deploy
+    skew where the schema gained an enum value before the code did).
+    """
+    good_row = {
+        "id": "decision-good",
+        "transform_id": "tx-1",
+        "target_id": "node-alice",
+        "target_kind": "node",
+        "decision_type": "entity_merged",
+        "reason": "good row",
+        "evidence": {},
+        "alternatives": [],
+        "created_at": "2026-05-08T12:00:00+00:00",
+    }
+    bad_row = {
+        "id": "decision-bad",
+        "transform_id": "tx-1",
+        "target_id": "node-alice",
+        "target_kind": "node",
+        # Not in DecisionType — would raise ValueError in
+        # _row_to_decision pre-fix.
+        "decision_type": "decision_type_from_a_future_release",
+        "reason": "bad row",
+        "evidence": {},
+        "alternatives": [],
+        "created_at": "2026-05-08T12:00:01+00:00",
+    }
+    another_good_row = {
+        "id": "decision-good-2",
+        "transform_id": "tx-1",
+        "target_id": "node-alice",
+        "target_kind": "node",
+        "decision_type": "confidence_marked",
+        "reason": "another good row",
+        "evidence": {},
+        "alternatives": [],
+        "created_at": "2026-05-08T12:00:02+00:00",
+    }
+
+    with patch(
+        "graphora_server.services.decision_log_service.db.fetch",
+        new=AsyncMock(
+            return_value=[good_row, bad_row, another_good_row],
+        ),
+    ):
+        results = await postgres_service.for_target("tx-1", "node-alice")
+
+    # Pre-fix: this would be 0 (the ValueError on the bad row escaped
+    # the list-comp into the outer except, returning []).
+    # Post-fix: 2 — bad row skipped, good rows preserved.
+    assert len(results) == 2, (
+        f"Expected 2 good rows preserved, got {len(results)}. The bad "
+        f"row's ValueError must be caught per-row, not at the query "
+        f"level — otherwise one stale row blanks the whole Decision "
+        f"Log surface for that target."
+    )
+    reasons = [d.reason for d in results]
+    assert "good row" in reasons
+    assert "another good row" in reasons
+    assert "bad row" not in reasons
