@@ -197,15 +197,16 @@ class Settings(BaseSettings):
         ),
     )
     ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enable cross-document entity linking via the entity_ledger "
             "embedding-similarity reader. When True, hydrate_nodes "
             "performs a two-stage lookup (exact canonical_key, then "
             "embedding similarity). When False, only the exact-key "
-            "stage runs — the historical default. Slice 2 default is "
-            "False (opt-in) until match-rate telemetry validates the "
-            "behaviour at scale; slice 4 will flip to True."
+            "stage runs — the historical default. Slice 2 shipped this "
+            "as opt-in (default False); slice 4 (this commit) flips "
+            "the default to True. Operators can still opt out by "
+            "setting ENTITY_RESOLUTION_CROSS_DOCUMENT_ENABLED=false."
         ),
     )
     ENTITY_RESOLUTION_BATCH_SIZE: int = Field(
