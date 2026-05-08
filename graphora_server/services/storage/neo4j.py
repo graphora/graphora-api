@@ -1,6 +1,6 @@
 """Neo4j implementation of graph storage"""
 
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 import logging
 import traceback
 from contextlib import asynccontextmanager
@@ -276,6 +276,88 @@ class Neo4jStorage(GraphStorageInterface):
 
         return query, {"id": node_id, "properties": properties}
 
+    def _prepare_node_unwind_row(
+        self,
+        node: Union[BaseNode, Dict[str, Any]],
+        transform_id: str,
+        merge_id: Optional[str] = None,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Build (label_key, row_dict) for one node in an UNWIND batch.
+
+        Mirrors ``_build_node_query``'s per-node prep — extract id /
+        type / properties, filter metadata keys, stamp transform_id
+        and merge_id, fold provenance fields, validate the label —
+        but stops short of building the query so multiple same-labeled
+        nodes can share one ``UNWIND`` query (see
+        ``_build_unwind_node_query``). Used by ``store_nodes`` for
+        per-label batched writes.
+
+        Returns ``(label_key, {"id": ..., "properties": ...})``. The
+        label_key is the validated colon-joined Cypher label string
+        used as the UNWIND batch group key. Empty label_key for nodes
+        without a type — those land in the ``unlabeled`` group with
+        a different query shape."""
+        if isinstance(node, dict):
+            node_properties = node.get("properties", {})
+            node_type = node.get("type", "")
+            node_id = node.get("id", str(uuid.uuid4()))
+        else:
+            node_properties = node.properties
+            node_type = node.type
+            node_id = node.id
+
+        properties = {
+            k: v
+            for k, v in node_properties.items()
+            if k not in ["id", "type", TRANSFORM_ID, MERGE_ID]
+        }
+        properties[TRANSFORM_ID] = transform_id
+        if merge_id:
+            properties[MERGE_ID] = merge_id
+
+        if (
+            not isinstance(node, dict)
+            and hasattr(node, "provenance")
+            and node.provenance
+        ):
+            # Pydantic v2 BaseModel iterates as (field, value) pairs;
+            # dict.update accepts that shape natively.
+            properties.update(node.provenance)
+
+        labels = [node_type] if node_type else []
+        if labels:
+            validated_labels = validate_cypher_labels(labels)
+            label_key = ":".join(validated_labels)
+        else:
+            label_key = ""
+
+        return label_key, {"id": node_id, "properties": properties}
+
+    def _build_unwind_node_query(
+        self,
+        label_key: str,
+        merge: bool = True,
+    ) -> str:
+        """Build the UNWIND-based Cypher query for one label group.
+
+        ``$rows`` is a list of ``{"id": ..., "properties": {...}}``
+        maps. The MERGE-or-CREATE pattern is inlined per label
+        (Cypher can't parameterize labels in patterns). For nodes
+        without a label, falls back to a label-less pattern that
+        Neo4j matches by id alone."""
+        op = "MERGE" if merge else "CREATE"
+        if label_key:
+            return (
+                f"UNWIND $rows AS row "
+                f"{op} (n:{label_key} {{id: row.id}}) "
+                "SET n += row.properties"
+            )
+        return (
+            f"UNWIND $rows AS row "
+            f"{op} (n {{id: row.id}}) "
+            "SET n += row.properties"
+        )
+
     async def create_or_replace_ft_index_for_node(
         self, index_name: str, entity_name: str, properties: List[str]
     ) -> None:
@@ -412,37 +494,82 @@ class Neo4jStorage(GraphStorageInterface):
         merge_id: Optional[str] = None,
         merge: bool = True,
     ) -> StorageBatchResult:
-        """Store nodes in Neo4j"""
+        """Store nodes in Neo4j via per-label UNWIND batching.
+
+        Pre-fix this opened ONE session and ran ONE query per node —
+        for a 40-node Apple-10K-style transform that's 40 driver
+        round-trips. Cypher can't parameterize labels in a MERGE/CREATE
+        pattern (the label has to be in the query string), so the
+        natural batching unit is the label group: nodes sharing an
+        entity type collapse into a single ``UNWIND`` query. Typical
+        transforms have 5-8 entity types, so this collapses N round-
+        trips to K round-trips — close to an order-of-magnitude
+        speedup on cloud Neo4j (Aura) where round-trip latency
+        dominates.
+
+        Failure granularity changes from per-node to per-label-group:
+        a query failure aborts that label's group and breaks the loop,
+        items_processed reflects completed groups. Per-node failure
+        isolation (pre-fix) is replaced by per-group isolation —
+        acceptable since groups are typically the natural unit of work
+        and a query that fails for one node in a group fails for all
+        (label validation, schema constraints, etc. are group-uniform).
+
+        Each group's query is wrapped in ``_execute_with_retry``
+        independently, so a transient failure on group J doesn't
+        re-do groups 0..J-1. Within a group, MERGE on (label, id) is
+        idempotent — retries on the same UNWIND batch are safe.
+        """
         start_time = time.time()
         success = True
         error_message = None
         items_processed = 0
         warnings = []
 
-        # First try to store all nodes
+        # Group nodes by validated label. Per-node prep happens here
+        # so that a per-node validation failure (e.g., a label that
+        # fails Cypher-injection validation) is reported with the
+        # offending node's id rather than aborting the whole batch
+        # mid-query.
+        groups_data: Dict[str, List[Dict[str, Any]]] = {}
         for node in nodes:
             try:
-
-                async def _execute_query():
-                    async with self._get_session() as session:
-                        query, params = self._build_node_query(
-                            node, transform_id, merge_id, merge
-                        )
-                        await session.run(query, params)
-
-                await self._execute_with_retry(_execute_query)
-                items_processed += 1
-            except (StorageError, DatabaseError) as e:
-                traceback.print_exc()
+                label_key, row = self._prepare_node_unwind_row(
+                    node, transform_id, merge_id
+                )
+            except CypherInjectionError as e:
+                node_id = (
+                    node.get("id", "unknown") if isinstance(node, dict) else node.id
+                )
+                logger.error(f"Failed to prepare node {node_id}: {e}")
+                warnings.append(f"Failed to store node {node_id}: {e}")
                 success = False
                 error_message = str(e)
-                if isinstance(node, dict):
-                    node_id = node.get("id", "unknown")
-                else:
-                    node_id = node.id
-                logger.error(f"Failed to store node {node_id}: {error_message}")
-                warnings.append(f"Failed to store node {node_id}: {error_message}")
                 break
+            groups_data.setdefault(label_key, []).append(row)
+
+        if success and groups_data:
+            for label_key, rows in groups_data.items():
+                try:
+
+                    async def _execute_group(label_key=label_key, rows=rows):
+                        async with self._get_session() as session:
+                            query = self._build_unwind_node_query(label_key, merge)
+                            await session.run(query, rows=rows)
+
+                    await self._execute_with_retry(_execute_group)
+                    items_processed += len(rows)
+                except (StorageError, DatabaseError) as e:
+                    traceback.print_exc()
+                    success = False
+                    error_message = str(e)
+                    err_msg = (
+                        f"Failed to store node batch (label={label_key!r}, "
+                        f"n={len(rows)}): {error_message}"
+                    )
+                    logger.error(err_msg)
+                    warnings.append(err_msg)
+                    break
 
         # Only update checkpoint if at least one node was stored successfully
         if items_processed > 0:

@@ -444,6 +444,150 @@ class TestNeo4jStorageNodeOperations:
                 assert params["id"] == "node-123"
                 assert "name" in params["properties"]
 
+    @pytest.mark.asyncio
+    async def test_store_nodes_batches_via_unwind_per_label_group(self):
+        """Storage perf fix (CLAUDE.md flagged N+1 in store_nodes):
+        nodes are batched per validated label into single UNWIND
+        queries. For a 5-Person + 3-Company input, the writer
+        issues 2 queries (one per label) instead of 8.
+
+        Pin the query shape: each call uses ``UNWIND $rows AS row``
+        with the label inlined into the MERGE pattern (Cypher can't
+        parameterize labels). The rows payload is a list of
+        ``{id, properties}`` maps, one per node in the group.
+
+        Captures session.run calls, asserts per-label query count
+        and the UNWIND payload composition. The integration test
+        test_store_and_read_nodes_round_trip exercises the same
+        path against real Neo4j once Docker is up — together they
+        pin both shape and round-trip correctness."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import BaseNode
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+        storage.database = "neo4j"
+
+        captured: list[tuple[str, dict]] = []
+
+        async def fake_run(query, **kwargs):
+            captured.append((query, kwargs))
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+        storage.update_checkpoint = AsyncMock(
+            return_value=MagicMock(success=True, error=None)
+        )
+
+        nodes = [
+            BaseNode(id="p-1", type="Person", properties={"name": "Alice"}),
+            BaseNode(id="p-2", type="Person", properties={"name": "Bob"}),
+            BaseNode(id="p-3", type="Person", properties={"name": "Cara"}),
+            BaseNode(id="c-1", type="Company", properties={"name": "Acme"}),
+            BaseNode(id="c-2", type="Company", properties={"name": "Beta"}),
+        ]
+
+        result = await storage.store_nodes(nodes, batch_index=0, transform_id="tx-1")
+
+        assert result.success is True
+        assert result.items_processed == 5
+
+        # Two queries — one per label group (Person, Company).
+        # Pre-fix this would have been 5 queries (one per node).
+        assert len(captured) == 2, (
+            f"Expected 2 batched queries (one per label group), got "
+            f"{len(captured)}. The N+1 perf fix regressed — store_nodes "
+            f"is back to per-node round-trips."
+        )
+
+        # Each query is an UNWIND with rows binding the per-group
+        # nodes' (id, properties) pairs.
+        for query, kwargs in captured:
+            assert (
+                "UNWIND $rows AS row" in query
+            ), f"Query isn't UNWIND-batched: {query!r}"
+            assert "rows" in kwargs
+            rows = kwargs["rows"]
+            for row in rows:
+                assert "id" in row
+                assert "properties" in row
+
+        # Person group has 3 rows, Company group has 2.
+        # Order isn't guaranteed by dict iteration but counts are.
+        row_counts = sorted(len(kwargs["rows"]) for _q, kwargs in captured)
+        assert row_counts == [2, 3]
+
+    @pytest.mark.asyncio
+    async def test_store_nodes_uses_single_query_for_homogeneous_batch(self):
+        """The N+1→1 collapse in the homogeneous case: 40 same-type
+        nodes produce 1 UNWIND query, not 40. Pins the absolute-best-
+        case behaviour so a future refactor that splits same-type
+        groups into smaller chunks fails this test loud."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import BaseNode
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+        storage.database = "neo4j"
+
+        captured: list[tuple[str, dict]] = []
+
+        async def fake_run(query, **kwargs):
+            captured.append((query, kwargs))
+            mock_result = MagicMock()
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+        storage.update_checkpoint = AsyncMock(
+            return_value=MagicMock(success=True, error=None)
+        )
+
+        nodes = [
+            BaseNode(id=f"p-{i}", type="Person", properties={"name": f"P{i}"})
+            for i in range(40)
+        ]
+
+        await storage.store_nodes(nodes, batch_index=0, transform_id="tx-1")
+
+        assert len(captured) == 1, (
+            f"40 same-type nodes should batch to 1 UNWIND query; "
+            f"got {len(captured)}."
+        )
+        assert len(captured[0][1]["rows"]) == 40
+
 
 # ============================================================
 # Relationship Storage Operation Tests
