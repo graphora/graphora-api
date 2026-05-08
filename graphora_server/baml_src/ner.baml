@@ -70,6 +70,24 @@ function ExtractNodesFromChunk(chunk: string, context: string) -> DynamicContain
     - Omit optional fields if information is not clearly present
     - When in doubt about entity boundaries, prefer more specific entities
 
+    ## Per-Entity Source Excerpt
+
+    For EACH extracted entity, include a `source_excerpt` field — a
+    1-2 sentence VERBATIM quote from the text chunk where this
+    entity is mentioned. This powers the Evidence-tab provenance
+    surface for end users.
+
+    Rules:
+    - Use the EXACT WORDS from the source text, not a paraphrase.
+    - Choose the most informative single sentence (or two adjacent
+      sentences) that mentions the entity.
+    - Keep it short — ideally under 200 characters.
+    - If the entity is mentioned multiple times, pick the mention
+      that includes the most identifying information (full name,
+      role, etc.).
+    - If you cannot identify a specific source sentence, omit the
+      field rather than fabricating one.
+
 
     {{ ctx.output_format }}
   "#
@@ -142,6 +160,23 @@ function ExtractRelationshipsFromChunk(chunk: string, context: string) -> Dynami
       * 0.5-0.7: Reasonably inferred relationship
     - Do not create relationships where the connection is purely speculative
     - Prefer ontology-defined relationship types over creating new ones
+
+    ## Per-Relationship Source Excerpt
+
+    For EACH extracted relationship, include a `source_excerpt`
+    field — a 1-2 sentence VERBATIM quote from the text chunk where
+    the relationship is described. This powers the Evidence-tab
+    provenance surface for end users.
+
+    Rules:
+    - Use the EXACT WORDS from the source text, not a paraphrase.
+    - Choose the sentence that most clearly establishes the
+      relationship between the source and target entities.
+    - Keep it short — ideally under 200 characters.
+    - If the relationship is implied across multiple sentences,
+      pick the one that most directly connects the two entities.
+    - If you cannot identify a specific source sentence, omit the
+      field rather than fabricating one.
 
 
     {{ ctx.output_format }}

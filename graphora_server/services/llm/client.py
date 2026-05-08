@@ -219,12 +219,12 @@ class LLMClient:
         3. Omit optional fields if information is not clearly present
         4. No additional properties. Just the specified fields.
 
-        When extracting new information, maintain consistency with these previously identified entities. If previous Entities miss any properties add them. 
+        When extracting new information, maintain consistency with these previously identified entities. If previous Entities miss any properties add them.
         These Nodes were identified from the previous text chunks of the same doc. Use the `id` field to refer & match the nodes below.
         ```
         {context}
         ```
-        
+
         <rules>
         - For name fields, sometimes names may be written as `LASTNAME, FIRSTNAME`. So interpret accordingly
         - Only extract information that is explicitly present in the text
@@ -232,6 +232,24 @@ class LLMClient:
         - Include all required fields for each node
         - Omit optional fields if information is not clearly present
         </rules>
+
+        <per_entity_source_excerpt>
+        For EACH extracted entity, include a `source_excerpt` field —
+        a 1-2 sentence VERBATIM quote from the PDF where this entity
+        is mentioned. This powers the Evidence-tab provenance
+        surface for end users.
+
+        Rules:
+        - Use the EXACT WORDS from the PDF text, not a paraphrase.
+        - Choose the most informative single sentence (or two
+          adjacent sentences) that mentions the entity.
+        - Keep it short — ideally under 200 characters.
+        - If the entity is mentioned on multiple pages, pick the
+          mention with the most identifying information (full name,
+          role, etc.).
+        - If you cannot identify a specific source sentence, omit
+          the field rather than fabricating one.
+        </per_entity_source_excerpt>
         """
         request_timestamp = datetime.now(timezone.utc)
         logger.debug(
@@ -410,6 +428,8 @@ class LLMClient:
         - "source_id": The ID of the source node from the provided entities.
         - "target_id": The ID of the target node from the provided entities.
         - "properties": Any additional relationship properties (optional).
+        - "source_excerpt": A 1-2 sentence VERBATIM quote from the
+          PDF where this relationship is described (see rules below).
         3. Metadata: "extraction_timestamp" (ISO), "tokens_used", "confidence_score" (0.0-1.0).
 
         Remember:
@@ -417,6 +437,23 @@ class LLMClient:
         - Set confidence scores based on certainty of extraction
         - Include all required fields for each relationship
         - Omit optional fields if information is not clearly present
+
+        <per_relationship_source_excerpt>
+        For EACH extracted relationship, include a `source_excerpt`
+        field — a 1-2 sentence VERBATIM quote from the PDF where the
+        relationship is described. This powers the Evidence-tab
+        provenance surface for end users.
+
+        Rules:
+        - Use the EXACT WORDS from the PDF text, not a paraphrase.
+        - Choose the sentence that most clearly establishes the
+          relationship between the source and target entities.
+        - Keep it short — ideally under 200 characters.
+        - If the relationship is implied across multiple sentences,
+          pick the one that most directly connects the two entities.
+        - If you cannot identify a specific source sentence, omit
+          the field rather than fabricating one.
+        </per_relationship_source_excerpt>
         """
         request_timestamp = datetime.now(timezone.utc)
         logger.debug(

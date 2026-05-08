@@ -162,7 +162,35 @@ class OntologyParser:
                 "id": (
                     Optional[str],
                     Field(default=None, description="Unique identifier for the entity"),
-                )
+                ),
+                # Per-fact provenance (Gate 4). The LLM emits a
+                # 1-2 sentence verbatim quote from the source text
+                # where this entity was extracted. Far more useful
+                # for the Evidence-tab surface than chunk-level
+                # source_text — entities from page 60 of a 100-page
+                # split get evidence pointing at THEIR sentence,
+                # not the chunk's first 1000 chars. Falls back
+                # to chunk-level source_text when the model omits it.
+                #
+                # Optional + default None so the field is opt-in
+                # for the model: ontologies that pre-date this
+                # field still validate, and an LLM that doesn't
+                # follow the instruction still produces a valid
+                # response (the downstream pipeline handles None).
+                "source_excerpt": (
+                    Optional[str],
+                    Field(
+                        default=None,
+                        description=(
+                            "A 1-2 sentence verbatim quote from the "
+                            "source text where this entity is "
+                            "mentioned. Use the exact words from "
+                            "the source, not a paraphrase. Used "
+                            "for per-fact provenance in the "
+                            "Evidence tab."
+                        ),
+                    ),
+                ),
             }
             for prop_name, prop_def in props.items():
                 field_type = self._get_field_type(prop_def.get("type", "str"))
@@ -220,6 +248,23 @@ class OntologyParser:
 
                 # Use full SOURCE_TYPE_RELATION_TARGET_TYPE format
                 rel_model_name = f"{entity_name}_{rel_name}_{target_name}_Relationship"
+                # Per-fact provenance (Gate 4) — see entity-model
+                # source_excerpt for rationale. The LLM emits a 1-2
+                # sentence verbatim quote per relationship; falls
+                # back to chunk-level source_text on the edge's
+                # node_or_edge.properties via _attach_provenance_properties.
+                source_excerpt_field = (
+                    Optional[str],
+                    Field(
+                        default=None,
+                        description=(
+                            "A 1-2 sentence verbatim quote from "
+                            "the source text where this "
+                            "relationship is described. Use the "
+                            "exact words, not a paraphrase."
+                        ),
+                    ),
+                )
                 if rel_property_model:
                     rel_model = create_model(
                         rel_model_name,
@@ -233,6 +278,7 @@ class OntologyParser:
                             str,
                             Field(..., description="ID of the target entity"),
                         ),
+                        source_excerpt=source_excerpt_field,
                         properties=(Optional[rel_property_model], None),
                     )
                 else:
@@ -248,6 +294,7 @@ class OntologyParser:
                             str,
                             Field(..., description="ID of the target entity"),
                         ),
+                        source_excerpt=source_excerpt_field,
                     )
                 globals()[rel_model_name] = rel_model
                 entity_relationship_models[rel_name] = rel_model

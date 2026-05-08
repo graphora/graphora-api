@@ -551,3 +551,178 @@ class TestRefinementPassProvenance:
         assert node.properties.get("document_name") == "paper.pdf"
         assert node.properties.get("page_number") == 2
         assert node.properties.get("source_text") == "chunk text body"
+
+
+class TestPerFactExcerptPriority:
+    """Gate 4 per-fact provenance: when the LLM emits a
+    ``source_excerpt`` per entity / relationship, that quote takes
+    priority over chunk-level ``source_text`` fallbacks. The pre-
+    Gate-4 path used the chunk's first ~1000 chars (truncated) for
+    every entity in the chunk — entities from page 60 of a 100-page
+    split got Evidence text from page 1, which was misleading
+    provenance on a user-facing surface.
+
+    These tests pin the priority order at ``_attach_provenance_
+    properties`` (the place every extraction path funnels through):
+
+      1. per_fact_excerpt (LLM-emitted Gate-4 quote) — wins when
+         non-empty.
+      2. chunk_text (text-chunk path)
+      3. chunk_metadata.source_text (PDF-binary path)
+
+    Whitespace-only excerpts fall through (treated as if the LLM
+    emitted nothing). Truncation cap still applies at
+    _SOURCE_TEXT_PROPERTY_LIMIT.
+    """
+
+    def _make_node(self) -> "BaseNode":  # noqa: F821
+        from graphora_server.services.transform.models import BaseNode
+
+        return BaseNode(type="Person", properties={"name": "Alice"})
+
+    def test_per_fact_excerpt_overrides_chunk_text(self) -> None:
+        """Pin the priority: when both per_fact_excerpt and
+        chunk_text are set, the per-fact quote wins. Otherwise
+        Gate 4 wouldn't actually replace the chunk-level
+        provenance — defeating the whole point."""
+        from graphora_server.services.transform.helpers import (
+            _attach_provenance_properties,
+        )
+
+        node = self._make_node()
+        _attach_provenance_properties(
+            node,
+            chunk_text="The whole chunk says lots of things.",
+            per_fact_excerpt="Alice joined Acme in 2019.",
+        )
+        assert node.properties.get("source_text") == "Alice joined Acme in 2019."
+
+    def test_per_fact_excerpt_overrides_chunk_metadata_source_text(self) -> None:
+        """Same priority pinned for the PDF-binary path:
+        chunk_metadata.source_text is only used when no
+        per_fact_excerpt is supplied."""
+        from graphora_server.services.chunking.models import ChunkMetadata
+        from graphora_server.services.transform.helpers import (
+            _attach_provenance_properties,
+        )
+
+        node = self._make_node()
+        cm = ChunkMetadata(
+            transform_id="tx",
+            chunk_id="c0",
+            source_file="report.pdf",
+            source_text="Long extracted text from the whole split.",
+        )
+        _attach_provenance_properties(
+            node,
+            chunk_metadata=cm,
+            per_fact_excerpt="Alice's title is CEO at Acme.",
+        )
+        assert node.properties.get("source_text") == "Alice's title is CEO at Acme."
+
+    def test_empty_per_fact_excerpt_falls_back_to_chunk_text(self) -> None:
+        """An LLM that emits ``""`` or whitespace (or omits the
+        field — treated as None) should NOT wipe out the chunk-
+        level fallback. Pin the fallthrough so a model regression
+        on the per-fact path doesn't silently lose all evidence."""
+        from graphora_server.services.transform.helpers import (
+            _attach_provenance_properties,
+        )
+
+        for empty in ["", "   ", "\n\t", None]:
+            node = self._make_node()
+            _attach_provenance_properties(
+                node,
+                chunk_text="Falls back to the chunk text.",
+                per_fact_excerpt=empty,
+            )
+            assert (
+                node.properties.get("source_text") == "Falls back to the chunk text."
+            ), f"empty={empty!r} should fall through to chunk_text"
+
+    def test_per_fact_excerpt_respects_truncation_limit(self) -> None:
+        """The 1000-char source_text property cap still applies to
+        per-fact excerpts. The contract: LLM SHOULD emit short
+        quotes (the prompt asks for under 200 chars), but if it
+        emits a long one we still cap it to keep node properties
+        bounded — same protection that exists for chunk-level
+        source_text."""
+        from graphora_server.services.transform.helpers import (
+            _SOURCE_TEXT_PROPERTY_LIMIT,
+            _attach_provenance_properties,
+        )
+
+        node = self._make_node()
+        long_excerpt = "x" * (_SOURCE_TEXT_PROPERTY_LIMIT + 500)
+        _attach_provenance_properties(node, per_fact_excerpt=long_excerpt)
+        stored = node.properties.get("source_text")
+        assert stored is not None
+        assert len(stored) == _SOURCE_TEXT_PROPERTY_LIMIT
+
+
+class TestTransformAsNodesPropagatesPerFactExcerpt:
+    """End-to-end: transform_as_nodes reads source_excerpt from the
+    LLM response and lands it on node.properties via
+    _attach_provenance_properties. Pin the propagation contract so
+    a refactor that drops the read-from-raw_properties step doesn't
+    silently lose Gate-4 evidence."""
+
+    def _ontology(self):
+        return {
+            "entities": {
+                "Person": {
+                    "properties": {
+                        "name": {"type": "string", "required": True},
+                    },
+                },
+            },
+        }
+
+    def test_source_excerpt_lands_on_node_properties(self) -> None:
+        from pydantic import BaseModel
+
+        from graphora_server.services.transform.helpers import transform_as_nodes
+
+        class _Person(BaseModel):
+            id: str
+            name: str
+            source_excerpt: str
+
+        class _NodesResult(BaseModel):
+            Person_list: list
+            confidence_score: float = 1.0
+
+        result = _NodesResult(
+            Person_list=[
+                _Person(
+                    id="p_0",
+                    name="Alice",
+                    source_excerpt="Alice joined Acme in 2019.",
+                )
+            ],
+        )
+        nodes = transform_as_nodes(self._ontology(), result)
+        assert len(nodes) == 1
+        assert nodes[0].properties.get("source_text") == "Alice joined Acme in 2019."
+
+    def test_missing_source_excerpt_does_not_break_extraction(self) -> None:
+        """Backward compat: an entity emitted without
+        source_excerpt (older ontologies, model regressions, etc.)
+        should still produce a valid node. source_text stays unset
+        unless a chunk-level fallback is provided."""
+        from pydantic import BaseModel
+
+        from graphora_server.services.transform.helpers import transform_as_nodes
+
+        class _Person(BaseModel):
+            id: str
+            name: str
+
+        class _NodesResult(BaseModel):
+            Person_list: list
+            confidence_score: float = 1.0
+
+        result = _NodesResult(Person_list=[_Person(id="p_0", name="Alice")])
+        nodes = transform_as_nodes(self._ontology(), result)
+        assert len(nodes) == 1
+        assert nodes[0].properties.get("source_text") is None

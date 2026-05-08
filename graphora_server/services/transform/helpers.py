@@ -227,6 +227,7 @@ def _attach_provenance_properties(
     chunk_metadata: Optional[ChunkMetadata] = None,
     chunk_text: Optional[str] = None,
     document_id: Optional[str] = None,
+    per_fact_excerpt: Optional[str] = None,
 ) -> None:
     """Copy provenance fields from a chunk into a node or edge's properties.
 
@@ -235,6 +236,16 @@ def _attach_provenance_properties(
     same set of fields. ``setdefault`` semantics throughout — if an
     LLM extractor already emitted (say) ``document_id``, that value
     wins; we never clobber.
+
+    Gate 4 (per-fact provenance): ``per_fact_excerpt`` is the LLM-
+    emitted 1-2 sentence verbatim quote for THIS specific entity /
+    relationship. When non-empty, it takes priority over the chunk-
+    level fallbacks for ``source_text`` — entities from page 60 of
+    a 100-page split get evidence pointing at their sentence,
+    rather than the chunk's first 1000 chars (the long-standing
+    truncation bias). Falls back to ``chunk_text`` then
+    ``chunk_metadata.source_text`` when the LLM omits it (older
+    ontologies, model regressions, etc.).
 
     No-op when none of the optional inputs are set; extraction still
     succeeds and just emits an empty Evidence tab for that node.
@@ -253,13 +264,24 @@ def _attach_provenance_properties(
         if chunk_metadata.start_position:
             props.setdefault("chunk_offset", chunk_metadata.start_position)
 
-    # source_text resolution: prefer the explicit chunk_text arg
-    # (text-chunk path), fall back to chunk_metadata.source_text
-    # (PDF-binary path, where the chunker can't pass text inline and
-    # flows.py pre-extracts an excerpt at split time).
-    text_to_write = chunk_text or (
-        chunk_metadata.source_text if chunk_metadata else None
-    )
+    # source_text resolution priority (highest to lowest):
+    #   1. per_fact_excerpt: LLM-emitted Gate-4 per-fact quote.
+    #      Replaces chunk-level fallbacks because it points at the
+    #      ACTUAL fact's sentence, not the chunk's first ~1000 chars.
+    #   2. chunk_text: explicit text-chunk path (caller pre-resolved).
+    #   3. chunk_metadata.source_text: PDF-binary path (flows.py
+    #      pre-extracted an excerpt at split time, gated on parse
+    #      size — see flows._resolve_evidence_source_text).
+    #
+    # Whitespace-only excerpts are treated as empty so a model that
+    # emits "" or " " falls through to the chunk-level fallback
+    # rather than wiping out useful evidence.
+    if per_fact_excerpt and per_fact_excerpt.strip():
+        text_to_write = per_fact_excerpt
+    else:
+        text_to_write = chunk_text or (
+            chunk_metadata.source_text if chunk_metadata else None
+        )
     if text_to_write:
         truncated = text_to_write[:_SOURCE_TEXT_PROPERTY_LIMIT]
         props.setdefault("source_text", truncated)
@@ -540,11 +562,22 @@ def transform_as_nodes(
                     validator_score=validator_score,
                 ),
             )
+            # Gate 4 per-fact excerpt: the LLM emits source_excerpt
+            # alongside the entity properties. Read it from
+            # raw_properties (the unfiltered dict — _normalize_entity_
+            # properties drops anything not in the ontology, which
+            # includes source_excerpt). When set, it lands on
+            # node.properties["source_text"] via the helper, replacing
+            # the chunk-level fallback and giving the Evidence tab
+            # per-fact provenance instead of per-chunk text.
+            raw_excerpt = raw_properties.get("source_excerpt")
+            per_fact_excerpt = raw_excerpt if isinstance(raw_excerpt, str) else None
             _attach_provenance_properties(
                 node,
                 chunk_metadata=chunk_metadata,
                 chunk_text=chunk_text,
                 document_id=document_id,
+                per_fact_excerpt=per_fact_excerpt,
             )
             chunk_node_registry[entity_type][node_key] = node_id
             nodes.append(node)
@@ -752,11 +785,23 @@ def transform_as_relationships(
                     validator_score=validator_score,
                 ),
             )
+            # Gate 4 per-fact excerpt for relationships. Lives
+            # directly on the rel_model (next to source_id /
+            # target_id) — not inside the nested properties bag —
+            # so we read it from rel_item.source_excerpt rather
+            # than rel_item.properties.source_excerpt. See
+            # transform_as_nodes for the same shape on the entity
+            # side.
+            raw_rel_excerpt = getattr(rel_item, "source_excerpt", None)
+            per_fact_rel_excerpt = (
+                raw_rel_excerpt if isinstance(raw_rel_excerpt, str) else None
+            )
             _attach_provenance_properties(
                 rel,
                 chunk_metadata=chunk_metadata,
                 chunk_text=chunk_text,
                 document_id=document_id,
+                per_fact_excerpt=per_fact_rel_excerpt,
             )
             relationships.append(rel)
 
