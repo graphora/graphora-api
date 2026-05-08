@@ -16,6 +16,15 @@ from graphora_server.baml_client.types import (
 )
 from graphora_server.utils.parse_pydantic_schema import build_from_pydantic
 from graphora_server.baml_client import reset_baml_env_vars
+
+# get_prompt_version is imported lazily at each callsite below —
+# importing at module top would route through
+# graphora_server.services.extraction/__init__.py which transitively
+# re-imports transform.helpers (via multi_pass_extractor) during
+# its own import. Since helpers.py imports THIS module at its top,
+# the chain forms a cycle on the helpers→client→extraction→helpers
+# path. Lazy import dodges that — it's a tiny per-call cost (one
+# attribute lookup) for clean module-load semantics.
 import os
 import dotenv
 
@@ -134,6 +143,26 @@ def _cache_key(*parts: str) -> str:
     return md5(normalized)
 
 
+def _get_prompt_version(baml_function_name: str) -> str:
+    """Lazy proxy for prompt_versions.get_prompt_version.
+
+    Module-level import of prompt_versions would route through
+    services/extraction/__init__.py which transitively re-imports
+    transform/helpers.py via multi_pass_extractor — and since
+    helpers.py imports THIS module at its top, that closes a cycle
+    on the helpers→client→extraction→helpers path. Lazy import
+    dodges the cycle at one attribute-lookup of cost per call.
+
+    Tests that need to override the version (e.g., the cache-key
+    versioning suite) should monkeypatch this shim directly via
+    ``monkeypatch.setattr(llm_client, "_get_prompt_version", ...)``."""
+    from graphora_server.services.extraction.prompt_versions import (
+        get_prompt_version,
+    )
+
+    return get_prompt_version(baml_function_name) or ""
+
+
 def _preview(text: Optional[str], limit: int = 200) -> str:
     if not text:
         return ""
@@ -182,6 +211,13 @@ class LLMClient:
         content_hash = hashlib.md5(file_bytes).hexdigest()
         ontology_hash = md5(ontology_yaml or "")
         context_hash = md5(context or "")
+        # Prompt version in the cache key so an output-shape change
+        # (Gate 4 v1.0.0 → v1.1.0 added source_excerpt) auto-
+        # invalidates pre-existing cached responses. Without this a
+        # v1.0.0 cache entry would validate against the v1.1.0
+        # schema (source_excerpt is Optional and defaults to None)
+        # and silently serve evidence-less responses to v1.1.0
+        # callers. Reviewer caught this on the Gate-4 commit.
         cache_key = _cache_key(
             "pdf-nodes",
             user_id or "",
@@ -189,6 +225,7 @@ class LLMClient:
             content_hash,
             ontology_hash,
             context_hash,
+            _get_prompt_version("ExtractNodesFromPdf"),
         )
 
         cached = await _PDF_NODE_CACHE.get(cache_key)
@@ -389,6 +426,8 @@ class LLMClient:
         content_hash = hashlib.md5(file_bytes).hexdigest()
         ontology_hash = md5(ontology_yaml or "")
         context_hash = md5(context or "")
+        # See pdf-nodes cache_key above for the prompt-version
+        # rationale — same Gate-4 v1.0.0 → v1.1.0 invalidation.
         cache_key = _cache_key(
             "pdf-relationships",
             user_id or "",
@@ -396,6 +435,7 @@ class LLMClient:
             content_hash,
             ontology_hash,
             context_hash,
+            _get_prompt_version("ExtractRelationshipsFromPdf"),
         )
 
         cached = await _PDF_REL_CACHE.get(cache_key)
@@ -583,6 +623,8 @@ class LLMClient:
         chunk_hash = md5(chunk)
         ontology_hash = md5(ontology_yaml or "")
         context_hash = md5(context or "")
+        # See pdf-nodes cache_key above for the prompt-version
+        # rationale — same Gate-4 v1.0.0 → v1.1.0 invalidation.
         cache_key = _cache_key(
             "chunk-nodes",
             user_id or "",
@@ -590,6 +632,7 @@ class LLMClient:
             chunk_hash,
             context_hash,
             ontology_hash,
+            _get_prompt_version("ExtractNodesFromChunk"),
         )
 
         cached = await _CHUNK_NODE_CACHE.get(cache_key)
@@ -676,6 +719,8 @@ class LLMClient:
         chunk_hash = md5(chunk)
         ontology_hash = md5(ontology_yaml or "")
         context_hash = md5(context or "")
+        # See pdf-nodes cache_key above for the prompt-version
+        # rationale — same Gate-4 v1.0.0 → v1.1.0 invalidation.
         cache_key = _cache_key(
             "chunk-relationships",
             user_id or "",
@@ -683,6 +728,7 @@ class LLMClient:
             chunk_hash,
             context_hash,
             ontology_hash,
+            _get_prompt_version("ExtractRelationshipsFromChunk"),
         )
 
         cached = await _CHUNK_REL_CACHE.get(cache_key)

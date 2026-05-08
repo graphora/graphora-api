@@ -35,13 +35,20 @@ convention.
 from typing import Optional
 
 
-# Initial registry — all functions start at v1.0.0 for the B0 landing.
-# Subsequent BAML edits should bump per the convention above.
+# Initial registry — all functions started at v1.0.0 for the B0
+# landing. Bumped to v1.1.0 in commit d928586 (Gate 4 per-fact
+# source_excerpt) — the four extraction functions added a new
+# optional output field (source_excerpt per entity / relationship)
+# AND new prompt sections instructing the model to emit it. Per the
+# minor-bump convention above (output shape additions), the version
+# moves. The cache-key layer in services/llm/client.py threads this
+# value into every cache key so a v1.0.0 cached response doesn't
+# serve a v1.1.0 caller and silently skip Gate 4.
 BAML_PROMPT_VERSIONS = {
-    "ExtractNodesFromChunk": "v1.0.0",
-    "ExtractRelationshipsFromChunk": "v1.0.0",
-    "ExtractNodesFromPdf": "v1.0.0",
-    "ExtractRelationshipsFromPdf": "v1.0.0",
+    "ExtractNodesFromChunk": "v1.1.0",
+    "ExtractRelationshipsFromChunk": "v1.1.0",
+    "ExtractNodesFromPdf": "v1.1.0",
+    "ExtractRelationshipsFromPdf": "v1.1.0",
 }
 
 

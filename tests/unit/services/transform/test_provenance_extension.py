@@ -213,9 +213,15 @@ async def test_build_graph_from_stamps_decision_trail() -> None:
     assert graph.nodes
     node = graph.nodes[0]
     assert node.provenance.extractor_model == "gemini-2.5-flash"
-    assert node.provenance.prompt_version == "v1.0.0"
+    # Pulls from the live registry rather than asserting against
+    # a literal — the registry's value evolves with prompt-shape
+    # changes (Gate 4 bumped this from v1.0.0 to v1.1.0). Reading
+    # via get_prompt_version keeps the test honest about what
+    # 'current contract' means without making it brittle on bump.
+    expected_version = get_prompt_version("ExtractNodesFromChunk")
+    assert node.provenance.prompt_version == expected_version
     assert node.properties["extractor_model"] == "gemini-2.5-flash"
-    assert node.properties["prompt_version"] == "v1.0.0"
+    assert node.properties["prompt_version"] == expected_version
 
 
 # ---- 6. validator_score back-fill helper --------------------------------
@@ -281,6 +287,25 @@ def test_prompt_versions_registry_covers_all_baml_extraction_functions() -> None
 
 def test_get_prompt_version_returns_none_for_unknown_function() -> None:
     assert get_prompt_version("DoesNotExist") is None
+
+
+def test_extraction_prompts_at_v1_1_0_for_gate_4() -> None:
+    """Gate 4 (commit d928586) added a new optional output field
+    (source_excerpt per entity / relationship) and new prompt
+    sections instructing the model to emit it. Per the registry's
+    minor-bump convention — 'output shape additions or backward-
+    compatible behavioural shifts' — all four extraction functions
+    moved from v1.0.0 to v1.1.0.
+
+    Pin: extracted facts post-Gate-4 carry prompt_version='v1.1.0'.
+    Pre-fix the registry stayed at v1.0.0 even after the contract
+    changed, so new facts got stamped with the OLD version label —
+    weakening the provenance audit trail. Reviewer caught this on
+    the Gate-4 commit."""
+    assert get_prompt_version("ExtractNodesFromChunk") == "v1.1.0"
+    assert get_prompt_version("ExtractRelationshipsFromChunk") == "v1.1.0"
+    assert get_prompt_version("ExtractNodesFromPdf") == "v1.1.0"
+    assert get_prompt_version("ExtractRelationshipsFromPdf") == "v1.1.0"
 
 
 # ---- 8. Backward compat: existing callsites still work ------------------
@@ -403,14 +428,20 @@ async def test_multi_pass_refinement_threads_decision_trail() -> None:
     # decision-trail fields. With max_passes=2 and a forced gap on
     # pass 1, refinement runs and produces additional nodes.
     assert len(nodes) >= 1
+    # Pulls from the live registry rather than asserting against a
+    # literal — see test_build_graph_from_stamps_decision_trail for
+    # the same pattern. Gate 4 bumped this from v1.0.0 to v1.1.0;
+    # future bumps shouldn't require updating literals across every
+    # test that round-trips the version.
+    expected_version = get_prompt_version("ExtractNodesFromChunk")
     for node in nodes:
         assert node.provenance.extractor_model == "gemini-2.5-flash", (
             f"node {node.id} from {'refinement' if node.provenance else 'initial'} "
             f"missing extractor_model"
         )
-        assert node.provenance.prompt_version == "v1.0.0"
+        assert node.provenance.prompt_version == expected_version
         assert node.properties.get("extractor_model") == "gemini-2.5-flash"
-        assert node.properties.get("prompt_version") == "v1.0.0"
+        assert node.properties.get("prompt_version") == expected_version
 
 
 @pytest.mark.asyncio

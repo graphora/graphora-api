@@ -153,6 +153,117 @@ class TestCacheKeyGeneration:
         assert key1 != key2
 
 
+class TestExtractionCacheKeyVersioning:
+    """Reviewer-flagged on the Gate-4 commit (d928586): the four
+    extraction cache keys (pdf-nodes, pdf-relationships, chunk-
+    nodes, chunk-relationships) didn't include the prompt version,
+    so a v1.0.0 cached response would silently serve a v1.1.0
+    caller — the new optional source_excerpt field would be
+    None for cached entries and Gate 4 wouldn't fire until the
+    cache TTL expired.
+
+    The fix threads ``get_prompt_version(<baml_function>)`` into
+    every extraction cache key. These tests pin that contract by
+    constructing two keys that differ only in their prompt
+    version part — they MUST produce different keys, otherwise
+    the version-bump invalidation isn't actually happening."""
+
+    def test_pdf_nodes_cache_key_changes_with_prompt_version(self):
+        """A v1.0.0 cache entry must NOT satisfy a v1.1.0 lookup
+        for the otherwise-identical input. Pin with the actual
+        cache-key arg shape used by extract_nodes_from_pdf."""
+        from graphora_server.services.llm.client import _cache_key
+
+        common = ("pdf-nodes", "user-1", "model-x", "content-h", "ont-h", "ctx-h")
+        key_v1_0_0 = _cache_key(*common, "v1.0.0")
+        key_v1_1_0 = _cache_key(*common, "v1.1.0")
+        assert key_v1_0_0 != key_v1_1_0, (
+            "Prompt version isn't part of the pdf-nodes cache key — "
+            "Gate 4 (or any future output-shape change) won't auto-"
+            "invalidate pre-bump cached responses."
+        )
+
+    def test_pdf_relationships_cache_key_changes_with_prompt_version(self):
+        from graphora_server.services.llm.client import _cache_key
+
+        common = (
+            "pdf-relationships",
+            "user-1",
+            "model-x",
+            "content-h",
+            "ont-h",
+            "ctx-h",
+        )
+        assert _cache_key(*common, "v1.0.0") != _cache_key(*common, "v1.1.0")
+
+    def test_chunk_nodes_cache_key_changes_with_prompt_version(self):
+        from graphora_server.services.llm.client import _cache_key
+
+        common = (
+            "chunk-nodes",
+            "user-1",
+            "model-x",
+            "chunk-h",
+            "ctx-h",
+            "ont-h",
+        )
+        assert _cache_key(*common, "v1.0.0") != _cache_key(*common, "v1.1.0")
+
+    def test_chunk_relationships_cache_key_changes_with_prompt_version(self):
+        from graphora_server.services.llm.client import _cache_key
+
+        common = (
+            "chunk-relationships",
+            "user-1",
+            "model-x",
+            "chunk-h",
+            "ctx-h",
+            "ont-h",
+        )
+        assert _cache_key(*common, "v1.0.0") != _cache_key(*common, "v1.1.0")
+
+    def test_extract_paths_thread_prompt_version_into_cache_key(self, monkeypatch):
+        """End-to-end pin: the extract-path cache-key construction
+        uses the live ``_get_prompt_version`` shim. Monkeypatch
+        the shim to return a sentinel; the resulting cache key
+        must differ from one constructed with a different version.
+
+        ``_get_prompt_version`` is the lazy-import shim used to
+        avoid the helpers→client→extraction→helpers circular
+        import (see its docstring). Tests override this shim
+        rather than the upstream ``prompt_versions.get_prompt_
+        version`` because the lazy import gets a fresh reference
+        on every call — only the shim is at a fixed module
+        location."""
+        from graphora_server.services.llm import client as llm_client
+
+        sentinel = "v-sentinel-test-token"
+        monkeypatch.setattr(
+            llm_client,
+            "_get_prompt_version",
+            lambda name: sentinel,
+        )
+
+        common = (
+            "chunk-nodes",
+            "user-1",
+            "model-x",
+            "chunk-h",
+            "ctx-h",
+            "ont-h",
+        )
+        key_with_sentinel = llm_client._cache_key(
+            *common,
+            llm_client._get_prompt_version("ExtractNodesFromChunk"),
+        )
+        key_with_real = llm_client._cache_key(*common, "v1.1.0")
+        assert key_with_sentinel != key_with_real, (
+            "_get_prompt_version's return value isn't reaching the "
+            "cache-key computation — the shim reference is being "
+            "shadowed somewhere upstream."
+        )
+
+
 # ============================================================
 # Preview Function Tests
 # ============================================================
