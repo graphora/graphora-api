@@ -581,7 +581,7 @@ class Neo4jStorage(GraphStorageInterface):
                                     f"Versioning relationship {rel.id} due to property differences"
                                 )
                                 await self._close_existing_relationship(
-                                    session, existing_rel
+                                    session, existing_rel, transform_id=transform_id
                                 )
                                 # Merge properties and create new version.
                                 #
@@ -807,18 +807,42 @@ class Neo4jStorage(GraphStorageInterface):
         record = await result.single()
         return record["r"] if record else None
 
-    async def _close_existing_relationship(self, session, existing_rel: Dict):
-        """Set valid_to on an existing relationship"""
+    async def _close_existing_relationship(
+        self,
+        session,
+        existing_rel: Dict,
+        transform_id: Optional[str] = None,
+    ):
+        """Set valid_to on an existing relationship.
+
+        Reviewer-flagged on commit 4d09894: pre-fix this matched
+        only on ``r.id = $rel_id``. Now that the create path
+        (Case 3) round-trips the caller-supplied rel.id, two
+        transforms can legitimately hold separate active edges
+        with the same r.id — especially because
+        graphora_server/services/transform/helpers.py builds
+        deterministic relationship IDs from
+        (source, target, type), so the same logical edge across
+        transforms produces identical r.id values. Without
+        transform-scoping the close query would also wipe
+        transform B's edge when transform A versions its own.
+
+        Adding ``r.__tid = $transform_id`` to the WHERE pins the
+        close to the caller's transform. transform_id=None keeps
+        the legacy unscoped behaviour for any unmigrated callers."""
+        scope_clause = f"AND r.{TRANSFORM_ID} = $transform_id" if transform_id else ""
         query = f"""
         MATCH ()-[r]->()
-        WHERE r.id = $rel_id
+        WHERE r.id = $rel_id {scope_clause}
         SET r.{VALID_TO} = $valid_to
         """
-        await session.run(
-            query,
-            rel_id=existing_rel["id"],
-            valid_to=datetime.now(timezone.utc).isoformat(),
-        )
+        params: Dict[str, Any] = {
+            "rel_id": existing_rel["id"],
+            "valid_to": datetime.now(timezone.utc).isoformat(),
+        }
+        if transform_id:
+            params["transform_id"] = transform_id
+        await session.run(query, **params)
 
     def _build_relationship_query(
         self,

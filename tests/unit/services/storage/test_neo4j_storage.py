@@ -1212,6 +1212,87 @@ class TestNeo4jStorageRelationshipOperations:
         )
 
     @pytest.mark.asyncio
+    async def test_close_existing_relationship_scopes_by_transform_id(self):
+        """Reviewer-flagged on commit 4d09894: with the create-path
+        round-tripping caller-supplied rel.id, two transforms can
+        legitimately hold separate active edges with the SAME r.id —
+        the transform_helpers id generator is deterministic on
+        (source, target, type), so identical logical edges across
+        transforms collide on id by design.
+
+        Pre-fix _close_existing_relationship matched only on
+        ``r.id = $rel_id`` and would wipe BOTH transforms' edges
+        when one of them versioned its edge — close-the-wrong-edge
+        across transform boundaries.
+
+        Pin: when transform_id is passed, the close query includes
+        ``r.__tid = $transform_id`` so only THIS transform's edge
+        gets its __valid_to set. The caller (store_relationships
+        versioning path) threads the transform_id through."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+
+        captured_query: list[str] = []
+        captured_params: list[dict] = []
+
+        async def fake_run(query, **kwargs):
+            captured_query.append(query)
+            captured_params.append(kwargs)
+            return MagicMock()
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        await storage._close_existing_relationship(
+            session,
+            existing_rel={"id": "shared-rel-id"},
+            transform_id="tx-a",
+        )
+
+        assert captured_query, "_close_existing_relationship made no query"
+        query = captured_query[0]
+        assert "r.__tid = $transform_id" in query, (
+            f"Close query missing the transform_id filter: {query!r}. "
+            f"With deterministic relationship IDs in transform/helpers.py, "
+            f"two transforms can hold active edges with the same r.id; an "
+            f"unscoped close wipes both."
+        )
+        assert captured_params[0].get("transform_id") == "tx-a"
+
+    @pytest.mark.asyncio
+    async def test_close_existing_relationship_legacy_no_transform_id(self):
+        """Pin the unscoped fallback so a future refactor can't make
+        transform_id mandatory and break callers that haven't been
+        migrated."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+
+        captured_query: list[str] = []
+        captured_params: list[dict] = []
+
+        async def fake_run(query, **kwargs):
+            captured_query.append(query)
+            captured_params.append(kwargs)
+            return MagicMock()
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        await storage._close_existing_relationship(
+            session, existing_rel={"id": "rel-id"}
+        )
+
+        query = captured_query[0]
+        assert "r.__tid" not in query
+        assert "transform_id" not in captured_params[0]
+
+    @pytest.mark.asyncio
     async def test_store_relationships_should_validate_relationship_type(self):
         """Relationship type should be validated for Cypher injection."""
         from graphora_server.services.storage.neo4j import (

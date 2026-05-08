@@ -280,6 +280,148 @@ async def test_cross_transform_isolation_with_shared_logical_edge(
 
 
 @pytest.mark.asyncio
+async def test_versioning_one_transform_does_not_close_sibling_transform(
+    neo4j_storage,
+):
+    """Reviewer-flagged on commit 4d09894: with deterministic
+    relationship IDs (transform/helpers.py builds them from
+    (source, target, type)), two transforms holding separate
+    active edges for the same logical edge will share r.id.
+    Pre-fix _close_existing_relationship matched only on
+    ``r.id = \$rel_id`` — versioning transform A's edge would
+    wipe transform B's edge with the same id.
+
+    The earlier shared-edge integration test
+    (test_cross_transform_isolation_with_shared_logical_edge)
+    used random default rel.ids per RelationshipInstance, so it
+    couldn't surface this. This test plants the SAME explicit
+    rel.id under two transforms, then versions transform A only,
+    and asserts B's edge stays active."""
+    tx_a = "shared-id-tx-a"
+    tx_b = "shared-id-tx-b"
+    shared_rel_id = "deterministic-rel-id-12345"
+
+    alice = BaseNode(id="alice-shared-id", type="Person", properties={"name": "Alice"})
+    acme = BaseNode(id="acme-shared-id", type="Company", properties={"name": "Acme"})
+
+    await neo4j_storage.store_nodes([alice, acme], batch_index=0, transform_id=tx_a)
+    await neo4j_storage.store_nodes([alice, acme], batch_index=0, transform_id=tx_b)
+
+    # Same explicit rel.id under both transforms — simulating
+    # the deterministic-id collision.
+    rel_a_v1 = RelationshipInstance(
+        id=shared_rel_id,
+        type="WORKS_AT",
+        source_id=alice.id,
+        target_id=acme.id,
+        source_type="Person",
+        target_type="Company",
+        properties={"role": "engineer"},
+    )
+    rel_b_v1 = RelationshipInstance(
+        id=shared_rel_id,
+        type="WORKS_AT",
+        source_id=alice.id,
+        target_id=acme.id,
+        source_type="Person",
+        target_type="Company",
+        properties={"role": "engineer"},
+    )
+    await neo4j_storage.store_relationships(
+        [rel_a_v1], batch_index=0, transform_id=tx_a
+    )
+    await neo4j_storage.store_relationships(
+        [rel_b_v1], batch_index=0, transform_id=tx_b
+    )
+
+    # Sanity: both transforms have an active edge with the same r.id.
+    async with neo4j_storage._get_session() as session:
+        before = await session.run(
+            "MATCH ()-[r:WORKS_AT]->() "
+            "WHERE r.id = $rid AND r.__valid_to IS NULL "
+            "RETURN r.__tid AS tid",
+            rid=shared_rel_id,
+        )
+        before_tids = []
+        async for record in before:
+            before_tids.append(record["tid"])
+    assert sorted(before_tids) == [tx_a, tx_b], (
+        f"Setup precondition failed: expected one active edge per "
+        f"transform with the shared rel.id, got tids={before_tids}"
+    )
+
+    # Version transform A's edge by storing a different role under tx_a.
+    # _close_existing_relationship runs on A's edge — pre-fix it
+    # would close B's edge too (same r.id, no transform scope).
+    rel_a_v2 = RelationshipInstance(
+        id=shared_rel_id,
+        type="WORKS_AT",
+        source_id=alice.id,
+        target_id=acme.id,
+        source_type="Person",
+        target_type="Company",
+        properties={"role": "principal-engineer"},
+    )
+    await neo4j_storage.store_relationships(
+        [rel_a_v2], batch_index=1, transform_id=tx_a
+    )
+
+    # Transform A: closed v1 + active v2. Transform B: still
+    # ONLY its untouched v1 (active).
+    async with neo4j_storage._get_session() as session:
+        a_active = await session.run(
+            "MATCH ()-[r:WORKS_AT]->() "
+            "WHERE r.__tid = $tid AND r.__valid_to IS NULL "
+            "RETURN count(r) AS n",
+            tid=tx_a,
+        )
+        a_active_count = (await a_active.single())["n"]
+
+        a_closed = await session.run(
+            "MATCH ()-[r:WORKS_AT]->() "
+            "WHERE r.__tid = $tid AND r.__valid_to IS NOT NULL "
+            "RETURN count(r) AS n",
+            tid=tx_a,
+        )
+        a_closed_count = (await a_closed.single())["n"]
+
+        b_active = await session.run(
+            "MATCH ()-[r:WORKS_AT]->() "
+            "WHERE r.__tid = $tid AND r.__valid_to IS NULL "
+            "RETURN count(r) AS n",
+            tid=tx_b,
+        )
+        b_active_count = (await b_active.single())["n"]
+
+        b_closed = await session.run(
+            "MATCH ()-[r:WORKS_AT]->() "
+            "WHERE r.__tid = $tid AND r.__valid_to IS NOT NULL "
+            "RETURN count(r) AS n",
+            tid=tx_b,
+        )
+        b_closed_count = (await b_closed.single())["n"]
+
+    assert a_active_count == 1, (
+        f"Transform A should have 1 active edge after versioning, got "
+        f"{a_active_count}. Versioning didn't fire as expected."
+    )
+    assert a_closed_count == 1, (
+        f"Transform A should have 1 closed edge (the versioned v1), "
+        f"got {a_closed_count}."
+    )
+    assert b_active_count == 1, (
+        f"Transform B's active edge was wiped by transform A's "
+        f"versioning — close-the-wrong-edge across transforms. "
+        f"Got {b_active_count} active edges for tx_b. The close "
+        f"query needs r.__tid scoping."
+    )
+    assert b_closed_count == 0, (
+        f"Transform B has unexpected closed edges ({b_closed_count}) — "
+        f"transform A's close query reached across the boundary."
+    )
+
+
+@pytest.mark.asyncio
 async def test_node_provenance_round_trip(neo4j_storage):
     """A1-prov / B0-prov-extend fields write + read back without
     losing source-span / decision-trail metadata. Same contract
