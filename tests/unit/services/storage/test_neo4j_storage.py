@@ -1113,6 +1113,105 @@ class TestNeo4jStorageRelationshipOperations:
         )
 
     @pytest.mark.asyncio
+    async def test_first_time_write_preserves_caller_supplied_id(self):
+        """Reviewer-flagged on commit 1240ced: switching the
+        no-existing path to merge=False fixed cross-transform
+        corruption but introduced a side-effect via
+        _build_relationship_query, which generated a fresh UUID
+        whenever merge=False. Result: first-time relationship
+        writes no longer round-tripped the caller-supplied
+        rel.id — Case 3 stored the edge under a synthesized
+        id, breaking external callers that expect to query
+        their own rels by id.
+
+        Pin the round-trip: the rel_id parameter sent to Neo4j
+        on the Case 3 (no-existing) write equals the caller's
+        rel.id, not a fresh UUID. Symmetric to the versioning
+        path which legitimately needs a new id (and now mints
+        one explicitly at the callsite via rel.model_copy)."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        captured_params: list = []
+
+        async def fake_run(query, *args, **kwargs):
+            # store_relationships calls session.run(query, params) —
+            # params is the second positional arg in this codebase's
+            # idiom. Capture both positional and kwarg shapes
+            # defensively.
+            captured_params.append((args, kwargs))
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        caller_supplied_id = "rel-caller-id-abc-123"
+        new_rel = RelationshipInstance(
+            id=caller_supplied_id,
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={"role": "engineer"},
+        )
+
+        with patch.object(
+            storage,
+            "_find_existing_relationship",
+            new=AsyncMock(return_value=None),
+        ):
+            await storage.store_relationships(
+                [new_rel], batch_index=0, transform_id="tx-a"
+            )
+
+        # The session.run call for the write carries a params dict
+        # (or kwargs) with rel_id == caller-supplied. Pre-fix the
+        # rel_id was a fresh uuid4 — the assertion below catches
+        # the regression by asserting equality against the exact
+        # caller-supplied string.
+        rel_ids_seen = []
+        for args, kwargs in captured_params:
+            if args and isinstance(args[-1], dict):
+                rid = args[-1].get("rel_id")
+                if rid is not None:
+                    rel_ids_seen.append(rid)
+            if "rel_id" in kwargs:
+                rel_ids_seen.append(kwargs["rel_id"])
+
+        assert caller_supplied_id in rel_ids_seen, (
+            f"First-time write didn't preserve the caller-supplied "
+            f"rel.id={caller_supplied_id!r}. Saw rel_ids: "
+            f"{rel_ids_seen}. _build_relationship_query is probably "
+            f"still generating a fresh UUID when merge=False — "
+            f"decouple Cypher op from id policy: id should always be "
+            f"rel.id, fresh UUIDs should be minted at the callsite "
+            f"(Case 2) explicitly."
+        )
+
+    @pytest.mark.asyncio
     async def test_store_relationships_should_validate_relationship_type(self):
         """Relationship type should be validated for Cypher injection."""
         from graphora_server.services.storage.neo4j import (

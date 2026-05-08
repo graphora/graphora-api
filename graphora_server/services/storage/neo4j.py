@@ -611,8 +611,25 @@ class Neo4jStorage(GraphStorageInterface):
                                     TRANSFORM_ID: transform_id,
                                     MERGE_ID: merge_id if merge_id else None,
                                 }
+                                # The new active version needs a fresh
+                                # id — v1 (just closed) still owns
+                                # rel.id in the graph, and a CREATE
+                                # with the same id would either
+                                # collide (if id were a uniqueness
+                                # constraint) or silently produce two
+                                # edges with the same r.id (which
+                                # confuses _close_existing_relationship's
+                                # id-keyed lookup). Mint the new id
+                                # at the callsite rather than letting
+                                # _build_relationship_query do it —
+                                # see that function's docstring for
+                                # why the operator (CREATE) and the
+                                # id policy must be decoupled.
+                                versioned_rel = rel.model_copy(
+                                    update={"id": str(uuid.uuid4())}
+                                )
                                 query, params = self._build_relationship_query(
-                                    rel,
+                                    versioned_rel,
                                     merge=False,
                                     properties=merged_props,
                                     transform_id=transform_id,
@@ -811,10 +828,26 @@ class Neo4jStorage(GraphStorageInterface):
         transform_id: str = None,
         merge_id: Optional[str] = None,
     ) -> Tuple[str, Dict[str, Any]]:
-        """Build a Cypher query for creating or versioning a relationship"""
+        """Build a Cypher query for creating or versioning a relationship.
+
+        ``rel.id`` is always used as the stored relationship's ``r.id``.
+        Pre-fix this method generated a fresh UUID whenever
+        ``merge=False``, conflating the Cypher operator (CREATE vs
+        MERGE) with id-generation policy. As a result, switching the
+        no-existing path from MERGE to CREATE in commit 1240ced (the
+        cross-transform fix) silently changed first-time writes from
+        'preserve caller-supplied id' to 'replace with fresh UUID' —
+        breaking caller round-tripping. Reviewer caught this on the
+        same commit.
+
+        Now: only the Cypher operator depends on ``merge``. Id
+        generation is the caller's responsibility — callers that
+        legitimately want a fresh id (Case 2, version creation) mint
+        one and pass it via ``rel.id`` on a synthesized
+        RelationshipInstance."""
         source_id = rel.source_id
         target_id = rel.target_id
-        rel_id = rel.id if merge else str(uuid.uuid4())
+        rel_id = rel.id
 
         # Validate relationship type to prevent Cypher injection
         validated_rel_type = validate_cypher_identifier(rel.type, "relationship type")
