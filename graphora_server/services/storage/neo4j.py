@@ -1,6 +1,6 @@
 """Neo4j implementation of graph storage"""
 
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Set, Tuple, Union
 import logging
 import traceback
 from contextlib import asynccontextmanager
@@ -601,6 +601,91 @@ class Neo4jStorage(GraphStorageInterface):
             warnings=warnings,
         )
 
+    async def _batched_find_existing_relationships(
+        self,
+        relationships: List[RelationshipInstance],
+        transform_id: str,
+        skip_ids: Set[str],
+    ) -> Tuple[Dict[Tuple[str, str, str], Dict], Set[str]]:
+        """Pre-fetch existing active relationships in batches by type.
+
+        Storage perf #2: pre-fix, ``store_relationships`` ran one
+        ``_find_existing_relationship`` query per relationship —
+        N round-trips just for the lookup side. This helper
+        groups relationships by type (Cypher needs the type
+        inlined into the query) and runs ONE find query per type
+        group via UNWIND. For a 50-rel transform with 5 types
+        that's 5 lookup round-trips instead of 50.
+
+        Returns ``(existing_lookup, find_failed_types)``:
+          * ``existing_lookup``: dict mapping
+            ``(rel_type, source_id, target_id)`` to the existing
+            active edge (when one was found). Pairs with no
+            existing edge are absent from the dict.
+          * ``find_failed_types``: set of rel types where the
+            batched query raised. Per-rel writes for those types
+            fall back to the slow ``_find_existing_relationship``
+            path so a transient failure on one type doesn't
+            cascade through the whole batch.
+
+        Same scope predicate as ``_find_existing_relationship``:
+        scopes by ``r.__tid = $transform_id`` AND ``r.__valid_to
+        IS NULL``. Cross-transform isolation and active-only
+        filtering preserved unchanged."""
+        rels_by_type: Dict[str, List[RelationshipInstance]] = {}
+        for rel in relationships:
+            if rel.id in skip_ids:
+                continue
+            rels_by_type.setdefault(rel.type, []).append(rel)
+
+        existing_lookup: Dict[Tuple[str, str, str], Dict] = {}
+        find_failed_types: Set[str] = set()
+
+        for rel_type, type_rels in rels_by_type.items():
+            try:
+
+                async def _find_for_type(rel_type=rel_type, type_rels=type_rels):
+                    async with self._get_session() as session:
+                        validated = validate_cypher_identifier(
+                            rel_type, "relationship type"
+                        )
+                        pairs = [
+                            {"sid": r.source_id, "tid": r.target_id} for r in type_rels
+                        ]
+                        query = f"""
+                        UNWIND $pairs AS pair
+                        MATCH (s)-[r:`{validated}`]->(t)
+                        WHERE s.id = pair.sid AND t.id = pair.tid
+                              AND r.{VALID_TO} IS NULL
+                              AND r.{TRANSFORM_ID} = $transform_id
+                        RETURN pair.sid AS sid, pair.tid AS tid, r AS existing
+                        """
+                        result = await session.run(
+                            query,
+                            pairs=pairs,
+                            transform_id=transform_id,
+                        )
+                        async for record in result:
+                            key = (
+                                rel_type,
+                                record["sid"],
+                                record["tid"],
+                            )
+                            existing_lookup[key] = record["existing"]
+
+                await self._execute_with_retry(_find_for_type)
+            except (StorageError, DatabaseError) as e:
+                logger.warning(
+                    "Batched find failed for type=%s (%s); per-rel "
+                    "writes for this type will use the slow "
+                    "_find_existing_relationship fallback.",
+                    rel_type,
+                    e,
+                )
+                find_failed_types.add(rel_type)
+
+        return existing_lookup, find_failed_types
+
     async def store_relationships(
         self,
         relationships: List[RelationshipInstance],
@@ -617,6 +702,18 @@ class Neo4jStorage(GraphStorageInterface):
         warnings = []
         stored_rels = set()
 
+        # Storage perf #2: pre-fetch existing active rels in
+        # batches (one query per type group) instead of one query
+        # per rel inside the loop. Per-rel writes still happen
+        # serially (the versioning state machine is per-rel by
+        # nature), but the lookup side collapses N→K. See
+        # _batched_find_existing_relationships docstring.
+        existing_lookup, find_failed_types = (
+            await self._batched_find_existing_relationships(
+                relationships, transform_id, stored_rels
+            )
+        )
+
         for rel in relationships:
             if rel.id in stored_rels:
                 logger.debug(f"Skipping duplicate relationship ID: {rel.id}")
@@ -627,14 +724,20 @@ class Neo4jStorage(GraphStorageInterface):
                 async def _execute_relationship():
                     async with self._get_session() as session:
                         # Check for existing relationship in this
-                        # transform's scope. Without transform_id
-                        # scoping, transforms collide on shared
-                        # logical edges — see _find_existing_relationship
-                        # docstring for the cross-transform breakage
-                        # this prevents.
-                        existing_rel = await self._find_existing_relationship(
-                            session, rel, transform_id=transform_id
-                        )
+                        # transform's scope. The batched pre-fetch
+                        # above usually populated existing_lookup;
+                        # fall back to per-rel _find_existing_relationship
+                        # only when the batched query failed for
+                        # this rel's type (find_failed_types) so
+                        # one type's transient failure doesn't
+                        # poison the others.
+                        if rel.type in find_failed_types:
+                            existing_rel = await self._find_existing_relationship(
+                                session, rel, transform_id=transform_id
+                            )
+                        else:
+                            pair_key = (rel.type, rel.source_id, rel.target_id)
+                            existing_rel = existing_lookup.get(pair_key)
 
                         if existing_rel:
                             # Case 1: Existing with no user-meaningful

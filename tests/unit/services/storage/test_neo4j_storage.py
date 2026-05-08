@@ -795,10 +795,19 @@ class TestNeo4jStorageRelationshipOperations:
             properties={"role": "principal-engineer"},
         )
 
+        # Populate the batched-lookup directly with fake_existing for
+        # this rel's pair key. Storage perf #2 added this pre-fetch
+        # layer ahead of the per-rel loop; tests mock the layer's
+        # output rather than the per-rel _find_existing_relationship
+        # because the loop only falls back to that helper when the
+        # batched query failed.
+        precomputed = {
+            (new_rel.type, new_rel.source_id, new_rel.target_id): fake_existing
+        }
         with patch.object(
             storage,
-            "_find_existing_relationship",
-            new=AsyncMock(return_value=fake_existing),
+            "_batched_find_existing_relationships",
+            new=AsyncMock(return_value=(precomputed, set())),
         ):
             await storage.store_relationships(
                 [new_rel], batch_index=0, transform_id="new-tx"
@@ -911,10 +920,16 @@ class TestNeo4jStorageRelationshipOperations:
             properties={"role": "engineer"},  # unchanged
         )
 
+        # Storage perf #2: mock the pre-fetch layer (see
+        # test_versioning_path_reads_properties_via_items_not_get
+        # for the rationale).
+        precomputed = {
+            (new_rel.type, new_rel.source_id, new_rel.target_id): fake_existing
+        }
         with patch.object(
             storage,
-            "_find_existing_relationship",
-            new=AsyncMock(return_value=fake_existing),
+            "_batched_find_existing_relationships",
+            new=AsyncMock(return_value=(precomputed, set())),
         ):
             await storage.store_relationships(
                 [new_rel], batch_index=0, transform_id="new-tx"
@@ -1029,10 +1044,16 @@ class TestNeo4jStorageRelationshipOperations:
             properties={"role": "engineer"},
         )
 
+        # Storage perf #2: mock the pre-fetch layer (see
+        # test_versioning_path_reads_properties_via_items_not_get
+        # for the rationale).
+        precomputed = {
+            (new_rel.type, new_rel.source_id, new_rel.target_id): fake_existing
+        }
         with patch.object(
             storage,
-            "_find_existing_relationship",
-            new=AsyncMock(return_value=fake_existing),
+            "_batched_find_existing_relationships",
+            new=AsyncMock(return_value=(precomputed, set())),
         ):
             await storage.store_relationships(
                 [new_rel], batch_index=0, transform_id="new-tx"
@@ -1231,11 +1252,14 @@ class TestNeo4jStorageRelationshipOperations:
             properties={"role": "engineer"},
         )
 
-        # Lookup returns None (no edge for this transform).
+        # Lookup returns empty (no edge for this transform). With the
+        # batched pre-fetch in place, "missing from existing_lookup"
+        # is the new "no existing rel" — same semantics as the old
+        # _find_existing_relationship → None.
         with patch.object(
             storage,
-            "_find_existing_relationship",
-            new=AsyncMock(return_value=None),
+            "_batched_find_existing_relationships",
+            new=AsyncMock(return_value=({}, set())),
         ):
             await storage.store_relationships(
                 [new_rel], batch_index=0, transform_id="tx-b"
@@ -1329,10 +1353,14 @@ class TestNeo4jStorageRelationshipOperations:
             properties={"role": "engineer"},
         )
 
+        # Storage perf #2: with the batched pre-fetch in place,
+        # "no existing rel" = empty existing_lookup with no failed
+        # types (see test_no_existing_path_uses_scoped_merge for
+        # the rationale).
         with patch.object(
             storage,
-            "_find_existing_relationship",
-            new=AsyncMock(return_value=None),
+            "_batched_find_existing_relationships",
+            new=AsyncMock(return_value=({}, set())),
         ):
             await storage.store_relationships(
                 [new_rel], batch_index=0, transform_id="tx-a"
@@ -1519,10 +1547,12 @@ class TestNeo4jStorageRelationshipOperations:
             properties={"role": "engineer"},
         )
 
+        # Storage perf #2: empty lookup = no existing rel for this
+        # pair (see test_no_existing_path_uses_scoped_merge).
         with patch.object(
             storage,
-            "_find_existing_relationship",
-            new=AsyncMock(return_value=None),
+            "_batched_find_existing_relationships",
+            new=AsyncMock(return_value=({}, set())),
         ):
             await storage.store_relationships(
                 [new_rel], batch_index=0, transform_id="tx-a"
@@ -1568,6 +1598,117 @@ class TestNeo4jStorageRelationshipOperations:
         # Validation should fail
         with pytest.raises(CypherInjectionError):
             validate_cypher_identifier(rel.type, "relationship type")
+
+    @pytest.mark.asyncio
+    async def test_batched_find_collapses_per_rel_lookups_to_one_query_per_type(
+        self,
+    ):
+        """Storage perf #2 regression pin.
+
+        Pre-fix: store_relationships called _find_existing_relationship
+        once per rel — for a 100-relationship batch that's 100 round-
+        trips to Neo4j just to discover which edges already exist for
+        this transform.
+
+        Post-fix: _batched_find_existing_relationships groups rels
+        by type and issues ONE UNWIND-driven find query per type
+        group. So a batch of N rels across K distinct types issues
+        K find queries instead of N.
+
+        This pin asserts the contract directly: 7 rels across 2
+        types must issue exactly 2 find queries (one per type group),
+        not 7 (per-rel) and not 1 (unsafe single label-less MATCH).
+        If a future refactor reverts to per-rel lookup or accidentally
+        flattens type groups, the assertion below catches it loud."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        executed_queries: list[str] = []
+
+        class _AsyncIterResult:
+            def __init__(self):
+                self._iter = iter([])
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._iter)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        async def fake_run(query, *args, **kwargs):
+            executed_queries.append(query)
+            return _AsyncIterResult()
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        # 7 rels across 2 types (WORKS_AT x 3, KNOWS x 4).
+        rels = [
+            RelationshipInstance(
+                id=f"rel-w-{i}",
+                type="WORKS_AT",
+                source_id=f"p{i}",
+                target_id="acme",
+                source_type="Person",
+                target_type="Company",
+            )
+            for i in range(3)
+        ] + [
+            RelationshipInstance(
+                id=f"rel-k-{i}",
+                type="KNOWS",
+                source_id=f"p{i}",
+                target_id=f"q{i}",
+                source_type="Person",
+                target_type="Person",
+            )
+            for i in range(4)
+        ]
+
+        existing_lookup, find_failed_types = (
+            await storage._batched_find_existing_relationships(
+                rels, transform_id="tx-perf", skip_ids=set()
+            )
+        )
+
+        # Pre-fix: 7 round-trips. Post-fix: 2 (one per type group).
+        find_queries = [
+            q for q in executed_queries if "UNWIND $pairs" in q and "MATCH" in q
+        ]
+        assert len(find_queries) == 2, (
+            f"Expected 2 find queries (one per rel-type group), got "
+            f"{len(find_queries)}. Storage perf #2 batched the per-rel "
+            f"lookup; if this pin fires you've either reverted to "
+            f"per-rel find or merged types into a single label-less "
+            f"MATCH (which would scan every active rel in the graph). "
+            f"Queries: {find_queries!r}"
+        )
+        # No actual existing rows in the mock → empty lookup, no
+        # type-level failures.
+        assert existing_lookup == {}
+        assert find_failed_types == set()
 
 
 # ============================================================
