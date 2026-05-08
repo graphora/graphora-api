@@ -1165,23 +1165,28 @@ class TestNeo4jStorageRelationshipOperations:
         assert "transform_id" not in captured_params[0]
 
     @pytest.mark.asyncio
-    async def test_no_existing_path_uses_create_not_merge(self):
-        """Reviewer-flagged on commit 14a939a: scoping the lookup
-        is necessary but not sufficient. Even when the scoped
-        lookup correctly returns 'no existing edge for this
-        transform', the write path then issues
-        ``MERGE (s)-[r:T]->(t)`` which is unscoped — that MERGE
-        re-matches a DIFFERENT transform's active edge for the
-        same (s, t, type) and ``SET r = $properties`` overwrites
-        its __tid with ours. End result: cross-transform corruption
-        on the create path, mirroring what the versioning path had
-        before c347f9c.
+    async def test_no_existing_path_uses_scoped_merge(self):
+        """The Case 3 (no-existing) write contract evolved across
+        the storage chain:
 
-        Pin: when the scoped lookup returns nothing (no existing for
-        this transform), the issued query uses CREATE rather than
-        MERGE. CREATE always makes a new edge without matching any
-        existing one — preserving other transforms' edges
-        untouched. Symmetric to the versioning fix on Case 2."""
+          Pre-1240ced: ``MERGE (s)-[r:T]->(t)`` — unscoped, matched
+            across transforms, caused cross-transform corruption.
+          1240ced:    ``CREATE (s)-[r:T]->(t)`` — scope-safe but
+            not atomic; concurrent first-time writes both produced
+            duplicate active edges (the reviewer's #3 race).
+          Now (this commit): ``MERGE (s)-[r:T {id: $rel_id, __tid:
+            $transform_id}]->(t)`` — predicate-bearing MERGE.
+            Atomic at the Neo4j layer (lock acquisition on the
+            edge pattern serializes concurrent writes; only one
+            CREATE actually fires) AND scope-aware (the __tid
+            predicate prevents cross-transform matches).
+
+        Pin the new shape:
+          1. Operator is MERGE, not CREATE.
+          2. Pattern includes the ``id`` and ``__tid`` predicates.
+          3. transform_id is bound in the params.
+        Without all three, either concurrency safety or cross-
+        transform isolation regresses."""
         from contextlib import asynccontextmanager
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1236,24 +1241,26 @@ class TestNeo4jStorageRelationshipOperations:
                 [new_rel], batch_index=0, transform_id="tx-b"
             )
 
-        # The write query for the new edge must be a CREATE, not a
-        # MERGE. A MERGE here would silently match a sibling
-        # transform's active edge for the same (s, t, type) and
-        # overwrite it.
+        # The write query for the new edge must be a MERGE with
+        # predicates. A plain unscoped MERGE matches across
+        # transforms; a plain CREATE isn't atomic. Predicate-
+        # bearing MERGE is both.
         write_queries = [q for q in executed if "WORKS_AT" in q and "$properties" in q]
         assert write_queries, "No write query reached the session"
         write_query = write_queries[0]
-        assert "CREATE (s)" in write_query, (
-            f"Create-path uses MERGE instead of CREATE: {write_query!r}. "
-            f"That MERGE will re-match a different transform's edge "
-            f"for the same (s, t, type) and SET r = \\$properties "
-            f"will overwrite its __tid — cross-transform corruption. "
-            f"Switch the Case 3 _build_relationship_query call to "
-            f"merge=False."
+        assert "MERGE (s)" in write_query, (
+            f"Create-path stopped using MERGE: {write_query!r}. "
+            f"Plain CREATE allows concurrent first-time writes to "
+            f"both produce duplicate active edges; switch back to "
+            f"merge=True so the predicate-bearing MERGE serializes "
+            f"them at the Neo4j layer."
         )
-        assert "MERGE (s)" not in write_query, (
-            "Create-path query still contains MERGE (s); switch to "
-            "CREATE so it doesn't match across transforms."
+        assert "id: $rel_id" in write_query and "__tid: $transform_id" in write_query, (
+            f"MERGE pattern is missing the id+__tid predicate: "
+            f"{write_query!r}. Without those predicates, the MERGE "
+            f"matches across transforms — same regression as before "
+            f"1240ced. The predicate is what makes the MERGE BOTH "
+            f"atomic AND cross-transform-isolated."
         )
 
     @pytest.mark.asyncio
@@ -1435,6 +1442,112 @@ class TestNeo4jStorageRelationshipOperations:
         query = captured_query[0]
         assert "r.__tid" not in query
         assert "transform_id" not in captured_params[0]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_first_time_writes_serialize_via_merge_predicate(self):
+        """Storage perf #3 (concurrency hardening): two concurrent
+        first-time writes for the same logical edge in the same
+        transform must converge to ONE edge, not two duplicates.
+
+        The pre-1240ced MERGE was unscoped (cross-transform
+        corruption). The 1240ced CREATE was scope-safe but not
+        atomic — two concurrent writers would both find None and
+        both CREATE, producing duplicate active edges with the
+        same (id, __tid). The fix is MERGE-with-predicate:
+        ``MERGE (s)-[r:T {id: $rel_id, __tid: $transform_id}]->(t)``
+        serializes concurrent writers at the Neo4j layer (lock
+        acquisition on the predicate-bearing pattern) AND
+        preserves cross-transform isolation.
+
+        Pin the binding contract: when the scoped lookup returns
+        None and Case 3 fires, the params dict carries BOTH
+        rel_id AND transform_id — the two values the predicate
+        depends on. Without transform_id in the params, MERGE
+        falls back to property-less matching and reintroduces
+        the cross-transform corruption from before 1240ced.
+
+        End-to-end concurrency safety has to be exercised
+        against a real Neo4j (Cypher-level lock acquisition is
+        not stubbable). The integration test
+        test_concurrent_first_time_writes_produce_single_edge
+        in tests/integration/neo4j/ pins that side once Docker
+        is up; this unit test pins the query+param shape that
+        unlocks the database-side guarantee."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        captured_params: list = []
+
+        async def fake_run(query, *args, **kwargs):
+            # store_relationships uses session.run(query, params)
+            # — params is the second positional arg.
+            captured_params.append((args, kwargs))
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        new_rel = RelationshipInstance(
+            id="rel-id-determ",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={"role": "engineer"},
+        )
+
+        with patch.object(
+            storage,
+            "_find_existing_relationship",
+            new=AsyncMock(return_value=None),
+        ):
+            await storage.store_relationships(
+                [new_rel], batch_index=0, transform_id="tx-a"
+            )
+
+        # Find the write call's params dict and verify both
+        # rel_id and transform_id are bound.
+        write_param_dicts = []
+        for args, kwargs in captured_params:
+            if args and isinstance(args[-1], dict):
+                d = args[-1]
+                if d.get("rel_id") == new_rel.id:
+                    write_param_dicts.append(d)
+            if "transform_id" in kwargs and "rel_id" in kwargs:
+                if kwargs["rel_id"] == new_rel.id:
+                    write_param_dicts.append(kwargs)
+
+        assert write_param_dicts, "No write call carried rel_id"
+        write_params = write_param_dicts[0]
+        assert write_params.get("transform_id") == "tx-a", (
+            f"transform_id wasn't bound to the MERGE call's params "
+            f"(got: {dict(write_params)}). The MERGE pattern's "
+            f"__tid predicate references $transform_id; if it isn't "
+            f"in the params dict, the predicate fails to bind."
+        )
 
     @pytest.mark.asyncio
     async def test_store_relationships_should_validate_relationship_type(self):

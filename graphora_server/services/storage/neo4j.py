@@ -774,31 +774,33 @@ class Neo4jStorage(GraphStorageInterface):
                                 stored_rels.add(rel.id)  # No change needed
                         else:
                             # Case 3: No existing relationship for THIS
-                            # transform.
+                            # transform. Use the predicate-bearing
+                            # MERGE shape (merge=True) — atomic at the
+                            # Neo4j layer AND scope-aware via the
+                            # ``__tid`` predicate.
                             #
-                            # CREATE (not MERGE) because a plain
-                            # ``MERGE (s)-[r:T]->(t)`` matches across
-                            # transforms — it ignores __tid, so a
-                            # MERGE on the same logical (s, t, type)
-                            # would re-match a different transform's
-                            # active edge and ``SET r = $properties``
-                            # would overwrite that edge's __tid with
-                            # ours. End result: the OTHER transform's
-                            # read sees no edge for the pair; this
-                            # transform's read sees the same edge
-                            # under our __tid. Cross-transform
-                            # corruption.
-                            #
-                            # The scoped lookup above guarantees no
-                            # active edge exists for THIS transform;
-                            # CREATE makes a new one without touching
-                            # other transforms' edges. Reviewer
-                            # caught this on commit 14a939a — the
-                            # lookup got scoped but the write path
-                            # was still unscoped. Same MERGE-vs-
-                            # CREATE pattern as the versioning case
-                            # above; this is the symmetric fix on
-                            # the create path.
+                            # The earlier CREATE fix (commit 1240ced)
+                            # was for the OLD unscoped MERGE shape
+                            # ``MERGE (s)-[r:T]->(t)`` which matched
+                            # across transforms. The NEW MERGE shape
+                            # includes ``{id: $rel_id, __tid:
+                            # $transform_id}`` in the pattern, so:
+                            #   * cross-transform: the predicate's
+                            #     __tid value differs, no match,
+                            #     each transform gets its own edge
+                            #     (preserves the 14a939a contract).
+                            #   * concurrent first-time writes within
+                            #     a transform: Neo4j locks the edge
+                            #     pattern; only one creates, the
+                            #     other matches and SET-updates the
+                            #     same edge. No duplicates.
+                            # The CREATE-only fix from 1240ced solved
+                            # cross-transform but left the concurrency
+                            # race exposed: two writers both find
+                            # None and both CREATE → two duplicate
+                            # active edges. Reviewer flagged the
+                            # concurrency case on the perf-fix arc.
+                            # MERGE-with-predicate fixes both.
                             logger.debug(
                                 f"No existing relationship found for {rel.id}, creating new"
                             )
@@ -811,7 +813,7 @@ class Neo4jStorage(GraphStorageInterface):
                             }
                             query, params = self._build_relationship_query(
                                 rel,
-                                merge=False,
+                                merge=True,
                                 properties=props_with_metadata,
                                 transform_id=transform_id,
                                 merge_id=merge_id,
@@ -981,21 +983,42 @@ class Neo4jStorage(GraphStorageInterface):
     ) -> Tuple[str, Dict[str, Any]]:
         """Build a Cypher query for creating or versioning a relationship.
 
-        ``rel.id`` is always used as the stored relationship's ``r.id``.
-        Pre-fix this method generated a fresh UUID whenever
-        ``merge=False``, conflating the Cypher operator (CREATE vs
-        MERGE) with id-generation policy. As a result, switching the
-        no-existing path from MERGE to CREATE in commit 1240ced (the
-        cross-transform fix) silently changed first-time writes from
-        'preserve caller-supplied id' to 'replace with fresh UUID' —
-        breaking caller round-tripping. Reviewer caught this on the
-        same commit.
+        Two operators with different concurrency semantics:
 
-        Now: only the Cypher operator depends on ``merge``. Id
-        generation is the caller's responsibility — callers that
-        legitimately want a fresh id (Case 2, version creation) mint
-        one and pass it via ``rel.id`` on a synthesized
-        RelationshipInstance."""
+        ``merge=True`` (Case 3, first-time write) — emits a MERGE
+        with a property-bearing pattern that includes both ``id``
+        and ``__tid``::
+
+            MERGE (s)-[r:T {id: $rel_id, __tid: $transform_id}]->(t)
+            SET r = $properties, r.id = $rel_id
+
+        Atomic at the Neo4j layer: even under concurrent first-time
+        writes for the same logical edge in the same transform, the
+        MERGE's lock acquisition serializes them and only one CREATE
+        actually fires. The pattern's ``__tid`` predicate also
+        preserves cross-transform isolation — two transforms storing
+        the same (source, target, type, id) get distinct edges
+        because their patterns differ on ``__tid``.
+
+        Pre-fix (commit 1240ced) Case 3 used CREATE because the
+        OLD MERGE pattern was unscoped — ``MERGE (s)-[r:T]->(t)``
+        with no predicate matched across transforms. The new
+        predicate-bearing MERGE is BOTH atomic AND scope-aware,
+        addressing the concurrency race the reviewer flagged on
+        the storage perf series. The CREATE path is reserved for
+        Case 2 (versioning) where we explicitly want a distinct
+        new edge alongside the closed one.
+
+        ``merge=False`` (Case 2, version creation) — plain CREATE.
+        Each call makes a new edge regardless. Callers that want a
+        fresh id mint one explicitly via ``rel.model_copy(update=
+        {"id": uuid4()})`` before passing — id generation is not
+        this function's job.
+
+        ``rel.id`` is always used as the stored relationship's
+        ``r.id``. Pre-fix this method generated a fresh UUID when
+        ``merge=False``, conflating the Cypher operator with id-
+        generation policy. The two are now decoupled."""
         source_id = rel.source_id
         target_id = rel.target_id
         rel_id = rel.id
@@ -1027,20 +1050,44 @@ class Neo4jStorage(GraphStorageInterface):
         if merge_id:
             sanitized_properties[MERGE_ID] = merge_id
 
-        query = f"""
-        MATCH (s), (t)
-        WHERE s.id = $source_id AND t.id = $target_id
-        {"MERGE" if merge else "CREATE"} (s)-[r:`{validated_rel_type}`]->(t)
-        SET r = $properties, r.id = $rel_id
-        RETURN r
-        """
+        if merge:
+            if not transform_id:
+                raise ValueError(
+                    "_build_relationship_query: merge=True requires "
+                    "transform_id (it's part of the uniqueness "
+                    "predicate that makes concurrent first-time "
+                    "writes atomic and cross-transform-isolated)."
+                )
+            query = f"""
+            MATCH (s), (t)
+            WHERE s.id = $source_id AND t.id = $target_id
+            MERGE (s)-[r:`{validated_rel_type}` {{id: $rel_id, {TRANSFORM_ID}: $transform_id}}]->(t)
+            SET r = $properties, r.id = $rel_id
+            RETURN r
+            """
+            params = {
+                "source_id": source_id,
+                "target_id": target_id,
+                "rel_id": rel_id,
+                "transform_id": transform_id,
+                "properties": sanitized_properties,
+            }
+        else:
+            query = f"""
+            MATCH (s), (t)
+            WHERE s.id = $source_id AND t.id = $target_id
+            CREATE (s)-[r:`{validated_rel_type}`]->(t)
+            SET r = $properties, r.id = $rel_id
+            RETURN r
+            """
+            params = {
+                "source_id": source_id,
+                "target_id": target_id,
+                "rel_id": rel_id,
+                "properties": sanitized_properties,
+            }
 
-        return query, {
-            "source_id": source_id,
-            "target_id": target_id,
-            "rel_id": rel_id,
-            "properties": sanitized_properties,
-        }
+        return query, params
 
     async def get_storage_status(
         self, transform_id: str

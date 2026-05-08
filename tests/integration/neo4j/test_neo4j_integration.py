@@ -422,6 +422,109 @@ async def test_versioning_one_transform_does_not_close_sibling_transform(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_first_time_writes_produce_single_edge(
+    neo4j_storage,
+):
+    """Storage perf #3: two concurrent first-time writes for the
+    same logical edge in the same transform must converge to ONE
+    active edge, not two duplicates.
+
+    The pre-fix CREATE path (commit 1240ced) was scope-safe but
+    not atomic — two writers both finding None from
+    _find_existing_relationship would both call CREATE and both
+    succeed. End: two active edges with the same (s, t, type, id,
+    __tid). The new MERGE-with-predicate path serializes them at
+    the Neo4j layer.
+
+    Real concurrency surfaces only against a real database — the
+    Cypher MERGE's lock acquisition isn't observable through
+    mocks. asyncio.gather runs two store_relationships calls in
+    parallel; once one's MERGE acquires the edge-pattern lock,
+    the other waits. When it resumes, it matches the now-existing
+    edge and SET-updates it (no-op for identical content). End:
+    one edge, not two."""
+    import asyncio
+
+    transform_id = "concurrent-write-tx"
+    alice = BaseNode(id="alice-conc", type="Person", properties={"name": "Alice"})
+    acme = BaseNode(id="acme-conc", type="Company", properties={"name": "Acme"})
+    await neo4j_storage.store_nodes(
+        [alice, acme], batch_index=0, transform_id=transform_id
+    )
+
+    # Both writers carry the SAME rel.id — simulating the
+    # deterministic-id case where transform/helpers.py builds
+    # rel.id from (source, target, type) and two parallel batches
+    # both reach the same logical edge.
+    shared_rel_id = "concurrent-rel-id"
+    rel_a = RelationshipInstance(
+        id=shared_rel_id,
+        type="WORKS_AT",
+        source_id=alice.id,
+        target_id=acme.id,
+        source_type="Person",
+        target_type="Company",
+        properties={"role": "engineer"},
+    )
+    rel_b = RelationshipInstance(
+        id=shared_rel_id,
+        type="WORKS_AT",
+        source_id=alice.id,
+        target_id=acme.id,
+        source_type="Person",
+        target_type="Company",
+        properties={"role": "engineer"},
+    )
+
+    # Fire both store_relationships calls in parallel. Without
+    # MERGE atomicity these would both call CREATE and the
+    # database would end up with two active edges. With the
+    # predicate-bearing MERGE, Neo4j serializes them — one
+    # creates, the other matches.
+    results = await asyncio.gather(
+        neo4j_storage.store_relationships(
+            [rel_a], batch_index=0, transform_id=transform_id
+        ),
+        neo4j_storage.store_relationships(
+            [rel_b], batch_index=1, transform_id=transform_id
+        ),
+        return_exceptions=True,
+    )
+    for r in results:
+        if isinstance(r, Exception):
+            raise r
+        assert r.success is True
+
+    # Raw DB assertion: exactly ONE active edge for the shared
+    # logical edge under this transform. Pre-fix this returns 2
+    # (both writers' CREATEs succeeded).
+    async with neo4j_storage._get_session() as session:
+        result = await session.run(
+            "MATCH ()-[r:WORKS_AT]->() "
+            "WHERE r.__tid = $tid AND r.__valid_to IS NULL "
+            "RETURN count(r) AS n, r.id AS rid",
+            tid=transform_id,
+        )
+        records = []
+        async for record in result:
+            records.append((record["n"], record["rid"]))
+
+    assert len(records) == 1, (
+        f"Expected exactly one (count, id) row from the active-edge "
+        f"query; got {records}. The grouping suggests duplicate edges "
+        f"with different ids — concurrency safety regressed."
+    )
+    count, rid = records[0]
+    assert count == 1, (
+        f"Two concurrent first-time writes produced {count} active "
+        f"edges instead of converging to 1. The MERGE-with-predicate "
+        f"atomicity guarantee broke — likely the predicate is missing "
+        f"or the operator regressed to CREATE."
+    )
+    assert rid == shared_rel_id
+
+
+@pytest.mark.asyncio
 async def test_node_provenance_round_trip(neo4j_storage):
     """A1-prov / B0-prov-extend fields write + read back without
     losing source-span / decision-trail metadata. Same contract
