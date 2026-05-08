@@ -629,7 +629,32 @@ class Neo4jStorage(GraphStorageInterface):
                                 )
                                 stored_rels.add(rel.id)  # No change needed
                         else:
-                            # Case 3: No existing relationship
+                            # Case 3: No existing relationship for THIS
+                            # transform.
+                            #
+                            # CREATE (not MERGE) because a plain
+                            # ``MERGE (s)-[r:T]->(t)`` matches across
+                            # transforms — it ignores __tid, so a
+                            # MERGE on the same logical (s, t, type)
+                            # would re-match a different transform's
+                            # active edge and ``SET r = $properties``
+                            # would overwrite that edge's __tid with
+                            # ours. End result: the OTHER transform's
+                            # read sees no edge for the pair; this
+                            # transform's read sees the same edge
+                            # under our __tid. Cross-transform
+                            # corruption.
+                            #
+                            # The scoped lookup above guarantees no
+                            # active edge exists for THIS transform;
+                            # CREATE makes a new one without touching
+                            # other transforms' edges. Reviewer
+                            # caught this on commit 14a939a — the
+                            # lookup got scoped but the write path
+                            # was still unscoped. Same MERGE-vs-
+                            # CREATE pattern as the versioning case
+                            # above; this is the symmetric fix on
+                            # the create path.
                             logger.debug(
                                 f"No existing relationship found for {rel.id}, creating new"
                             )
@@ -642,7 +667,7 @@ class Neo4jStorage(GraphStorageInterface):
                             }
                             query, params = self._build_relationship_query(
                                 rel,
-                                merge=True,
+                                merge=False,
                                 properties=props_with_metadata,
                                 transform_id=transform_id,
                                 merge_id=merge_id,

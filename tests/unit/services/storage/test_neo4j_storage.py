@@ -1021,6 +1021,98 @@ class TestNeo4jStorageRelationshipOperations:
         assert "transform_id" not in captured_params[0]
 
     @pytest.mark.asyncio
+    async def test_no_existing_path_uses_create_not_merge(self):
+        """Reviewer-flagged on commit 14a939a: scoping the lookup
+        is necessary but not sufficient. Even when the scoped
+        lookup correctly returns 'no existing edge for this
+        transform', the write path then issues
+        ``MERGE (s)-[r:T]->(t)`` which is unscoped — that MERGE
+        re-matches a DIFFERENT transform's active edge for the
+        same (s, t, type) and ``SET r = $properties`` overwrites
+        its __tid with ours. End result: cross-transform corruption
+        on the create path, mirroring what the versioning path had
+        before c347f9c.
+
+        Pin: when the scoped lookup returns nothing (no existing for
+        this transform), the issued query uses CREATE rather than
+        MERGE. CREATE always makes a new edge without matching any
+        existing one — preserving other transforms' edges
+        untouched. Symmetric to the versioning fix on Case 2."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        executed: list[str] = []
+
+        async def fake_run(query, *args, **kwargs):
+            executed.append(query)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        new_rel = RelationshipInstance(
+            id="new-rel-id",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={"role": "engineer"},
+        )
+
+        # Lookup returns None (no edge for this transform).
+        with patch.object(
+            storage,
+            "_find_existing_relationship",
+            new=AsyncMock(return_value=None),
+        ):
+            await storage.store_relationships(
+                [new_rel], batch_index=0, transform_id="tx-b"
+            )
+
+        # The write query for the new edge must be a CREATE, not a
+        # MERGE. A MERGE here would silently match a sibling
+        # transform's active edge for the same (s, t, type) and
+        # overwrite it.
+        write_queries = [q for q in executed if "WORKS_AT" in q and "$properties" in q]
+        assert write_queries, "No write query reached the session"
+        write_query = write_queries[0]
+        assert "CREATE (s)" in write_query, (
+            f"Create-path uses MERGE instead of CREATE: {write_query!r}. "
+            f"That MERGE will re-match a different transform's edge "
+            f"for the same (s, t, type) and SET r = \\$properties "
+            f"will overwrite its __tid — cross-transform corruption. "
+            f"Switch the Case 3 _build_relationship_query call to "
+            f"merge=False."
+        )
+        assert "MERGE (s)" not in write_query, (
+            "Create-path query still contains MERGE (s); switch to "
+            "CREATE so it doesn't match across transforms."
+        )
+
+    @pytest.mark.asyncio
     async def test_store_relationships_should_validate_relationship_type(self):
         """Relationship type should be validated for Cypher injection."""
         from graphora_server.services.storage.neo4j import (
