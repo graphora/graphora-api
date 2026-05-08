@@ -542,19 +542,34 @@ class Neo4jStorage(GraphStorageInterface):
                                 for k, v in existing_rel.items()
                                 if k not in SYSTEM_PROPERTIES
                             }
-                            if not existing_props:
-                                logger.debug(
-                                    f"Existing relationship {rel.id} has no meaningful properties, skipping"
-                                )
-                                stored_rels.add(rel.id)
-                                return  # Skip adding new relationship
-
-                            # Case 2: Existing with differing properties
                             new_props = {
                                 k: v
                                 for k, v in rel.properties.items()
                                 if k not in SYSTEM_PROPERTIES
                             }
+
+                            # Skip-on-empty branch only fires when
+                            # BOTH sides have no user-meaningful
+                            # properties. Pre-fix, we skipped on
+                            # ``not existing_props`` alone — which
+                            # silently dropped incoming user
+                            # properties when an existing empty rel
+                            # was being upgraded with real data
+                            # (existing rel had {id, __tid, ...} only,
+                            # new rel had {"role": "engineer"} ⇒
+                            # existing_props={} after SYSTEM_PROPERTIES
+                            # filtering ⇒ early-return ⇒ "role" lost).
+                            # Reviewer caught this on commit 3e7c3cd.
+                            if not existing_props and not new_props:
+                                logger.debug(
+                                    f"Existing relationship {rel.id} has no "
+                                    "meaningful properties on either side, "
+                                    "skipping"
+                                )
+                                stored_rels.add(rel.id)
+                                return  # Skip adding new relationship
+
+                            # Case 2: Existing with differing properties
                             if existing_props != new_props:
                                 # Version the existing relationship
                                 logger.debug(

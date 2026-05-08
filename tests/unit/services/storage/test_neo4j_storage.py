@@ -790,6 +790,131 @@ class TestNeo4jStorageRelationshipOperations:
         )
 
     @pytest.mark.asyncio
+    async def test_empty_existing_with_new_props_versions_not_drops(self):
+        """Reviewer-flagged on commit 3e7c3cd: with the
+        SYSTEM_PROPERTIES filter, an existing edge that was first
+        stored without user properties has existing_props={}. The
+        pre-fix early-return on ``not existing_props`` then
+        unconditionally skipped the write, silently DROPPING the
+        incoming user properties on the floor.
+
+        Real-world hit: an edge gets created during a transform
+        before the LLM emits properties for it (e.g., a chunked
+        write that adds metadata first, then properties on a
+        later replay). The replay's user data should land on
+        v2; pre-fix it just disappeared.
+
+        Fix: compute new_props above the early-return and only
+        skip when BOTH sides are empty. This test pins the
+        contract: empty existing + non-empty new ⇒ versioning
+        fires (close existing, create new with the user props).
+        Cross-pinned with the symmetric test
+        test_unchanged_properties_does_not_trigger_versioning so
+        the early-return only kills truly-noop writes."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        class _FakeNeo4jRelationship:
+            def __init__(self, properties):
+                self._props = dict(properties)
+
+            def items(self):
+                return self._props.items()
+
+            def __getitem__(self, key):
+                return self._props[key]
+
+            def get(self, key, default=None):
+                return self._props.get(key, default)
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        executed: list[str] = []
+
+        async def fake_run(query, *args, **kwargs):
+            executed.append(query)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        # Existing rel has ONLY system properties — id, transform-id,
+        # validity, provenance metadata. Zero user-meaningful keys.
+        # SYSTEM_PROPERTIES filtering reduces existing_props to {}.
+        fake_existing = _FakeNeo4jRelationship(
+            {
+                "id": "existing-rel-id",
+                "__tid": "old-tx",
+                "__valid_from": "2026-01-01T00:00:00",
+                "__valid_to": None,
+                "extractor_model": "gemini-1.5-pro",
+            }
+        )
+
+        # New rel brings real user data the existing rel doesn't have.
+        # Pre-fix, this got silently dropped because existing_props={}
+        # triggered the early-return before new_props was even
+        # computed.
+        new_rel = RelationshipInstance(
+            id="new-rel-id",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={"role": "engineer"},
+        )
+
+        with patch.object(
+            storage,
+            "_find_existing_relationship",
+            new=AsyncMock(return_value=fake_existing),
+        ):
+            await storage.store_relationships(
+                [new_rel], batch_index=0, transform_id="new-tx"
+            )
+
+        # Versioning fired iff a SET __valid_to query reached the
+        # session. Pre-fix this is empty (skip path); post-fix the
+        # close happens and the new edge with {role: engineer} gets
+        # created.
+        close_queries = [q for q in executed if "__valid_to" in q and "SET" in q]
+        assert close_queries, (
+            "Versioning didn't fire on empty-existing + non-empty-new — "
+            "the incoming user property was silently dropped. The "
+            "early-return must require BOTH existing_props AND new_props "
+            "to be empty before skipping."
+        )
+        # And the new edge's CREATE query carries the role property,
+        # so the user data didn't get lost in the wash.
+        create_queries = [q for q in executed if "CREATE" in q and "$properties" in q]
+        assert create_queries, (
+            "No CREATE for the new version landed — the close happened "
+            "but the new edge wasn't built. Check that "
+            "_build_relationship_query was invoked with the new props."
+        )
+
+    @pytest.mark.asyncio
     async def test_store_relationships_should_validate_relationship_type(self):
         """Relationship type should be validated for Cypher injection."""
         from graphora_server.services.storage.neo4j import (
