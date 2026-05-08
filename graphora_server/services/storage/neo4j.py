@@ -505,7 +505,8 @@ class Neo4jStorage(GraphStorageInterface):
                         )
 
                         if existing_rel:
-                            # Case 1: Existing with no properties beyond valid_from/valid_to/transform_id/merge_id
+                            # Case 1: Existing with no user-meaningful
+                            # properties beyond system metadata.
                             #
                             # ``existing_rel`` is a neo4j-driver
                             # Relationship object, NOT a dict. Properties
@@ -518,15 +519,28 @@ class Neo4jStorage(GraphStorageInterface):
                             # returned {} for existing_props, so the
                             # 'no meaningful properties' early-return
                             # below ALWAYS fired and the versioning
-                            # path was unreachable. Reviewer caught
-                            # this on commit c347f9c (the integration
-                            # test that would surface it can't run
-                            # without Docker).
+                            # path was unreachable (reviewer caught
+                            # this on commit c347f9c).
+                            #
+                            # Filter via SYSTEM_PROPERTIES — the
+                            # canonical 'metadata, not entity signal'
+                            # list — rather than the narrow
+                            # {VALID_FROM, VALID_TO, TRANSFORM_ID,
+                            # MERGE_ID} subset. The narrow filter let
+                            # ``id`` (always stamped onto stored rels)
+                            # and provenance fields (extractor_model,
+                            # validator_score, source_chunk_id, ...)
+                            # leak into the comparison. Since
+                            # rel.properties on the new edge typically
+                            # has none of those, existing_props !=
+                            # new_props was True even on unchanged
+                            # re-stores → versioning fired on every
+                            # replay/retry → unbounded version churn.
+                            # Reviewer caught this on commit f476aa3.
                             existing_props = {
                                 k: v
                                 for k, v in existing_rel.items()
-                                if k
-                                not in {VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID}
+                                if k not in SYSTEM_PROPERTIES
                             }
                             if not existing_props:
                                 logger.debug(
@@ -539,8 +553,7 @@ class Neo4jStorage(GraphStorageInterface):
                             new_props = {
                                 k: v
                                 for k, v in rel.properties.items()
-                                if k
-                                not in {VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID}
+                                if k not in SYSTEM_PROPERTIES
                             }
                             if existing_props != new_props:
                                 # Version the existing relationship

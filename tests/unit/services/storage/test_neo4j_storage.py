@@ -673,6 +673,123 @@ class TestNeo4jStorageRelationshipOperations:
         )
 
     @pytest.mark.asyncio
+    async def test_unchanged_properties_does_not_trigger_versioning(self):
+        """Reviewer-flagged on commit f476aa3: with the .items() fix,
+        existing_props now includes the stored r.id property (because
+        _build_relationship_query always SETs r.id = $rel_id). The
+        new rel's .properties dict typically doesn't have ``id`` (it
+        lives on .id attribute). So the comparison saw
+        ``{"id": ..., "role": "engineer"}`` vs ``{"role":
+        "engineer"}`` and triggered versioning on every retry/replay
+        even when no user-meaningful property changed. Unbounded
+        version churn on idempotent writes.
+
+        Fix: filter both sides via SYSTEM_PROPERTIES (the canonical
+        'metadata, not user signal' list — includes id, all
+        provenance fields, transform_id, merge_id, etc.) rather than
+        the narrow {VALID_FROM, VALID_TO, TRANSFORM_ID, MERGE_ID}
+        subset. This test pins the contract: if the same role lands
+        on an existing 'role: engineer' edge, the versioning path is
+        NOT taken — _close_existing_relationship is never called and
+        no SET __valid_to query reaches the session."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        class _FakeNeo4jRelationship:
+            def __init__(self, properties):
+                self._props = dict(properties)
+
+            def items(self):
+                return self._props.items()
+
+            def __getitem__(self, key):
+                return self._props[key]
+
+            def get(self, key, default=None):
+                return self._props.get(key, default)
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        executed: list[str] = []
+
+        async def fake_run(query, *args, **kwargs):
+            executed.append(query)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        # Existing rel has the stored id + provenance metadata + the
+        # ONLY meaningful user property is role=engineer. New rel has
+        # the same role. Without SYSTEM_PROPERTIES filtering, id /
+        # extractor_model / etc. would leak into existing_props and
+        # diverge from new_props (which lacks them).
+        fake_existing = _FakeNeo4jRelationship(
+            {
+                "id": "existing-rel-id",
+                "role": "engineer",
+                "__tid": "old-tx",
+                "__valid_from": "2026-01-01T00:00:00",
+                "__valid_to": None,
+                "extractor_model": "gemini-1.5-pro",
+                "validator_score": 0.92,
+                "source_chunk_id": "chunk-7",
+            }
+        )
+
+        new_rel = RelationshipInstance(
+            id="new-rel-id",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={"role": "engineer"},  # unchanged
+        )
+
+        with patch.object(
+            storage,
+            "_find_existing_relationship",
+            new=AsyncMock(return_value=fake_existing),
+        ):
+            await storage.store_relationships(
+                [new_rel], batch_index=0, transform_id="new-tx"
+            )
+
+        # No SET __valid_to query → versioning didn't fire → contract
+        # holds. Pre-fix the narrow system-key filter let id leak
+        # into existing_props, the comparison saw a phantom 'change',
+        # and a SET __valid_to query DID land in executed.
+        close_queries = [q for q in executed if "__valid_to" in q and "SET" in q]
+        assert not close_queries, (
+            f"Versioning fired on an unchanged-properties re-store. "
+            f"existing_props probably includes id / provenance fields "
+            f"that aren't in new_rel.properties — filter both sides "
+            f"via SYSTEM_PROPERTIES, not the narrow VALID_*/TRANSFORM_ID "
+            f"set. Captured queries: {close_queries}"
+        )
+
+    @pytest.mark.asyncio
     async def test_store_relationships_should_validate_relationship_type(self):
         """Relationship type should be validated for Cypher injection."""
         from graphora_server.services.storage.neo4j import (
