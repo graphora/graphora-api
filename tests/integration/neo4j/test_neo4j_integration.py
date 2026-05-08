@@ -177,6 +177,109 @@ async def test_get_transformation_data_scopes_to_single_transform(
 
 
 @pytest.mark.asyncio
+async def test_cross_transform_isolation_with_shared_logical_edge(
+    neo4j_storage,
+):
+    """Reviewer-flagged on commit 6329d68: two transforms storing
+    the SAME logical edge (same source, target, type) under
+    DIFFERENT transform_ids must each get their own active edge —
+    not collide via the _find_existing_relationship lookup.
+
+    Pre-fix the lookup ignored transform_id, so transform B's
+    write would find A's existing edge:
+      * Same props → B no-ops, never writes its own edge →
+        get_transformation_data(tx_b) returns 0 edges.
+      * Different props → B closes A's edge → A's transform read
+        sees no active edge.
+
+    Both break the transform-scoped read contract. Pin: each
+    transform's get_transformation_data sees its own active
+    edge, even when the logical (s, t, type) is shared.
+
+    The earlier test_get_transformation_data_scopes_to_single_transform
+    used different node IDs across transforms, so it can't surface
+    this — pre-fix this test would have passed even without the
+    lookup-scoping fix. This new test reuses the same node IDs
+    intentionally to force the collision."""
+    tx_a = "shared-edge-tx-a"
+    tx_b = "shared-edge-tx-b"
+
+    # Plant the SAME nodes under both transforms (Neo4j MERGE on
+    # node id will return the existing node, but each transform's
+    # store_nodes still stamps __tid = its own transform_id; the
+    # node sits under whichever transform stored it last for read
+    # purposes, but the relationship side is what we're testing
+    # here so this asymmetry doesn't affect the assertion).
+    alice = BaseNode(id="alice-shared", type="Person", properties={"name": "Alice"})
+    acme = BaseNode(id="acme-shared", type="Company", properties={"name": "Acme"})
+
+    await neo4j_storage.store_nodes([alice, acme], batch_index=0, transform_id=tx_a)
+    await neo4j_storage.store_nodes([alice, acme], batch_index=0, transform_id=tx_b)
+
+    # Transform A's edge between alice and acme.
+    rel_a = RelationshipInstance(
+        type="WORKS_AT",
+        source_id=alice.id,
+        target_id=acme.id,
+        source_type="Person",
+        target_type="Company",
+        properties={"role": "engineer"},
+    )
+    await neo4j_storage.store_relationships([rel_a], batch_index=0, transform_id=tx_a)
+
+    # Transform B's edge between the SAME nodes — could be same
+    # or different props; this test covers same to demonstrate the
+    # silent-no-op failure mode pre-fix.
+    rel_b = RelationshipInstance(
+        type="WORKS_AT",
+        source_id=alice.id,
+        target_id=acme.id,
+        source_type="Person",
+        target_type="Company",
+        properties={"role": "engineer"},
+    )
+    await neo4j_storage.store_relationships([rel_b], batch_index=0, transform_id=tx_b)
+
+    # Each transform must see its own active edge.
+    a_data = await neo4j_storage.get_transformation_data(tx_a)
+    b_data = await neo4j_storage.get_transformation_data(tx_b)
+
+    assert a_data.total_edges == 1, (
+        f"Transform A's read should have 1 active edge, got "
+        f"{a_data.total_edges}. Likely B's write closed A's edge "
+        f"(versioning fired across transforms)."
+    )
+    assert b_data.total_edges == 1, (
+        f"Transform B's read should have 1 active edge, got "
+        f"{b_data.total_edges}. Likely B no-op'd because it found "
+        f"A's edge as 'existing' — _find_existing_relationship "
+        f"isn't scoped by transform_id."
+    )
+
+    # Raw DB assertion: TWO active edges exist for the same logical
+    # (s, t, type) — one per transform. Pre-fix at most one would
+    # exist (B reused or replaced A's).
+    async with neo4j_storage._get_session() as session:
+        active_result = await session.run(
+            "MATCH (s {id: $sid})-[r:WORKS_AT]->(t {id: $tid}) "
+            "WHERE r.__valid_to IS NULL "
+            "RETURN r.__tid AS tid",
+            sid=alice.id,
+            tid=acme.id,
+        )
+        records = []
+        async for record in active_result:
+            records.append(record)
+        active_tids = sorted(r["tid"] for r in records)
+
+    assert active_tids == [tx_a, tx_b], (
+        f"Expected one active edge per transform_id; got {active_tids}. "
+        f"Cross-transform collision: _find_existing_relationship is "
+        f"matching across transforms instead of scoping to its own."
+    )
+
+
+@pytest.mark.asyncio
 async def test_node_provenance_round_trip(neo4j_storage):
     """A1-prov / B0-prov-extend fields write + read back without
     losing source-span / decision-trail metadata. Same contract

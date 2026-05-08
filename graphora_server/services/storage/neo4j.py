@@ -499,9 +499,14 @@ class Neo4jStorage(GraphStorageInterface):
 
                 async def _execute_relationship():
                     async with self._get_session() as session:
-                        # Check for existing relationship
+                        # Check for existing relationship in this
+                        # transform's scope. Without transform_id
+                        # scoping, transforms collide on shared
+                        # logical edges — see _find_existing_relationship
+                        # docstring for the cross-transform breakage
+                        # this prevents.
                         existing_rel = await self._find_existing_relationship(
-                            session, rel
+                            session, rel, transform_id=transform_id
                         )
 
                         if existing_rel:
@@ -708,20 +713,55 @@ class Neo4jStorage(GraphStorageInterface):
         )
 
     async def _find_existing_relationship(
-        self, session, rel: RelationshipInstance
+        self,
+        session,
+        rel: RelationshipInstance,
+        transform_id: Optional[str] = None,
     ) -> Optional[Dict]:
-        """Check for an existing relationship in Neo4j"""
+        """Check for an existing relationship in Neo4j.
+
+        Scoping (reviewer-flagged on commit 6329d68): pre-fix the
+        lookup matched on (source, target, type, __valid_to IS NULL)
+        only — no transform_id filter. Once the versioning path
+        actually fired (post c347f9c/f476aa3/3e7c3cd), this caused
+        cross-transform collisions:
+
+          * Transform A stores rel alice-[WORKS_AT]->acme with
+            transform_id=tx_a.
+          * Transform B stores the SAME logical edge with
+            transform_id=tx_b.
+          * Pre-fix lookup returns A's edge as "existing" because
+            it matches s/t/type. If props are identical, B no-ops
+            and never writes its own edge → get_transformation_data(
+            tx_b) returns 0 edges. If props differ, B closes A's
+            edge → A's transform read now sees no active edge for
+            this pair.
+
+        Both outcomes break the transform-scoped read contract in
+        get_transformation_data which filters by r.__tid. Each
+        transform must keep its own edges independent.
+
+        ``transform_id=None`` keeps the legacy unscoped behaviour for
+        any callers that haven't been migrated. The store_relationships
+        callsite passes the value explicitly."""
         # Validate relationship type to prevent Cypher injection
         validated_rel_type = validate_cypher_identifier(rel.type, "relationship type")
 
+        scope_clause = f"AND r.{TRANSFORM_ID} = $transform_id" if transform_id else ""
         query = f"""
         MATCH (s)-[r:`{validated_rel_type}`]->(t)
-        WHERE s.id = $source_id AND t.id = $target_id AND r.{VALID_TO} IS NULL
+        WHERE s.id = $source_id AND t.id = $target_id
+              AND r.{VALID_TO} IS NULL
+              {scope_clause}
         RETURN r
         """
-        result = await session.run(
-            query, source_id=rel.source_id, target_id=rel.target_id
-        )
+        params: Dict[str, Any] = {
+            "source_id": rel.source_id,
+            "target_id": rel.target_id,
+        }
+        if transform_id:
+            params["transform_id"] = transform_id
+        result = await session.run(query, **params)
         record = await result.single()
         return record["r"] if record else None
 

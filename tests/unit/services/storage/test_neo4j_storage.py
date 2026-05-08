@@ -915,6 +915,112 @@ class TestNeo4jStorageRelationshipOperations:
         )
 
     @pytest.mark.asyncio
+    async def test_find_existing_relationship_scopes_by_transform_id(self):
+        """Reviewer-flagged on commit 6329d68: the lookup needs to
+        filter by transform_id, otherwise transform B's writes find
+        transform A's active edge for the same logical (s, t, type)
+        and either silently no-op (props unchanged) or close A's edge
+        (props differ). Both outcomes break the transform-scoped read
+        contract that get_transformation_data depends on.
+
+        Pin the query shape: when transform_id is passed, the WHERE
+        clause includes ``r.__tid = $transform_id``. The store_
+        relationships caller threads this value through every call.
+        Pre-fix the function only filtered on s/t/type/__valid_to
+        IS NULL — cross-transform collisions waiting to happen the
+        moment versioning actually worked."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+
+        captured_query: list[str] = []
+        captured_params: list[dict] = []
+
+        async def fake_run(query, **kwargs):
+            captured_query.append(query)
+            captured_params.append(kwargs)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        rel = RelationshipInstance(
+            id="rel-id",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={"role": "engineer"},
+        )
+        await storage._find_existing_relationship(session, rel, transform_id="tx-a")
+
+        assert captured_query, "_find_existing_relationship made no query"
+        query = captured_query[0]
+        assert "r.__tid = $transform_id" in query, (
+            "Lookup query is missing the transform_id filter — cross-"
+            "transform collision is possible. The same logical edge "
+            "stored under transform B will find transform A's edge "
+            "as 'existing' and either no-op (props unchanged) or "
+            "version A's edge (props differ), breaking the "
+            "transform-scoped read."
+        )
+        assert (
+            captured_params[0].get("transform_id") == "tx-a"
+        ), "transform_id parameter wasn't bound to the query."
+
+    @pytest.mark.asyncio
+    async def test_find_existing_relationship_legacy_no_transform_id(self):
+        """When called without transform_id (the pre-fix signature
+        for any callers that haven't been migrated), the WHERE clause
+        omits the __tid filter and the params dict doesn't carry it.
+        Pin so a future refactor doesn't accidentally make
+        transform_id mandatory and break those callers."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+
+        captured_query: list[str] = []
+        captured_params: list[dict] = []
+
+        async def fake_run(query, **kwargs):
+            captured_query.append(query)
+            captured_params.append(kwargs)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        rel = RelationshipInstance(
+            id="rel-id",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={},
+        )
+        await storage._find_existing_relationship(session, rel)
+
+        query = captured_query[0]
+        assert "r.__tid" not in query
+        assert "transform_id" not in captured_params[0]
+
+    @pytest.mark.asyncio
     async def test_store_relationships_should_validate_relationship_type(self):
         """Relationship type should be validated for Cypher injection."""
         from graphora_server.services.storage.neo4j import (
