@@ -276,3 +276,102 @@ relationships: {}
                         user_id="test-user",
                         transform_id="transform_abc123",
                     )
+
+    @pytest.mark.asyncio
+    async def test_create_ontology_emits_schema_inferred_decision(self, monkeypatch):
+        """B0-log slice 3a: a successful auto-schema ontology
+        creation emits one ``schema_inferred`` Decision so the
+        Decision Log surface (Evidence tab, MCP get_evidence) can
+        render "schema was auto-inferred from N chunks". Pin the
+        contract directly: target_kind=SCHEMA, target_id=None,
+        evidence carries the ontology_id + entity/relationship
+        counts.
+
+        Force memory mode by clearing DATABASE_URL so we can read
+        appended rows directly from the mocked DecisionLogService's
+        memory store rather than mocking psycopg."""
+        from graphora_server.config import settings
+        from graphora_server.services.decision_log_service import (
+            DecisionLogService,
+            DecisionType,
+            TargetKind,
+        )
+
+        monkeypatch.setattr(settings, "DATABASE_URL", "")
+        monkeypatch.setattr(settings, "POSTGRES_HOST", None)
+
+        # Patch DecisionLogService.__init__ side path: capture the
+        # one instance the production code constructs so we can read
+        # its memory_store. Patching the class itself with a hook
+        # that records instances is the cleanest way without leaking
+        # global state from the service.
+        captured_logs: list = []
+
+        class _CapturingLog(DecisionLogService):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                captured_logs.append(self)
+
+        mock_response = MagicMock()
+        mock_response.text = """version: "0.1.0"
+entities:
+  Person:
+    properties:
+      name:
+        type: str
+  Company:
+    properties:
+      name:
+        type: str
+relationships:
+  WORKS_AT:
+    source: Person
+    target: Company
+"""
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+
+        with (
+            patch(
+                "graphora_server.services.schema_inference.get_llm_client_for_user",
+                new_callable=AsyncMock,
+                return_value=(mock_client, "model-name", "gemini"),
+            ),
+            patch(
+                "graphora_server.services.schema_inference.ontology_storage_service.store_ontology",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "graphora_server.services.schema_inference.DecisionLogService",
+                new=_CapturingLog,
+            ),
+        ):
+            ontology_id = await create_auto_schema_ontology(
+                text_chunks=["Alice works at Acme.", "Bob works at Acme too."],
+                user_id="user-1",
+                transform_id="tx-auto-schema-1",
+            )
+
+        # One DecisionLogService constructed; one decision appended.
+        assert len(captured_logs) == 1
+        decisions = await captured_logs[0].for_transform("tx-auto-schema-1")
+        assert len(decisions) == 1, (
+            "Expected exactly 1 schema_inferred decision per "
+            "create_auto_schema_ontology call. Got: "
+            f"{[d.decision_type.value for d in decisions]}"
+        )
+
+        decision = decisions[0]
+        assert decision.target_kind == TargetKind.SCHEMA
+        assert decision.target_id is None
+        assert decision.decision_type == DecisionType.SCHEMA_INFERRED
+
+        # Evidence carries the inferred-schema metrics.
+        ev = decision.evidence
+        assert ev["ontology_id"] == ontology_id
+        assert ev["text_chunk_count"] == 2
+        # Two entity types in the inferred YAML, one relationship.
+        assert ev["entities_count"] == 2
+        assert ev["relationships_count"] == 1
+        assert ev["version"] == "0.1.0"

@@ -17,6 +17,12 @@ from graphora_server.utils.llm_helper import (
     get_llm_client_for_user,
 )
 from graphora_server.services.ontology_storage_service import ontology_storage_service
+from graphora_server.services.decision_log_service import (
+    Decision,
+    DecisionLogService,
+    DecisionType,
+    TargetKind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +206,45 @@ async def create_auto_schema_ontology(
 
     logger.info(
         f"Created auto-schema ontology {ontology_id} for transform {transform_id}"
+    )
+
+    # B0-log slice 3a: emit a schema_inferred Decision so the
+    # Decision Log surface (Evidence tab, MCP get_evidence) can
+    # render "schema was auto-inferred from N chunks producing K
+    # entity types and L relationship types". Schema-level
+    # decision: target_id=None, target_kind=SCHEMA — the for_target
+    # query won't return it (no node/edge to anchor on) but the
+    # for_transform query will.
+    #
+    # Per-call DecisionLogService follows the tasks.py pattern from
+    # slice 3b: short-lived, garbage-collected after the append.
+    # Constructed unconditionally — dual-backend (Postgres when
+    # DATABASE_URL is set, in-memory otherwise) means dev mode
+    # runs with zero config. Append failures are logged-and-
+    # swallowed by design so observability can't take down
+    # extraction.
+    entities_count = len(ontology_dict.get("entities", {}))
+    relationships_count = len(ontology_dict.get("relationships", {}))
+    decision_log = DecisionLogService()
+    await decision_log.append(
+        Decision(
+            transform_id=transform_id,
+            target_id=None,
+            target_kind=TargetKind.SCHEMA,
+            decision_type=DecisionType.SCHEMA_INFERRED,
+            reason=(
+                f"No ontology supplied — auto-inferred {entities_count} "
+                f"entity type(s) and {relationships_count} relationship "
+                f"type(s) from {len(text_chunks)} text chunk(s)"
+            ),
+            evidence={
+                "ontology_id": ontology_id,
+                "text_chunk_count": len(text_chunks),
+                "entities_count": entities_count,
+                "relationships_count": relationships_count,
+                "version": ontology_dict.get("version"),
+            },
+        )
     )
 
     return ontology_id
