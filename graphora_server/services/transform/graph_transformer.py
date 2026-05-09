@@ -17,6 +17,12 @@ from graphora_server.services.transform.helpers import (
 from graphora_server.services.llm.client import LLMClient
 from graphora_server.services.transform.models import BaseNode, RelationshipInstance
 from graphora_server.services.entity_ledger_service import entity_ledger_service
+from graphora_server.services.decision_log_service import (
+    Decision,
+    DecisionLogService,
+    DecisionType,
+    TargetKind,
+)
 from graphora_server.services.extraction.prompt_versions import (
     get_prompt_version as _resolve_prompt_version,
 )
@@ -385,6 +391,7 @@ async def build_graph_from_chunks(
     max_passes: int = 2,
     chunk_metadatas: Optional[List[Any]] = None,
     extractor_model: Optional[str] = None,
+    decision_log: Optional[DecisionLogService] = None,
 ) -> DocumentKnowledgeGraph:
     """Build knowledge graph from text chunks.
 
@@ -421,6 +428,7 @@ async def build_graph_from_chunks(
             max_passes,
             chunk_metadatas=chunk_metadatas,
             extractor_model=extractor_model,
+            decision_log=decision_log,
         )
 
     # Default single-pass extraction
@@ -437,6 +445,7 @@ async def build_graph_from_chunks(
         extractor_model=extractor_model,
         node_baml_function="ExtractNodesFromChunk",
         rel_baml_function="ExtractRelationshipsFromChunk",
+        decision_log=decision_log,
     )
 
 
@@ -449,6 +458,7 @@ async def build_graph_from_pdfs(
     document_usage_id: Optional[str] = None,
     chunk_metadatas: Optional[List[Any]] = None,
     extractor_model: Optional[str] = None,
+    decision_log: Optional[DecisionLogService] = None,
 ) -> DocumentKnowledgeGraph:
     """Build a graph by sending each PDF split file to Gemini's
     multimodal API. Caller may pass per-split ``chunk_metadatas``;
@@ -473,6 +483,7 @@ async def build_graph_from_pdfs(
         extractor_model=extractor_model,
         node_baml_function="ExtractNodesFromPdf",
         rel_baml_function="ExtractRelationshipsFromPdf",
+        decision_log=decision_log,
     )
 
 
@@ -490,6 +501,7 @@ async def _build_graph_from(
     extractor_model: Optional[str] = None,
     node_baml_function: Optional[str] = None,
     rel_baml_function: Optional[str] = None,
+    decision_log: Optional[DecisionLogService] = None,
 ) -> DocumentKnowledgeGraph:
     nodes_only_ontology = ontology_parser.build_entities_only_model()
     nodes: List[BaseNode] = []
@@ -1154,12 +1166,69 @@ async def _splink_candidate_groups(
     return [grp for grp in by_rep.values() if len(grp) >= 2]
 
 
+async def _emit_entity_merged_decision(
+    decision_log: Optional[DecisionLogService],
+    transform_id: Optional[str],
+    base_node: BaseNode,
+    merged_away: List[BaseNode],
+    stage: str,
+    candidate_group_size: int,
+) -> None:
+    """B0-log slice 2: emit one entity_merged decision per merge
+    event so the Decision Log surface (Evidence tab,
+    MCP get_evidence) can render which signal drove the merge.
+
+    No-ops when:
+      * decision_log is None (default — preserves the pre-slice-2
+        behaviour for callers that don't construct a service).
+      * transform_id is None (the log is keyed by transform; without
+        it, the row is unfindable).
+      * merged_away is empty (singleton groups don't represent a
+        merge event — the resolver returned the same node it got).
+
+    ``stage`` is the blocker that surfaced the candidate group
+    (``property_blocker``, ``embedding_blocker``, ``splink_blocker``);
+    ``candidate_group_size`` is the count fed to the LLM resolver.
+    Both end up in ``evidence`` so the rendering layer can show "this
+    merge was caught by Splink after property and embedding stages
+    missed it" — useful for ER tuning."""
+    if not decision_log or not transform_id or not merged_away:
+        return
+    await decision_log.append(
+        Decision(
+            transform_id=transform_id,
+            target_id=base_node.id,
+            target_kind=TargetKind.NODE,
+            decision_type=DecisionType.ENTITY_MERGED,
+            reason=(
+                f"Merged {len(merged_away)} node(s) into {base_node.id} " f"via {stage}"
+            ),
+            evidence={
+                "stage": stage,
+                "candidate_group_size": candidate_group_size,
+                "merge_group_size": len(merged_away) + 1,
+                "node_type": base_node.type,
+            },
+            alternatives=[
+                {
+                    "id": n.id,
+                    "type": n.type,
+                    "canonical_key": n.canonical_key,
+                    "confidence_score": n.confidence_score,
+                }
+                for n in merged_away
+            ],
+        )
+    )
+
+
 async def _compare_and_merge_nodes(
     nodes: List[BaseNode],
     user_id: Optional[str] = None,
     transform_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
     parsed_ontology: Optional[Dict[str, Any]] = None,
+    decision_log: Optional[DecisionLogService] = None,
 ) -> List[BaseNode]:
     """Compare all nodes and resolve them using LLM, with a
     layered blocking stack that bounds the LLM input size.
@@ -1233,6 +1302,14 @@ async def _compare_and_merge_nodes(
             final_nodes.append(base_node)
             for n in group:
                 nodes_in_groups.add(n.id)
+            await _emit_entity_merged_decision(
+                decision_log,
+                transform_id,
+                base_node,
+                sorted_nodes[1:],
+                stage="property_blocker",
+                candidate_group_size=len(candidate_group),
+            )
 
     # Step 3.5 — B2-er slice 2 embedding-based blocking on the
     # nodes the property blocker missed. Catches semantic variants
@@ -1265,6 +1342,14 @@ async def _compare_and_merge_nodes(
             final_nodes.append(base_node)
             for n in group:
                 nodes_in_groups.add(n.id)
+            await _emit_entity_merged_decision(
+                decision_log,
+                transform_id,
+                base_node,
+                sorted_nodes[1:],
+                stage="embedding_blocker",
+                candidate_group_size=len(candidate_group),
+            )
 
     # Step 3.75 — B2-er slice 3 Splink probabilistic blocking on
     # the nodes both prior blockers missed. Splink's m/u-probability
@@ -1303,6 +1388,14 @@ async def _compare_and_merge_nodes(
             final_nodes.append(base_node)
             for n in group:
                 nodes_in_groups.add(n.id)
+            await _emit_entity_merged_decision(
+                decision_log,
+                transform_id,
+                base_node,
+                sorted_nodes[1:],
+                stage="splink_blocker",
+                candidate_group_size=len(candidate_group),
+            )
 
     # Step 4 — pass-through for nodes that didn't appear in any
     # candidate group (genuine singletons: missed by property,
@@ -1375,6 +1468,7 @@ async def _build_graph_with_multi_pass(
     max_passes: int = 2,
     chunk_metadatas: Optional[List[Any]] = None,
     extractor_model: Optional[str] = None,
+    decision_log: Optional[DecisionLogService] = None,
 ) -> DocumentKnowledgeGraph:
     """Build knowledge graph using multi-pass extraction with validation.
 
@@ -1447,6 +1541,7 @@ async def _build_graph_with_multi_pass(
         transform_id=transform_id,
         document_usage_id=document_usage_id,
         parsed_ontology=ontology_parser.parsed_ontology,
+        decision_log=decision_log,
     )
     nodes, relationships = await deduplicate_entities_with_splink(
         entities=nodes,

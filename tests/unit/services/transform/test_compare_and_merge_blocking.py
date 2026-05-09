@@ -289,6 +289,214 @@ class TestCompareAndMergeNodesIntegration:
         assert result[0].id in {"p1", "p2"}
 
 
+class TestCompareAndMergeNodesEmitsDecisions:
+    """B0-log slice 2: the entity-merge site emits one
+    ``entity_merged`` decision per merge event so the Decision Log
+    surface (Evidence tab, MCP get_evidence) can render which signal
+    drove the merge.
+
+    Tests cover three properties:
+      1. Default (no decision_log argument) preserves pre-slice-2
+         behaviour — no decisions emitted, no errors.
+      2. When a memory-mode service is supplied and a merge happens
+         in the property-blocker stage, exactly one decision lands
+         with the right shape.
+      3. Singleton resolutions DO NOT emit decisions — there's no
+         merge event to log when a "group of 1" goes through.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _force_memory_mode(self, monkeypatch):
+        """conftest.py defaults DATABASE_URL to a localhost Postgres
+        for tests that need it; this class needs the memory backend
+        of DecisionLogService so we can read appended rows directly
+        from ``memory_log``. Disabling DATABASE_URL flips
+        ``_enabled`` False at service init."""
+        from graphora_server.config import settings
+
+        monkeypatch.setattr(settings, "DATABASE_URL", "")
+        monkeypatch.setattr(settings, "POSTGRES_HOST", None)
+
+    @pytest.mark.asyncio
+    async def test_no_decision_log_means_no_emission(self) -> None:
+        """Pre-slice-2 callers don't construct a DecisionLogService.
+        The hook must no-op cleanly so existing call paths see zero
+        behaviour change. We can't assert "no append happened" without
+        a mock; the proof is "the merge still works AND no exception
+        was raised", which is what the existing
+        test_resolved_groups_merge_by_highest_confidence already
+        covers — this test pins the contract explicitly."""
+        n1 = BaseNode(
+            id="p1",
+            type="Person",
+            properties={"name": "Alice"},
+            confidence_score=0.5,
+        )
+        n2 = BaseNode(
+            id="p2",
+            type="Person",
+            properties={"name": "Alice"},
+            confidence_score=0.9,
+        )
+
+        async def fake_resolve(entity_type, group, **kwargs):
+            return [list(group)]
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.resolve_entity_group",
+            new=AsyncMock(side_effect=fake_resolve),
+        ):
+            # decision_log argument deliberately omitted — that's
+            # the legacy-caller path.
+            result = await _compare_and_merge_nodes([n1, n2], transform_id="tx-no-log")
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_property_blocker_merge_emits_entity_merged_decision(
+        self,
+    ) -> None:
+        """Two same-name nodes share a name3 block → property blocker
+        groups them → resolver merges them → exactly one
+        entity_merged decision lands with target_id=base_node.id,
+        evidence.stage='property_blocker', and alternatives carrying
+        the merged-away node's id+canonical_key."""
+        from graphora_server.services.decision_log_service import (
+            DecisionLogService,
+            DecisionType,
+            TargetKind,
+        )
+
+        n1 = BaseNode(
+            id="p1",
+            type="Person",
+            properties={"name": "Alice"},
+            canonical_key="alice-1",
+            confidence_score=0.5,
+        )
+        n2 = BaseNode(
+            id="p2",
+            type="Person",
+            properties={"name": "Alice"},
+            canonical_key="alice-2",
+            confidence_score=0.9,
+        )
+
+        async def fake_resolve(entity_type, group, **kwargs):
+            return [list(group)]  # One group containing both
+
+        memory_log: list = []
+        decision_log = DecisionLogService(memory_store=memory_log)
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.resolve_entity_group",
+            new=AsyncMock(side_effect=fake_resolve),
+        ):
+            result = await _compare_and_merge_nodes(
+                [n1, n2],
+                transform_id="tx-merge",
+                decision_log=decision_log,
+            )
+
+        assert len(result) == 1
+        # Higher-confidence node is the base.
+        base = result[0]
+        assert base.id == "p2"
+
+        # Exactly one decision; correct target + shape.
+        assert len(memory_log) == 1
+        decision = memory_log[0]
+        assert decision.transform_id == "tx-merge"
+        assert decision.target_id == "p2"
+        assert decision.target_kind == TargetKind.NODE
+        assert decision.decision_type == DecisionType.ENTITY_MERGED
+
+        # evidence.stage names the blocker so the Evidence tab can
+        # render "merged via property blocker" vs "via embedding".
+        assert decision.evidence["stage"] == "property_blocker"
+        assert decision.evidence["merge_group_size"] == 2
+        assert decision.evidence["node_type"] == "Person"
+
+        # alternatives lists the merged-away node(s).
+        assert len(decision.alternatives) == 1
+        alt = decision.alternatives[0]
+        assert alt["id"] == "p1"
+        assert alt["canonical_key"] == "alice-1"
+
+    @pytest.mark.asyncio
+    async def test_singleton_resolution_emits_no_decision(self) -> None:
+        """When the resolver returns each input as its own group
+        (no merge), no decision must be emitted — only actual merge
+        events warrant a row. Without this pin, a future helper
+        change ('emit on every resolved group') would silently fill
+        the Decision Log with no-op entries."""
+        from graphora_server.services.decision_log_service import (
+            DecisionLogService,
+        )
+
+        # Two same-name nodes share a name3 block so the resolver
+        # gets called, but it splits them back out.
+        n1 = BaseNode(id="p1", type="Person", properties={"name": "Alice"})
+        n2 = BaseNode(id="p2", type="Person", properties={"name": "Alic"})
+
+        async def fake_resolve(entity_type, group, **kwargs):
+            return [[n] for n in group]  # Each its own group → no merge
+
+        memory_log: list = []
+        decision_log = DecisionLogService(memory_store=memory_log)
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.resolve_entity_group",
+            new=AsyncMock(side_effect=fake_resolve),
+        ):
+            await _compare_and_merge_nodes(
+                [n1, n2],
+                transform_id="tx-no-merge",
+                decision_log=decision_log,
+            )
+
+        assert memory_log == []
+
+    @pytest.mark.asyncio
+    async def test_no_transform_id_means_no_emission(self) -> None:
+        """The Decision Log is keyed by transform; without
+        transform_id a row would be unfindable. Helper short-circuits
+        rather than appending an orphaned row."""
+        from graphora_server.services.decision_log_service import (
+            DecisionLogService,
+        )
+
+        n1 = BaseNode(
+            id="p1",
+            type="Person",
+            properties={"name": "Alice"},
+            confidence_score=0.5,
+        )
+        n2 = BaseNode(
+            id="p2",
+            type="Person",
+            properties={"name": "Alice"},
+            confidence_score=0.9,
+        )
+
+        async def fake_resolve(entity_type, group, **kwargs):
+            return [list(group)]
+
+        memory_log: list = []
+        decision_log = DecisionLogService(memory_store=memory_log)
+
+        with patch(
+            "graphora_server.services.transform.graph_transformer.resolve_entity_group",
+            new=AsyncMock(side_effect=fake_resolve),
+        ):
+            # transform_id omitted (None).
+            await _compare_and_merge_nodes(
+                [n1, n2],
+                decision_log=decision_log,
+            )
+
+        assert memory_log == []
+
+
 class TestNodeToEmbeddingText:
     """Pin the node-to-text serialization used to feed the
     embedding service. Same recipe as
