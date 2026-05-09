@@ -177,6 +177,25 @@ async def _tool_impl_get_evidence(
     }
 
 
+async def _tool_impl_get_cost_report(
+    api: GraphoraClient,
+    transform_id: str,
+) -> Dict[str, Any]:
+    """B5-obs: agent-facing per-transform cost surface.
+
+    Pure HTTP-client passthrough — same architectural shape as
+    get_evidence's decisions read (commit eb22a79). The API
+    endpoint owns the DB read; MCP forwards the payload.
+
+    Empty/zero state returns the shape the endpoint always emits,
+    not a different "not found" structure — callers can render
+    "0 calls / no cost recorded" without conditional access.
+    Transport errors propagate so the agent sees the real failure
+    (this isn't an observability-of-observability path; cost is
+    the headline answer the agent asked for)."""
+    return await api.get_cost_report(transform_id)
+
+
 # ---- FastMCP wiring --------------------------------------------------------
 
 
@@ -325,6 +344,34 @@ def build_server(client: Optional[GraphoraClient] = None):
         """
         return await _tool_impl_get_evidence(api, transform_id, node_id)
 
+    @mcp.tool()
+    async def get_cost_report(transform_id: str) -> Dict[str, Any]:
+        """Per-transform LLM cost / token report.
+
+        Aggregates every LLM call the pipeline made for this
+        transform: total invocations, input/output/total tokens,
+        estimated cost in USD, distinct provider:model pairs, and
+        a per-operation-type breakdown so the agent can answer
+        "how much did this extraction cost, and where did the
+        budget go?"
+
+        Args:
+            transform_id: The extraction whose cost to report.
+
+        Returns a dict with:
+            transform_id (str): Echo of the input.
+            total_calls (int): Count of LLM invocations.
+            input_tokens / output_tokens / total_tokens (int): Sums.
+            estimated_cost_usd (str | None): Sum of estimated costs
+                in USD (string for Decimal precision). None when no
+                row had pricing — distinguishes "cost is zero" from
+                "cost is unknown".
+            models_used (list[str]): Distinct ``"<provider>:<model>"``.
+            by_operation_type (dict[str, dict]): Per-op breakdown,
+                same shape as the top-level totals.
+        """
+        return await _tool_impl_get_cost_report(api, transform_id)
+
     return mcp
 
 
@@ -391,5 +438,6 @@ __all__ = [
     "_tool_impl_extract_document",
     "_tool_impl_query_graph",
     "_tool_impl_get_evidence",
+    "_tool_impl_get_cost_report",
     "_tool_impl_refine_ontology",
 ]

@@ -253,6 +253,21 @@ class GraphoraClient:
         )
         return _ok(resp)
 
+    async def get_cost_report(self, transform_id: str) -> Dict[str, Any]:
+        """B5-obs: per-transform cost / token aggregation.
+
+        Returns the same payload shape as the
+        ``/api/v1/graph/{transform_id}/cost`` endpoint:
+        ``{transform_id, total_calls, input_tokens, output_tokens,
+        total_tokens, estimated_cost_usd, models_used,
+        by_operation_type}``. ``estimated_cost_usd`` is a string
+        (Decimal-precise) or None when no priced row was found.
+        """
+        resp = await self._client.get(
+            f"{_API_V1}/graph/{transform_id}/cost",
+        )
+        return _ok(resp)
+
 
 def _ok(resp: httpx.Response) -> Dict[str, Any]:
     if resp.status_code >= 400:

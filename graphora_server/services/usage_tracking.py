@@ -706,6 +706,125 @@ class UsageTrackingService:
             logger.error(f"Error generating usage report for {user_id}: {str(e)}")
             raise
 
+    async def get_transform_cost_report(
+        self,
+        transform_id: str,
+        user_id: str,
+    ) -> Dict[str, Any]:
+        """B5-obs: per-extraction cost/token aggregation.
+
+        Aggregates ``llm_usage`` rows for a single ``transform_id``
+        into the shape an agent or operator wants when answering
+        "how much did this extraction cost?". Mirrors the
+        per-transform aggregation already done in dashboard.py for
+        the dashboard cards, but as an addressable service method
+        + REST endpoint so MCP / external callers can consume it
+        without scraping the dashboard.
+
+        Tenant-scoped via ``user_id`` — same pattern as the
+        Decision Log /decisions endpoint (commit 65fceac). Rows
+        are filtered server-side so a request for another user's
+        transform_id returns the zero-row aggregate, not their
+        cost data.
+
+        Returns a dict ready for JSON transport:
+          * ``transform_id``: echo of the input
+          * ``total_calls``: count of llm_usage rows
+          * ``input_tokens``/``output_tokens``/``total_tokens``: sums
+          * ``estimated_cost_usd``: sum of estimated_cost_usd, or
+            None when no row had pricing (Decimal → str for JSON)
+          * ``models_used``: sorted list of distinct
+            ``"<provider>:<model>"`` keys
+          * ``by_operation_type``: per-op-type breakdown so callers
+            can see "schema inference cost X, extraction cost Y".
+            Each value: ``{calls, input_tokens, output_tokens,
+            total_tokens, estimated_cost_usd}``.
+        """
+        try:
+            rows = await db.fetch(
+                """
+                SELECT model_provider, model_name, operation_type,
+                       input_tokens, output_tokens, total_tokens,
+                       estimated_cost_usd
+                FROM llm_usage
+                WHERE transform_id = %s AND user_id = %s
+                """,
+                transform_id,
+                user_id,
+            )
+            rows = rows or []
+
+            total_calls = len(rows)
+            input_tokens = 0
+            output_tokens = 0
+            total_tokens = 0
+            estimated_cost = Decimal("0")
+            any_priced = False
+            model_set: set = set()
+            by_op: Dict[str, Dict[str, Any]] = {}
+
+            for r in rows:
+                input_tokens += int(r.get("input_tokens", 0) or 0)
+                output_tokens += int(r.get("output_tokens", 0) or 0)
+                total_tokens += int(r.get("total_tokens", 0) or 0)
+                cost = r.get("estimated_cost_usd")
+                if cost is not None:
+                    estimated_cost += Decimal(str(cost))
+                    any_priced = True
+                provider = r.get("model_provider")
+                model = r.get("model_name")
+                if provider and model:
+                    model_set.add(f"{provider}:{model}")
+
+                op = r.get("operation_type") or "unknown"
+                bucket = by_op.setdefault(
+                    op,
+                    {
+                        "calls": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                        "estimated_cost_usd": Decimal("0"),
+                        "_any_priced": False,
+                    },
+                )
+                bucket["calls"] += 1
+                bucket["input_tokens"] += int(r.get("input_tokens", 0) or 0)
+                bucket["output_tokens"] += int(r.get("output_tokens", 0) or 0)
+                bucket["total_tokens"] += int(r.get("total_tokens", 0) or 0)
+                if cost is not None:
+                    bucket["estimated_cost_usd"] += Decimal(str(cost))
+                    bucket["_any_priced"] = True
+
+            # Decimal → str for JSON. None when no row had pricing
+            # (the model wasn't in the pricing table) — distinguishes
+            # "cost is zero" from "cost is unknown".
+            for bucket in by_op.values():
+                bucket["estimated_cost_usd"] = (
+                    str(bucket["estimated_cost_usd"])
+                    if bucket.pop("_any_priced")
+                    else None
+                )
+
+            return {
+                "transform_id": transform_id,
+                "total_calls": total_calls,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+                "estimated_cost_usd": (str(estimated_cost) if any_priced else None),
+                "models_used": sorted(model_set),
+                "by_operation_type": by_op,
+            }
+        except Exception as e:
+            logger.error(
+                "Error generating cost report for transform %s, user %s: %s",
+                transform_id,
+                user_id,
+                str(e),
+            )
+            raise
+
     async def get_all_model_providers(self) -> List[ModelProviderSchema]:
         """Get all active model providers"""
         try:

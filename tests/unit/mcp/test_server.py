@@ -15,6 +15,7 @@ import pytest
 
 from graphora_server.mcp.server import (
     _tool_impl_extract_document,
+    _tool_impl_get_cost_report,
     _tool_impl_get_evidence,
     _tool_impl_query_graph,
     _tool_impl_refine_ontology,
@@ -36,6 +37,8 @@ class FakeAPIClient:
         graph_return: Optional[Dict[str, Any]] = None,
         decisions_return: Optional[Dict[str, Any]] = None,
         decisions_error: Optional[Exception] = None,
+        cost_report_return: Optional[Dict[str, Any]] = None,
+        cost_report_error: Optional[Exception] = None,
     ):
         self.upload_file_return = upload_file_return or {
             "transform_id": "tx_file",
@@ -58,6 +61,17 @@ class FakeAPIClient:
             "alternatives": [],
         }
         self.decisions_error = decisions_error
+        self.cost_report_return = cost_report_return or {
+            "transform_id": "tx_default",
+            "total_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost_usd": None,
+            "models_used": [],
+            "by_operation_type": {},
+        }
+        self.cost_report_error = cost_report_error
         self.calls: List[tuple] = []
 
     async def upload_file(
@@ -136,6 +150,12 @@ class FakeAPIClient:
         if self.decisions_error is not None:
             raise self.decisions_error
         return self.decisions_return
+
+    async def get_cost_report(self, transform_id: str) -> Dict[str, Any]:
+        self.calls.append(("get_cost_report", transform_id))
+        if self.cost_report_error is not None:
+            raise self.cost_report_error
+        return self.cost_report_return
 
 
 # ---- extract_document ------------------------------------------------------
@@ -522,3 +542,81 @@ class TestRefineOntology:
         result = await _tool_impl_refine_ontology(api, "tx-1", save=True)
         assert result["ontology_id"] == "auto_refined_abc"
         assert api.calls == [("finalize_ontology", "tx-1")]
+
+
+# ---- get_cost_report ------------------------------------------------------
+
+
+class TestGetCostReport:
+    """B5-obs: agent-facing cost surface. Tool is a pure passthrough
+    over the /cost endpoint — same architectural pattern as
+    get_evidence's decision read (commit eb22a79).
+    """
+
+    @pytest.mark.asyncio
+    async def test_passthrough_returns_endpoint_payload_unchanged(self) -> None:
+        """Pin the passthrough contract: whatever the API returns,
+        the tool surfaces. No client-side aggregation, no shape
+        massaging — the API endpoint is the single source of truth
+        for the cost report shape."""
+        payload = {
+            "transform_id": "tx-1",
+            "total_calls": 12,
+            "input_tokens": 4500,
+            "output_tokens": 800,
+            "total_tokens": 5300,
+            "estimated_cost_usd": "0.0234",
+            "models_used": ["gemini:gemini-2.5-flash"],
+            "by_operation_type": {
+                "schema_inference": {
+                    "calls": 1,
+                    "input_tokens": 500,
+                    "output_tokens": 100,
+                    "total_tokens": 600,
+                    "estimated_cost_usd": "0.0030",
+                },
+                "extraction": {
+                    "calls": 11,
+                    "input_tokens": 4000,
+                    "output_tokens": 700,
+                    "total_tokens": 4700,
+                    "estimated_cost_usd": "0.0204",
+                },
+            },
+        }
+        api = FakeAPIClient(cost_report_return=payload)
+        result = await _tool_impl_get_cost_report(api, "tx-1")
+
+        assert result == payload
+        assert api.calls == [("get_cost_report", "tx-1")]
+
+    @pytest.mark.asyncio
+    async def test_zero_call_transform_returns_zero_aggregate(self) -> None:
+        """Empty transform → zero counts, models_used empty,
+        estimated_cost_usd None (NOT "0" — the None vs "0"
+        distinction lets callers tell "no LLM was invoked" apart
+        from "the LLM ran but the model wasn't priced").
+        Default FakeAPIClient.cost_report_return matches this
+        shape."""
+        api = FakeAPIClient()
+        result = await _tool_impl_get_cost_report(api, "tx-empty")
+
+        assert result["total_calls"] == 0
+        assert result["estimated_cost_usd"] is None
+        assert result["models_used"] == []
+        assert result["by_operation_type"] == {}
+
+    @pytest.mark.asyncio
+    async def test_transport_error_propagates(self) -> None:
+        """Cost is the headline answer the agent asked for — unlike
+        decisions on get_evidence (observability OF observability),
+        a cost-fetch failure has no fallback. Pin: errors propagate
+        so the agent sees the real failure rather than silently
+        getting a zero-aggregate."""
+        from graphora_server.mcp.client import GraphoraClientError
+
+        api = FakeAPIClient(
+            cost_report_error=GraphoraClientError(503, "Service Unavailable"),
+        )
+        with pytest.raises(GraphoraClientError):
+            await _tool_impl_get_cost_report(api, "tx-1")

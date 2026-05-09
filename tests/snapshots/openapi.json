@@ -6808,6 +6808,56 @@
         ]
       }
     },
+    "/api/v1/graph/{transform_id}/cost": {
+      "get": {
+        "description": "Per-transform LLM cost / token report. Aggregates llm_usage rows for the transform: total calls, input/output/total tokens, estimated cost in USD, distinct models used, and a per-operation-type breakdown.",
+        "operationId": "get_cost_by_transform_id_api_v1_graph__transform_id__cost_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transform_id",
+            "required": true,
+            "schema": {
+              "title": "Transform Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Cost By Transform Id Api V1 Graph  Transform Id  Cost Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Cost By Transform Id",
+        "tags": [
+          "Graph"
+        ]
+      }
+    },
     "/api/v1/graph/{transform_id}/decisions": {
       "get": {
         "description": "Decision Log entries for a transform. With ``node_id`` set, returns schema-level decisions plus the per-node decisions for that node, schema-first. Without ``node_id``, returns only schema-level decisions.",

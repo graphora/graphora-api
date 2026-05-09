@@ -10,6 +10,7 @@ from graphora_server.services.decision_log_service import (
     DecisionLogService,
     DecisionType,
 )
+from graphora_server.services.usage_tracking import UsageTrackingService
 from graphora_server.utils.logger import logger
 import traceback
 from graphora_server.auth import AuthContext, get_current_auth
@@ -242,6 +243,58 @@ async def get_decisions_by_transform_id(
         )
         raise HTTPException(
             status_code=500, detail=f"Error fetching decisions: {str(e)}"
+        )
+
+
+@router.get(
+    "/{transform_id}/cost",
+    description=(
+        "Per-transform LLM cost / token report. Aggregates llm_usage "
+        "rows for the transform: total calls, input/output/total "
+        "tokens, estimated cost in USD, distinct models used, and "
+        "a per-operation-type breakdown."
+    ),
+)
+async def get_cost_by_transform_id(
+    transform_id: str,
+    auth: AuthContext = Depends(get_current_auth),
+) -> Dict[str, Any]:
+    """B5-obs: agent-facing cost surface.
+
+    Tenant-scoped via auth.user_id (same pattern as /decisions —
+    a request for another user's transform_id returns the zero-row
+    aggregate). Surfaces existing llm_usage data without forcing
+    callers to scrape the dashboard endpoint.
+
+    Returns:
+        transform_id (str): Echo of the input.
+        total_calls (int): Count of LLM invocations on this transform.
+        input_tokens / output_tokens / total_tokens (int): Sums.
+        estimated_cost_usd (str | None): Sum of estimated_cost_usd
+            values as a string for JSON precision. None when no
+            row had pricing (e.g., the model wasn't in the
+            model_pricing table) — distinguishes "cost is zero"
+            from "cost is unknown".
+        models_used (list[str]): Distinct ``"<provider>:<model>"``.
+        by_operation_type (dict): Per-op breakdown, same shape as
+            the top-level totals.
+    """
+    try:
+        service = UsageTrackingService()
+        return await service.get_transform_cost_report(
+            transform_id=transform_id,
+            user_id=auth.user_id,
+        )
+    except Exception as e:
+        traceback.print_exc()
+        logger.error(
+            "Error fetching cost report for transform %s, user %s: %s",
+            transform_id,
+            auth.user_id,
+            str(e),
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching cost report: {str(e)}"
         )
 
 
