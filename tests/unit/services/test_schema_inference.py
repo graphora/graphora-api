@@ -208,6 +208,28 @@ entities:
 class TestCreateAutoSchemaOntology:
     """Tests for creating auto-schema ontology."""
 
+    @pytest.fixture(autouse=True)
+    def _force_memory_mode(self, monkeypatch):
+        """B0-log slice 3a (commit 52995d4) made
+        ``create_auto_schema_ontology`` unconditionally construct a
+        ``DecisionLogService``. ``tests/conftest.py`` sets a default
+        ``DATABASE_URL`` for tests that need it, which flips the
+        service into Postgres mode and opens a psycopg pool on the
+        first append. The pool open is slow (seconds) and the
+        append fails-and-swallows against the unreachable DB.
+
+        Existing tests in this class don't care about the Decision
+        Log behaviour — they were written before slice 3a — but
+        without this autouse fixture they'd silently pay the
+        pool-open cost on every run. Force memory mode at the
+        class boundary so all tests here read decisions in-process
+        (or, for tests that don't read them at all, just no-op
+        cheaply)."""
+        from graphora_server.config import settings
+
+        monkeypatch.setattr(settings, "DATABASE_URL", "")
+        monkeypatch.setattr(settings, "POSTGRES_HOST", None)
+
     @pytest.mark.asyncio
     async def test_create_ontology_stores_in_database(self):
         """Test that auto-schema ontology is stored."""
@@ -278,27 +300,20 @@ relationships: {}
                     )
 
     @pytest.mark.asyncio
-    async def test_create_ontology_emits_schema_inferred_decision(self, monkeypatch):
+    async def test_create_ontology_emits_schema_inferred_decision(self):
         """B0-log slice 3a: a successful auto-schema ontology
         creation emits one ``schema_inferred`` Decision so the
         Decision Log surface (Evidence tab, MCP get_evidence) can
         render "schema was auto-inferred from N chunks". Pin the
         contract directly: target_kind=SCHEMA, target_id=None,
         evidence carries the ontology_id + entity/relationship
-        counts.
-
-        Force memory mode by clearing DATABASE_URL so we can read
-        appended rows directly from the mocked DecisionLogService's
-        memory store rather than mocking psycopg."""
-        from graphora_server.config import settings
+        counts. Memory mode is forced at the class fixture so we
+        can read appended rows directly without mocking psycopg."""
         from graphora_server.services.decision_log_service import (
             DecisionLogService,
             DecisionType,
             TargetKind,
         )
-
-        monkeypatch.setattr(settings, "DATABASE_URL", "")
-        monkeypatch.setattr(settings, "POSTGRES_HOST", None)
 
         # Patch DecisionLogService.__init__ side path: capture the
         # one instance the production code constructs so we can read
