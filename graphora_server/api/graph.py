@@ -196,16 +196,25 @@ async def get_decisions_by_transform_id(
     try:
         log = DecisionLogService()
 
-        # Schema-level: narrow to decision_type for the index hit;
-        # see for_decision_type docstring + reviewer's P3 finding.
+        # P1 follow-up (commit eb22a79): scope reads by auth.user_id
+        # so authenticated user A can't fetch user B's transform
+        # decisions just by knowing the transform_id. Writers
+        # (entity-merge hook, schema-inference hook) stamp the
+        # row with their user_id; reads filter on it. Rows with
+        # NULL user_id (legacy / pre-migration-15) won't match
+        # any specific user — they're orphaned by design.
         schema_decisions = await log.for_decision_type(
-            transform_id, DecisionType.SCHEMA_INFERRED
+            transform_id,
+            DecisionType.SCHEMA_INFERRED,
+            user_id=auth.user_id,
         )
 
         node_decisions: List[Any] = []
         alternatives: List[Dict[str, Any]] = []
         if node_id:
-            node_decisions = await log.for_target(transform_id, node_id)
+            node_decisions = await log.for_target(
+                transform_id, node_id, user_id=auth.user_id
+            )
             for d in node_decisions:
                 alternatives.extend(d.alternatives)
 

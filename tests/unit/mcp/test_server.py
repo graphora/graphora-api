@@ -437,6 +437,38 @@ class TestGetEvidence:
         assert result["decision_log"] == []
         assert result["alternatives"] == []
 
+    @pytest.mark.asyncio
+    async def test_get_decisions_transport_error_degrades_to_empty_arrays(
+        self,
+    ) -> None:
+        """Reviewer-flagged on commit eb22a79 (P3). The earlier
+        try/except caught only ``GraphoraClientError`` (raised
+        AFTER the HTTP response is parsed). httpx transport errors
+        (timeout, connect reset, DNS failure) raise
+        ``httpx.HTTPError`` BEFORE _ok() runs and would have
+        propagated, blanking the entire evidence response.
+
+        Pin: a transport-layer failure on the decisions call is
+        treated the same as a 5xx — the rest of the evidence
+        response survives, decision_log + alternatives degrade
+        to empty arrays. Without this catch, network flake on the
+        decisions endpoint takes down the whole get_evidence tool
+        for the agent."""
+        import httpx
+
+        api = FakeAPIClient(
+            graph_return=self._graph(),
+            decisions_error=httpx.ConnectTimeout("connect timed out"),
+        )
+        result = await _tool_impl_get_evidence(api, "tx1", "n1")
+
+        # Source-span evidence + edges still present.
+        assert result["node"]["properties"]["name"] == "Alice"
+        assert result["evidence"]["source_chunk_id"] == "chunk-42"
+        # Decision-related keys present, empty.
+        assert result["decision_log"] == []
+        assert result["alternatives"] == []
+
 
 # ---- schemaless + refine_ontology -----------------------------------------
 

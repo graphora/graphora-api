@@ -244,6 +244,12 @@ async def create_auto_schema_ontology(
                 "relationships_count": relationships_count,
                 "version": ontology_dict.get("version"),
             },
+            # P1 follow-up: stamp the writer's user_id so the
+            # /decisions endpoint can scope reads to the same
+            # tenant. The schema-inference call always has a
+            # user_id (passed by the API layer that triggered
+            # the auto-schema flow).
+            user_id=user_id,
         )
     )
 

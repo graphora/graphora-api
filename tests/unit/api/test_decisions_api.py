@@ -92,8 +92,11 @@ def test_decisions_endpoint_uses_for_decision_type_for_schema_query(test_client)
     assert response.status_code == 200
     # Pin the indexed-read contract: the endpoint must call
     # for_decision_type with SCHEMA_INFERRED, NOT for_transform.
+    # The user_id kwarg lands as part of the P1 follow-up
+    # (commit eb22a79); pinned separately in
+    # test_decisions_endpoint_passes_auth_user_id_to_service_filters.
     mock_log.for_decision_type.assert_awaited_once_with(
-        "tx1", DecisionType.SCHEMA_INFERRED
+        "tx1", DecisionType.SCHEMA_INFERRED, user_id="test-user-1"
     )
     # for_transform must NOT be invoked — the bug-fix collapses
     # the read to the indexed type query only.
@@ -182,6 +185,105 @@ def test_decisions_endpoint_orders_schema_first_then_node_decisions(test_client)
     # Per-node alternatives aggregated at the top level. Schema
     # decision contributed none; node decision contributed one.
     assert body["alternatives"] == [{"id": "n1-alias"}]
+
+
+def test_decisions_endpoint_passes_auth_user_id_to_service_filters(test_client):
+    """Reviewer-flagged P1 (commit eb22a79): the endpoint went
+    straight to the decision table which was keyed only by
+    transform_id/target_id, so any authenticated user could fetch
+    any other tenant's decision log just by knowing the transform
+    ID. Migration 15 added a user_id column; the endpoint must now
+    pass auth.user_id to every read so the WHERE clause filters
+    on it.
+
+    Pin: every service call out of the endpoint receives
+    user_id=auth.user_id. If a future refactor drops the kwarg
+    on any read path, this fires."""
+    from graphora_server.services.decision_log_service import DecisionType
+
+    with patch("graphora_server.api.graph.DecisionLogService") as mock_log_class:
+        mock_log = AsyncMock()
+        mock_log.for_decision_type = AsyncMock(return_value=[])
+        mock_log.for_target = AsyncMock(return_value=[])
+        mock_log_class.return_value = mock_log
+
+        response = test_client.get("/api/v1/graph/tx1/decisions?node_id=n1")
+
+    assert response.status_code == 200
+
+    # Both read methods invoked with user_id from the auth context.
+    mock_log.for_decision_type.assert_awaited_once_with(
+        "tx1", DecisionType.SCHEMA_INFERRED, user_id="test-user-1"
+    )
+    mock_log.for_target.assert_awaited_once_with("tx1", "n1", user_id="test-user-1")
+
+
+def test_decisions_endpoint_does_not_leak_other_tenants_decisions(test_client):
+    """End-to-end pin for the cross-tenant fix. Two users seeded
+    decisions for the same transform_id (a synthetic edge case
+    that can occur if two users somehow share a transform id, OR
+    if a malicious user crafts a request with another user's
+    transform_id). Auth as user-1 must only see user-1's row.
+
+    Memory backend equivalence pin — the same filter must apply
+    to both backends so dev-mode behaves like production."""
+    from graphora_server.services.decision_log_service import (
+        Decision,
+        DecisionLogService,
+        DecisionType,
+        TargetKind,
+    )
+
+    # Seed a real DecisionLogService memory store with rows from
+    # both users. This exercises the actual filtering, not just
+    # mock contracts.
+    store: list = []
+    log = DecisionLogService(memory_store=store)
+
+    user_a_decision = Decision(
+        transform_id="tx1",
+        target_id=None,
+        target_kind=TargetKind.SCHEMA,
+        decision_type=DecisionType.SCHEMA_INFERRED,
+        reason="user-a's schema",
+        evidence={"ontology_id": "auto_a"},
+        user_id="test-user-1",
+    )
+    user_b_decision = Decision(
+        transform_id="tx1",  # SAME transform id, different user
+        target_id=None,
+        target_kind=TargetKind.SCHEMA,
+        decision_type=DecisionType.SCHEMA_INFERRED,
+        reason="user-b's schema — must not leak to user-1",
+        evidence={"ontology_id": "auto_b"},
+        user_id="test-user-2",
+    )
+
+    import asyncio
+
+    asyncio.get_event_loop().run_until_complete(log.append(user_a_decision))
+    asyncio.get_event_loop().run_until_complete(log.append(user_b_decision))
+
+    # Patch DecisionLogService class so the endpoint's
+    # `DecisionLogService()` call returns OUR seeded instance.
+    with patch(
+        "graphora_server.api.graph.DecisionLogService",
+        return_value=log,
+    ):
+        response = test_client.get("/api/v1/graph/tx1/decisions")
+
+    assert response.status_code == 200
+    body = response.json()
+
+    # The auth context says user-1; only user-1's decision is
+    # returned. user-2's row stays invisible.
+    assert len(body["decision_log"]) == 1
+    only = body["decision_log"][0]
+    assert only["reason"] == "user-a's schema", (
+        f"Cross-tenant leak: got reason {only['reason']!r} "
+        f"(expected user-a's row only). Pre-fix this would have "
+        f"returned BOTH rows because the filter ignored user_id."
+    )
 
 
 def test_decisions_endpoint_serializes_enums_to_strings(test_client):

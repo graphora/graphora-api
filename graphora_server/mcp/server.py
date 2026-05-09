@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import httpx
+
 from graphora_server.mcp.client import GraphoraClient, GraphoraClientError
 
 _MAX_NODES_RETURNED = 200
@@ -143,11 +145,20 @@ async def _tool_impl_get_evidence(
     decisions_payload: Dict[str, Any] = {"decision_log": [], "alternatives": []}
     try:
         decisions_payload = await api.get_decisions(transform_id, node_id=node_id)
-    except GraphoraClientError as exc:
+    except (GraphoraClientError, httpx.HTTPError) as exc:
         # Decisions are observability — a transient API error here
         # must not blank the rest of the evidence response. Log
         # and degrade to empty arrays so the agent still sees the
         # source-span / edges payload.
+        #
+        # Reviewer-flagged on commit eb22a79 (P3): the catch
+        # initially named only GraphoraClientError, which is
+        # raised AFTER the HTTP response is parsed. Transport
+        # errors (timeout, connect reset) raise httpx.HTTPError
+        # before we reach _ok(), so a flaky network would have
+        # blanked the entire evidence response. Catching both
+        # keeps the "decision failures never blank source
+        # evidence" contract honest.
         logger = __import__("logging").getLogger(__name__)
         logger.warning(
             "get_decisions failed for transform=%s node=%s: %s",

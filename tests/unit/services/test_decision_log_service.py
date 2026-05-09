@@ -417,6 +417,92 @@ async def test_postgres_for_decision_type_runs_indexed_query(postgres_service):
 
 
 @pytest.mark.asyncio
+async def test_memory_user_id_filter_isolates_tenants(memory_service):
+    """Reviewer-flagged P1 (commit eb22a79). When for_target /
+    for_transform / for_decision_type is called with a non-None
+    user_id, only rows matching that user_id come back. Pin
+    bidirectionally: user-1 sees user-1's rows; user-2 sees
+    user-2's rows; rows with NULL user_id (legacy) come back only
+    when the caller doesn't pass a user_id filter.
+
+    The Postgres backend's WHERE clause does the same filtering
+    via a parameterized query — the unit test for that lives
+    further down."""
+    await memory_service.append(
+        Decision(
+            transform_id="tx-1",
+            target_id="n1",
+            target_kind=TargetKind.NODE,
+            decision_type=DecisionType.ENTITY_MERGED,
+            reason="user-1 merge",
+            user_id="user-1",
+        )
+    )
+    await memory_service.append(
+        Decision(
+            transform_id="tx-1",
+            target_id="n1",
+            target_kind=TargetKind.NODE,
+            decision_type=DecisionType.ENTITY_MERGED,
+            reason="user-2 merge — must not leak to user-1",
+            user_id="user-2",
+        )
+    )
+    await memory_service.append(
+        Decision(
+            transform_id="tx-1",
+            target_id="n1",
+            target_kind=TargetKind.NODE,
+            decision_type=DecisionType.ENTITY_MERGED,
+            reason="legacy null-user-id row",
+            user_id=None,
+        )
+    )
+
+    user_1_results = await memory_service.for_target("tx-1", "n1", user_id="user-1")
+    assert [d.reason for d in user_1_results] == ["user-1 merge"]
+
+    user_2_results = await memory_service.for_target("tx-1", "n1", user_id="user-2")
+    assert [d.reason for d in user_2_results] == [
+        "user-2 merge — must not leak to user-1"
+    ]
+
+    # Without a user_id filter, all three rows come back — that's
+    # the legacy-caller path and what tests use to seed.
+    no_filter_results = await memory_service.for_target("tx-1", "n1")
+    assert len(no_filter_results) == 3
+
+
+@pytest.mark.asyncio
+async def test_postgres_for_target_with_user_id_appends_where_clause(
+    postgres_service,
+):
+    """Pin the SQL shape: when user_id is provided, WHERE adds
+    ``AND user_id = %s`` and the param is bound. When user_id
+    is None, that clause is omitted (legacy callers untouched)."""
+    with patch(
+        "graphora_server.services.decision_log_service.db.fetch",
+        new=AsyncMock(return_value=[]),
+    ) as mock_fetch:
+        await postgres_service.for_target("tx-1", "n1", user_id="user-1")
+
+    query = mock_fetch.await_args.args[0]
+    assert "AND user_id = %s" in query
+    assert mock_fetch.await_args.args[1:] == ("tx-1", "n1", "user-1")
+
+    # Now without user_id — clause omitted, two params only.
+    with patch(
+        "graphora_server.services.decision_log_service.db.fetch",
+        new=AsyncMock(return_value=[]),
+    ) as mock_fetch_no_user:
+        await postgres_service.for_target("tx-1", "n1")
+
+    query_no_user = mock_fetch_no_user.await_args.args[0]
+    assert "AND user_id" not in query_no_user
+    assert mock_fetch_no_user.await_args.args[1:] == ("tx-1", "n1")
+
+
+@pytest.mark.asyncio
 async def test_memory_for_decision_type_filters_correctly(memory_service):
     """Memory backend equivalent: filter by decision_type on the
     in-memory list. The two backends must return shape-identical

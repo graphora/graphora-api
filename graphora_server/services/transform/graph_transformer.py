@@ -1174,6 +1174,7 @@ async def _emit_entity_merged_decision(
     merged_away: List[BaseNode],
     stage: str,
     candidate_group_size: int,
+    user_id: Optional[str] = None,
 ) -> None:
     """B0-log slice 2: emit one entity_merged decision per merge
     event so the Decision Log surface (Evidence tab,
@@ -1219,6 +1220,7 @@ async def _emit_entity_merged_decision(
                 }
                 for n in merged_away
             ],
+            user_id=user_id,
         )
     )
 
@@ -1310,6 +1312,7 @@ async def _compare_and_merge_nodes(
                 sorted_nodes[1:],
                 stage="property_blocker",
                 candidate_group_size=len(candidate_group),
+                user_id=user_id,
             )
 
     # Step 3.5 — B2-er slice 2 embedding-based blocking on the
@@ -1350,6 +1353,7 @@ async def _compare_and_merge_nodes(
                 sorted_nodes[1:],
                 stage="embedding_blocker",
                 candidate_group_size=len(candidate_group),
+                user_id=user_id,
             )
 
     # Step 3.75 — B2-er slice 3 Splink probabilistic blocking on
@@ -1396,6 +1400,7 @@ async def _compare_and_merge_nodes(
                 sorted_nodes[1:],
                 stage="splink_blocker",
                 candidate_group_size=len(candidate_group),
+                user_id=user_id,
             )
 
     # Step 4 — pass-through for nodes that didn't appear in any

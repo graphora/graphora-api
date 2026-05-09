@@ -74,6 +74,15 @@ class Decision:
     alternatives: List[Dict[str, Any]] = field(default_factory=list)
     id: Optional[str] = None
     created_at: Optional[str] = None
+    # Reviewer-flagged on commit eb22a79 (P1). Tenant ownership for
+    # the row. Writers (entity-merge hook, schema-inference hook)
+    # populate this from the user_id they already have on hand.
+    # Reads filter on this so authenticated user A can't fetch
+    # user B's transform decisions just by knowing the transform_id.
+    # Optional for backwards-compat with legacy callers and tests
+    # that don't care about tenancy; the API endpoint always passes
+    # user_id from auth context.
+    user_id: Optional[str] = None
 
 
 class DecisionLogService:
@@ -134,9 +143,10 @@ class DecisionLogService:
                         reason,
                         evidence,
                         alternatives,
-                        created_at
+                        created_at,
+                        user_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 await db.execute(
                     query,
@@ -149,6 +159,7 @@ class DecisionLogService:
                     Json(decision.evidence),
                     Json(decision.alternatives),
                     decision.created_at,
+                    decision.user_id,
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Failed to append extraction decision: %s", exc)
@@ -160,20 +171,32 @@ class DecisionLogService:
         self,
         transform_id: str,
         target_id: str,
+        user_id: Optional[str] = None,
     ) -> List[Decision]:
         """All decisions for a specific node/edge in the given
-        transform, ordered by created_at ASC. Empty list if none."""
+        transform, ordered by created_at ASC. Empty list if none.
+
+        ``user_id`` enforces tenant ownership when provided
+        (reviewer-flagged on commit eb22a79). The API endpoint
+        always passes auth.user_id; legacy callers and tests may
+        omit it. Rows with NULL user_id only match when the
+        caller passes None — never leak legacy rows to a specific
+        user that didn't write them."""
         if self._enabled:
             try:
-                query = """
+                base_query = """
                     SELECT id, transform_id, target_id, target_kind,
                            decision_type, reason, evidence, alternatives,
-                           created_at
+                           created_at, user_id
                     FROM extraction_decisions
                     WHERE transform_id = %s AND target_id = %s
-                    ORDER BY created_at ASC
                 """
-                rows = await db.fetch(query, transform_id, target_id)
+                params: List[Any] = [transform_id, target_id]
+                if user_id is not None:
+                    base_query += " AND user_id = %s"
+                    params.append(user_id)
+                base_query += " ORDER BY created_at ASC"
+                rows = await db.fetch(base_query, *params)
                 return self._rows_to_decisions(rows)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Failed to fetch decisions for target: %s", exc)
@@ -182,31 +205,49 @@ class DecisionLogService:
             (
                 d
                 for d in self._memory_store
-                if d.transform_id == transform_id and d.target_id == target_id
+                if d.transform_id == transform_id
+                and d.target_id == target_id
+                and (user_id is None or d.user_id == user_id)
             ),
             key=lambda d: d.created_at or "",
         )
 
-    async def for_transform(self, transform_id: str) -> List[Decision]:
+    async def for_transform(
+        self,
+        transform_id: str,
+        user_id: Optional[str] = None,
+    ) -> List[Decision]:
         """All decisions for a transform — including schema-level
-        decisions whose target_id is None. Ordered by created_at ASC."""
+        decisions whose target_id is None. Ordered by created_at ASC.
+
+        ``user_id`` enforces tenant ownership when provided. See
+        for_target for the legacy-row caveat."""
         if self._enabled:
             try:
-                query = """
+                base_query = """
                     SELECT id, transform_id, target_id, target_kind,
                            decision_type, reason, evidence, alternatives,
-                           created_at
+                           created_at, user_id
                     FROM extraction_decisions
                     WHERE transform_id = %s
-                    ORDER BY created_at ASC
                 """
-                rows = await db.fetch(query, transform_id)
+                params: List[Any] = [transform_id]
+                if user_id is not None:
+                    base_query += " AND user_id = %s"
+                    params.append(user_id)
+                base_query += " ORDER BY created_at ASC"
+                rows = await db.fetch(base_query, *params)
                 return self._rows_to_decisions(rows)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Failed to fetch decisions for transform: %s", exc)
                 return []
         return sorted(
-            (d for d in self._memory_store if d.transform_id == transform_id),
+            (
+                d
+                for d in self._memory_store
+                if d.transform_id == transform_id
+                and (user_id is None or d.user_id == user_id)
+            ),
             key=lambda d: d.created_at or "",
         )
 
@@ -214,6 +255,7 @@ class DecisionLogService:
         self,
         transform_id: str,
         decision_type: DecisionType,
+        user_id: Optional[str] = None,
     ) -> List[Decision]:
         """All decisions of a specific type for a transform, ordered
         by created_at ASC.
@@ -225,18 +267,26 @@ class DecisionLogService:
         the read at the DB layer using the existing
         ``idx_extraction_decisions_transform_type`` index from
         migration 14, so node-evidence lookups don't scale with the
-        full transform decision log."""
+        full transform decision log.
+
+        ``user_id`` enforces tenant ownership when provided
+        (commit eb22a79 follow-up). See for_target for the
+        legacy-row caveat."""
         if self._enabled:
             try:
-                query = """
+                base_query = """
                     SELECT id, transform_id, target_id, target_kind,
                            decision_type, reason, evidence, alternatives,
-                           created_at
+                           created_at, user_id
                     FROM extraction_decisions
                     WHERE transform_id = %s AND decision_type = %s
-                    ORDER BY created_at ASC
                 """
-                rows = await db.fetch(query, transform_id, decision_type.value)
+                params: List[Any] = [transform_id, decision_type.value]
+                if user_id is not None:
+                    base_query += " AND user_id = %s"
+                    params.append(user_id)
+                base_query += " ORDER BY created_at ASC"
+                rows = await db.fetch(base_query, *params)
                 return self._rows_to_decisions(rows)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Failed to fetch decisions for transform/type: %s", exc)
@@ -245,7 +295,9 @@ class DecisionLogService:
             (
                 d
                 for d in self._memory_store
-                if d.transform_id == transform_id and d.decision_type == decision_type
+                if d.transform_id == transform_id
+                and d.decision_type == decision_type
+                and (user_id is None or d.user_id == user_id)
             ),
             key=lambda d: d.created_at or "",
         )
@@ -306,4 +358,8 @@ class DecisionLogService:
                 if hasattr(row["created_at"], "isoformat")
                 else row["created_at"]
             ),
+            # Optional in the row dict — pre-migration-15 rows
+            # don't have this column. ``.get()`` returns None
+            # which matches the dataclass default.
+            user_id=row.get("user_id") if isinstance(row, dict) else None,
         )
