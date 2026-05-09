@@ -14,6 +14,7 @@ from graphora_server.services.transform.graph_transformer import (
     build_graph_from_chunks,
     build_graph_from_pdfs,
 )
+from graphora_server.services.decision_log_service import DecisionLogService
 from graphora_server.config import settings
 
 
@@ -188,6 +189,17 @@ async def construct_knowledge_graph(
         # config exists (e.g., test mode) — graceful degrade.
         extractor_model = await _resolve_extractor_model_name(user_id)
 
+        # B0-log slice 3b: per-transform Decision Log instance.
+        # Constructed unconditionally — the service's dual backend
+        # (Postgres when DATABASE_URL is set, in-memory list
+        # otherwise) means dev mode runs with zero config and
+        # production runs persist decisions. The instance is local
+        # to this transform: no singleton, no cross-transform state
+        # leak, garbage-collected when the task ends. Any per-row
+        # write failure is logged-and-swallowed by append() so the
+        # Decision Log can never block extraction itself.
+        decision_log = DecisionLogService()
+
         # Process chunks with controlled concurrency
         concurrency = settings.EXTRACTION_CONCURRENCY
         if len(chunks) < concurrency:
@@ -206,6 +218,7 @@ async def construct_knowledge_graph(
                 user_id=user_id,
                 chunk_metadatas=chunk_metadatas,
                 extractor_model=extractor_model,
+                decision_log=decision_log,
             )
         elif pdf_paths:
             graph = await build_graph_from_pdfs(
@@ -216,6 +229,7 @@ async def construct_knowledge_graph(
                 user_id=user_id,
                 chunk_metadatas=chunk_metadatas,
                 extractor_model=extractor_model,
+                decision_log=decision_log,
             )
 
         metrics = ExtractionMetrics(
