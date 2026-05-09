@@ -20,6 +20,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from graphora_server.mcp.client import GraphoraClient, GraphoraClientError
+from graphora_server.services.decision_log_service import (
+    Decision,
+    DecisionLogService,
+    TargetKind,
+)
 
 _MAX_NODES_RETURNED = 200
 _MAX_EDGES_RETURNED = 500
@@ -96,6 +101,7 @@ async def _tool_impl_get_evidence(
     api: GraphoraClient,
     transform_id: str,
     node_id: str,
+    decision_log: Optional[DecisionLogService] = None,
 ) -> Dict[str, Any]:
     # Paginate through the graph rather than hard-capping at 200 — a
     # valid node_id may live on any page of a large extraction, and
@@ -107,6 +113,12 @@ async def _tool_impl_get_evidence(
             "incoming_edges": [],
             "outgoing_edges": [],
             "evidence": {},
+            # B0-explain (slice 4): the new fields ALWAYS appear in
+            # the response shape so consumers can rely on the schema
+            # without conditional access. Empty when the node is
+            # unknown.
+            "decision_log": [],
+            "alternatives": [],
         }
 
     nodes = data.get("nodes", []) or []
@@ -119,16 +131,45 @@ async def _tool_impl_get_evidence(
             "incoming_edges": [],
             "outgoing_edges": [],
             "evidence": {},
+            "decision_log": [],
+            "alternatives": [],
         }
 
     incoming = [_trim_edge(e) for e in edges if e.get("target") == node_id]
     outgoing = [_trim_edge(e) for e in edges if e.get("source") == node_id]
+
+    # B0-explain (slice 4): pull decisions for this node and the
+    # transform-level (schema) decisions so an agent answering "why
+    # is this entity in the graph?" can see the full chain — schema
+    # inference at the top, then the per-node merge events.
+    #
+    # Per-call DecisionLogService instance follows the slice-3a/3b
+    # pattern (one-shot read, garbage-collected). Caller may inject
+    # one for tests; production passes None and we construct here.
+    log = decision_log if decision_log is not None else DecisionLogService()
+    node_decisions = await log.for_target(transform_id, node_id)
+    transform_decisions = await log.for_transform(transform_id)
+    schema_decisions = [
+        d for d in transform_decisions if d.target_kind == TargetKind.SCHEMA
+    ]
+    decision_dicts = [_decision_to_dict(d) for d in schema_decisions + node_decisions]
+
+    # Aggregated alternatives across all decisions for this node.
+    # Simple agents that only want "what other candidates did the
+    # LLM see for this entity" can read this without walking the
+    # full decision history. Schema decisions don't contribute
+    # alternatives (no per-entity candidates to compare).
+    alternatives: List[Dict[str, Any]] = []
+    for d in node_decisions:
+        alternatives.extend(d.alternatives)
 
     return {
         "node": _trim_node(node, full_properties=True),
         "incoming_edges": incoming,
         "outgoing_edges": outgoing,
         "evidence": _extract_evidence_fields(node.get("properties", {})),
+        "decision_log": decision_dicts,
+        "alternatives": alternatives,
     }
 
 
@@ -251,8 +292,9 @@ def build_server(client: Optional[GraphoraClient] = None):
 
         Surfaces provenance fields stored on the node (source chunk
         text, document name, offsets) plus any relationships the
-        node participates in — useful for an agent that wants to
-        explain *why* an entity is in the graph before citing it.
+        node participates in AND the Decision Log history — useful
+        for an agent that wants to explain *why* an entity is in
+        the graph before citing it.
 
         Args:
             transform_id: The extraction that produced the node.
@@ -265,6 +307,17 @@ def build_server(client: Optional[GraphoraClient] = None):
             outgoing_edges (list): Edges where this node is the source.
             evidence (dict): Provenance-related properties pulled out of
                 the node (e.g. source_chunk, source_text, document_id).
+            decision_log (list): All decisions the pipeline made about
+                this node (entity merges, LLM disambiguations) plus
+                schema-level decisions for the transform (schema
+                inference). Each entry: ``{id, transform_id,
+                target_id, target_kind, decision_type, reason,
+                evidence, alternatives, created_at}``.
+            alternatives (list): Aggregated candidate entities the
+                pipeline considered for this node across all merge
+                decisions. Each entry: ``{id, type, canonical_key,
+                confidence_score}``. Empty when the node had no
+                merge events.
         """
         return await _tool_impl_get_evidence(api, transform_id, node_id)
 
@@ -298,6 +351,28 @@ _EVIDENCE_KEYS = {
 
 def _extract_evidence_fields(props: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in props.items() if k in _EVIDENCE_KEYS}
+
+
+def _decision_to_dict(decision: Decision) -> Dict[str, Any]:
+    """Serialize a Decision into the JSON shape the MCP response
+    contract specifies.
+
+    Enums are serialized to their string values so the response
+    survives a round-trip through any JSON consumer without
+    requiring the agent to know the Python enum type. The Decision
+    dataclass itself isn't JSON-serializable directly because of
+    those enums."""
+    return {
+        "id": decision.id,
+        "transform_id": decision.transform_id,
+        "target_id": decision.target_id,
+        "target_kind": decision.target_kind.value,
+        "decision_type": decision.decision_type.value,
+        "reason": decision.reason,
+        "evidence": decision.evidence,
+        "alternatives": decision.alternatives,
+        "created_at": decision.created_at,
+    }
 
 
 def _trim_node(
