@@ -592,6 +592,7 @@ async def _build_graph_from(
         transform_id=transform_id,
         document_usage_id=document_usage_id,
         parsed_ontology=ontology_parser.parsed_ontology,
+        decision_log=decision_log,
     )
     logger.info(f"Nodes after comparison: {nodes}")
 

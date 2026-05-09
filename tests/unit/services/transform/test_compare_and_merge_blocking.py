@@ -497,6 +497,199 @@ class TestCompareAndMergeNodesEmitsDecisions:
         assert memory_log == []
 
 
+class TestBuildGraphFromThreadsDecisionLog:
+    """Reviewer-flagged on commit f5df894.
+
+    _build_graph_from accepts decision_log: Optional[DecisionLogService]
+    and the public entry points (build_graph_from_chunks /
+    build_graph_from_pdfs) thread it down. But the actual
+    _compare_and_merge_nodes call inside _build_graph_from was
+    missing ``decision_log=decision_log``, so single-pass extractions
+    silently dropped the service even when the caller supplied one.
+    Multi-pass was wired correctly; single-pass was not.
+
+    These tests pin the contract directly: when _build_graph_from
+    is called with a decision_log, the _compare_and_merge_nodes
+    invocation it makes MUST receive that same decision_log
+    instance. Mirror tests for _build_graph_with_multi_pass guard
+    against the inverse regression (the multi-pass kwarg getting
+    dropped in some future refactor).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _force_memory_mode(self, monkeypatch):
+        from graphora_server.config import settings
+
+        monkeypatch.setattr(settings, "DATABASE_URL", "")
+        monkeypatch.setattr(settings, "POSTGRES_HOST", None)
+
+    @pytest.mark.asyncio
+    async def test_build_graph_from_threads_decision_log_to_merge_call(
+        self,
+    ) -> None:
+        """Pin the kwarg flow: a decision_log handed to
+        _build_graph_from must reach _compare_and_merge_nodes. Pre-fix
+        the call site dropped the kwarg, leaving slice-3-onward
+        callers with a "decision_log set on the entry point but no
+        decisions ever emitted" foot-gun."""
+        from graphora_server.services.decision_log_service import (
+            DecisionLogService,
+        )
+        from graphora_server.services.transform import graph_transformer
+        from graphora_server.services.transform.ontology_helper import (
+            OntologyParser,
+        )
+        from graphora_server.services.entity_ledger_service import (
+            entity_ledger_service,
+        )
+
+        # Minimal ontology — no Person extraction needed; the merge
+        # call is the only thing we're inspecting.
+        parser = OntologyParser.__new__(OntologyParser)
+        parser.parsed_ontology = {
+            "entities": {
+                "Person": {"properties": {"name": {"type": "str"}}},
+            },
+        }
+        parser.ontology_yaml = "version: '0.1.0'\n"
+        parser.build_entities_only_model = lambda: object  # noqa: E731
+        parser.build_relationships_only_model = lambda: object  # noqa: E731
+
+        async def fake_extract_nodes(*_a, **_kw):
+            class _Empty:
+                confidence_score = 0.9
+
+            return _Empty()
+
+        async def fake_extract_rels(*_a, **_kw):
+            class _Empty:
+                confidence_score = 0.9
+
+            return _Empty()
+
+        decision_log = DecisionLogService(memory_store=[])
+
+        captured: dict = {}
+
+        async def fake_compare(nodes, **kwargs):
+            # Pin: this is the kwarg the production call must pass.
+            captured["decision_log"] = kwargs.get("decision_log")
+            captured["transform_id"] = kwargs.get("transform_id")
+            return nodes
+
+        with (
+            patch.object(
+                entity_ledger_service,
+                "hydrate_nodes",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                graph_transformer,
+                "_compare_and_merge_nodes",
+                new=AsyncMock(side_effect=fake_compare),
+            ),
+        ):
+            await graph_transformer._build_graph_from(
+                ontology_parser=parser,
+                chunks_or_pdf_paths=["Alice joined Acme."],
+                transform_id="tx-thread",
+                node_extractor=fake_extract_nodes,
+                relationship_extractor=fake_extract_rels,
+                node_baml_function="ExtractNodesFromChunk",
+                rel_baml_function="ExtractRelationshipsFromChunk",
+                decision_log=decision_log,
+            )
+
+        assert captured["decision_log"] is decision_log, (
+            "_build_graph_from didn't pass decision_log to "
+            "_compare_and_merge_nodes. Pre-fix this kwarg was "
+            "silently dropped — single-pass transforms would never "
+            "emit entity_merged decisions even when a service was "
+            "supplied. Got: "
+            f"{captured.get('decision_log')!r}; expected: {decision_log!r}."
+        )
+        assert captured["transform_id"] == "tx-thread"
+
+    @pytest.mark.asyncio
+    async def test_build_graph_with_multi_pass_threads_decision_log(
+        self,
+    ) -> None:
+        """Mirror pin for the multi-pass path. It was correct at
+        slice-2 landing time; this guards against a future refactor
+        accidentally dropping the kwarg from this path while leaving
+        the single-pass one intact (or vice versa)."""
+        from graphora_server.services.decision_log_service import (
+            DecisionLogService,
+        )
+        from graphora_server.services.transform import graph_transformer
+        from graphora_server.services.transform.ontology_helper import (
+            OntologyParser,
+        )
+        from graphora_server.services.entity_ledger_service import (
+            entity_ledger_service,
+        )
+
+        parser = OntologyParser.__new__(OntologyParser)
+        parser.parsed_ontology = {
+            "entities": {
+                "Person": {"properties": {"name": {"type": "str"}}},
+            },
+        }
+
+        decision_log = DecisionLogService(memory_store=[])
+        captured: dict = {}
+
+        async def fake_compare(nodes, **kwargs):
+            captured["decision_log"] = kwargs.get("decision_log")
+            return nodes
+
+        # Stub the MultiPassExtractor.extract to return empty
+        # results — we only care about whether the post-extract
+        # _compare_and_merge_nodes call receives the kwarg.
+        class _StubExtractor:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            async def extract(self, *_a, **_kw):
+                return [], []
+
+        with (
+            patch.object(
+                entity_ledger_service,
+                "hydrate_nodes",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                graph_transformer,
+                "_compare_and_merge_nodes",
+                new=AsyncMock(side_effect=fake_compare),
+            ),
+            patch(
+                "graphora_server.services.extraction.MultiPassExtractor",
+                new=_StubExtractor,
+            ),
+            patch(
+                "graphora_server.services.transform.graph_transformer."
+                "deduplicate_entities_with_splink",
+                new=AsyncMock(side_effect=lambda **kwargs: ([], [])),
+            ),
+        ):
+            await graph_transformer._build_graph_with_multi_pass(
+                ontology_parser=parser,
+                chunks=["Alice joined Acme."],
+                transform_id="tx-mp",
+                llm_client=MagicMock(),
+                decision_log=decision_log,
+            )
+
+        assert captured["decision_log"] is decision_log, (
+            "_build_graph_with_multi_pass dropped the decision_log "
+            "kwarg on its way to _compare_and_merge_nodes. The "
+            f"single-pass path also has this contract. Got: "
+            f"{captured.get('decision_log')!r}."
+        )
+
+
 class TestNodeToEmbeddingText:
     """Pin the node-to-text serialization used to feed the
     embedding service. Same recipe as
