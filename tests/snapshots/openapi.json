@@ -6808,6 +6808,72 @@
         ]
       }
     },
+    "/api/v1/graph/{transform_id}/decisions": {
+      "get": {
+        "description": "Decision Log entries for a transform. With ``node_id`` set, returns schema-level decisions plus the per-node decisions for that node, schema-first. Without ``node_id``, returns only schema-level decisions.",
+        "operationId": "get_decisions_by_transform_id_api_v1_graph__transform_id__decisions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transform_id",
+            "required": true,
+            "schema": {
+              "title": "Transform Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "node_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Node Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Decisions By Transform Id Api V1 Graph  Transform Id  Decisions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Decisions By Transform Id",
+        "tags": [
+          "Graph"
+        ]
+      }
+    },
     "/api/v1/merge/graph/{merge_id}/{transform_id}": {
       "get": {
         "description": "Retrieve nodes by transform ID and their relationships",

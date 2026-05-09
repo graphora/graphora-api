@@ -210,6 +210,46 @@ class DecisionLogService:
             key=lambda d: d.created_at or "",
         )
 
+    async def for_decision_type(
+        self,
+        transform_id: str,
+        decision_type: DecisionType,
+    ) -> List[Decision]:
+        """All decisions of a specific type for a transform, ordered
+        by created_at ASC.
+
+        Reviewer-flagged on commit 9ac9bb5 (B0-explain): the previous
+        ``for_transform + Python filter`` pattern fetched every
+        decision in the transform just to surface schema-level ones
+        (one row out of potentially thousands). This method narrows
+        the read at the DB layer using the existing
+        ``idx_extraction_decisions_transform_type`` index from
+        migration 14, so node-evidence lookups don't scale with the
+        full transform decision log."""
+        if self._enabled:
+            try:
+                query = """
+                    SELECT id, transform_id, target_id, target_kind,
+                           decision_type, reason, evidence, alternatives,
+                           created_at
+                    FROM extraction_decisions
+                    WHERE transform_id = %s AND decision_type = %s
+                    ORDER BY created_at ASC
+                """
+                rows = await db.fetch(query, transform_id, decision_type.value)
+                return self._rows_to_decisions(rows)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Failed to fetch decisions for transform/type: %s", exc)
+                return []
+        return sorted(
+            (
+                d
+                for d in self._memory_store
+                if d.transform_id == transform_id and d.decision_type == decision_type
+            ),
+            key=lambda d: d.created_at or "",
+        )
+
     # Helpers --------------------------------------------------------------------
 
     @classmethod

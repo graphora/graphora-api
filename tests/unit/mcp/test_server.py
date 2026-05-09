@@ -34,6 +34,8 @@ class FakeAPIClient:
         upload_file_return: Optional[Dict[str, Any]] = None,
         upload_url_return: Optional[Dict[str, Any]] = None,
         graph_return: Optional[Dict[str, Any]] = None,
+        decisions_return: Optional[Dict[str, Any]] = None,
+        decisions_error: Optional[Exception] = None,
     ):
         self.upload_file_return = upload_file_return or {
             "transform_id": "tx_file",
@@ -51,6 +53,11 @@ class FakeAPIClient:
             "total_nodes": 0,
             "total_edges": 0,
         }
+        self.decisions_return = decisions_return or {
+            "decision_log": [],
+            "alternatives": [],
+        }
+        self.decisions_error = decisions_error
         self.calls: List[tuple] = []
 
     async def upload_file(
@@ -114,6 +121,21 @@ class FakeAPIClient:
         if any(n.get("id") == node_id for n in nodes):
             return self.graph_return
         return None
+
+    async def get_decisions(
+        self,
+        transform_id: str,
+        node_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        # Mirrors GraphoraClient.get_decisions: returns whatever the
+        # test pre-seeded, raises whatever the test injected. The
+        # MCP tool catches GraphoraClientError specifically and
+        # degrades to empty arrays — pinned by
+        # test_get_decisions_failure_degrades_to_empty.
+        self.calls.append(("get_decisions", transform_id, node_id))
+        if self.decisions_error is not None:
+            raise self.decisions_error
+        return self.decisions_return
 
 
 # ---- extract_document ------------------------------------------------------
@@ -339,171 +361,81 @@ class TestGetEvidence:
         assert result["alternatives"] == []
 
     @pytest.mark.asyncio
-    async def test_node_decisions_surface_in_decision_log_and_alternatives(
+    async def test_get_evidence_reads_decisions_via_api_not_local_service(
         self,
     ) -> None:
-        """B0-explain: when the Decision Log holds an entity_merged
-        decision for the requested node, get_evidence surfaces it
-        in decision_log AND aggregates the merge candidates into
-        alternatives. Pin the dict-shape contract so the agent
-        rendering layer can rely on stable keys."""
-        from graphora_server.services.decision_log_service import (
-            Decision,
-            DecisionLogService,
-            DecisionType,
-            TargetKind,
-        )
+        """Reviewer-flagged on commit 9ac9bb5 (P1): the MCP server
+        is a pure HTTP client. Reading decisions from a local
+        DecisionLogService inside the MCP process either silently
+        falls into an empty in-memory store (when the operator only
+        configured GRAPHORA_API_URL) or opens a new direct DB
+        dependency / secret surface (when DATABASE_URL is set
+        locally). Both are wrong.
 
-        log = DecisionLogService(memory_store=[])
-        await log.append(
-            Decision(
-                transform_id="tx1",
-                target_id="n1",
-                target_kind=TargetKind.NODE,
-                decision_type=DecisionType.ENTITY_MERGED,
-                reason="Merged 1 node into n1 via property_blocker",
-                evidence={
-                    "stage": "property_blocker",
-                    "candidate_group_size": 2,
-                    "merge_group_size": 2,
-                    "node_type": "Person",
-                },
-                alternatives=[
+        Pin the contract: MCP MUST invoke api.get_decisions; the
+        FakeAPIClient records that call. If MCP regresses to
+        constructing a local service, this assertion fires."""
+        api = FakeAPIClient(
+            graph_return=self._graph(),
+            decisions_return={
+                "decision_log": [
                     {
-                        "id": "n1-alias",
-                        "type": "Person",
-                        "canonical_key": "alice-2",
-                        "confidence_score": 0.5,
+                        "id": "d1",
+                        "transform_id": "tx1",
+                        "target_id": "n1",
+                        "target_kind": "node",
+                        "decision_type": "entity_merged",
+                        "reason": "merge n1",
+                        "evidence": {"stage": "property_blocker"},
+                        "alternatives": [{"id": "n1-alias"}],
+                        "created_at": "2026-05-09T00:00:00+00:00",
                     }
                 ],
-            )
+                "alternatives": [{"id": "n1-alias"}],
+            },
+        )
+        result = await _tool_impl_get_evidence(api, "tx1", "n1")
+
+        # The api.get_decisions call must happen — pin that the
+        # MCP tool delegated to the HTTP boundary rather than going
+        # to a local DB.
+        decision_calls = [c for c in api.calls if c[0] == "get_decisions"]
+        assert decision_calls == [("get_decisions", "tx1", "n1")], (
+            f"_tool_impl_get_evidence must read decisions through "
+            f"api.get_decisions, not a local DecisionLogService. "
+            f"Calls seen: {api.calls}"
         )
 
-        api = FakeAPIClient(graph_return=self._graph())
-        result = await _tool_impl_get_evidence(api, "tx1", "n1", decision_log=log)
-
-        # decision_log carries the node decision serialized as dict
-        # (enums → str values).
-        assert len(result["decision_log"]) == 1
-        d = result["decision_log"][0]
-        assert d["target_id"] == "n1"
-        assert d["target_kind"] == "node"
-        assert d["decision_type"] == "entity_merged"
-        assert d["reason"].startswith("Merged 1 node into n1")
-        assert d["evidence"]["stage"] == "property_blocker"
-        # ``alternatives`` field on the per-decision dict mirrors
-        # the original Decision.alternatives list.
-        assert len(d["alternatives"]) == 1
-        assert d["alternatives"][0]["id"] == "n1-alias"
-
-        # Top-level alternatives is the aggregated union — same
-        # candidate appears once because one decision contributed
-        # it. Two decisions merging different aliases would extend
-        # this list further.
-        assert len(result["alternatives"]) == 1
-        assert result["alternatives"][0]["id"] == "n1-alias"
-        assert result["alternatives"][0]["canonical_key"] == "alice-2"
+        # Response surfaces what the API returned, untouched.
+        assert result["decision_log"] == api.decisions_return["decision_log"]
+        assert result["alternatives"] == api.decisions_return["alternatives"]
 
     @pytest.mark.asyncio
-    async def test_schema_decisions_surface_in_decision_log_for_any_node(
-        self,
-    ) -> None:
-        """B0-explain: schema-level decisions (target_id=None,
-        target_kind=SCHEMA) belong to the transform, not a specific
-        node — but they're load-bearing context for ANY node-level
-        evidence query. ("Why is Alice in the graph?" answers with
-        "the schema was inferred from these chunks, then Alice was
-        merged from these candidates.") Pin: schema decisions
-        appear in decision_log for any node_id we ask about under
-        the same transform."""
-        from graphora_server.services.decision_log_service import (
-            Decision,
-            DecisionLogService,
-            DecisionType,
-            TargetKind,
+    async def test_get_decisions_failure_degrades_to_empty_arrays(self) -> None:
+        """A transient API error fetching decisions must not blank
+        the rest of the evidence response. The agent still gets
+        node + edges + source-span evidence; decision_log and
+        alternatives degrade to empty arrays. Decision Log is
+        observability — losing it is regrettable but extracting
+        ``why is this fact here?`` from the source span alone is
+        still useful."""
+        from graphora_server.mcp.client import GraphoraClientError
+
+        api = FakeAPIClient(
+            graph_return=self._graph(),
+            decisions_error=GraphoraClientError(503, "Service Unavailable"),
         )
+        result = await _tool_impl_get_evidence(api, "tx1", "n1")
 
-        log = DecisionLogService(memory_store=[])
-        await log.append(
-            Decision(
-                transform_id="tx1",
-                target_id=None,
-                target_kind=TargetKind.SCHEMA,
-                decision_type=DecisionType.SCHEMA_INFERRED,
-                reason="No ontology supplied — auto-inferred 2 entity types",
-                evidence={
-                    "ontology_id": "auto_abc",
-                    "entities_count": 2,
-                    "relationships_count": 1,
-                },
-            )
-        )
+        # Pre-existing contract preserved — the rest of the
+        # evidence response survives a decisions API outage.
+        assert result["node"]["properties"]["name"] == "Alice"
+        assert result["evidence"]["source_chunk_id"] == "chunk-42"
+        assert len(result["incoming_edges"]) + len(result["outgoing_edges"]) >= 1
 
-        api = FakeAPIClient(graph_return=self._graph())
-        result = await _tool_impl_get_evidence(api, "tx1", "n1", decision_log=log)
-
-        assert len(result["decision_log"]) == 1
-        d = result["decision_log"][0]
-        assert d["target_id"] is None
-        assert d["target_kind"] == "schema"
-        assert d["decision_type"] == "schema_inferred"
-        # Schema decisions don't contribute to the alternatives
-        # aggregation — there are no per-entity candidates to
-        # compare at the schema-inference step.
+        # Decision-related keys present, empty.
+        assert result["decision_log"] == []
         assert result["alternatives"] == []
-
-    @pytest.mark.asyncio
-    async def test_decision_log_orders_schema_first_then_node_decisions(
-        self,
-    ) -> None:
-        """B0-explain narrative-ordering pin. The Evidence tab
-        renders the decision log as a top-down causation chain:
-        schema-level (the prerequisite — "this is the ontology we
-        decided on") then node-level (the per-entity merges that
-        followed). A future refactor that flattens both into a
-        single timestamp-sorted list would mis-narrate causation
-        for any case where a node-merge happened to land before a
-        schema decision in walltime."""
-        from graphora_server.services.decision_log_service import (
-            Decision,
-            DecisionLogService,
-            DecisionType,
-            TargetKind,
-        )
-
-        log = DecisionLogService(memory_store=[])
-        # Append in REVERSE intended-display order to prove the
-        # ordering isn't an artifact of insertion order.
-        await log.append(
-            Decision(
-                transform_id="tx1",
-                target_id="n1",
-                target_kind=TargetKind.NODE,
-                decision_type=DecisionType.ENTITY_MERGED,
-                reason="node-level merge",
-            )
-        )
-        await log.append(
-            Decision(
-                transform_id="tx1",
-                target_id=None,
-                target_kind=TargetKind.SCHEMA,
-                decision_type=DecisionType.SCHEMA_INFERRED,
-                reason="schema-level inference",
-            )
-        )
-
-        api = FakeAPIClient(graph_return=self._graph())
-        result = await _tool_impl_get_evidence(api, "tx1", "n1", decision_log=log)
-
-        kinds = [d["target_kind"] for d in result["decision_log"]]
-        assert kinds == ["schema", "node"], (
-            f"Expected schema-level decisions to render before "
-            f"node-level ones; got {kinds}. The Evidence tab "
-            f"renders this as a top-down causation chain — "
-            f"schema is the prerequisite for the node merges, so "
-            f"flattening to walltime would mis-narrate causation."
-        )
 
 
 # ---- schemaless + refine_ontology -----------------------------------------

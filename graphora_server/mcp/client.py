@@ -225,6 +225,34 @@ class GraphoraClient:
                 break
         return None
 
+    async def get_decisions(
+        self,
+        transform_id: str,
+        node_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetch Decision Log entries for a transform via the API.
+
+        Reviewer-flagged on commit 9ac9bb5 (B0-explain): MCP must
+        not touch the DecisionLogService directly — that creates a
+        new direct DB dependency from a process that's otherwise
+        a pure HTTP client. The /decisions endpoint owns the read
+        so MCP stays decoupled.
+
+        Returns ``{decision_log, alternatives}``. ``alternatives``
+        is empty when ``node_id`` is None (schema-only fetch) or
+        when the node had no merge events. The endpoint always
+        returns both keys regardless of state, so callers can
+        rely on the response shape unconditionally.
+        """
+        params: Dict[str, Any] = {}
+        if node_id is not None:
+            params["node_id"] = node_id
+        resp = await self._client.get(
+            f"{_API_V1}/graph/{transform_id}/decisions",
+            params=params,
+        )
+        return _ok(resp)
+
 
 def _ok(resp: httpx.Response) -> Dict[str, Any]:
     if resp.status_code >= 400:

@@ -393,6 +393,68 @@ async def test_postgres_for_transform_runs_indexed_query(postgres_service):
 
 
 @pytest.mark.asyncio
+async def test_postgres_for_decision_type_runs_indexed_query(postgres_service):
+    """Reviewer-flagged P3 (commit 9ac9bb5): callers needing
+    schema-level decisions used to do ``for_transform + Python
+    filter`` which fetched every row in the transform. The new
+    ``for_decision_type`` narrows the read at the DB layer using
+    the (transform_id, decision_type) index from migration 14.
+
+    Pin both the SQL shape AND the parameter binding (the enum's
+    ``.value`` is what hits the DB, not the Python enum object)."""
+    with patch(
+        "graphora_server.services.decision_log_service.db.fetch",
+        new=AsyncMock(return_value=[]),
+    ) as mock_fetch:
+        await postgres_service.for_decision_type("tx-1", DecisionType.SCHEMA_INFERRED)
+
+    query = mock_fetch.await_args.args[0]
+    assert "transform_id = %s AND decision_type = %s" in query
+    assert "ORDER BY created_at ASC" in query
+    # The enum value (string), not the enum object — psycopg can't
+    # bind enum types directly.
+    assert mock_fetch.await_args.args[1:] == ("tx-1", "schema_inferred")
+
+
+@pytest.mark.asyncio
+async def test_memory_for_decision_type_filters_correctly(memory_service):
+    """Memory backend equivalent: filter by decision_type on the
+    in-memory list. The two backends must return shape-identical
+    results so dev-mode (memory) and prod (Postgres) behave the
+    same."""
+    await memory_service.append(
+        Decision(
+            transform_id="tx-1",
+            target_id=None,
+            target_kind=TargetKind.SCHEMA,
+            decision_type=DecisionType.SCHEMA_INFERRED,
+            reason="schema",
+        )
+    )
+    await memory_service.append(
+        Decision(
+            transform_id="tx-1",
+            target_id="n1",
+            target_kind=TargetKind.NODE,
+            decision_type=DecisionType.ENTITY_MERGED,
+            reason="merge",
+        )
+    )
+
+    schema_only = await memory_service.for_decision_type(
+        "tx-1", DecisionType.SCHEMA_INFERRED
+    )
+    assert len(schema_only) == 1
+    assert schema_only[0].reason == "schema"
+
+    merge_only = await memory_service.for_decision_type(
+        "tx-1", DecisionType.ENTITY_MERGED
+    )
+    assert len(merge_only) == 1
+    assert merge_only[0].reason == "merge"
+
+
+@pytest.mark.asyncio
 async def test_postgres_malformed_row_isolates_does_not_blank_query(
     postgres_service,
 ):
