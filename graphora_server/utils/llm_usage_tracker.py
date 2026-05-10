@@ -225,8 +225,9 @@ async def track_llm_call(
 
 
 # Convenience functions for common LLM providers
-async def track_gemini_usage(
+async def track_llm_completion(
     user_id: str,
+    model_provider: ModelProvider,
     model_name: str,
     operation_type: str,
     response: Any,
@@ -238,19 +239,25 @@ async def track_gemini_usage(
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
 ):
-    """Track Gemini API usage after a call is made.
+    """Track an LLM call's usage after the response is in hand.
+
+    Provider-aware: the row records the actual ``model_provider`` the
+    call ran against, so the cost report's ``models_used`` and
+    ``by_operation_type`` buckets surface the truth (a request that
+    ran via Ollama doesn't get mislabeled as Gemini).
 
     Usage resolution order:
-    1. If `response` is a Gemini/OpenAI-shaped object with usage metadata,
-       extract tokens from it (the common synchronous case).
-    2. Otherwise, use the explicit `input_tokens` / `output_tokens` kwargs.
-       Streaming callers typically pass `response=None` and provide
-       manual token estimates because the streamed chunks don't expose a
-       consolidated `usage_metadata`.
+    1. If ``response`` carries Gemini-style ``usage_metadata`` (the
+       Ollama compat wrapper synthesizes the same shape — see
+       graphora_server/utils/llm_helper.py:_OllamaResponse — so this
+       path covers both providers), extract from there.
+    2. Otherwise, use the explicit ``input_tokens`` / ``output_tokens``
+       kwargs. Streaming callers typically pass ``response=None`` and
+       provide manual token counts.
     """
     tracker = LLMUsageTracker(
         user_id=user_id,
-        model_provider=ModelProvider.GEMINI,
+        model_provider=model_provider,
         model_name=model_name,
         operation_type=operation_type,
         transform_id=transform_id,
@@ -272,6 +279,38 @@ async def track_gemini_usage(
         tracker.set_token_usage(int(input_tokens or 0), int(output_tokens or 0))
 
     await tracker._record_usage()
+
+
+async def track_gemini_usage(
+    user_id: str,
+    model_name: str,
+    operation_type: str,
+    response: Any,
+    transform_id: Optional[str] = None,
+    document_usage_id: Optional[str] = None,
+    operation_context: Optional[str] = None,
+    request_timestamp: Optional[datetime] = None,
+    response_timestamp: Optional[datetime] = None,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+):
+    """Backward-compat shim for the Gemini-only tracker. New code
+    should call ``track_llm_completion`` with an explicit
+    ``model_provider``."""
+    await track_llm_completion(
+        user_id=user_id,
+        model_provider=ModelProvider.GEMINI,
+        model_name=model_name,
+        operation_type=operation_type,
+        response=response,
+        transform_id=transform_id,
+        document_usage_id=document_usage_id,
+        operation_context=operation_context,
+        request_timestamp=request_timestamp,
+        response_timestamp=response_timestamp,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
 
 
 async def track_baml_usage(

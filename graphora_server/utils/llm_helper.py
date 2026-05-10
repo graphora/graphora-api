@@ -182,16 +182,44 @@ class _OllamaGenAICompat:
             options=options or None,
             stream=False,
         )
-        return _OllamaResponse(response.get("response", ""))
+        # Pass through Ollama's token counts so the usage tracker
+        # can surface real numbers for /cost. Ollama's SDK calls
+        # them prompt_eval_count / eval_count; mirror them onto a
+        # ``usage_metadata``-shaped object so the same Gemini-style
+        # extractor in llm_usage_tracker.set_usage_from_response
+        # picks them up unchanged.
+        prompt_tokens = int(response.get("prompt_eval_count", 0) or 0)
+        completion_tokens = int(response.get("eval_count", 0) or 0)
+        return _OllamaResponse(
+            text=response.get("response", ""),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+
+class _OllamaUsageMetadata:
+    """Gemini-shaped token counts so set_usage_from_response works
+    on the Ollama path without provider-aware branching there."""
+
+    __slots__ = ("prompt_token_count", "candidates_token_count", "total_token_count")
+
+    def __init__(self, prompt_tokens: int, completion_tokens: int):
+        self.prompt_token_count = prompt_tokens
+        self.candidates_token_count = completion_tokens
+        self.total_token_count = prompt_tokens + completion_tokens
 
 
 class _OllamaResponse:
-    """Mimic the ``response.text`` access pattern of genai responses."""
+    """Mimic the ``response.text`` access pattern of genai responses,
+    plus a Gemini-shaped ``usage_metadata`` so the same
+    set_usage_from_response extractor picks up Ollama's token counts
+    without provider-aware branching at the tracker boundary."""
 
-    __slots__ = ("text",)
+    __slots__ = ("text", "usage_metadata")
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, prompt_tokens: int = 0, completion_tokens: int = 0):
         self.text = text
+        self.usage_metadata = _OllamaUsageMetadata(prompt_tokens, completion_tokens)
 
 
 def create_ollama_client(host: str, model: str) -> _OllamaGenAICompat:

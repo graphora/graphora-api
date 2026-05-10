@@ -279,11 +279,11 @@ relationships: {}
         flow).
 
         Pin: when transform_id is supplied, the call invokes
-        track_gemini_usage with operation_type='schema_inference'
-        and the same transform_id. Without this hook, /cost
-        undercounts schema-inference tokens/cost — reviewer's
-        exact words: "the promised by_operation_type schema bucket"
-        is missing."""
+        track_llm_completion with operation_type='schema_inference',
+        the matching transform_id, AND the resolved provider
+        (Gemini in this case)."""
+        from graphora_server.schemas.usage import ModelProvider
+
         # A response object the LLM-usage tracker can pull
         # tokens off via ``set_usage_from_response``.
         usage_metadata = MagicMock()
@@ -310,7 +310,7 @@ relationships: {}
                 return_value=(mock_client, "gemini-2.5-flash", "gemini"),
             ),
             patch(
-                "graphora_server.services.schema_inference.track_gemini_usage",
+                "graphora_server.services.schema_inference.track_llm_completion",
                 new_callable=AsyncMock,
             ) as mock_track,
         ):
@@ -328,10 +328,111 @@ relationships: {}
         # match exactly so by_operation_type lights up.
         assert kwargs["operation_type"] == "schema_inference"
         assert kwargs["model_name"] == "gemini-2.5-flash"
-        # The Gemini response is forwarded so the tracker can
-        # extract usage_metadata. Pin the type, not the contents
-        # — the tracker's own contract handles the metadata.
+        # Provider matches what get_llm_client_for_user returned.
+        assert kwargs["model_provider"] == ModelProvider.GEMINI
+        # The response is forwarded so the tracker can extract
+        # usage_metadata.
         assert kwargs["response"] is mock_response
+
+    @pytest.mark.asyncio
+    async def test_infer_schema_records_ollama_provider_truthfully(self):
+        """Reviewer-flagged on commit 9f8e5e7 (B5-obs slice 1
+        follow-up): ``get_llm_client_for_user`` can return
+        provider='ollama', but the previous fix hard-coded
+        ModelProvider.GEMINI inside track_gemini_usage, so /cost
+        recorded ``gemini:<ollama_model>`` with zero tokens — the
+        Gemini path was fixed but the provider-aware path produced
+        misleading rows.
+
+        Pin: when the LLM helper returns 'ollama', the tracking
+        call passes ModelProvider.OLLAMA. The Ollama compat
+        wrapper carries the model name through ``model_name``,
+        so the cost report's ``models_used`` shows
+        ``ollama:llama3.2`` rather than ``gemini:llama3.2``."""
+        from graphora_server.schemas.usage import ModelProvider
+
+        # Ollama compat response from llm_helper synthesizes a
+        # Gemini-shaped usage_metadata so the same tracker
+        # extractor picks up the tokens.
+        usage_metadata = MagicMock()
+        usage_metadata.prompt_token_count = 200
+        usage_metadata.candidates_token_count = 50
+        usage_metadata.total_token_count = 250
+        mock_response = MagicMock()
+        mock_response.text = """version: "0.1.0"
+entities:
+  Person:
+    properties:
+      name:
+        type: str
+"""
+        mock_response.usage_metadata = usage_metadata
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+
+        with (
+            patch(
+                "graphora_server.services.schema_inference.get_llm_client_for_user",
+                new_callable=AsyncMock,
+                return_value=(mock_client, "llama3.2", "ollama"),
+            ),
+            patch(
+                "graphora_server.services.schema_inference.track_llm_completion",
+                new_callable=AsyncMock,
+            ) as mock_track,
+        ):
+            await infer_schema_from_text(
+                text_chunks=["Alice joined Acme."],
+                user_id="user-1",
+                transform_id="tx-ollama",
+            )
+
+        assert mock_track.await_count == 1
+        kwargs = mock_track.await_args.kwargs
+        # The truthful provider — NOT GEMINI.
+        assert kwargs["model_provider"] == ModelProvider.OLLAMA
+        assert kwargs["model_name"] == "llama3.2"
+        assert kwargs["operation_type"] == "schema_inference"
+
+    @pytest.mark.asyncio
+    async def test_infer_schema_skips_tracking_for_unknown_provider(self):
+        """Defensive pin for the unknown-provider fallback:
+        ``_resolve_model_provider`` returns None for any provider
+        string not in the ModelProvider enum, and the call site
+        skips tracking rather than mislabel the row. Operators
+        will see the warning log and know to extend the enum."""
+        mock_response = MagicMock()
+        mock_response.text = """version: "0.1.0"
+entities:
+  Person:
+    properties:
+      name:
+        type: str
+"""
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+
+        with (
+            patch(
+                "graphora_server.services.schema_inference.get_llm_client_for_user",
+                new_callable=AsyncMock,
+                # Provider string the enum doesn't know about (yet).
+                return_value=(mock_client, "model-x", "novel-provider"),
+            ),
+            patch(
+                "graphora_server.services.schema_inference.track_llm_completion",
+                new_callable=AsyncMock,
+            ) as mock_track,
+        ):
+            await infer_schema_from_text(
+                text_chunks=["Sample"],
+                user_id="user-1",
+                transform_id="tx-unknown",
+            )
+
+        # Tracking deliberately skipped — undercounting beats
+        # mislabeling.
+        mock_track.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_infer_schema_skips_tracking_when_transform_id_omitted(
@@ -360,7 +461,7 @@ entities:
                 return_value=(mock_client, "gemini-2.5-flash", "gemini"),
             ),
             patch(
-                "graphora_server.services.schema_inference.track_gemini_usage",
+                "graphora_server.services.schema_inference.track_llm_completion",
                 new_callable=AsyncMock,
             ) as mock_track,
         ):
@@ -402,7 +503,7 @@ relationships: {}
                 return_value=True,
             ),
             patch(
-                "graphora_server.services.schema_inference.track_gemini_usage",
+                "graphora_server.services.schema_inference.track_llm_completion",
                 new_callable=AsyncMock,
             ) as mock_track,
         ):

@@ -85,6 +85,47 @@ class TestOllamaGenAICompat:
         # max_output_tokens → num_predict (Ollama option name).
         assert opts == {"temperature": 0.2, "num_predict": 4096}
 
+    def test_response_carries_token_counts_via_usage_metadata(self) -> None:
+        """B5-obs reviewer fix (commit 9f8e5e7 → this fix): the
+        Ollama adapter previously discarded
+        ``prompt_eval_count`` / ``eval_count`` from the SDK
+        response, so /cost saw 0 tokens for any Ollama-backed
+        call. Pin: the response object exposes a Gemini-shaped
+        ``usage_metadata`` so the same set_usage_from_response
+        extractor in llm_usage_tracker works without provider-
+        aware branching."""
+        fake_module = MagicMock()
+        fake_client = MagicMock()
+        fake_client.generate.return_value = {
+            "response": "hello",
+            "prompt_eval_count": 200,
+            "eval_count": 50,
+        }
+        fake_module.Client.return_value = fake_client
+        with patch.dict("sys.modules", {"ollama": fake_module}):
+            adapter = llm_helper.create_ollama_client("http://localhost:11434", "m")
+            result = adapter.models.generate_content(contents="x", config=None)
+
+        assert result.text == "hello"
+        # Mirror Gemini's usage_metadata field names.
+        assert result.usage_metadata.prompt_token_count == 200
+        assert result.usage_metadata.candidates_token_count == 50
+        assert result.usage_metadata.total_token_count == 250
+
+    def test_response_handles_missing_token_counts_gracefully(self) -> None:
+        """Older Ollama servers / cached responses may not include
+        ``prompt_eval_count`` or ``eval_count``. Pin: the adapter
+        falls back to 0 rather than raising — the call's tokens
+        record as 0 in /cost (which is honest, not wrong)."""
+        fake_module, fake_client = self._patched_ollama()
+        with patch.dict("sys.modules", {"ollama": fake_module}):
+            adapter = llm_helper.create_ollama_client("http://localhost:11434", "m")
+            result = adapter.models.generate_content(contents="x", config=None)
+
+        assert result.usage_metadata.prompt_token_count == 0
+        assert result.usage_metadata.candidates_token_count == 0
+        assert result.usage_metadata.total_token_count == 0
+
 
 # ---- get_llm_client_for_user routing -------------------------------------
 

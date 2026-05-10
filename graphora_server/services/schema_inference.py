@@ -14,10 +14,11 @@ from uuid import uuid4
 import yaml
 from google.genai import types
 
+from graphora_server.schemas.usage import ModelProvider
 from graphora_server.utils.llm_helper import (
     get_llm_client_for_user,
 )
-from graphora_server.utils.llm_usage_tracker import track_gemini_usage
+from graphora_server.utils.llm_usage_tracker import track_llm_completion
 from graphora_server.services.ontology_storage_service import ontology_storage_service
 from graphora_server.services.decision_log_service import (
     Decision,
@@ -27,6 +28,23 @@ from graphora_server.services.decision_log_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_model_provider(provider: Optional[str]) -> Optional[ModelProvider]:
+    """Map ``get_llm_client_for_user``'s provider string into the
+    typed enum, or None when the provider isn't a known value.
+
+    Returning None on unknown providers is deliberate. The caller
+    skips tracking rather than picks a default — mislabeling a
+    cost-report row would be worse than undercounting it. Add a
+    new enum member when a new provider lands; the explicit code
+    change is the right tradeoff vs silently relabeling rows."""
+    if not provider:
+        return None
+    try:
+        return ModelProvider(provider.lower())
+    except ValueError:
+        return None
 
 
 SCHEMA_INFERENCE_PROMPT = """Analyze the following text and extract a knowledge graph schema.
@@ -108,18 +126,20 @@ async def infer_schema_from_text(
     )
 
     # Provider-aware: routes to Gemini OR Ollama based on env/config.
-    client, model_name, _provider = await get_llm_client_for_user(user_id)
+    client, model_name, provider = await get_llm_client_for_user(user_id)
 
     # Call LLM for schema inference
     prompt = SCHEMA_INFERENCE_PROMPT.format(text_sample=sample)
 
-    # Reviewer-flagged on commit 34e29d7 (B5-obs slice 1): the
-    # /cost endpoint aggregates llm_usage rows but this Gemini
-    # call wasn't tracked, so /cost undercounted the default
-    # auto-schema flow (the most common path). Record before/
-    # after timestamps and the Gemini response's usage_metadata
-    # via track_gemini_usage so the schema_inference bucket
-    # actually populates in by_operation_type.
+    # B5-obs reviewer fix (commit 9f8e5e7 → this fix): record the
+    # call into llm_usage so /cost lights up the schema_inference
+    # bucket. Pre-this-fix the call was hard-coded to
+    # ModelProvider.GEMINI, but get_llm_client_for_user can also
+    # return an Ollama-backed client — that path was being
+    # mislabeled as gemini:<ollama_model> in /cost. Now we map
+    # the returned provider string to the enum and let the
+    # tracker record truthfully. Unknown providers skip tracking
+    # entirely (loud-warning path) rather than mislabel.
     request_timestamp = datetime.now(timezone.utc)
     response = client.models.generate_content(
         model=model_name,
@@ -132,26 +152,42 @@ async def infer_schema_from_text(
     response_timestamp = datetime.now(timezone.utc)
 
     if transform_id and user_id:
-        try:
-            await track_gemini_usage(
-                user_id=user_id,
-                model_name=model_name,
-                operation_type="schema_inference",
-                response=response,
-                transform_id=transform_id,
-                request_timestamp=request_timestamp,
-                response_timestamp=response_timestamp,
-            )
-        except Exception as exc:  # pragma: no cover — defensive
-            # Usage tracking is observability — a failure here must
-            # never block schema inference itself. Mirrors the
-            # logged-and-swallowed contract in
-            # decision_log_service.append.
+        resolved_provider = _resolve_model_provider(provider)
+        if resolved_provider is None:
+            # Unknown provider — refuse to mislabel the row.
+            # /cost will undercount this call rather than show a
+            # wrong provider. Log so operators can see the gap
+            # and know to extend the enum.
             logger.warning(
-                "Failed to record schema_inference LLM usage for " "transform=%s: %s",
+                "Skipping schema_inference usage tracking for "
+                "transform=%s: unknown provider %r (extend "
+                "ModelProvider enum to record this provider's calls).",
                 transform_id,
-                exc,
+                provider,
             )
+        else:
+            try:
+                await track_llm_completion(
+                    user_id=user_id,
+                    model_provider=resolved_provider,
+                    model_name=model_name,
+                    operation_type="schema_inference",
+                    response=response,
+                    transform_id=transform_id,
+                    request_timestamp=request_timestamp,
+                    response_timestamp=response_timestamp,
+                )
+            except Exception as exc:  # pragma: no cover — defensive
+                # Usage tracking is observability — a failure here
+                # must never block schema inference itself. Mirrors
+                # the logged-and-swallowed contract in
+                # decision_log_service.append.
+                logger.warning(
+                    "Failed to record schema_inference LLM usage "
+                    "for transform=%s: %s",
+                    transform_id,
+                    exc,
+                )
 
     response_text = response.text.strip()
     logger.debug(f"Schema inference response: {response_text[:500]}...")
