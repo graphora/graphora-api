@@ -268,6 +268,159 @@ relationships: {}
                 assert "Auto-generated" in call_args.kwargs["name"]
 
     @pytest.mark.asyncio
+    async def test_infer_schema_records_llm_usage_under_schema_inference_op(
+        self,
+    ):
+        """Reviewer-flagged on commit 34e29d7 (B5-obs slice 1): the
+        Gemini call inside infer_schema_from_text wasn't wrapped by
+        usage tracking, so the /cost endpoint's
+        ``by_operation_type`` dropped the schema_inference bucket
+        for the default auto-schema path (the most common transform
+        flow).
+
+        Pin: when transform_id is supplied, the call invokes
+        track_gemini_usage with operation_type='schema_inference'
+        and the same transform_id. Without this hook, /cost
+        undercounts schema-inference tokens/cost — reviewer's
+        exact words: "the promised by_operation_type schema bucket"
+        is missing."""
+        # A response object the LLM-usage tracker can pull
+        # tokens off via ``set_usage_from_response``.
+        usage_metadata = MagicMock()
+        usage_metadata.prompt_token_count = 500
+        usage_metadata.candidates_token_count = 100
+        usage_metadata.total_token_count = 600
+        mock_response = MagicMock()
+        mock_response.text = """version: "0.1.0"
+entities:
+  Person:
+    properties:
+      name:
+        type: str
+relationships: {}
+"""
+        mock_response.usage_metadata = usage_metadata
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+
+        with (
+            patch(
+                "graphora_server.services.schema_inference.get_llm_client_for_user",
+                new_callable=AsyncMock,
+                return_value=(mock_client, "gemini-2.5-flash", "gemini"),
+            ),
+            patch(
+                "graphora_server.services.schema_inference.track_gemini_usage",
+                new_callable=AsyncMock,
+            ) as mock_track,
+        ):
+            await infer_schema_from_text(
+                text_chunks=["Alice joined Acme."],
+                user_id="user-1",
+                transform_id="tx-auto-schema",
+            )
+
+        assert mock_track.await_count == 1
+        kwargs = mock_track.await_args.kwargs
+        assert kwargs["user_id"] == "user-1"
+        assert kwargs["transform_id"] == "tx-auto-schema"
+        # The bucket key the cost report partitions by — must
+        # match exactly so by_operation_type lights up.
+        assert kwargs["operation_type"] == "schema_inference"
+        assert kwargs["model_name"] == "gemini-2.5-flash"
+        # The Gemini response is forwarded so the tracker can
+        # extract usage_metadata. Pin the type, not the contents
+        # — the tracker's own contract handles the metadata.
+        assert kwargs["response"] is mock_response
+
+    @pytest.mark.asyncio
+    async def test_infer_schema_skips_tracking_when_transform_id_omitted(
+        self,
+    ):
+        """Legacy callers (or any future call path) that don't
+        supply transform_id should NOT invoke usage tracking. The
+        log row would be unfindable in /cost (which keys on
+        transform_id), and recording orphaned rows would skew
+        per-user aggregates."""
+        mock_response = MagicMock()
+        mock_response.text = """version: "0.1.0"
+entities:
+  Person:
+    properties:
+      name:
+        type: str
+"""
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+
+        with (
+            patch(
+                "graphora_server.services.schema_inference.get_llm_client_for_user",
+                new_callable=AsyncMock,
+                return_value=(mock_client, "gemini-2.5-flash", "gemini"),
+            ),
+            patch(
+                "graphora_server.services.schema_inference.track_gemini_usage",
+                new_callable=AsyncMock,
+            ) as mock_track,
+        ):
+            await infer_schema_from_text(text_chunks=["Sample"], user_id="user-1")
+
+        mock_track.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_auto_schema_threads_transform_id_into_inference(
+        self,
+    ):
+        """Pin the threading: create_auto_schema_ontology must pass
+        its transform_id into infer_schema_from_text so the
+        downstream tracking call lands on the right transform.
+        Without this thread, the tracking inside infer_schema would
+        always be a no-op for the default auto-schema flow because
+        transform_id would be None."""
+        mock_response = MagicMock()
+        mock_response.text = """version: "0.1.0"
+entities:
+  Person:
+    properties:
+      name:
+        type: str
+relationships: {}
+"""
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = mock_response
+
+        with (
+            patch(
+                "graphora_server.services.schema_inference.get_llm_client_for_user",
+                new_callable=AsyncMock,
+                return_value=(mock_client, "gemini-2.5-flash", "gemini"),
+            ),
+            patch(
+                "graphora_server.services.schema_inference.ontology_storage_service.store_ontology",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "graphora_server.services.schema_inference.track_gemini_usage",
+                new_callable=AsyncMock,
+            ) as mock_track,
+        ):
+            await create_auto_schema_ontology(
+                text_chunks=["Sample text"],
+                user_id="user-1",
+                transform_id="tx-auto-1",
+            )
+
+        # Tracking call ran, with the transform_id from the
+        # outer create_auto_schema_ontology call. If a future
+        # refactor drops the kwarg in the inference call, this
+        # fails loud with transform_id=None.
+        assert mock_track.await_count == 1
+        assert mock_track.await_args.kwargs["transform_id"] == "tx-auto-1"
+        assert mock_track.await_args.kwargs["operation_type"] == "schema_inference"
+
+    @pytest.mark.asyncio
     async def test_create_ontology_raises_on_store_failure(self):
         """Test that failure to store raises ValueError."""
         mock_response = MagicMock()

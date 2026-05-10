@@ -7,7 +7,8 @@ auto-detecting entity types, relationships, and properties.
 
 import re
 import logging
-from typing import Dict, Any, List
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import yaml
@@ -16,6 +17,7 @@ from google.genai import types
 from graphora_server.utils.llm_helper import (
     get_llm_client_for_user,
 )
+from graphora_server.utils.llm_usage_tracker import track_gemini_usage
 from graphora_server.services.ontology_storage_service import ontology_storage_service
 from graphora_server.services.decision_log_service import (
     Decision,
@@ -70,6 +72,7 @@ async def infer_schema_from_text(
     text_chunks: List[str],
     user_id: str,
     max_sample_chars: int = 15000,
+    transform_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Infer ontology schema from document text.
 
@@ -77,6 +80,14 @@ async def infer_schema_from_text(
         text_chunks: List of text chunks from documents
         user_id: User ID for LLM credentials
         max_sample_chars: Maximum characters to sample for inference
+        transform_id: Transform ID for usage tracking. When provided
+            (the auto-schema flow always provides it), the LLM call's
+            tokens/cost get recorded in ``llm_usage`` with
+            ``operation_type='schema_inference'`` so the per-transform
+            cost report includes the schema-inference bucket. When
+            None (legacy callers), tracking is skipped — the call
+            still works, just doesn't contribute to that transform's
+            cost surface.
 
     Returns:
         Parsed ontology dictionary
@@ -102,6 +113,14 @@ async def infer_schema_from_text(
     # Call LLM for schema inference
     prompt = SCHEMA_INFERENCE_PROMPT.format(text_sample=sample)
 
+    # Reviewer-flagged on commit 34e29d7 (B5-obs slice 1): the
+    # /cost endpoint aggregates llm_usage rows but this Gemini
+    # call wasn't tracked, so /cost undercounted the default
+    # auto-schema flow (the most common path). Record before/
+    # after timestamps and the Gemini response's usage_metadata
+    # via track_gemini_usage so the schema_inference bucket
+    # actually populates in by_operation_type.
+    request_timestamp = datetime.now(timezone.utc)
     response = client.models.generate_content(
         model=model_name,
         contents=[prompt],
@@ -110,6 +129,29 @@ async def infer_schema_from_text(
             max_output_tokens=4096,
         ),
     )
+    response_timestamp = datetime.now(timezone.utc)
+
+    if transform_id and user_id:
+        try:
+            await track_gemini_usage(
+                user_id=user_id,
+                model_name=model_name,
+                operation_type="schema_inference",
+                response=response,
+                transform_id=transform_id,
+                request_timestamp=request_timestamp,
+                response_timestamp=response_timestamp,
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            # Usage tracking is observability — a failure here must
+            # never block schema inference itself. Mirrors the
+            # logged-and-swallowed contract in
+            # decision_log_service.append.
+            logger.warning(
+                "Failed to record schema_inference LLM usage for " "transform=%s: %s",
+                transform_id,
+                exc,
+            )
 
     response_text = response.text.strip()
     logger.debug(f"Schema inference response: {response_text[:500]}...")
@@ -183,8 +225,12 @@ async def create_auto_schema_ontology(
     Returns:
         Ontology ID of the created schema
     """
-    # Infer schema from text
-    ontology_dict = await infer_schema_from_text(text_chunks, user_id)
+    # Infer schema from text. Pass transform_id so the Gemini
+    # call's tokens/cost get recorded under this transform's
+    # cost report (B5-obs reviewer fix).
+    ontology_dict = await infer_schema_from_text(
+        text_chunks, user_id, transform_id=transform_id
+    )
 
     # Convert to YAML
     yaml_content = yaml.dump(ontology_dict, default_flow_style=False, sort_keys=False)
