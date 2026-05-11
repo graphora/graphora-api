@@ -84,6 +84,20 @@ def transform_upload_setup(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(transform_api, "run_transform_flow", fake_run_transform_flow)
 
+    # B5-obs slice 2 preflight (commit 535f56d) + fail-closed
+    # reviewer fix (HEAD): preflight hits Postgres for the budget
+    # + spend reads, and a configured-but-degraded read returns
+    # 503. Patch the helper to be a no-op so this integration
+    # test exercises the happy path it was written for.
+    async def fake_enforce_budget_preflight(_user_id):
+        return None
+
+    monkeypatch.setattr(
+        transform_api,
+        "enforce_budget_preflight",
+        fake_enforce_budget_preflight,
+    )
+
     yield recorded
 
     app.dependency_overrides.pop(get_current_user_id, None)

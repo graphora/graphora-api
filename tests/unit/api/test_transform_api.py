@@ -255,6 +255,42 @@ class TestTransformCleanupEndpoint:
 class TestUploadEndpointValidation:
     """Test upload endpoint input validation."""
 
+    @pytest.fixture(autouse=True)
+    def _bypass_budget_preflight(self):
+        """B5-obs slice 2 made transform-upload run a budget
+        preflight (commit 535f56d) that hits Postgres for the
+        budget + spend reads, and the fail-closed reviewer fix
+        (commit at HEAD) turns DB read failures into 503.
+
+        These pre-existing tests are checking VALIDATION logic
+        (invalid file, path traversal) that should fire BEFORE
+        the preflight result matters in production — but in
+        unit-test land the preflight runs first against a real
+        DB that isn't reachable, returning 503 before the
+        validation gets a chance.
+
+        Stub the service to return allowed so the validation
+        assertions hold. Mirrors the pattern from the new
+        ``test_budgets_api.py::test_preflight_lets_under_budget_through``
+        test which mocks the same service."""
+        from decimal import Decimal
+        from graphora_server.services.budget_service import (
+            BudgetCheckResult,
+            BudgetState,
+        )
+
+        allowed = BudgetCheckResult(
+            allowed=True,
+            state=BudgetState.UNSET,
+            current_spend_usd=Decimal("0"),
+            cap_usd=None,
+        )
+        with patch("graphora_server.api.budgets.BudgetService") as mock_class:
+            mock = MagicMock()
+            mock.check_can_proceed = AsyncMock(return_value=allowed)
+            mock_class.return_value = mock
+            yield
+
     def test_upload_should_reject_invalid_file(
         self,
         test_client,

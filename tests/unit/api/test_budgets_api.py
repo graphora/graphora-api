@@ -354,3 +354,127 @@ def test_preflight_runs_on_schemaless_endpoint(test_client, _empty_upload):
             )
 
     assert response.status_code == 402
+
+
+# ---- Fail-closed on degraded DB (P1 reviewer fix) -------------------------
+
+
+def test_preflight_returns_503_when_budget_db_read_fails(test_client, _empty_upload):
+    """Reviewer-flagged P1 on commit 535f56d. Pre-fix the service
+    swallowed DB errors and returned None → state UNSET →
+    allowed=True. A degraded Postgres with a configured
+    DATABASE_URL silently disabled every budget cap.
+
+    Post-fix: BudgetReadError propagates out of check_can_proceed,
+    the helper catches it, and the API responds with 503. This
+    pin asserts the user sees the failure rather than slipping
+    through."""
+    from graphora_server.services.budget_service import BudgetReadError
+
+    with patch("graphora_server.api.budgets.BudgetService") as mock_class:
+        mock = AsyncMock()
+        mock.check_can_proceed = AsyncMock(
+            side_effect=BudgetReadError("postgres unreachable"),
+        )
+        mock_class.return_value = mock
+
+        with open(_empty_upload, "rb") as f:
+            response = test_client.post(
+                "/api/v1/transform/some-ontology/upload",
+                files={"files": ("a.txt", f, "text/plain")},
+            )
+
+    assert response.status_code == 503
+    body = response.json()["detail"]
+    assert body["error"] == "budget_db_unavailable"
+
+
+def test_ontology_upload_does_not_delete_upload_root_on_402(
+    test_client, _empty_upload, monkeypatch, tmp_path
+):
+    """Reviewer-flagged P1 on commit 535f56d. The ontology-supplied
+    upload endpoint set ``temp_dir = Path(settings.UPLOAD_DIR)``
+    early, then deleted ``temp_dir`` in the broad except. A 402
+    fell into the broad except (no HTTPException guard) and
+    nuked the entire upload root, taking out every other
+    transform's working directory.
+
+    Pin: after a 402 from preflight, the upload root still
+    exists. Auto-schema and schemaless already had the guard;
+    this fires loud on the ontology endpoint specifically."""
+    from graphora_server.config import settings as app_settings
+
+    # Point UPLOAD_DIR at a tmpdir with a sibling-transform
+    # marker file in it. Pre-fix the rmtree wipes the marker;
+    # post-fix it survives.
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    sibling_marker = upload_dir / "another_transform_dir"
+    sibling_marker.mkdir()
+    monkeypatch.setattr(app_settings, "UPLOAD_DIR", str(upload_dir))
+
+    blocked = BudgetCheckResult(
+        allowed=False,
+        state=BudgetState.OVER,
+        current_spend_usd=Decimal("150"),
+        cap_usd=Decimal("100"),
+        reason="Monthly budget exceeded",
+    )
+    with patch("graphora_server.api.budgets.BudgetService") as mock_class:
+        mock = AsyncMock()
+        mock.check_can_proceed = AsyncMock(return_value=blocked)
+        mock_class.return_value = mock
+
+        with open(_empty_upload, "rb") as f:
+            response = test_client.post(
+                "/api/v1/transform/some-ontology/upload",
+                files={"files": ("a.txt", f, "text/plain")},
+            )
+
+    assert response.status_code == 402
+    # Pin the fix: the upload root and the sibling marker survive.
+    assert upload_dir.exists(), (
+        "UPLOAD_DIR was deleted on 402 — the broad except in "
+        "the ontology endpoint caught HTTPException and ran "
+        "shutil.rmtree on the root. Add `except HTTPException: "
+        "raise` like the other two upload endpoints."
+    )
+    assert sibling_marker.exists(), (
+        "A sibling transform's working dir was collateral-damaged "
+        "by the cleanup. Same root cause as the upload_dir "
+        "assertion above."
+    )
+
+
+def test_get_my_budget_returns_503_on_db_read_error(test_client):
+    """Mirror pin for the read endpoint. When the DB is configured
+    but degraded, the user must see 503 not "no budget set" —
+    otherwise operators believe they have no cap and behave
+    accordingly."""
+    from graphora_server.services.budget_service import BudgetReadError
+
+    with patch("graphora_server.api.budgets.BudgetService") as mock_class:
+        mock = AsyncMock()
+        mock.get_budget = AsyncMock(side_effect=BudgetReadError("DB down"))
+        mock_class.return_value = mock
+
+        response = test_client.get("/api/v1/budgets/me")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"] == "budget_db_unavailable"
+
+
+def test_get_status_returns_503_on_db_read_error(test_client):
+    """Same fail-closed contract on the status endpoint. The
+    dashboard renders the state label — silently reporting
+    "unset" when the DB is degraded would mislead operators."""
+    from graphora_server.services.budget_service import BudgetReadError
+
+    with patch("graphora_server.api.budgets.BudgetService") as mock_class:
+        mock = AsyncMock()
+        mock.get_status = AsyncMock(side_effect=BudgetReadError("DB down"))
+        mock_class.return_value = mock
+
+        response = test_client.get("/api/v1/budgets/me/status")
+
+    assert response.status_code == 503

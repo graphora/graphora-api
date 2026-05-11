@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from graphora_server.auth import AuthContext, get_current_auth
 from graphora_server.config import settings
-from graphora_server.services.budget_service import BudgetService
+from graphora_server.services.budget_service import BudgetReadError, BudgetService
 from graphora_server.utils.logger import logger
 
 router = APIRouter(prefix=f"{settings.API_V1_STR}/budgets", tags=["Budgets"])
@@ -80,7 +80,18 @@ async def get_my_budget(
     one. Returning null (not 404) lets the dashboard render an
     "add budget" CTA without paying a 404-as-not-error round."""
     service = BudgetService()
-    budget = await service.get_budget(auth.user_id)
+    try:
+        budget = await service.get_budget(auth.user_id)
+    except BudgetReadError as exc:
+        # Fail-closed (P1 reviewer fix): the read surface mirrors
+        # the enforcement gate's invariant — when the DB is
+        # configured but degraded, surface 503 rather than mis-
+        # report "no budget set". Operators see the real problem
+        # in the UI instead of believing they have no cap.
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "budget_db_unavailable", "reason": str(exc)},
+        )
     if budget is None:
         return None
     return BudgetResponse(
@@ -148,7 +159,14 @@ async def get_my_budget_status(
     auth: AuthContext = Depends(get_current_auth),
 ) -> BudgetStatusResponse:
     service = BudgetService()
-    status = await service.get_status(auth.user_id)
+    try:
+        status = await service.get_status(auth.user_id)
+    except BudgetReadError as exc:
+        # See get_my_budget for the fail-closed rationale.
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "budget_db_unavailable", "reason": str(exc)},
+        )
     return BudgetStatusResponse(
         state=status.state.value,
         current_spend_usd=str(status.current_spend_usd),
@@ -164,16 +182,38 @@ async def get_my_budget_status(
 async def enforce_budget_preflight(user_id: str) -> None:
     """Helper called at the top of transform-upload endpoints.
 
-    Raises HTTPException(402) when the user is over budget. Returns
-    None on allow (so the call site stays a one-liner ``await
-    enforce_budget_preflight(user_id)``).
+    Raises HTTPException(402) when the user is over budget,
+    HTTPException(503) when the budget DB can't be read (P1
+    reviewer fix: configured-but-degraded reads fail closed so
+    enforcement doesn't silently disable). Returns None on allow.
 
     Centralizing the check here means the three transform-upload
     routes (ontology-supplied, auto-schema, schemaless) all
     inherit the same enforcement contract — a future fourth
     upload route just needs to call this helper, no copy/paste."""
     service = BudgetService()
-    result = await service.check_can_proceed(user_id)
+    try:
+        result = await service.check_can_proceed(user_id)
+    except BudgetReadError as exc:
+        # Fail closed. The enforcement gate is a correctness
+        # boundary: when we can't tell whether the user is over
+        # budget, we must NOT let them through — that's what made
+        # the pre-fix swallow-and-return-None path dangerous.
+        logger.error(
+            "Budget preflight FAILED CLOSED for user %s (DB read error): %s",
+            user_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "budget_db_unavailable",
+                "reason": (
+                    "Cannot verify budget — refusing to start a new "
+                    "transform. Retry once the database is reachable."
+                ),
+            },
+        )
     if not result.allowed:
         logger.info(
             "Blocking transform start for user %s: %s",

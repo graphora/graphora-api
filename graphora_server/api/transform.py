@@ -328,6 +328,17 @@ async def upload_documents(
             document_info=doc_info,
         )
 
+    except HTTPException:
+        # Reviewer-flagged on commit 535f56d (B5-obs slice 2 P1):
+        # without this guard the budget-preflight 402 (and any
+        # other HTTPException raised before temp_dir narrows to
+        # the per-transform subdirectory) would fall into the
+        # broad except below and shutil.rmtree(temp_dir) — which
+        # is still settings.UPLOAD_DIR — deleting every other
+        # transform's working directory. Auto-schema and
+        # schemaless endpoints already have this guard; the
+        # ontology-supplied endpoint was missing it.
+        raise
     except Exception as e:
         logger.error(f"Upload failed for user {user_id}: {str(e)}")
         traceback.print_exc()

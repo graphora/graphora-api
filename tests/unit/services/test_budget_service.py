@@ -24,6 +24,7 @@ import pytest
 from graphora_server.config import settings
 from graphora_server.services.budget_service import (
     BudgetCheckResult,
+    BudgetReadError,
     BudgetService,
     BudgetState,
     BudgetStatus,
@@ -396,6 +397,112 @@ async def test_check_allows_when_database_disabled(monkeypatch):
     assert result.state == BudgetState.UNSET
 
 
+# ---- Fail-closed on DB errors (P1 reviewer fix on commit 535f56d) ---------
+
+
+@pytest.mark.asyncio
+async def test_get_budget_raises_budget_read_error_on_db_failure(service):
+    """Reviewer-flagged P1: the previous behaviour swallowed every
+    DB exception and returned None, which the status path then
+    treated as UNSET → allowed → silent enforcement bypass.
+
+    Pin the fail-closed contract: a configured-but-failing DB read
+    propagates BudgetReadError so the API layer can translate to
+    HTTP 503. The alternative — return None — would re-introduce
+    the silent-bypass bug."""
+    with patch(
+        "graphora_server.services.budget_service.db.fetchrow",
+        new=AsyncMock(side_effect=RuntimeError("connection refused")),
+    ):
+        with pytest.raises(BudgetReadError, match="connection refused"):
+            await service.get_budget("user-1")
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_raises_budget_read_error_on_db_failure(service):
+    """Mirror pin for the spend aggregation path. Pre-fix, this
+    returned Decimal(0), which collapsed against any non-zero cap
+    to spend < cap → UNDER → allowed. Post-fix it propagates so
+    the gate fails closed."""
+    with patch(
+        "graphora_server.services.budget_service.db.fetchrow",
+        new=AsyncMock(side_effect=RuntimeError("relation llm_usage does not exist")),
+    ):
+        with pytest.raises(BudgetReadError, match="llm_usage"):
+            await service.get_current_spend("user-1")
+
+
+@pytest.mark.asyncio
+async def test_check_can_proceed_fails_closed_when_budget_read_fails(service):
+    """End-to-end pin via the enforcement helper. The pre-fix
+    pattern was particularly nasty here: get_budget swallowed →
+    returned None → state==UNSET → allowed=True. A degraded
+    Postgres with a configured DATABASE_URL silently disabled
+    every budget cap.
+
+    Post-fix the BudgetReadError propagates all the way out of
+    check_can_proceed, and the API helper translates to 503."""
+    with patch(
+        "graphora_server.services.budget_service.db.fetchrow",
+        new=AsyncMock(side_effect=RuntimeError("postgres unreachable")),
+    ):
+        with pytest.raises(BudgetReadError):
+            await service.check_can_proceed("user-1")
+
+
+@pytest.mark.asyncio
+async def test_check_can_proceed_fails_closed_when_spend_read_fails(service):
+    """The second leg of the read: the budget row was fetched
+    successfully, but the spend rollup failed. The composite
+    get_status / check_can_proceed flow must still propagate so
+    we don't accidentally let the user through with cap-known +
+    spend-unknown."""
+    budget_row = {
+        "user_id": "user-1",
+        "monthly_cap_usd": Decimal("100"),
+        "created_at": None,
+        "updated_at": None,
+    }
+
+    # First fetchrow returns the budget; second raises on the
+    # spend rollup. Pre-fix the spend rollup would have been
+    # swallowed → 0 → allowed=True (under any positive cap).
+    with patch(
+        "graphora_server.services.budget_service.db.fetchrow",
+        new=AsyncMock(
+            side_effect=[budget_row, RuntimeError("network partition")],
+        ),
+    ):
+        with pytest.raises(BudgetReadError):
+            await service.check_can_proceed("user-1")
+
+
+@pytest.mark.asyncio
+async def test_dev_mode_still_allows_through_when_db_is_unconfigured(
+    monkeypatch,
+):
+    """The fail-closed change must not affect dev mode. When
+    DATABASE_URL is intentionally unset (``_enabled=False``), the
+    service short-circuits before touching the DB — no
+    BudgetReadError, no 503. Operators running ``make dev``
+    without a Postgres get the same behaviour as before the fix."""
+    monkeypatch.setattr(settings, "DATABASE_URL", "")
+    monkeypatch.setattr(settings, "POSTGRES_HOST", None)
+    dev_service = BudgetService()
+
+    # Even if we wire a raising mock, dev mode shouldn't reach it.
+    with patch(
+        "graphora_server.services.budget_service.db.fetchrow",
+        new=AsyncMock(side_effect=RuntimeError("should not be called")),
+    ):
+        # All three reads succeed without raising.
+        assert await dev_service.get_budget("user-1") is None
+        assert await dev_service.get_current_spend("user-1") == Decimal("0")
+        result = await dev_service.check_can_proceed("user-1")
+        assert result.allowed is True
+        assert result.state == BudgetState.UNSET
+
+
 # Sanity that the dataclasses re-export cleanly for downstream use.
 def test_dataclasses_exported():
     """If the imports landed wrong this module wouldn't load —
@@ -404,3 +511,4 @@ def test_dataclasses_exported():
     assert BudgetState.UNSET.value == "unset"
     assert BudgetStatus
     assert BudgetCheckResult
+    assert BudgetReadError

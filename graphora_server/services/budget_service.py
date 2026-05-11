@@ -52,6 +52,23 @@ class BudgetState(str, Enum):
     OVER = "over"
 
 
+class BudgetReadError(RuntimeError):
+    """Raised when a budget read fails against a configured database.
+
+    Reviewer-flagged on commit 535f56d (B5-obs slice 2 P1): the
+    previous behaviour swallowed every DB error and treated it as
+    "no budget set" / "zero spend", which silently disabled
+    enforcement when migration 16 was missing or Postgres was
+    degraded. The enforcement gate is a correctness boundary and
+    MUST fail closed when it can't tell — that's what this
+    exception signals to the API layer (which translates it to
+    HTTP 503).
+
+    Dev mode (``_enabled=False``) does NOT raise — it short-
+    circuits before touching the DB. Only the configured-but-
+    failing path raises."""
+
+
 # 80% of cap triggers the ``near`` state — early-warning headroom
 # the rendering layer uses to render an amber badge before the
 # operator hits the hard wall.
@@ -116,7 +133,12 @@ class BudgetService:
 
     async def get_budget(self, user_id: str) -> Optional[Budget]:
         """Fetch this user's budget, or None when they haven't
-        set one."""
+        set one.
+
+        Raises BudgetReadError when the DB is configured but the
+        read fails — see class docstring on the fail-closed
+        invariant. Dev mode (``_enabled=False``) short-circuits
+        before touching the DB and returns None instead."""
         if not self._enabled or not user_id:
             return None
         try:
@@ -128,9 +150,11 @@ class BudgetService:
                 """,
                 user_id,
             )
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             logger.error("Failed to fetch budget for user %s: %s", user_id, exc)
-            return None
+            raise BudgetReadError(
+                f"Budget DB read failed for user {user_id}: {exc}"
+            ) from exc
         if not row:
             return None
         return _row_to_budget(row)
@@ -139,7 +163,10 @@ class BudgetService:
         """Sum of estimated_cost_usd across this user's llm_usage
         rows in the current UTC-calendar-month window. Unpriced
         rows (NULL estimated_cost_usd) contribute zero — they're
-        unbillable but tracked elsewhere via models_used."""
+        unbillable but tracked elsewhere via models_used.
+
+        Raises BudgetReadError when the DB is configured but the
+        read fails — same fail-closed invariant as get_budget."""
         if not self._enabled or not user_id:
             return Decimal("0")
         start, end = _current_month_window()
@@ -156,11 +183,13 @@ class BudgetService:
                 start,
                 end,
             )
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             logger.error(
                 "Failed to compute current spend for user %s: %s", user_id, exc
             )
-            return Decimal("0")
+            raise BudgetReadError(
+                f"llm_usage read failed for user {user_id}: {exc}"
+            ) from exc
         if not row or row.get("total") is None:
             return Decimal("0")
         return Decimal(str(row["total"]))
