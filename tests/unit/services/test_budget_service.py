@@ -478,6 +478,72 @@ async def test_check_can_proceed_fails_closed_when_spend_read_fails(service):
 
 
 @pytest.mark.asyncio
+async def test_check_allows_unset_user_without_reading_spend(service):
+    """Reviewer-flagged P2 on commit 5b78f85. The fail-closed
+    spend read meant an unset-budget user got a 503 if llm_usage
+    was unavailable — breaking the stated opt-in semantics
+    ("legacy users keep working").
+
+    Pin the short-circuit contract: when budget is None,
+    check_can_proceed allows WITHOUT touching get_current_spend.
+    A capped user's spend read can fail closed; an unset user
+    shouldn't see that read at all.
+
+    Two assertions: (1) the result is allowed=UNSET, (2) the
+    spend read mock was never invoked. The second assertion is
+    the load-bearing one — a future refactor that re-introduces
+    the eager spend roll-up would fail loud here even if the
+    return value happened to look right."""
+    spend_mock = AsyncMock(
+        side_effect=AssertionError(
+            "get_current_spend must not be called when budget is unset"
+        )
+    )
+    with (
+        patch(
+            "graphora_server.services.budget_service.db.fetchrow",
+            new=AsyncMock(return_value=None),  # No budget row.
+        ),
+        patch.object(service, "get_current_spend", new=spend_mock),
+    ):
+        result = await service.check_can_proceed("user-no-budget")
+
+    assert result.allowed is True
+    assert result.state == BudgetState.UNSET
+    spend_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_check_allows_unset_user_even_when_spend_read_would_fail(
+    service,
+):
+    """End-to-end version of the opt-in pin: even with llm_usage
+    actively failing (the exact scenario the reviewer flagged),
+    an unset user passes through. The short-circuit happens
+    BEFORE the spend read, so the read never gets a chance to
+    raise."""
+    # First fetchrow returns None (no budget); second WOULD
+    # raise on the spend read but must never be called.
+    fetchrow_mock = AsyncMock(
+        side_effect=[
+            None,  # get_budget — unset
+            RuntimeError("llm_usage unavailable — must not be reached"),
+        ]
+    )
+    with patch(
+        "graphora_server.services.budget_service.db.fetchrow",
+        new=fetchrow_mock,
+    ):
+        result = await service.check_can_proceed("user-1")
+
+    assert result.allowed is True
+    assert result.state == BudgetState.UNSET
+    # Only ONE fetchrow call — the budget lookup. The spend
+    # lookup was never reached.
+    assert fetchrow_mock.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_dev_mode_still_allows_through_when_db_is_unconfigured(
     monkeypatch,
 ):

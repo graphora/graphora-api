@@ -287,17 +287,47 @@ class BudgetService:
           * Current spend < cap.
 
         Blocks when current spend >= cap. The endpoint translates
-        a blocked result into a 402 Payment Required."""
-        status = await self.get_status(user_id)
+        a blocked result into a 402 Payment Required.
 
-        if status.state == BudgetState.OVER:
-            cap_str = f"${status.cap_usd}" if status.cap_usd is not None else "unset"
-            spend_str = f"${status.current_spend_usd}"
+        Fetches budget BEFORE spend so an unset-budget user doesn't
+        pay the llm_usage read (reviewer-flagged: with the
+        fail-closed spend read, a user with no cap would have
+        received a 503 if llm_usage was degraded, breaking the
+        stated opt-in semantics). Only capped users need the
+        spend rollup."""
+        budget = await self.get_budget(user_id)
+        if budget is None:
+            # Opt-in: no cap configured ⇒ allow without touching
+            # llm_usage. A degraded spend table can't break a
+            # user who never asked to be capped.
+            return BudgetCheckResult(
+                allowed=True,
+                state=BudgetState.UNSET,
+                current_spend_usd=Decimal("0"),
+                cap_usd=None,
+                reason=None,
+            )
+
+        # Capped user: now the spend read matters. A failure here
+        # propagates BudgetReadError → 503 (fail-closed gate).
+        spend = await self.get_current_spend(user_id)
+        cap = budget.monthly_cap_usd
+
+        if spend >= cap:
+            state = BudgetState.OVER
+        elif spend / cap >= _NEAR_THRESHOLD:
+            state = BudgetState.NEAR
+        else:
+            state = BudgetState.UNDER
+
+        if state == BudgetState.OVER:
+            cap_str = f"${cap}"
+            spend_str = f"${spend}"
             return BudgetCheckResult(
                 allowed=False,
-                state=status.state,
-                current_spend_usd=status.current_spend_usd,
-                cap_usd=status.cap_usd,
+                state=state,
+                current_spend_usd=spend,
+                cap_usd=cap,
                 reason=(
                     f"Monthly budget exceeded: spent {spend_str} of "
                     f"{cap_str} cap. Increase or remove the cap to "
@@ -306,9 +336,9 @@ class BudgetService:
             )
         return BudgetCheckResult(
             allowed=True,
-            state=status.state,
-            current_spend_usd=status.current_spend_usd,
-            cap_usd=status.cap_usd,
+            state=state,
+            current_spend_usd=spend,
+            cap_usd=cap,
             reason=None,
         )
 

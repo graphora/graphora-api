@@ -265,14 +265,27 @@ def test_preflight_blocks_with_402_when_over_budget(test_client, _empty_upload):
     assert mock.check_can_proceed.await_count == 1
 
 
-def test_preflight_lets_under_budget_through(test_client, _empty_upload):
+def test_preflight_lets_under_budget_through(
+    test_client, _empty_upload, monkeypatch, tmp_path
+):
     """Under-budget users should NOT get 402. They may still hit
     downstream errors (the underlying transform may fail for other
     reasons), but the budget gate doesn't fire. Pin: not 402.
 
     Mock the audit-service downstream call so the test doesn't
     open a psycopg pool against a missing dev DB — without this
-    mock the test slows by ~30s waiting for the pool init."""
+    mock the test slows by ~30s waiting for the pool init.
+
+    Reviewer-flagged on commit 5b78f85 (P2.2): also monkeypatch
+    UPLOAD_DIR to a tmpdir. Pre-fix this test hit the real default
+    upload directory (~/.graphora/uploads/...), which fails with
+    PermissionError on CI workers and pollutes the dev environment
+    elsewhere. The 402-cleanup test already does this; mirror it
+    here for parity."""
+    from graphora_server.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "UPLOAD_DIR", str(tmp_path / "uploads"))
+
     allowed = BudgetCheckResult(
         allowed=True,
         state=BudgetState.UNDER,
