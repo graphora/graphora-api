@@ -205,6 +205,112 @@
         "title": "Body_upload_documents_schemaless_api_v1_transform_schemaless_upload_post",
         "type": "object"
       },
+      "BudgetResponse": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "monthly_cap_usd": {
+            "description": "Cap as a string for Decimal precision \u2014 same convention as /cost's estimated_cost_usd.",
+            "title": "Monthly Cap Usd",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "monthly_cap_usd"
+        ],
+        "title": "BudgetResponse",
+        "type": "object"
+      },
+      "BudgetStatusResponse": {
+        "properties": {
+          "cap_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cap Usd"
+          },
+          "current_spend_usd": {
+            "description": "Spend rolled up from llm_usage in the current period, as a string for Decimal precision.",
+            "title": "Current Spend Usd",
+            "type": "string"
+          },
+          "period_end": {
+            "title": "Period End",
+            "type": "string"
+          },
+          "period_start": {
+            "title": "Period Start",
+            "type": "string"
+          },
+          "state": {
+            "description": "One of: unset, under, near, over",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "current_spend_usd",
+          "period_start",
+          "period_end"
+        ],
+        "title": "BudgetStatusResponse",
+        "type": "object"
+      },
+      "BudgetWriteRequest": {
+        "description": "Body shape for PUT /budgets/me. Pydantic's Decimal type\naccepts JSON numbers and strings; the service layer enforces\nnon-negative via a CHECK constraint at the DB layer as\ndefense-in-depth.",
+        "properties": {
+          "monthly_cap_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "description": "Monthly spend cap in USD. 0 blocks all spend.",
+            "title": "Monthly Cap Usd"
+          }
+        },
+        "required": [
+          "monthly_cap_usd"
+        ],
+        "title": "BudgetWriteRequest",
+        "type": "object"
+      },
       "ChangeLog": {
         "description": "Model for change logs",
         "properties": {
@@ -5474,6 +5580,142 @@
         "summary": "Get Audit Trail",
         "tags": [
           "Audit Trail"
+        ]
+      }
+    },
+    "/api/v1/budgets/me": {
+      "delete": {
+        "description": "Remove the authenticated user's monthly budget cap.",
+        "operationId": "delete_my_budget_api_v1_budgets_me_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Delete My Budget Api V1 Budgets Me Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete My Budget",
+        "tags": [
+          "Budgets"
+        ]
+      },
+      "get": {
+        "description": "Get the authenticated user's monthly budget cap.",
+        "operationId": "get_my_budget_api_v1_budgets_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BudgetResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get My Budget Api V1 Budgets Me Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get My Budget",
+        "tags": [
+          "Budgets"
+        ]
+      },
+      "put": {
+        "description": "Set or update the authenticated user's monthly budget cap.",
+        "operationId": "set_my_budget_api_v1_budgets_me_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set My Budget",
+        "tags": [
+          "Budgets"
+        ]
+      }
+    },
+    "/api/v1/budgets/me/status": {
+      "get": {
+        "description": "Current period's spend vs cap for the authenticated user, with a state label the UI / agent can use to decide whether to render an amber warning or block further spend.",
+        "operationId": "get_my_budget_status_api_v1_budgets_me_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get My Budget Status",
+        "tags": [
+          "Budgets"
         ]
       }
     },

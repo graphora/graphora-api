@@ -196,6 +196,17 @@ async def _tool_impl_get_cost_report(
     return await api.get_cost_report(transform_id)
 
 
+async def _tool_impl_get_budget_status(
+    api: GraphoraClient,
+) -> Dict[str, Any]:
+    """B5-obs slice 2: agent-facing budget status surface.
+
+    Lets the agent pre-flight check before submitting an
+    expensive transform. Pure passthrough — same architecture as
+    get_cost_report. Transport errors propagate."""
+    return await api.get_budget_status()
+
+
 # ---- FastMCP wiring --------------------------------------------------------
 
 
@@ -372,6 +383,30 @@ def build_server(client: Optional[GraphoraClient] = None):
         """
         return await _tool_impl_get_cost_report(api, transform_id)
 
+    @mcp.tool()
+    async def get_budget_status() -> Dict[str, Any]:
+        """Current monthly budget status for the authenticated user.
+
+        Tells the agent whether the next transform will succeed:
+          * ``state="under"`` — well under cap, safe to proceed.
+          * ``state="near"`` — within 20% of cap; warn the user
+            before queueing more work.
+          * ``state="over"`` — the next transform-upload will be
+            rejected with 402.
+          * ``state="unset"`` — no cap configured; spend untracked
+            against any limit.
+
+        Returns:
+            state (str): one of under / near / over / unset.
+            current_spend_usd (str): cumulative LLM spend this
+                period (Decimal-precision string).
+            cap_usd (str | None): the cap, or null when unset.
+            period_start (str): ISO8601 UTC, start of the period.
+            period_end (str): ISO8601 UTC, exclusive end of the
+                period.
+        """
+        return await _tool_impl_get_budget_status(api)
+
     return mcp
 
 
@@ -439,5 +474,6 @@ __all__ = [
     "_tool_impl_query_graph",
     "_tool_impl_get_evidence",
     "_tool_impl_get_cost_report",
+    "_tool_impl_get_budget_status",
     "_tool_impl_refine_ontology",
 ]

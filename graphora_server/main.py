@@ -14,6 +14,7 @@ from slowapi.util import get_remote_address
 
 from graphora_server.api.ai_config import router as ai_config_router
 from graphora_server.api.audit import router as audit_router
+from graphora_server.api.budgets import router as budgets_router
 from graphora_server.api.chat import router as chat_router
 from graphora_server.api.chunking import router as chunking_router
 from graphora_server.api.config import router as config_router
@@ -139,6 +140,7 @@ app.include_router(chat_router)
 app.include_router(quality_router)
 app.include_router(chunking_router)
 app.include_router(dashboard_router)
+app.include_router(budgets_router)
 
 
 @app.get("/health")

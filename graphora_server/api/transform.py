@@ -37,6 +37,7 @@ from graphora_server.services.transform.status_models import DetailedTransformSt
 from graphora_server.config import settings
 from pathlib import Path
 from datetime import datetime, timezone
+from graphora_server.api.budgets import enforce_budget_preflight
 from graphora_server.services.audit_service import audit_service, OperationType
 from graphora_server.services.chunking.config import ChunkingConfig
 from graphora_server.services.schema_inference import create_auto_schema_ontology
@@ -186,6 +187,12 @@ async def upload_documents(
 
     try:
         logger.info(f"Starting document upload for user: {user_id}")
+
+        # B5-obs slice 2: preflight budget check. Raises 402 if the
+        # user is over their monthly cap; no-ops otherwise. Runs
+        # before any audit row / temp file is created — failing
+        # here leaves no cleanup tail.
+        await enforce_budget_preflight(user_id)
 
         # Parse chunking configuration if provided
         parsed_chunking_config = None
@@ -382,6 +389,10 @@ async def upload_documents_auto_schema(
 
     try:
         logger.info(f"Starting auto-schema document upload for user: {user_id}")
+
+        # B5-obs slice 2: preflight budget check. Same enforcement
+        # contract as the ontology-supplied upload path.
+        await enforce_budget_preflight(user_id)
 
         # Parse chunking configuration if provided
         parsed_chunking_config = None
@@ -841,6 +852,10 @@ async def upload_documents_schemaless(
 
     try:
         logger.info("Starting schemaless upload for user: %s", user_id)
+
+        # B5-obs slice 2: preflight budget check. Same enforcement
+        # contract as the other two transform-upload endpoints.
+        await enforce_budget_preflight(user_id)
 
         parsed_chunking_config = None
         if chunking_config:

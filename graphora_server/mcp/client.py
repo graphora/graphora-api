@@ -268,6 +268,17 @@ class GraphoraClient:
         )
         return _ok(resp)
 
+    async def get_budget_status(self) -> Dict[str, Any]:
+        """B5-obs slice 2: authenticated user's current-period
+        budget status. Returns the shape from
+        ``/api/v1/budgets/me/status``: ``{state, current_spend_usd,
+        cap_usd, period_start, period_end}``. ``state`` is one of
+        ``unset`` / ``under`` / ``near`` / ``over``; the agent can
+        use it to decide whether the next transform will succeed
+        before submitting one."""
+        resp = await self._client.get(f"{_API_V1}/budgets/me/status")
+        return _ok(resp)
+
 
 def _ok(resp: httpx.Response) -> Dict[str, Any]:
     if resp.status_code >= 400:

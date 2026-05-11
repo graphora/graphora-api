@@ -15,6 +15,7 @@ import pytest
 
 from graphora_server.mcp.server import (
     _tool_impl_extract_document,
+    _tool_impl_get_budget_status,
     _tool_impl_get_cost_report,
     _tool_impl_get_evidence,
     _tool_impl_query_graph,
@@ -39,6 +40,8 @@ class FakeAPIClient:
         decisions_error: Optional[Exception] = None,
         cost_report_return: Optional[Dict[str, Any]] = None,
         cost_report_error: Optional[Exception] = None,
+        budget_status_return: Optional[Dict[str, Any]] = None,
+        budget_status_error: Optional[Exception] = None,
     ):
         self.upload_file_return = upload_file_return or {
             "transform_id": "tx_file",
@@ -72,6 +75,14 @@ class FakeAPIClient:
             "by_operation_type": {},
         }
         self.cost_report_error = cost_report_error
+        self.budget_status_return = budget_status_return or {
+            "state": "unset",
+            "current_spend_usd": "0",
+            "cap_usd": None,
+            "period_start": "2026-05-01T00:00:00+00:00",
+            "period_end": "2026-06-01T00:00:00+00:00",
+        }
+        self.budget_status_error = budget_status_error
         self.calls: List[tuple] = []
 
     async def upload_file(
@@ -156,6 +167,12 @@ class FakeAPIClient:
         if self.cost_report_error is not None:
             raise self.cost_report_error
         return self.cost_report_return
+
+    async def get_budget_status(self) -> Dict[str, Any]:
+        self.calls.append(("get_budget_status",))
+        if self.budget_status_error is not None:
+            raise self.budget_status_error
+        return self.budget_status_return
 
 
 # ---- extract_document ------------------------------------------------------
@@ -620,3 +637,55 @@ class TestGetCostReport:
         )
         with pytest.raises(GraphoraClientError):
             await _tool_impl_get_cost_report(api, "tx-1")
+
+
+# ---- get_budget_status -----------------------------------------------------
+
+
+class TestGetBudgetStatus:
+    """B5-obs slice 2: agent-facing budget status surface.
+    Pure passthrough — same architectural pattern as
+    get_cost_report. The agent uses this to predict whether the
+    next transform will succeed."""
+
+    @pytest.mark.asyncio
+    async def test_passthrough_returns_endpoint_payload_unchanged(self) -> None:
+        """Whatever the API returns, the tool surfaces verbatim.
+        Pinning the wire shape so a refactor that "helpfully"
+        coerces fields can't slip through."""
+        payload = {
+            "state": "near",
+            "current_spend_usd": "85.0000",
+            "cap_usd": "100.0000",
+            "period_start": "2026-05-01T00:00:00+00:00",
+            "period_end": "2026-06-01T00:00:00+00:00",
+        }
+        api = FakeAPIClient(budget_status_return=payload)
+        result = await _tool_impl_get_budget_status(api)
+        assert result == payload
+        assert api.calls == [("get_budget_status",)]
+
+    @pytest.mark.asyncio
+    async def test_unset_state_returns_null_cap(self) -> None:
+        """The default FakeAPIClient payload mirrors the
+        unset-budget shape: state=unset, cap_usd=null. The agent
+        layer renders this as 'no budget set' rather than
+        '$0/$0'."""
+        api = FakeAPIClient()
+        result = await _tool_impl_get_budget_status(api)
+        assert result["state"] == "unset"
+        assert result["cap_usd"] is None
+
+    @pytest.mark.asyncio
+    async def test_transport_error_propagates(self) -> None:
+        """Budget status is a primary signal for the agent's
+        decision to submit work — propagate failures rather than
+        silently report 'unset' (which would let the agent submit
+        and then 402)."""
+        from graphora_server.mcp.client import GraphoraClientError
+
+        api = FakeAPIClient(
+            budget_status_error=GraphoraClientError(503, "Service Unavailable"),
+        )
+        with pytest.raises(GraphoraClientError):
+            await _tool_impl_get_budget_status(api)
