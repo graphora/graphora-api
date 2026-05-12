@@ -169,6 +169,112 @@ def test_diff_endpoint_returns_500_when_loading_fails(test_client):
     assert response.status_code == 500
 
 
+def test_diff_endpoint_413s_when_base_truncated(test_client):
+    """Reviewer-flagged P2 on commit a75cd73. The diff loader
+    caps reads at 10k nodes, but ``GraphResponse.total_nodes``
+    can exceed the returned list — pre-fix the endpoint returned
+    a confident-looking but silently incomplete diff for larger
+    transforms.
+
+    Pin: when the base graph reports more total_nodes than were
+    returned, the endpoint fails loud with 413 carrying the
+    structured detail body so the agent / CLI can render a
+    meaningful "this transform is too big for diff" message
+    rather than misinterpret a partial diff."""
+    # Returned 5 nodes but the count query said there are 15000.
+    base = GraphResponse(
+        nodes=[_node(f"b-{i}") for i in range(5)],
+        edges=[],
+        total_nodes=15000,
+        total_edges=0,
+    )
+    compare = GraphResponse(
+        nodes=[_node(f"c-{i}") for i in range(5)],
+        edges=[],
+        total_nodes=5,
+        total_edges=0,
+    )
+
+    async def fake_load(transform_id: str, user_id: str):
+        return base if transform_id == "tx-big" else compare
+
+    with patch(
+        "graphora_server.api.graph._load_graph_for_diff",
+        new=AsyncMock(side_effect=fake_load),
+    ):
+        response = test_client.get("/api/v1/graph/tx-big/diff/tx-small")
+
+    assert response.status_code == 413
+    body = response.json()["detail"]
+    assert body["error"] == "transform_too_large_to_diff"
+    assert body["side"] == "base"
+    assert body["transform_id"] == "tx-big"
+    assert body["returned_nodes"] == 5
+    assert body["total_nodes"] == 15000
+
+
+def test_diff_endpoint_413s_when_compare_truncated(test_client):
+    """Mirror pin: truncation on the compare side trips the same
+    413 with side='compare'. Both sides must pass the check for
+    the diff to compute."""
+    base = GraphResponse(
+        nodes=[_node("b-1")],
+        edges=[],
+        total_nodes=1,
+        total_edges=0,
+    )
+    compare = GraphResponse(
+        nodes=[_node("c-1")],
+        edges=[],
+        total_nodes=20000,  # truncated
+        total_edges=0,
+    )
+
+    async def fake_load(transform_id: str, user_id: str):
+        return base if transform_id == "tx-small" else compare
+
+    with patch(
+        "graphora_server.api.graph._load_graph_for_diff",
+        new=AsyncMock(side_effect=fake_load),
+    ):
+        response = test_client.get("/api/v1/graph/tx-small/diff/tx-big")
+
+    assert response.status_code == 413
+    body = response.json()["detail"]
+    assert body["side"] == "compare"
+    assert body["transform_id"] == "tx-big"
+
+
+def test_diff_endpoint_succeeds_when_counts_match(test_client):
+    """Sanity check: when total_nodes == len(nodes) on both sides
+    (the common case), the 413 doesn't fire. Pin to guard against
+    the truncation check accidentally rejecting fully-loaded
+    graphs."""
+    base = GraphResponse(
+        nodes=[_node("b-1"), _node("b-2")],
+        edges=[],
+        total_nodes=2,
+        total_edges=0,
+    )
+    compare = GraphResponse(
+        nodes=[_node("c-1"), _node("c-2")],
+        edges=[],
+        total_nodes=2,
+        total_edges=0,
+    )
+
+    async def fake_load(transform_id: str, user_id: str):
+        return base if transform_id == "tx-1" else compare
+
+    with patch(
+        "graphora_server.api.graph._load_graph_for_diff",
+        new=AsyncMock(side_effect=fake_load),
+    ):
+        response = test_client.get("/api/v1/graph/tx-1/diff/tx-2")
+
+    assert response.status_code == 200
+
+
 def test_diff_endpoint_handles_edge_property_change(test_client):
     """End-to-end edge-level diff: same endpoint identities,
     different edge properties. The endpoint surfaces it as a

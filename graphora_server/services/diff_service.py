@@ -150,24 +150,35 @@ class DiffService:
         the rendering layer a stable "what changed FROM base TO
         compare" narrative."""
 
-        base_nodes = {_node_key(n): n for n in base_graph.nodes}
-        compare_nodes = {_node_key(n): n for n in compare_graph.nodes}
+        # Reviewer-flagged P1 on commit a75cd73: a single-pass
+        # _node_key() build broke fallback matching when one side
+        # had canonical_id and the other had only canonical_key.
+        # Same logical entity → different keys → false
+        # added+removed pair. Fixed with staged matching:
+        # canonical_id first, then type:canonical_key on the
+        # remainder, then local-id fallback.
+        #
+        # ``base_match_key`` and ``compare_match_key`` map each
+        # side's per-transform node id to a STABLE match identity
+        # that survives the side-mismatch (e.g. both alices end
+        # up as "Person:alice" even when one has canonical_id and
+        # the other doesn't). Edge composition reads from these
+        # maps so endpoint identity is the matched identity, not
+        # the per-side identity.
+        (
+            matched_pairs,
+            unmatched_base,
+            unmatched_compare,
+            base_match_key,
+            compare_match_key,
+        ) = _match_nodes(base_graph.nodes, compare_graph.nodes)
 
-        base_keys = set(base_nodes.keys())
-        compare_keys = set(compare_nodes.keys())
-
-        added_node_keys = compare_keys - base_keys
-        removed_node_keys = base_keys - compare_keys
-        common_node_keys = base_keys & compare_keys
-
-        added_nodes = [compare_nodes[k] for k in added_node_keys]
-        removed_nodes = [base_nodes[k] for k in removed_node_keys]
+        added_nodes = list(unmatched_compare)
+        removed_nodes = list(unmatched_base)
 
         changed_nodes: List[NodeDelta] = []
         unchanged_count = 0
-        for key in common_node_keys:
-            b = base_nodes[key]
-            c = compare_nodes[key]
+        for b, c, _match_key in matched_pairs:
             prop_changes = _property_delta(b.properties, c.properties)
             if not prop_changes:
                 unchanged_count += 1
@@ -186,21 +197,15 @@ class DiffService:
 
         # ---- Edges --------------------------------------------------------
         #
-        # Edge identity depends on its endpoints' identity keys.
-        # If an endpoint is missing from a graph (i.e. the source/
-        # target node was added or removed), that edge gets
-        # attributed to the same side as the missing endpoint
-        # naturally — because the edge's key on that side won't
-        # exist on the other side either.
+        # Edge identity uses the MATCHED node identity (not the
+        # per-side raw key) so an edge whose endpoint matched
+        # across the cid/canonical-key fallback still surfaces as
+        # the same edge on both sides.
 
-        base_edges = {_edge_key(e, base_nodes): e for e in base_graph.edges}
-        compare_edges = {_edge_key(e, compare_nodes): e for e in compare_graph.edges}
-        # Drop edges whose endpoints we couldn't key (orphaned
-        # source/target ids on the same side). Diffing those is
-        # ambiguous; logging the count keeps the issue visible
-        # without polluting the payload.
-        base_edges = {k: v for k, v in base_edges.items() if k is not None}
-        compare_edges = {k: v for k, v in compare_edges.items() if k is not None}
+        base_edges_keyed = _key_edges(base_graph.edges, base_match_key)
+        compare_edges_keyed = _key_edges(compare_graph.edges, compare_match_key)
+        base_edges = base_edges_keyed
+        compare_edges = compare_edges_keyed
 
         base_edge_keys = set(base_edges.keys())
         compare_edge_keys = set(compare_edges.keys())
@@ -306,20 +311,165 @@ def _node_key(node: Node) -> NodeKey:
     return f"__local__:{node.id}"
 
 
+def _match_nodes(
+    base_nodes: List[Node],
+    compare_nodes: List[Node],
+) -> Tuple[
+    List[Tuple[Node, Node, str]],
+    List[Node],
+    List[Node],
+    Dict[str, str],
+    Dict[str, str],
+]:
+    """Three-pass staged matching for cross-transform node identity.
+
+    Reviewer-flagged P1 on commit a75cd73. The previous single-pass
+    keyer broke when one side had ``canonical_id`` and the other
+    only had ``canonical_key`` — the same entity got two different
+    keys and surfaced as a false added+removed pair.
+
+    Pass order (strictest signal first):
+      1. ``canonical_id`` — Gate 4 entity resolution. Both sides
+         must have it for a match.
+      2. ``type:canonical_key`` — extraction-time identity, runs
+         only on nodes the first pass didn't claim. Crucially:
+         this is the pass that bridges "base lacks canonical_id,
+         compare has it" cases — both sides still share
+         canonical_key, so the match happens here.
+      3. ``__local__:<id>`` — last resort, matches only same-id
+         pairs that exist on both sides. Rare in production
+         (transforms produce different ids per run) but valuable
+         in tests and for the rare same-id retry case.
+
+    Returns:
+        matched_pairs: list of (base_node, compare_node, match_key)
+        unmatched_base / unmatched_compare: nodes with no partner
+        base_match_key / compare_match_key: per-side maps from
+            node.id to the stable match key. Edge composition uses
+            these so endpoint identity is the *matched* identity,
+            not the per-side raw key (load-bearing for the same
+            cross-pass scenario as the node fix).
+    """
+    matched: List[Tuple[Node, Node, str]] = []
+    consumed_base: set = set()
+    consumed_compare: set = set()
+    base_match_key: Dict[str, str] = {}
+    compare_match_key: Dict[str, str] = {}
+
+    # ---- Pass 1: canonical_id ------------------------------------------
+    base_by_cid: Dict[str, Node] = {}
+    for b in base_nodes:
+        cid = _canonical_id_or_none(b)
+        if cid:
+            # If multiple base nodes share a canonical_id (a
+            # post-ER mistake), the last one wins — diffing
+            # such an ambiguous graph is best-effort.
+            base_by_cid[cid] = b
+
+    for c in compare_nodes:
+        cid = _canonical_id_or_none(c)
+        if cid and cid in base_by_cid:
+            b = base_by_cid[cid]
+            if b.id in consumed_base:
+                # Compare has multiple nodes with the same
+                # canonical_id; only the first one matches.
+                continue
+            matched.append((b, c, cid))
+            consumed_base.add(b.id)
+            consumed_compare.add(c.id)
+            base_match_key[b.id] = cid
+            compare_match_key[c.id] = cid
+
+    # ---- Pass 2: type:canonical_key ------------------------------------
+    base_by_ckey: Dict[str, Node] = {}
+    for b in base_nodes:
+        if b.id in consumed_base:
+            continue
+        ckey = _canonical_key_or_none(b)
+        if ckey:
+            base_by_ckey[f"{b.type}:{ckey}"] = b
+
+    for c in compare_nodes:
+        if c.id in consumed_compare:
+            continue
+        ckey = _canonical_key_or_none(c)
+        if not ckey:
+            continue
+        composite = f"{c.type}:{ckey}"
+        if composite in base_by_ckey:
+            b = base_by_ckey[composite]
+            if b.id in consumed_base:
+                continue
+            matched.append((b, c, composite))
+            consumed_base.add(b.id)
+            consumed_compare.add(c.id)
+            base_match_key[b.id] = composite
+            compare_match_key[c.id] = composite
+
+    # ---- Pass 3: __local__:<id> fallback -------------------------------
+    base_by_local_id = {b.id: b for b in base_nodes if b.id not in consumed_base}
+    for c in compare_nodes:
+        if c.id in consumed_compare:
+            continue
+        if c.id in base_by_local_id:
+            b = base_by_local_id[c.id]
+            local_key = f"__local__:{c.id}"
+            matched.append((b, c, local_key))
+            consumed_base.add(b.id)
+            consumed_compare.add(c.id)
+            base_match_key[b.id] = local_key
+            compare_match_key[c.id] = local_key
+
+    # ---- Unmatched + their individual match keys -----------------------
+    unmatched_base = [b for b in base_nodes if b.id not in consumed_base]
+    unmatched_compare = [c for c in compare_nodes if c.id not in consumed_compare]
+
+    # Unmatched nodes still need a key for edge composition. Use
+    # their best individual key — won't collide with anything on
+    # the other side because that side didn't have it (otherwise
+    # they would have matched).
+    for b in unmatched_base:
+        base_match_key[b.id] = _node_key(b)
+    for c in unmatched_compare:
+        compare_match_key[c.id] = _node_key(c)
+
+    return matched, unmatched_base, unmatched_compare, base_match_key, compare_match_key
+
+
+def _key_edges(
+    edges: List[Edge],
+    match_key_by_node_id: Dict[str, str],
+) -> Dict[EdgeKey, Edge]:
+    """Build a {(source_match_key, target_match_key, type) -> Edge}
+    map. Drops orphaned edges (endpoint not in the same-side
+    match-key map) — they can't be sensibly matched across
+    transforms."""
+    keyed: Dict[EdgeKey, Edge] = {}
+    for edge in edges:
+        src_key = match_key_by_node_id.get(edge.source)
+        tgt_key = match_key_by_node_id.get(edge.target)
+        if src_key is None or tgt_key is None:
+            logger.debug(
+                "Skipping orphaned edge %s (%s -> %s, type=%s) — endpoint not "
+                "in match-key map",
+                edge.id,
+                edge.source,
+                edge.target,
+                edge.type,
+            )
+            continue
+        keyed[(src_key, tgt_key, edge.type)] = edge
+    return keyed
+
+
 def _edge_key(
     edge: Edge,
     node_lookup: Dict[NodeKey, Node],
 ) -> Optional[EdgeKey]:
-    """Compose a stable cross-transform identity from the edge's
-    endpoint keys + type.
-
-    Returns None when either endpoint can't be located in the
-    same-side node map — that's an orphaned edge (source/target id
-    pointing at a node that was filtered or simply doesn't exist
-    in the graph response). The diff loop drops these because we
-    can't sensibly match them across transforms; logging the count
-    happens at the call site."""
-    # Find each endpoint by id in the same-side node map.
+    """Single-side edge key. Retained for unit-test callers that
+    exercise the per-edge identity rule directly; production
+    diffing goes through _match_nodes + _key_edges so endpoint
+    identity uses the matched identity across the staged passes."""
     src_node = next((n for n in node_lookup.values() if n.id == edge.source), None)
     tgt_node = next((n for n in node_lookup.values() if n.id == edge.target), None)
     if src_node is None or tgt_node is None:
@@ -335,17 +485,38 @@ def _edge_key(
     return (_node_key(src_node), _node_key(tgt_node), edge.type)
 
 
+# Properties the diff service treats as identity / metadata
+# signal rather than user-meaningful content. Filtering these
+# from _property_delta keeps "ER added a canonical_id" or
+# "canonical_key got re-derived" from surfacing as a property
+# change — those are identity signals consumed by the staged
+# matcher, not user-visible facts about the entity.
+#
+# Kept LOCAL to the diff service rather than added to the
+# global SYSTEM_PROPERTIES list because the global list has
+# wide blast radius (similarity scoring, ontology validation,
+# storage versioning) and the diff service is the only surface
+# that needs canonical_id / canonical_key filtered out of
+# property comparison.
+_DIFF_EXCLUDED_PROPERTIES = set(SYSTEM_PROPERTIES) | {
+    "canonical_id",
+    "canonical_key",
+    "canonical_properties",
+}
+
+
 def _property_delta(
     base: Dict[str, Any], compare: Dict[str, Any]
 ) -> Dict[str, PropertyChange]:
-    """Per-property diff with SYSTEM_PROPERTIES filtered out.
+    """Per-property diff with system + identity fields filtered out.
 
     The filter is load-bearing: without it, every re-extraction
     re-stamps source_chunk_id / validator_score / __valid_from /
     extraction_timestamp and the diff fires "changed" on every
-    node. Mirrors the filter the storage layer uses to decide
-    whether to version a relationship, so user-visible "changes"
-    here match user-visible "versioning" there."""
+    node. Also strips identity signals (canonical_id,
+    canonical_key) — those are how the staged matcher pairs
+    nodes across sides, not user-meaningful facts about the
+    entity. See _DIFF_EXCLUDED_PROPERTIES."""
     base_filtered = _filter_system(base)
     compare_filtered = _filter_system(compare)
     all_keys = set(base_filtered.keys()) | set(compare_filtered.keys())
@@ -361,4 +532,4 @@ def _property_delta(
 def _filter_system(props: Dict[str, Any]) -> Dict[str, Any]:
     if not props:
         return {}
-    return {k: v for k, v in props.items() if k not in SYSTEM_PROPERTIES}
+    return {k: v for k, v in props.items() if k not in _DIFF_EXCLUDED_PROPERTIES}

@@ -366,6 +366,8 @@ async def diff_transforms(
     try:
         base_graph = await _load_graph_for_diff(base_transform_id, auth.user_id)
         compare_graph = await _load_graph_for_diff(compare_transform_id, auth.user_id)
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         logger.error(
@@ -379,6 +381,16 @@ async def diff_transforms(
             status_code=500, detail=f"Error loading graphs for diff: {str(e)}"
         )
 
+    # Reviewer-flagged P2 on commit a75cd73: the 10k node loader
+    # cap meant a transform with more nodes than that returned a
+    # confident-looking but silently incomplete diff. Fail loud
+    # (413) when either side was truncated rather than expose a
+    # ``truncated: true`` flag — diffs MUST be correct to be
+    # useful, and a flag can be missed by agents/CLI consumers.
+    # Streaming for >10k transforms is a future slice.
+    _check_truncated(base_graph, "base", base_transform_id)
+    _check_truncated(compare_graph, "compare", compare_transform_id)
+
     diff = DiffService().diff(
         base_graph=base_graph,
         compare_graph=compare_graph,
@@ -386,6 +398,34 @@ async def diff_transforms(
         compare_transform_id=compare_transform_id,
     )
     return _diff_to_dict(diff)
+
+
+def _check_truncated(graph: GraphResponse, side: str, transform_id: str) -> None:
+    """Raise HTTPException(413) when the loaded graph is smaller
+    than its reported total_nodes. ``total_nodes`` is populated
+    by both backends (in-memory + Neo4j) from a count query that
+    is independent of the LIMIT applied to the data fetch, so a
+    mismatch is a reliable truncation signal."""
+    if graph.total_nodes is None:
+        return
+    if len(graph.nodes) < graph.total_nodes:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error": "transform_too_large_to_diff",
+                "side": side,
+                "transform_id": transform_id,
+                "returned_nodes": len(graph.nodes),
+                "total_nodes": graph.total_nodes,
+                "reason": (
+                    f"The {side} transform contains {graph.total_nodes} "
+                    f"nodes but the diff loader caps reads at "
+                    f"{len(graph.nodes)}. Streaming diff for large "
+                    "transforms is not yet implemented; refusing to "
+                    "return a silent partial diff."
+                ),
+            },
+        )
 
 
 def _diff_to_dict(diff: Any) -> Dict[str, Any]:

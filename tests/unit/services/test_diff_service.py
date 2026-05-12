@@ -363,6 +363,139 @@ class TestDiffService:
             n.id for n in reverse.removed_nodes
         ]
 
+    def test_asymmetric_identity_signals_match_via_canonical_key(self) -> None:
+        """Reviewer-flagged P1 on commit a75cd73. Pre-fix the
+        single-pass keyer broke when base had only canonical_key
+        and compare had both canonical_id AND canonical_key —
+        base keyed to ``Person:alice``, compare keyed to
+        ``cid-alice``, and the same logical entity surfaced as
+        a false ``removed: alice`` + ``added: alice`` pair.
+
+        Pin: when both sides share canonical_key but only one
+        side has canonical_id, staged matching catches them via
+        the canonical_key pass — they match, with zero added
+        and zero removed."""
+        # The exact scenario from the reviewer's example.
+        legacy_alice = _make_node(
+            "old-1",
+            type="Person",
+            canonical_key="alice",
+            canonical_id=None,  # legacy — no ER yet
+            properties={"role": "engineer"},
+        )
+        post_er_alice = _make_node(
+            "new-1",
+            type="Person",
+            canonical_key="alice",
+            canonical_id="cid-alice",  # ER assigned a stable id
+            properties={"role": "engineer"},
+        )
+        base = GraphResponse(nodes=[legacy_alice], edges=[])
+        compare = GraphResponse(nodes=[post_er_alice], edges=[])
+
+        result = self._service().diff(base, compare, "tx-legacy", "tx-er")
+
+        assert result.summary.nodes_added == 0, (
+            "Pre-fix: same entity surfaced as added because base "
+            "keyed to Person:alice and compare keyed to cid-alice. "
+            f"Got {result.summary.nodes_added} added, payload: "
+            f"{[n.id for n in result.added_nodes]!r}"
+        )
+        assert result.summary.nodes_removed == 0
+        # Same user properties → no changes; same logical
+        # entity, just with one side gaining a canonical_id.
+        assert result.summary.nodes_unchanged == 1
+
+    def test_asymmetric_identity_edge_endpoints_still_match(self) -> None:
+        """Cascade pin for the P1 fix: edges between two
+        asymmetric-identity nodes must also match across the
+        diff. Pre-fix, the false node-level added+removed
+        would have cascaded into the edge layer (different
+        endpoint keys on each side) and reported the same
+        relationship as both removed and added too.
+
+        Post-fix the edge identity uses the MATCHED identity
+        (Person:alice) from the staged matcher, so endpoint keys
+        stay consistent across sides."""
+        legacy_alice = _make_node(
+            "old-1", type="Person", canonical_key="alice", canonical_id=None
+        )
+        legacy_acme = _make_node(
+            "old-2", type="Company", canonical_key="acme", canonical_id=None
+        )
+        post_er_alice = _make_node(
+            "new-1", type="Person", canonical_key="alice", canonical_id="cid-alice"
+        )
+        post_er_acme = _make_node(
+            "new-2", type="Company", canonical_key="acme", canonical_id="cid-acme"
+        )
+
+        legacy_edge = _make_edge(
+            "e-legacy", source="old-1", target="old-2", type="WORKS_AT"
+        )
+        post_er_edge = _make_edge(
+            "e-new", source="new-1", target="new-2", type="WORKS_AT"
+        )
+
+        base = GraphResponse(nodes=[legacy_alice, legacy_acme], edges=[legacy_edge])
+        compare = GraphResponse(
+            nodes=[post_er_alice, post_er_acme], edges=[post_er_edge]
+        )
+
+        result = self._service().diff(base, compare, "tx-legacy", "tx-er")
+
+        assert result.summary.edges_added == 0, (
+            "Pre-fix: the cascaded false node identity made the "
+            "edge endpoints disagree across sides, surfacing "
+            "the same WORKS_AT edge as both added and removed."
+        )
+        assert result.summary.edges_removed == 0
+        assert result.summary.edges_unchanged == 1
+
+    def test_canonical_id_match_wins_over_canonical_key_match(self) -> None:
+        """Staged matching is order-sensitive: a node that COULD
+        match via type:canonical_key but ALSO has a canonical_id
+        must match via canonical_id first. Otherwise a node with
+        canonical_id="cid-A" + canonical_key="alice" on base could
+        match a different compare node with no canonical_id +
+        canonical_key="alice", leaving the true cid-A match
+        unmatched."""
+        # Base: cid-A alice + no-cid bob (both type:canonical_key="alice"
+        # impossible since types differ — use same type and different
+        # canonical_keys to set this up cleanly).
+        base_alice_cid = _make_node(
+            "old-1",
+            type="Person",
+            canonical_key="alice",
+            canonical_id="cid-alice",
+        )
+        # Compare: same canonical_id alice + a stranger with only
+        # canonical_key matching base alice's canonical_key.
+        compare_alice_cid = _make_node(
+            "new-1",
+            type="Person",
+            canonical_key="alice",
+            canonical_id="cid-alice",
+        )
+        compare_stranger = _make_node(
+            "new-2",
+            type="Person",
+            canonical_key="alice",  # collides on canonical_key only
+            canonical_id=None,
+        )
+
+        base = GraphResponse(nodes=[base_alice_cid], edges=[])
+        compare = GraphResponse(nodes=[compare_alice_cid, compare_stranger], edges=[])
+
+        result = self._service().diff(base, compare, "tx-1", "tx-2")
+
+        # Pass 1 (canonical_id) matches base alice with compare
+        # alice → consumed. Pass 2 sees the stranger but base has
+        # nothing left for it → stranger surfaces as added.
+        assert result.summary.nodes_unchanged == 1
+        assert result.summary.nodes_added == 1
+        assert result.added_nodes[0].id == "new-2"
+
     @pytest.mark.asyncio
     async def test_local_only_nodes_show_as_added_or_removed_per_side(
         self,
