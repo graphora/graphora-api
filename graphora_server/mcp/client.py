@@ -279,6 +279,25 @@ class GraphoraClient:
         resp = await self._client.get(f"{_API_V1}/budgets/me/status")
         return _ok(resp)
 
+    async def diff_transforms(
+        self,
+        base_transform_id: str,
+        compare_transform_id: str,
+    ) -> Dict[str, Any]:
+        """B3-diff: structured graph-state diff between two
+        transforms. Returns the shape from
+        ``/api/v1/graph/{base}/diff/{compare}``: ``{summary,
+        added_nodes, removed_nodes, changed_nodes, added_edges,
+        removed_edges, changed_edges}``.
+
+        Node identity matches across transforms by canonical_id
+        (Gate 4 entity resolution), with type:canonical_key as
+        fallback."""
+        resp = await self._client.get(
+            f"{_API_V1}/graph/{base_transform_id}/diff/{compare_transform_id}",
+        )
+        return _ok(resp)
+
 
 def _ok(resp: httpx.Response) -> Dict[str, Any]:
     if resp.status_code >= 400:

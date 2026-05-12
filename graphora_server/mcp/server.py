@@ -207,6 +207,21 @@ async def _tool_impl_get_budget_status(
     return await api.get_budget_status()
 
 
+async def _tool_impl_review_diff(
+    api: GraphoraClient,
+    base_transform_id: str,
+    compare_transform_id: str,
+) -> Dict[str, Any]:
+    """B3-diff: agent-facing graph-state diff between two transforms.
+
+    Pure passthrough — same architecture as get_cost_report and
+    get_budget_status. The API endpoint owns the read + diff
+    computation; MCP forwards the payload. Transport errors
+    propagate because diff is a primary answer the agent asked
+    for, not observability-of-observability."""
+    return await api.diff_transforms(base_transform_id, compare_transform_id)
+
+
 # ---- FastMCP wiring --------------------------------------------------------
 
 
@@ -407,6 +422,47 @@ def build_server(client: Optional[GraphoraClient] = None):
         """
         return await _tool_impl_get_budget_status(api)
 
+    @mcp.tool()
+    async def review_diff(
+        base_transform_id: str,
+        compare_transform_id: str,
+    ) -> Dict[str, Any]:
+        """Structured graph-state diff between two transforms.
+
+        Answers "what changed between extraction A and extraction
+        B?" — useful when an agent re-runs a transform after
+        prompt tweaks or ontology changes and wants to inspect
+        the delta before accepting / publishing.
+
+        Node identity matches across transforms by canonical_id
+        (Gate 4 entity resolution gives this), falling back to
+        type:canonical_key. Edge identity uses the same rule on
+        each endpoint. Property comparison filters system fields
+        (source_chunk_id, validator_score, etc.) so re-extraction
+        churn doesn't drown the actual signal.
+
+        Args:
+            base_transform_id: The "before" transform.
+            compare_transform_id: The "after" transform.
+
+        Returns a dict with:
+            base_transform_id / compare_transform_id (str): Echo.
+            summary (dict): ``{nodes: {added, removed, changed,
+                unchanged}, edges: {...}}`` — the rendering layer
+                can show counts without walking the full payload.
+            added_nodes / removed_nodes (list): Full node objects
+                only present on one side.
+            changed_nodes (list): Nodes in both with property
+                changes. Each: ``{canonical_id, type, base_id,
+                compare_id, property_changes: {<key>: {base,
+                compare}}}``.
+            added_edges / removed_edges / changed_edges (list):
+                Same shape, edge-level.
+        """
+        return await _tool_impl_review_diff(
+            api, base_transform_id, compare_transform_id
+        )
+
     return mcp
 
 
@@ -475,5 +531,6 @@ __all__ = [
     "_tool_impl_get_evidence",
     "_tool_impl_get_cost_report",
     "_tool_impl_get_budget_status",
+    "_tool_impl_review_diff",
     "_tool_impl_refine_ontology",
 ]

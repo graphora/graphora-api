@@ -10,6 +10,7 @@ from graphora_server.services.decision_log_service import (
     DecisionLogService,
     DecisionType,
 )
+from graphora_server.services.diff_service import DiffService
 from graphora_server.services.usage_tracking import UsageTrackingService
 from graphora_server.utils.logger import logger
 import traceback
@@ -296,6 +297,131 @@ async def get_cost_by_transform_id(
         raise HTTPException(
             status_code=500, detail=f"Error fetching cost report: {str(e)}"
         )
+
+
+async def _load_graph_for_diff(transform_id: str, user_id: str) -> GraphResponse:
+    """Helper: fetch one transform's full graph via the same
+    backend-selection logic the main /graph/{transform_id}
+    endpoint uses (in-memory vs staging DB). Pagination is NOT
+    applied — diffs need the whole graph, not a page slice.
+
+    The hard cap of 10k matches the user-facing endpoint's max
+    limit; transforms bigger than that need a different surface
+    (streaming diff) that's out of scope for this slice."""
+    from graphora_server.services.storage.factory import user_has_staging_db
+
+    use_in_memory = is_memory_storage_enabled() or not await user_has_staging_db(
+        user_id
+    )
+
+    if use_in_memory:
+        from graphora_server.services.storage.memory import InMemoryStorage
+
+        storage = InMemoryStorage(user_id=user_id)
+        return await storage.get_transformation_data(transform_id)
+
+    graph_service = await UserDatabaseService.get_staging_graph_service(user_id)
+    try:
+        return graph_service.get_graph_by_transform_id(
+            transform_id=transform_id, limit=10000, skip=0
+        )
+    finally:
+        graph_service.close()
+
+
+@router.get(
+    "/{base_transform_id}/diff/{compare_transform_id}",
+    description=(
+        "B3-diff: structured graph-state diff between two transforms "
+        "(same user). Returns added / removed / changed nodes and "
+        "edges, plus a summary the rendering layer can use without "
+        "walking the full payload. Node identity matches across "
+        "transforms by canonical_id (Gate 4 ER), falling back to "
+        "type:canonical_key, falling back to per-transform id."
+    ),
+)
+async def diff_transforms(
+    base_transform_id: str,
+    compare_transform_id: str,
+    auth: AuthContext = Depends(get_current_auth),
+) -> Dict[str, Any]:
+    """B3-diff endpoint. Both transforms must belong to the
+    authenticated user — tenant scoping follows the same pattern
+    as /decisions and /cost (the graph reader at the storage
+    layer scopes by user_id via the staging DB lookup).
+
+    Returns:
+        base_transform_id (str): Echo.
+        compare_transform_id (str): Echo.
+        summary (dict): ``{nodes: {added, removed, changed,
+            unchanged}, edges: {...}}``.
+        added_nodes (list): Nodes in compare but not base.
+        removed_nodes (list): Nodes in base but not compare.
+        changed_nodes (list): Nodes in both with property changes.
+            Each: ``{canonical_id, type, base_id, compare_id,
+            property_changes: {<key>: {base, compare}}}``.
+        added_edges / removed_edges / changed_edges (lists):
+            Same shape, edge-level.
+    """
+    try:
+        base_graph = await _load_graph_for_diff(base_transform_id, auth.user_id)
+        compare_graph = await _load_graph_for_diff(compare_transform_id, auth.user_id)
+    except Exception as e:
+        traceback.print_exc()
+        logger.error(
+            "Error loading graphs for diff (base=%s, compare=%s, user=%s): %s",
+            base_transform_id,
+            compare_transform_id,
+            auth.user_id,
+            str(e),
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Error loading graphs for diff: {str(e)}"
+        )
+
+    diff = DiffService().diff(
+        base_graph=base_graph,
+        compare_graph=compare_graph,
+        base_transform_id=base_transform_id,
+        compare_transform_id=compare_transform_id,
+    )
+    return _diff_to_dict(diff)
+
+
+def _diff_to_dict(diff: Any) -> Dict[str, Any]:
+    """Serialize the GraphDiff dataclass for JSON transport.
+
+    Nodes and edges are already Pydantic models; ``.model_dump()``
+    produces JSON-clean dicts. NodeDelta / EdgeDelta /
+    PropertyChange are plain dataclasses — convert via
+    dataclasses.asdict so nested ``PropertyChange(base=..., compare=...)``
+    instances render as ``{"base": ..., "compare": ...}``."""
+    from dataclasses import asdict
+
+    return {
+        "base_transform_id": diff.base_transform_id,
+        "compare_transform_id": diff.compare_transform_id,
+        "summary": {
+            "nodes": {
+                "added": diff.summary.nodes_added,
+                "removed": diff.summary.nodes_removed,
+                "changed": diff.summary.nodes_changed,
+                "unchanged": diff.summary.nodes_unchanged,
+            },
+            "edges": {
+                "added": diff.summary.edges_added,
+                "removed": diff.summary.edges_removed,
+                "changed": diff.summary.edges_changed,
+                "unchanged": diff.summary.edges_unchanged,
+            },
+        },
+        "added_nodes": [n.model_dump(mode="json") for n in diff.added_nodes],
+        "removed_nodes": [n.model_dump(mode="json") for n in diff.removed_nodes],
+        "changed_nodes": [asdict(n) for n in diff.changed_nodes],
+        "added_edges": [e.model_dump(mode="json") for e in diff.added_edges],
+        "removed_edges": [e.model_dump(mode="json") for e in diff.removed_edges],
+        "changed_edges": [asdict(e) for e in diff.changed_edges],
+    }
 
 
 @router.put(

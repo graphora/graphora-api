@@ -6912,6 +6912,65 @@
         ]
       }
     },
+    "/api/v1/graph/{base_transform_id}/diff/{compare_transform_id}": {
+      "get": {
+        "description": "B3-diff: structured graph-state diff between two transforms (same user). Returns added / removed / changed nodes and edges, plus a summary the rendering layer can use without walking the full payload. Node identity matches across transforms by canonical_id (Gate 4 ER), falling back to type:canonical_key, falling back to per-transform id.",
+        "operationId": "diff_transforms_api_v1_graph__base_transform_id__diff__compare_transform_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "base_transform_id",
+            "required": true,
+            "schema": {
+              "title": "Base Transform Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "compare_transform_id",
+            "required": true,
+            "schema": {
+              "title": "Compare Transform Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Diff Transforms Api V1 Graph  Base Transform Id  Diff  Compare Transform Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Diff Transforms",
+        "tags": [
+          "Graph"
+        ]
+      }
+    },
     "/api/v1/graph/{transform_id}": {
       "get": {
         "description": "Retrieve nodes by transform ID and their relationships",

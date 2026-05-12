@@ -20,6 +20,7 @@ from graphora_server.mcp.server import (
     _tool_impl_get_evidence,
     _tool_impl_query_graph,
     _tool_impl_refine_ontology,
+    _tool_impl_review_diff,
 )
 
 
@@ -42,6 +43,8 @@ class FakeAPIClient:
         cost_report_error: Optional[Exception] = None,
         budget_status_return: Optional[Dict[str, Any]] = None,
         budget_status_error: Optional[Exception] = None,
+        diff_return: Optional[Dict[str, Any]] = None,
+        diff_error: Optional[Exception] = None,
     ):
         self.upload_file_return = upload_file_return or {
             "transform_id": "tx_file",
@@ -83,6 +86,21 @@ class FakeAPIClient:
             "period_end": "2026-06-01T00:00:00+00:00",
         }
         self.budget_status_error = budget_status_error
+        self.diff_return = diff_return or {
+            "base_transform_id": "tx-base",
+            "compare_transform_id": "tx-cmp",
+            "summary": {
+                "nodes": {"added": 0, "removed": 0, "changed": 0, "unchanged": 0},
+                "edges": {"added": 0, "removed": 0, "changed": 0, "unchanged": 0},
+            },
+            "added_nodes": [],
+            "removed_nodes": [],
+            "changed_nodes": [],
+            "added_edges": [],
+            "removed_edges": [],
+            "changed_edges": [],
+        }
+        self.diff_error = diff_error
         self.calls: List[tuple] = []
 
     async def upload_file(
@@ -173,6 +191,16 @@ class FakeAPIClient:
         if self.budget_status_error is not None:
             raise self.budget_status_error
         return self.budget_status_return
+
+    async def diff_transforms(
+        self,
+        base_transform_id: str,
+        compare_transform_id: str,
+    ) -> Dict[str, Any]:
+        self.calls.append(("diff_transforms", base_transform_id, compare_transform_id))
+        if self.diff_error is not None:
+            raise self.diff_error
+        return self.diff_return
 
 
 # ---- extract_document ------------------------------------------------------
@@ -689,3 +717,73 @@ class TestGetBudgetStatus:
         )
         with pytest.raises(GraphoraClientError):
             await _tool_impl_get_budget_status(api)
+
+
+# ---- review_diff -----------------------------------------------------------
+
+
+class TestReviewDiff:
+    """B3-diff backend: agent-facing graph-state diff surface.
+    Pure passthrough — same architectural pattern as
+    get_cost_report and get_budget_status."""
+
+    @pytest.mark.asyncio
+    async def test_passthrough_returns_endpoint_payload_unchanged(self) -> None:
+        """Whatever the API returns, the tool surfaces verbatim.
+        Pinning the wire shape so a "helpful" client-side
+        re-aggregation can't slip into the tool."""
+        payload = {
+            "base_transform_id": "tx-1",
+            "compare_transform_id": "tx-2",
+            "summary": {
+                "nodes": {"added": 5, "removed": 2, "changed": 1, "unchanged": 100},
+                "edges": {"added": 3, "removed": 0, "changed": 1, "unchanged": 50},
+            },
+            "added_nodes": [{"id": "x", "type": "Person", "properties": {}}],
+            "removed_nodes": [],
+            "changed_nodes": [
+                {
+                    "canonical_id": "cid-alice",
+                    "type": "Person",
+                    "base_id": "a1",
+                    "compare_id": "a2",
+                    "property_changes": {
+                        "role": {"base": "engineer", "compare": "principal"}
+                    },
+                }
+            ],
+            "added_edges": [],
+            "removed_edges": [],
+            "changed_edges": [],
+        }
+        api = FakeAPIClient(diff_return=payload)
+        result = await _tool_impl_review_diff(api, "tx-1", "tx-2")
+
+        assert result == payload
+        assert api.calls == [("diff_transforms", "tx-1", "tx-2")]
+
+    @pytest.mark.asyncio
+    async def test_empty_diff_returns_zero_aggregate(self) -> None:
+        """Identical transforms (or empty graphs) return the zero-
+        aggregate shape, not a 'not found' structure — callers
+        can render 'no differences' without conditional access."""
+        api = FakeAPIClient()
+        result = await _tool_impl_review_diff(api, "tx-x", "tx-y")
+
+        assert result["summary"]["nodes"]["added"] == 0
+        assert result["summary"]["nodes"]["removed"] == 0
+        assert result["added_nodes"] == []
+        assert result["changed_nodes"] == []
+
+    @pytest.mark.asyncio
+    async def test_transport_error_propagates(self) -> None:
+        """Diff is a primary answer the agent asked for — same
+        as cost report and budget status. Errors propagate rather
+        than silently report 'no differences'."""
+        from graphora_server.mcp.client import GraphoraClientError
+
+        api = FakeAPIClient(
+            diff_error=GraphoraClientError(500, "boom"),
+        )
+        with pytest.raises(GraphoraClientError):
+            await _tool_impl_review_diff(api, "tx-1", "tx-2")
