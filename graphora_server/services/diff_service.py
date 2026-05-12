@@ -380,7 +380,21 @@ def _match_nodes(
             base_match_key[b.id] = cid
             compare_match_key[c.id] = cid
 
-    # ---- Pass 2: type:canonical_key ------------------------------------
+    # ---- Pass 2: type:canonical_key (asymmetric ER signal only) --------
+    #
+    # Reviewer-flagged P1 on commit a261321. Pre-fix this pass
+    # matched any pair sharing canonical_key, including cases
+    # where BOTH sides had explicit-but-DIFFERENT canonical_ids
+    # — letting the weaker canonical_key signal override ER's
+    # verdict. When ER assigned different canonical_ids on each
+    # side, it explicitly said "these are different entities";
+    # canonical_key alone cannot bridge that decision.
+    #
+    # Constraint: a pass-2 match is valid iff AT LEAST ONE side
+    # lacks canonical_id. Both-with-canonical-id pairs that pass
+    # 1 already rejected stay unmatched here too, preserving
+    # ER's verdict in the diff payload (they surface as
+    # removed + added).
     base_by_ckey: Dict[str, Node] = {}
     for b in base_nodes:
         if b.id in consumed_base:
@@ -396,15 +410,22 @@ def _match_nodes(
         if not ckey:
             continue
         composite = f"{c.type}:{ckey}"
-        if composite in base_by_ckey:
-            b = base_by_ckey[composite]
-            if b.id in consumed_base:
-                continue
-            matched.append((b, c, composite))
-            consumed_base.add(b.id)
-            consumed_compare.add(c.id)
-            base_match_key[b.id] = composite
-            compare_match_key[c.id] = composite
+        if composite not in base_by_ckey:
+            continue
+        b = base_by_ckey[composite]
+        if b.id in consumed_base:
+            continue
+
+        # Asymmetry constraint: skip when both sides have explicit
+        # canonical_ids (pass 1 already rejected them).
+        if _canonical_id_or_none(b) and _canonical_id_or_none(c):
+            continue
+
+        matched.append((b, c, composite))
+        consumed_base.add(b.id)
+        consumed_compare.add(c.id)
+        base_match_key[b.id] = composite
+        compare_match_key[c.id] = composite
 
     # ---- Pass 3: __local__:<id> fallback -------------------------------
     base_by_local_id = {b.id: b for b in base_nodes if b.id not in consumed_base}

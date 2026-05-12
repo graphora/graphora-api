@@ -402,27 +402,56 @@ async def diff_transforms(
 
 def _check_truncated(graph: GraphResponse, side: str, transform_id: str) -> None:
     """Raise HTTPException(413) when the loaded graph is smaller
-    than its reported total_nodes. ``total_nodes`` is populated
-    by both backends (in-memory + Neo4j) from a count query that
-    is independent of the LIMIT applied to the data fetch, so a
-    mismatch is a reliable truncation signal."""
-    if graph.total_nodes is None:
-        return
-    if len(graph.nodes) < graph.total_nodes:
+    than its reported totals on EITHER nodes or edges.
+
+    ``total_nodes`` and ``total_edges`` are populated by both
+    backends (in-memory + Neo4j) from count queries that are
+    independent of the LIMIT applied to the data fetch, so a
+    mismatch is a reliable truncation signal.
+
+    Reviewer-flagged P2 on commit a261321: the pre-fix check
+    only inspected total_nodes. The Neo4j loader paginates by
+    main node; edges between paginated-out nodes are silently
+    omitted from the fetched edges list. A transform that
+    happens to fit within the 10k-node cap (total_nodes ==
+    len(nodes)) could still have its edges truncated and the
+    diff would silently return a partial answer. Checking
+    BOTH counts closes that hole."""
+    if graph.total_nodes is not None and len(graph.nodes) < graph.total_nodes:
         raise HTTPException(
             status_code=413,
             detail={
                 "error": "transform_too_large_to_diff",
                 "side": side,
                 "transform_id": transform_id,
+                "truncated_dimension": "nodes",
                 "returned_nodes": len(graph.nodes),
                 "total_nodes": graph.total_nodes,
                 "reason": (
                     f"The {side} transform contains {graph.total_nodes} "
-                    f"nodes but the diff loader caps reads at "
+                    f"nodes but the diff loader returned only "
                     f"{len(graph.nodes)}. Streaming diff for large "
                     "transforms is not yet implemented; refusing to "
                     "return a silent partial diff."
+                ),
+            },
+        )
+    if graph.total_edges is not None and len(graph.edges) < graph.total_edges:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error": "transform_too_large_to_diff",
+                "side": side,
+                "transform_id": transform_id,
+                "truncated_dimension": "edges",
+                "returned_edges": len(graph.edges),
+                "total_edges": graph.total_edges,
+                "reason": (
+                    f"The {side} transform contains {graph.total_edges} "
+                    f"edges but the diff loader returned only "
+                    f"{len(graph.edges)} — edges between nodes excluded "
+                    "by the node-pagination cap are missing. Refusing "
+                    "to return a silent partial diff."
                 ),
             },
         )

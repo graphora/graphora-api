@@ -275,6 +275,85 @@ def test_diff_endpoint_succeeds_when_counts_match(test_client):
     assert response.status_code == 200
 
 
+def test_diff_endpoint_413s_when_edges_truncated_even_with_full_nodes(
+    test_client,
+):
+    """Reviewer-flagged P2 on commit a261321. The pre-fix
+    truncation guard only inspected total_nodes. The Neo4j loader
+    paginates by main node; edges between paginated-out nodes
+    are silently omitted from the fetched edges. A transform
+    that happens to fit within the 10k node cap (so
+    total_nodes == len(nodes)) could still have its edges
+    truncated and the diff would silently return a partial
+    answer.
+
+    Pin: total_edges > len(edges) trips 413 with
+    ``truncated_dimension: "edges"`` so the operator knows
+    which side and which dimension fell over."""
+    base = GraphResponse(
+        nodes=[_node("b-1"), _node("b-2")],
+        edges=[
+            # Only 1 edge returned but the count says 500.
+            Edge(id="e-1", source="b-1", target="b-2", type="WORKS_AT", properties={}),
+        ],
+        total_nodes=2,
+        total_edges=500,  # truncated
+    )
+    compare = GraphResponse(
+        nodes=[_node("c-1")],
+        edges=[],
+        total_nodes=1,
+        total_edges=0,
+    )
+
+    async def fake_load(transform_id: str, user_id: str):
+        return base if transform_id == "tx-many-edges" else compare
+
+    with patch(
+        "graphora_server.api.graph._load_graph_for_diff",
+        new=AsyncMock(side_effect=fake_load),
+    ):
+        response = test_client.get("/api/v1/graph/tx-many-edges/diff/tx-small")
+
+    assert response.status_code == 413
+    body = response.json()["detail"]
+    assert body["error"] == "transform_too_large_to_diff"
+    assert body["side"] == "base"
+    assert body["truncated_dimension"] == "edges"
+    assert body["returned_edges"] == 1
+    assert body["total_edges"] == 500
+
+
+def test_diff_endpoint_413s_when_compare_edges_truncated(test_client):
+    """Mirror pin for the compare side."""
+    base = GraphResponse(
+        nodes=[_node("b-1")],
+        edges=[],
+        total_nodes=1,
+        total_edges=0,
+    )
+    compare = GraphResponse(
+        nodes=[_node("c-1"), _node("c-2")],
+        edges=[],
+        total_nodes=2,
+        total_edges=99,  # truncated
+    )
+
+    async def fake_load(transform_id: str, user_id: str):
+        return base if transform_id == "tx-small" else compare
+
+    with patch(
+        "graphora_server.api.graph._load_graph_for_diff",
+        new=AsyncMock(side_effect=fake_load),
+    ):
+        response = test_client.get("/api/v1/graph/tx-small/diff/tx-many-edges")
+
+    assert response.status_code == 413
+    body = response.json()["detail"]
+    assert body["side"] == "compare"
+    assert body["truncated_dimension"] == "edges"
+
+
 def test_diff_endpoint_handles_edge_property_change(test_client):
     """End-to-end edge-level diff: same endpoint identities,
     different edge properties. The endpoint surfaces it as a

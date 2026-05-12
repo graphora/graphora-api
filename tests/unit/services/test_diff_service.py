@@ -452,6 +452,106 @@ class TestDiffService:
         assert result.summary.edges_removed == 0
         assert result.summary.edges_unchanged == 1
 
+    def test_conflicting_canonical_ids_stay_unmatched_even_with_shared_key(
+        self,
+    ) -> None:
+        """Reviewer-flagged P1 on commit a261321. The pre-fix
+        pass-2 logic happily bridged ER's verdict: when both
+        sides had explicit-but-DIFFERENT canonical_ids, pass 1
+        rejected them but pass 2 matched them via shared
+        canonical_key — silently overriding ER and reporting
+        the conflict as ``unchanged``.
+
+        Pin: when both sides carry explicit canonical_ids,
+        canonical_key alone cannot rescue them. They stay
+        unmatched and surface as removed + added so the diff
+        truthfully reflects ER's decision.
+
+        The exact scenario from the reviewer's example."""
+        base_alice = _make_node(
+            "old-1",
+            type="Person",
+            canonical_id="cid-old",
+            canonical_key="alice",
+            properties={"role": "engineer"},
+        )
+        compare_alice = _make_node(
+            "new-1",
+            type="Person",
+            canonical_id="cid-new",  # ER assigned a DIFFERENT id
+            canonical_key="alice",
+            properties={"role": "engineer"},
+        )
+        base = GraphResponse(nodes=[base_alice], edges=[])
+        compare = GraphResponse(nodes=[compare_alice], edges=[])
+
+        result = self._service().diff(base, compare, "tx-1", "tx-2")
+
+        # Both have canonical_ids, but they differ → not the
+        # same entity by ER. canonical_key match would have
+        # been a lie.
+        assert result.summary.nodes_unchanged == 0, (
+            "Pre-fix: pass-2 bridged ER's verdict. Both sides "
+            "had explicit-but-different canonical_ids; canonical_key "
+            "alone shouldn't override that. Got "
+            f"{result.summary.nodes_unchanged} unchanged."
+        )
+        assert result.summary.nodes_removed == 1
+        assert result.summary.nodes_added == 1
+        assert result.removed_nodes[0].id == "old-1"
+        assert result.added_nodes[0].id == "new-1"
+
+    def test_asymmetric_canonical_id_still_matches_via_canonical_key(
+        self,
+    ) -> None:
+        """Companion pin to the conflicting-canonical-id case
+        above. The asymmetric scenario (one side has cid, the
+        other doesn't) MUST still match — that's the legitimate
+        use case for pass 2. Without this pin, an over-zealous
+        fix could silently disable pass 2 entirely.
+
+        Three sub-cases enumerated:
+          * base has cid, compare lacks cid
+          * base lacks cid, compare has cid
+          * neither has cid
+
+        All three should match via canonical_key."""
+
+        # Sub-case 1: base has cid, compare lacks.
+        base_with = _make_node("old-1", canonical_id="cid-alice", canonical_key="alice")
+        compare_without = _make_node("new-1", canonical_id=None, canonical_key="alice")
+        result_1 = self._service().diff(
+            GraphResponse(nodes=[base_with], edges=[]),
+            GraphResponse(nodes=[compare_without], edges=[]),
+            "tx-1",
+            "tx-2",
+        )
+        assert result_1.summary.nodes_unchanged == 1, "sub-case 1"
+
+        # Sub-case 2: base lacks cid, compare has.
+        base_without = _make_node("old-2", canonical_id=None, canonical_key="alice")
+        compare_with = _make_node(
+            "new-2", canonical_id="cid-alice", canonical_key="alice"
+        )
+        result_2 = self._service().diff(
+            GraphResponse(nodes=[base_without], edges=[]),
+            GraphResponse(nodes=[compare_with], edges=[]),
+            "tx-1",
+            "tx-2",
+        )
+        assert result_2.summary.nodes_unchanged == 1, "sub-case 2"
+
+        # Sub-case 3: neither side has cid (pre-ER on both sides).
+        base_neither = _make_node("old-3", canonical_id=None, canonical_key="alice")
+        compare_neither = _make_node("new-3", canonical_id=None, canonical_key="alice")
+        result_3 = self._service().diff(
+            GraphResponse(nodes=[base_neither], edges=[]),
+            GraphResponse(nodes=[compare_neither], edges=[]),
+            "tx-1",
+            "tx-2",
+        )
+        assert result_3.summary.nodes_unchanged == 1, "sub-case 3"
+
     def test_canonical_id_match_wins_over_canonical_key_match(self) -> None:
         """Staged matching is order-sensitive: a node that COULD
         match via type:canonical_key but ALSO has a canonical_id
