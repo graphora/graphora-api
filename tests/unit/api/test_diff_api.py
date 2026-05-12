@@ -170,18 +170,14 @@ def test_diff_endpoint_returns_500_when_loading_fails(test_client):
 
 
 def test_diff_endpoint_413s_when_base_truncated(test_client):
-    """Reviewer-flagged P2 on commit a75cd73. The diff loader
-    caps reads at 10k nodes, but ``GraphResponse.total_nodes``
-    can exceed the returned list — pre-fix the endpoint returned
-    a confident-looking but silently incomplete diff for larger
-    transforms.
+    """Reviewer-flagged P2 on commit a75cd73 — pin retained
+    after the commit-fae7e91 fix that added the upfront cap
+    check. Same scenario (large base transform), just hits the
+    cap-check trigger now instead of the len-vs-total trigger.
 
-    Pin: when the base graph reports more total_nodes than were
-    returned, the endpoint fails loud with 413 carrying the
-    structured detail body so the agent / CLI can render a
-    meaningful "this transform is too big for diff" message
-    rather than misinterpret a partial diff."""
-    # Returned 5 nodes but the count query said there are 15000.
+    Pin: total_nodes far above the cap → 413, side=base."""
+    # Returned 5 nodes but the count query said there are
+    # 15000 — exceeds the diff cap. Hits trigger 1 (cap).
     base = GraphResponse(
         nodes=[_node(f"b-{i}") for i in range(5)],
         edges=[],
@@ -209,7 +205,7 @@ def test_diff_endpoint_413s_when_base_truncated(test_client):
     assert body["error"] == "transform_too_large_to_diff"
     assert body["side"] == "base"
     assert body["transform_id"] == "tx-big"
-    assert body["returned_nodes"] == 5
+    assert body["truncated_dimension"] == "nodes"
     assert body["total_nodes"] == 15000
 
 
@@ -322,6 +318,107 @@ def test_diff_endpoint_413s_when_edges_truncated_even_with_full_nodes(
     assert body["truncated_dimension"] == "edges"
     assert body["returned_edges"] == 1
     assert body["total_edges"] == 500
+
+
+def test_diff_endpoint_413s_when_total_nodes_exceeds_cap_even_if_list_full(
+    test_client,
+):
+    """Reviewer-flagged P2 on commit fae7e91. The staging reader's
+    query is::
+
+        MATCH (n) WHERE n.__tid = $tid
+        WITH n ORDER BY n.id SKIP $skip LIMIT $limit
+        OPTIONAL MATCH (n)-[r]-(m) WHERE r.__tid = $tid
+        RETURN nodes, relationships, connected_nodes
+
+    The response merges paged main nodes with connected nodes
+    pulled via edge endpoints. So ``len(graph.nodes)`` can
+    REACH OR EXCEED ``total_nodes`` (the main-node count) even
+    when the main-node page was capped — connected nodes pad
+    the list back up. The earlier ``len(nodes) < total_nodes``
+    check was a false-negative for this case.
+
+    Pin: when ``total_nodes`` itself exceeds the diff loader's
+    cap, the endpoint MUST 413 regardless of how ``len(nodes)``
+    looks. The exact scenario the reviewer described."""
+    # 10001 main nodes — exceeds the 10000 cap. The staging
+    # reader would page out 1 main node BUT then connected_nodes
+    # could pad len(nodes) up to 10001 or higher. Pre-fix:
+    # len(nodes) (10001) < total_nodes (10001) is False →
+    # truncation check passes → silent partial diff. Post-fix:
+    # total_nodes (10001) > _DIFF_NODE_LIMIT (10000) → 413.
+    base = GraphResponse(
+        # Simulate connected-node padding: 10001 nodes returned
+        # via the mocked loader even though total_nodes is 10001.
+        nodes=[_node(f"b-{i}") for i in range(10001)],
+        edges=[],
+        total_nodes=10001,
+        total_edges=0,
+    )
+    compare = GraphResponse(
+        nodes=[_node("c-1")],
+        edges=[],
+        total_nodes=1,
+        total_edges=0,
+    )
+
+    async def fake_load(transform_id: str, user_id: str):
+        return base if transform_id == "tx-too-big" else compare
+
+    with patch(
+        "graphora_server.api.graph._load_graph_for_diff",
+        new=AsyncMock(side_effect=fake_load),
+    ):
+        response = test_client.get("/api/v1/graph/tx-too-big/diff/tx-small")
+
+    assert response.status_code == 413, (
+        "Pre-fix: connected_nodes padding masked the main-node "
+        "truncation. Got "
+        f"{response.status_code} instead of 413. The diff would "
+        "have silently returned a partial answer."
+    )
+    body = response.json()["detail"]
+    assert body["side"] == "base"
+    assert body["truncated_dimension"] == "nodes"
+    assert body["total_nodes"] == 10001
+    # The new detail field that exposes the cap value so
+    # operators can correlate "the transform is bigger than X".
+    assert body["diff_node_cap"] == 10000
+
+
+def test_diff_endpoint_413s_when_compare_total_nodes_exceeds_cap(
+    test_client,
+):
+    """Mirror pin for the compare side. Same scenario: a
+    transform whose total_nodes exceeds the cap can pad its
+    response.nodes via connected nodes; the upfront cap check
+    must fire on either side."""
+    base = GraphResponse(
+        nodes=[_node("b-1")],
+        edges=[],
+        total_nodes=1,
+        total_edges=0,
+    )
+    compare = GraphResponse(
+        nodes=[_node(f"c-{i}") for i in range(50000)],  # padded list
+        edges=[],
+        total_nodes=20000,  # but the count says 20000 main nodes
+        total_edges=0,
+    )
+
+    async def fake_load(transform_id: str, user_id: str):
+        return base if transform_id == "tx-small" else compare
+
+    with patch(
+        "graphora_server.api.graph._load_graph_for_diff",
+        new=AsyncMock(side_effect=fake_load),
+    ):
+        response = test_client.get("/api/v1/graph/tx-small/diff/tx-huge")
+
+    assert response.status_code == 413
+    body = response.json()["detail"]
+    assert body["side"] == "compare"
+    assert body["truncated_dimension"] == "nodes"
 
 
 def test_diff_endpoint_413s_when_compare_edges_truncated(test_client):

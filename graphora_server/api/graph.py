@@ -299,15 +299,26 @@ async def get_cost_by_transform_id(
         )
 
 
+# Diff loader's main-node cap. Shared between the LIMIT in the
+# staging query and the upfront total_nodes check in
+# _check_truncated. Must stay in lockstep — the check assumes a
+# transform whose total_nodes exceeds this value would have its
+# main-node page truncated by the LIMIT below.
+_DIFF_NODE_LIMIT = 10000
+
+
 async def _load_graph_for_diff(transform_id: str, user_id: str) -> GraphResponse:
     """Helper: fetch one transform's full graph via the same
     backend-selection logic the main /graph/{transform_id}
     endpoint uses (in-memory vs staging DB). Pagination is NOT
     applied — diffs need the whole graph, not a page slice.
 
-    The hard cap of 10k matches the user-facing endpoint's max
-    limit; transforms bigger than that need a different surface
-    (streaming diff) that's out of scope for this slice."""
+    The hard cap of ``_DIFF_NODE_LIMIT`` matches the user-facing
+    endpoint's max limit; transforms bigger than that need a
+    different surface (streaming diff) that's out of scope for
+    this slice. ``_check_truncated`` enforces the cap upfront
+    using ``total_nodes`` — see that function's docstring for
+    why ``len(graph.nodes)`` alone isn't a trustworthy signal."""
     from graphora_server.services.storage.factory import user_has_staging_db
 
     use_in_memory = is_memory_storage_enabled() or not await user_has_staging_db(
@@ -323,7 +334,7 @@ async def _load_graph_for_diff(transform_id: str, user_id: str) -> GraphResponse
     graph_service = await UserDatabaseService.get_staging_graph_service(user_id)
     try:
         return graph_service.get_graph_by_transform_id(
-            transform_id=transform_id, limit=10000, skip=0
+            transform_id=transform_id, limit=_DIFF_NODE_LIMIT, skip=0
         )
     finally:
         graph_service.close()
@@ -401,22 +412,53 @@ async def diff_transforms(
 
 
 def _check_truncated(graph: GraphResponse, side: str, transform_id: str) -> None:
-    """Raise HTTPException(413) when the loaded graph is smaller
-    than its reported totals on EITHER nodes or edges.
+    """Raise HTTPException(413) when the loaded graph might be
+    incomplete. Three triggers, in priority order:
 
-    ``total_nodes`` and ``total_edges`` are populated by both
-    backends (in-memory + Neo4j) from count queries that are
-    independent of the LIMIT applied to the data fetch, so a
-    mismatch is a reliable truncation signal.
+      1. ``total_nodes > _DIFF_NODE_LIMIT`` — the upfront cap
+         check. The staging reader's query is
+         ``MATCH (n) ... SKIP $skip LIMIT $limit OPTIONAL MATCH
+         (n)-[r]-(m) ... collect ... connected_nodes``. The
+         response.nodes list combines the paged main nodes with
+         the connected nodes pulled via edge endpoints, so its
+         length can REACH OR EXCEED total_nodes even when the
+         main-node page was truncated. That makes ``len(nodes)``
+         alone an unreliable truncation signal. The upfront
+         total_nodes vs cap comparison closes that hole — see
+         reviewer P2 on commit fae7e91.
 
-    Reviewer-flagged P2 on commit a261321: the pre-fix check
-    only inspected total_nodes. The Neo4j loader paginates by
-    main node; edges between paginated-out nodes are silently
-    omitted from the fetched edges list. A transform that
-    happens to fit within the 10k-node cap (total_nodes ==
-    len(nodes)) could still have its edges truncated and the
-    diff would silently return a partial answer. Checking
-    BOTH counts closes that hole."""
+      2. ``len(nodes) < total_nodes`` — catches non-staging-path
+         truncation (in-memory backend, future readers) where
+         the cap-check isn't load-bearing but the loader still
+         returned fewer than expected.
+
+      3. ``len(edges) < total_edges`` — closes the edge-only
+         truncation hole (reviewer P2 on commit a261321).
+
+    All three return the same structured detail body with a
+    ``truncated_dimension`` field so operators see exactly
+    which dimension fell over."""
+    if graph.total_nodes is not None and graph.total_nodes > _DIFF_NODE_LIMIT:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error": "transform_too_large_to_diff",
+                "side": side,
+                "transform_id": transform_id,
+                "truncated_dimension": "nodes",
+                "total_nodes": graph.total_nodes,
+                "diff_node_cap": _DIFF_NODE_LIMIT,
+                "reason": (
+                    f"The {side} transform contains {graph.total_nodes} "
+                    f"nodes — exceeding the diff loader's cap of "
+                    f"{_DIFF_NODE_LIMIT}. The staging reader merges "
+                    "connected nodes into the response so len(nodes) "
+                    "alone can mask main-node truncation. Streaming "
+                    "diff for large transforms is not yet implemented; "
+                    "refusing to return a silent partial diff."
+                ),
+            },
+        )
     if graph.total_nodes is not None and len(graph.nodes) < graph.total_nodes:
         raise HTTPException(
             status_code=413,
@@ -430,9 +472,8 @@ def _check_truncated(graph: GraphResponse, side: str, transform_id: str) -> None
                 "reason": (
                     f"The {side} transform contains {graph.total_nodes} "
                     f"nodes but the diff loader returned only "
-                    f"{len(graph.nodes)}. Streaming diff for large "
-                    "transforms is not yet implemented; refusing to "
-                    "return a silent partial diff."
+                    f"{len(graph.nodes)}. Refusing to return a silent "
+                    "partial diff."
                 ),
             },
         )
