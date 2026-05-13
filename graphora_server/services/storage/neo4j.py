@@ -601,6 +601,85 @@ class Neo4jStorage(GraphStorageInterface):
             warnings=warnings,
         )
 
+    @staticmethod
+    def _sanitize_relationship_properties(
+        rel_properties: Dict[str, Any],
+        *,
+        transform_id: Optional[str],
+        merge_id: Optional[str],
+        valid_from: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Normalize relationship properties for Neo4j storage.
+
+        Reviewer-flagged on commit a070a16 (storage perf #3): the
+        batched Case 3 path built ``props = {**r.properties, ...}``
+        directly, bypassing the sanitization the per-rel
+        ``_build_relationship_query`` path has always applied. That
+        caused two kinds of representation drift:
+          * Dict properties: the per-rel path JSON-stringifies
+            them (Neo4j doesn't allow nested-object properties);
+            the batched path tried to persist them raw, which
+            either crashed the write or — worse — succeeded
+            inconsistently across drivers.
+          * List properties: per-rel path JSON-stringifies; the
+            batched path persisted as Neo4j arrays. Same logical
+            edge written first via batched then via versioning
+            would yield ``[1, 2]`` on disk vs ``"[1, 2]"`` — false
+            "changed" deltas on subsequent re-stores or diffs.
+          * None values: per-rel drops them (Neo4j doesn't store
+            NULL property values); the batched path passed them
+            through.
+
+        Centralizing the sanitization in this helper closes those
+        gaps. Both the per-rel ``_build_relationship_query`` path
+        and the batched ``_batched_create_first_time_relationships``
+        path call this, so first-time-write / versioning /
+        re-store all produce the same on-disk representation.
+
+        Sanitization rules:
+          * dict / list values → ``json.dumps(value)``.
+          * None values → dropped from the dict entirely.
+          * other primitives → pass through.
+
+        System fields stamped on top:
+          * VALID_FROM: caller-supplied (when valid_from is not
+            None), or the rel's existing VALID_FROM (when
+            ``rel_properties[VALID_FROM]`` is truthy), or
+            ``now().isoformat()`` as last-resort default.
+          * VALID_TO: always set to None — VALID_TO=None
+            represents "active edge" and is a load-bearing
+            system field; the None-drop rule above applies to
+            USER properties only.
+          * TRANSFORM_ID: only when ``transform_id`` is truthy.
+          * MERGE_ID: only when ``merge_id`` is truthy."""
+        sanitized: Dict[str, Any] = {}
+        for key, value in rel_properties.items():
+            if isinstance(value, (dict, list)):
+                sanitized[key] = json.dumps(value)
+            elif value is None:
+                continue
+            else:
+                sanitized[key] = value
+
+        # System fields stamped AFTER user-prop sanitization so
+        # they survive the None-drop rule (VALID_TO=None must
+        # land in the dict).
+        if valid_from is not None:
+            sanitized[VALID_FROM] = valid_from
+        else:
+            existing_valid_from = rel_properties.get(VALID_FROM)
+            sanitized[VALID_FROM] = (
+                existing_valid_from
+                if existing_valid_from
+                else datetime.now(timezone.utc).isoformat()
+            )
+        sanitized[VALID_TO] = None
+        if transform_id:
+            sanitized[TRANSFORM_ID] = transform_id
+        if merge_id:
+            sanitized[MERGE_ID] = merge_id
+        return sanitized
+
     async def _batched_find_existing_relationships(
         self,
         relationships: List[RelationshipInstance],
@@ -748,13 +827,21 @@ class Neo4jStorage(GraphStorageInterface):
                         )
                         batch_payload = []
                         for r in type_rels:
-                            props = {
-                                **r.properties,
-                                VALID_FROM: timestamp,
-                                VALID_TO: None,
-                                TRANSFORM_ID: transform_id,
-                                MERGE_ID: merge_id if merge_id else None,
-                            }
+                            # Reviewer-flagged: use the shared
+                            # sanitizer so dict/list/None values
+                            # are normalized the same way the per-
+                            # rel path does. Without this the same
+                            # logical edge written via batched
+                            # then versioned would surface as a
+                            # false "changed" delta because dicts
+                            # would be raw on the first write and
+                            # JSON-stringified on the second.
+                            props = self._sanitize_relationship_properties(
+                                r.properties,
+                                transform_id=transform_id,
+                                merge_id=merge_id,
+                                valid_from=timestamp,
+                            )
                             batch_payload.append(
                                 {
                                     "source_id": r.source_id,
@@ -1369,27 +1456,23 @@ class Neo4jStorage(GraphStorageInterface):
 
         rel_properties = properties if properties is not None else rel.properties
 
-        # Sanitize properties
-        sanitized_properties = {}
-        for key, value in rel_properties.items():
-            if isinstance(value, (dict, list)):
-                sanitized_properties[key] = json.dumps(value)
-            elif value is None:
-                continue
-            else:
-                sanitized_properties[key] = value
-
-        # Add versioning properties
-        sanitized_properties[VALID_FROM] = (
-            datetime.now(timezone.utc).isoformat()
-            if not (rel.properties.get(VALID_FROM))
-            else rel.properties.get(VALID_FROM)
+        # Sanitize + stamp system fields via the shared helper.
+        # The VALID_FROM lookup intentionally reads ``rel.properties``
+        # (the ORIGINAL rel, not the passed-in ``rel_properties``
+        # which may be a merged_props dict on the Case 2 versioning
+        # path). Preserves the pre-shared-helper behavior exactly.
+        existing_valid_from = rel.properties.get(VALID_FROM)
+        valid_from_to_use = (
+            existing_valid_from
+            if existing_valid_from
+            else datetime.now(timezone.utc).isoformat()
         )
-        sanitized_properties[VALID_TO] = None
-        if transform_id:
-            sanitized_properties[TRANSFORM_ID] = transform_id
-        if merge_id:
-            sanitized_properties[MERGE_ID] = merge_id
+        sanitized_properties = self._sanitize_relationship_properties(
+            rel_properties,
+            transform_id=transform_id,
+            merge_id=merge_id,
+            valid_from=valid_from_to_use,
+        )
 
         if merge:
             if not transform_id:

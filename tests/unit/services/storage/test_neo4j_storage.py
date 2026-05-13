@@ -1842,6 +1842,180 @@ class TestNeo4jStorageRelationshipOperations:
         assert write_failed_types == set()
 
     @pytest.mark.asyncio
+    async def test_batched_create_sanitizes_dict_list_none_property_values(
+        self,
+    ):
+        """Reviewer-flagged on commit a070a16 (storage perf #3).
+        The batched Case 3 helper was building ``props =
+        {**r.properties, ...}`` raw, bypassing the per-rel path's
+        sanitizer that JSON-stringifies dict/list values and
+        drops None values. That caused two failure modes:
+          * dicts: Neo4j rejects nested-object property values →
+            batched write fails, falls back to per-rel for the
+            whole type → no perf gain on any type that uses dict
+            props.
+          * lists: per-rel JSON-stringifies; batched persists as
+            Neo4j arrays. Same logical edge written first
+            batched, later versioned → false 'changed' delta
+            because ``[1,2]`` != ``"[1, 2]"`` on subsequent
+            compare.
+          * None values: per-rel drops; batched passes them
+            through (driver may reject or silently skip).
+
+        Pin: the batched path applies the same sanitization as
+        the per-rel path. dict → JSON-stringified; list →
+        JSON-stringified; None → dropped."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        captured_kwargs: list = []
+
+        async def fake_run(query, *args, **kwargs):
+            captured_kwargs.append(kwargs)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        rel = RelationshipInstance(
+            id="rel-1",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={
+                "role": "engineer",  # passes through
+                "metadata": {"team": "infra", "level": 3},  # dict
+                "tags": ["python", "rust"],  # list
+                "manager": None,  # None — should be dropped
+            },
+        )
+
+        await storage._batched_create_first_time_relationships(
+            [rel], transform_id="tx-1"
+        )
+
+        [kwargs] = captured_kwargs
+        [row] = kwargs["batch"]
+        props = row["properties"]
+
+        import json as _json
+
+        # Primitive passes through.
+        assert props["role"] == "engineer"
+        # Dict → JSON-stringified.
+        assert isinstance(props["metadata"], str), (
+            f"Dict property persisted raw: {props['metadata']!r}. "
+            "Neo4j rejects nested-object property values; per-rel "
+            "path JSON-stringifies. Batched path must match."
+        )
+        assert _json.loads(props["metadata"]) == {
+            "team": "infra",
+            "level": 3,
+        }
+        # List → JSON-stringified (storing as Neo4j array would
+        # create representation drift on subsequent re-stores).
+        assert isinstance(props["tags"], str), (
+            f"List property persisted raw: {props['tags']!r}. "
+            "Per-rel path JSON-stringifies; batched path was "
+            "persisting as Neo4j array, causing false 'changed' "
+            "deltas on re-store."
+        )
+        assert _json.loads(props["tags"]) == ["python", "rust"]
+        # None → dropped.
+        assert "manager" not in props, (
+            f"None-valued property leaked through: {props!r}. "
+            "Per-rel path drops None user-prop values."
+        )
+
+        # System fields stamped on top survive the None-drop rule.
+        assert props["__valid_to"] is None
+        assert props["__tid"] == "tx-1"
+
+    @pytest.mark.asyncio
+    async def test_batched_create_sanitization_matches_per_rel_path(
+        self,
+    ):
+        """End-to-end equivalence pin: a rel sanitized via the
+        shared helper produces the same property bag whether it
+        comes through the batched path or the per-rel
+        _build_relationship_query path. Without this pin a
+        future divergence in either path's sanitization could
+        cause first-time-write vs versioning to disagree on
+        representation."""
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+
+        rel = RelationshipInstance(
+            id="rel-1",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={
+                "role": "engineer",
+                "metadata": {"team": "infra"},
+                "tags": ["a", "b"],
+                "manager": None,
+            },
+        )
+
+        # Via the shared helper directly (what the batched path uses).
+        via_helper = storage._sanitize_relationship_properties(
+            rel.properties,
+            transform_id="tx-1",
+            merge_id=None,
+            valid_from="2026-05-13T00:00:00+00:00",
+        )
+
+        # Via _build_relationship_query (what the per-rel path uses).
+        _query, params = storage._build_relationship_query(
+            rel,
+            merge=True,
+            transform_id="tx-1",
+        )
+        via_per_rel = params["properties"]
+
+        # User-prop sanitization is identical.
+        for key in ("role", "metadata", "tags"):
+            assert via_helper[key] == via_per_rel[key], (
+                f"Sanitization diverged on key={key!r}: "
+                f"batched={via_helper.get(key)!r}, "
+                f"per-rel={via_per_rel.get(key)!r}"
+            )
+        # None-drop applies on both sides.
+        assert "manager" not in via_helper
+        assert "manager" not in via_per_rel
+
+    @pytest.mark.asyncio
     async def test_batched_create_writes_use_predicate_bearing_merge(
         self,
     ):
