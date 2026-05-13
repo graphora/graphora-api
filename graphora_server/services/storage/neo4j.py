@@ -686,6 +686,121 @@ class Neo4jStorage(GraphStorageInterface):
 
         return existing_lookup, find_failed_types
 
+    async def _batched_create_first_time_relationships(
+        self,
+        relationships: List[RelationshipInstance],
+        transform_id: str,
+        merge_id: Optional[str] = None,
+    ) -> Tuple[Dict[str, Dict[str, Any]], Set[str]]:
+        """Storage perf #3: batched Case 3 (first-time) writes.
+
+        Groups rels by type and runs ONE UNWIND-driven MERGE per
+        type group, collapsing N first-time writes into K
+        round-trips (where K = distinct rel types). Mirrors the
+        structure of ``_batched_find_existing_relationships``
+        (perf #2): per-type isolation, atomic-per-type retry,
+        per-type fallback on failure.
+
+        Caller must pre-filter: only rels that are confirmed
+        first-time writes (no existing match in the pre-fetch
+        lookup AND no earlier rel in the same batch already
+        claimed the same ``(type, source, target)`` pair) belong
+        here. Same-pair-different-id duplicates within a batch
+        must NOT all land here — the predicate-bearing MERGE
+        keys on rel_id, so two rels with the same pair but
+        different ids would produce two active edges (the
+        commit-1a050ce bug). Caller defers those to the per-rel
+        loop where the post-batch lookup update lets Case 1/2
+        catch them.
+
+        Returns:
+          * write_results: ``{rel.id: props_with_metadata}`` for
+            each successfully written rel. Caller uses this to
+            synthesize ``existing_lookup`` entries for in-batch
+            duplicates so the per-rel loop sees them as Case 1/2.
+          * write_failed_types: types where the batched write
+            raised. Caller falls back to per-rel writes for
+            those types so one type's transient failure doesn't
+            cascade through the whole batch."""
+        if not relationships:
+            return {}, set()
+
+        rels_by_type: Dict[str, List[RelationshipInstance]] = {}
+        for rel in relationships:
+            rels_by_type.setdefault(rel.type, []).append(rel)
+
+        write_results: Dict[str, Dict[str, Any]] = {}
+        write_failed_types: Set[str] = set()
+
+        # One timestamp per batch call so all rels in this batch
+        # share VALID_FROM (consistent with how the per-rel loop
+        # uses datetime.now() at write time — every call to
+        # store_relationships emits writes within a brief window).
+        timestamp = datetime.now().isoformat()
+
+        for rel_type, type_rels in rels_by_type.items():
+            try:
+
+                async def _write_for_type(rel_type=rel_type, type_rels=type_rels):
+                    async with self._get_session() as session:
+                        validated = validate_cypher_identifier(
+                            rel_type, "relationship type"
+                        )
+                        batch_payload = []
+                        for r in type_rels:
+                            props = {
+                                **r.properties,
+                                VALID_FROM: timestamp,
+                                VALID_TO: None,
+                                TRANSFORM_ID: transform_id,
+                                MERGE_ID: merge_id if merge_id else None,
+                            }
+                            batch_payload.append(
+                                {
+                                    "source_id": r.source_id,
+                                    "target_id": r.target_id,
+                                    "rel_id": r.id,
+                                    "properties": props,
+                                }
+                            )
+                        # MATCH (s), (t) is label-less to match the
+                        # existing per-rel _build_relationship_query
+                        # shape — the predicate-bearing MERGE pattern
+                        # supplies the cross-transform isolation via
+                        # ``__tid`` and the in-transform atomicity via
+                        # ``id``. SET writes the property bag and
+                        # re-stamps ``r.id`` so it survives the MERGE's
+                        # CREATE branch.
+                        query = f"""
+                        UNWIND $batch AS row
+                        MATCH (s), (t)
+                        WHERE s.id = row.source_id AND t.id = row.target_id
+                        MERGE (s)-[r:`{validated}` {{id: row.rel_id, __tid: $transform_id}}]->(t)
+                        SET r = row.properties, r.id = row.rel_id
+                        """
+                        await session.run(
+                            query,
+                            batch=batch_payload,
+                            transform_id=transform_id,
+                        )
+                        # Populate write_results AFTER the run
+                        # completes — only successful writes
+                        # propagate to the caller's lookup update.
+                        for entry in batch_payload:
+                            write_results[entry["rel_id"]] = entry["properties"]
+
+                await self._execute_with_retry(_write_for_type)
+            except (StorageError, DatabaseError) as e:
+                logger.warning(
+                    "Batched write failed for type=%s (%s); per-rel "
+                    "writes for this type will use the per-rel fallback.",
+                    rel_type,
+                    e,
+                )
+                write_failed_types.add(rel_type)
+
+        return write_results, write_failed_types
+
     async def store_relationships(
         self,
         relationships: List[RelationshipInstance],
@@ -714,7 +829,87 @@ class Neo4jStorage(GraphStorageInterface):
             )
         )
 
+        # Storage perf #3: partition rels into Case 3 first-time
+        # writes (which can be batched via UNWIND MERGE) and
+        # everything else (per-rel because the versioning state
+        # machine is sequential by nature). See
+        # _batched_create_first_time_relationships docstring for
+        # the partition contract — particularly the in-batch
+        # duplicate handling.
+        case_3_batch: List[RelationshipInstance] = []
+        deferred_rels: List[RelationshipInstance] = []
+        in_batch_seen_pairs: Set[Tuple[str, str, str]] = set()
+        # Dedup by rel.id within this call (preserves pre-perf-3
+        # behaviour: a relationships list containing the same
+        # rel.id twice writes it once). Pre-fix this dedup
+        # happened inside the per-rel loop via stored_rels.add(rel.id);
+        # now we dedup at partition time so the same id can't
+        # land in case_3_batch twice.
+        seen_rel_ids: Set[str] = set()
+
         for rel in relationships:
+            if rel.id in seen_rel_ids:
+                logger.debug(f"Skipping duplicate relationship ID: {rel.id}")
+                continue
+            seen_rel_ids.add(rel.id)
+            if rel.type in find_failed_types:
+                # Pre-fetch failed for this type → per-rel path
+                # re-queries via _find_existing_relationship.
+                deferred_rels.append(rel)
+                continue
+            pair_key = (rel.type, rel.source_id, rel.target_id)
+            existing_rel = existing_lookup.get(pair_key)
+            if existing_rel is not None:
+                # Case 1/2: real existing rel from the DB pre-fetch.
+                deferred_rels.append(rel)
+                continue
+            if pair_key in in_batch_seen_pairs:
+                # In-batch duplicate of the same logical edge.
+                # The first rel claimed Case 3; this one needs to
+                # see the synthesized existing entry (populated
+                # after the batched write) and go through Case 1/2.
+                deferred_rels.append(rel)
+                continue
+            case_3_batch.append(rel)
+            in_batch_seen_pairs.add(pair_key)
+
+        # Batched Case 3 write.
+        write_results, write_failed_types = (
+            await self._batched_create_first_time_relationships(
+                case_3_batch, transform_id, merge_id
+            )
+        )
+
+        # Mark successful batched writes + synthesize lookup
+        # entries so deferred in-batch duplicates see them.
+        # Types whose batched write failed get punted back to
+        # the per-rel loop (the per-rel path's Case 3 branch
+        # will retry them individually).
+        for rel in case_3_batch:
+            if rel.type in write_failed_types:
+                deferred_rels.append(rel)
+                continue
+            if rel.id not in write_results:  # pragma: no cover — defensive
+                deferred_rels.append(rel)
+                continue
+            stored_rels.add(rel.id)
+            items_processed += 1
+            pair_key = (rel.type, rel.source_id, rel.target_id)
+            existing_lookup[pair_key] = {
+                **write_results[rel.id],
+                "id": rel.id,
+            }
+
+        # Sort deferred_rels back into the original input order so
+        # the per-rel loop processes them deterministically (e.g.
+        # in-batch duplicates after their canonical first-write
+        # counterpart). Without this, type-grouped failures and
+        # in-batch dupes could land out of order, surprising
+        # callers that audit by rel.id ordering.
+        rel_id_to_index = {rel.id: i for i, rel in enumerate(relationships)}
+        deferred_rels.sort(key=lambda r: rel_id_to_index[r.id])
+
+        for rel in deferred_rels:
             if rel.id in stored_rels:
                 logger.debug(f"Skipping duplicate relationship ID: {rel.id}")
                 continue

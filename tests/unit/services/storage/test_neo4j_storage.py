@@ -1269,22 +1269,34 @@ class TestNeo4jStorageRelationshipOperations:
         # predicates. A plain unscoped MERGE matches across
         # transforms; a plain CREATE isn't atomic. Predicate-
         # bearing MERGE is both.
-        write_queries = [q for q in executed if "WORKS_AT" in q and "$properties" in q]
+        #
+        # Storage perf #3: Case 3 writes now go through the
+        # batched UNWIND helper. The MERGE pattern is identical
+        # — same `{id, __tid}` predicate — but inside an UNWIND
+        # over a row payload. The shape pin tracks both:
+        write_queries = [q for q in executed if "WORKS_AT" in q and "MERGE" in q]
         assert write_queries, "No write query reached the session"
         write_query = write_queries[0]
         assert "MERGE (s)" in write_query, (
             f"Create-path stopped using MERGE: {write_query!r}. "
             f"Plain CREATE allows concurrent first-time writes to "
-            f"both produce duplicate active edges; switch back to "
-            f"merge=True so the predicate-bearing MERGE serializes "
-            f"them at the Neo4j layer."
+            f"both produce duplicate active edges."
         )
-        assert "id: $rel_id" in write_query and "__tid: $transform_id" in write_query, (
-            f"MERGE pattern is missing the id+__tid predicate: "
-            f"{write_query!r}. Without those predicates, the MERGE "
-            f"matches across transforms — same regression as before "
-            f"1240ced. The predicate is what makes the MERGE BOTH "
-            f"atomic AND cross-transform-isolated."
+        # Predicate-bearing MERGE. The batched helper uses
+        # ``row.rel_id`` and ``$transform_id`` (the transform_id
+        # is one-per-batch so it stays as a scalar param); the
+        # per-rel fallback path uses ``$rel_id``. Accept either
+        # — both bind the same atomicity+scope contract.
+        assert "__tid: $transform_id" in write_query, (
+            f"MERGE pattern is missing the __tid predicate: "
+            f"{write_query!r}. Without it, the MERGE matches across "
+            "transforms — same regression as before 1240ced."
+        )
+        assert "id: row.rel_id" in write_query or "id: $rel_id" in write_query, (
+            f"MERGE pattern is missing the id predicate: "
+            f"{write_query!r}. Without it, the MERGE doesn't pin "
+            "this specific rel — the predicate is what makes the "
+            "MERGE BOTH atomic AND cross-transform-isolated."
         )
 
     @pytest.mark.asyncio
@@ -1366,28 +1378,34 @@ class TestNeo4jStorageRelationshipOperations:
                 [new_rel], batch_index=0, transform_id="tx-a"
             )
 
-        # The session.run call for the write carries a params dict
-        # (or kwargs) with rel_id == caller-supplied. Pre-fix the
-        # rel_id was a fresh uuid4 — the assertion below catches
-        # the regression by asserting equality against the exact
-        # caller-supplied string.
+        # The session.run call for the write carries the caller-
+        # supplied rel.id. Pre-fix (perf #2 era) the per-rel path
+        # bound it as a scalar ``rel_id`` param. Storage perf #3
+        # routes Case 3 writes through the batched UNWIND helper,
+        # which puts rel_id inside each row of the ``$batch``
+        # payload. The pin walks both shapes so it survives the
+        # eventual fallback-path test too.
         rel_ids_seen = []
         for args, kwargs in captured_params:
+            # Scalar rel_id (per-rel fallback path).
             if args and isinstance(args[-1], dict):
                 rid = args[-1].get("rel_id")
                 if rid is not None:
                     rel_ids_seen.append(rid)
             if "rel_id" in kwargs:
                 rel_ids_seen.append(kwargs["rel_id"])
+            # Batched UNWIND payload (storage perf #3 path).
+            if "batch" in kwargs and isinstance(kwargs["batch"], list):
+                for row in kwargs["batch"]:
+                    if isinstance(row, dict) and "rel_id" in row:
+                        rel_ids_seen.append(row["rel_id"])
 
         assert caller_supplied_id in rel_ids_seen, (
             f"First-time write didn't preserve the caller-supplied "
             f"rel.id={caller_supplied_id!r}. Saw rel_ids: "
-            f"{rel_ids_seen}. _build_relationship_query is probably "
-            f"still generating a fresh UUID when merge=False — "
-            f"decouple Cypher op from id policy: id should always be "
-            f"rel.id, fresh UUIDs should be minted at the callsite "
-            f"(Case 2) explicitly."
+            f"{rel_ids_seen}. The Case 3 path (batched or per-rel) "
+            "must round-trip the caller's id — fresh UUIDs are minted "
+            "explicitly on the Case 2 versioning path only."
         )
 
     @pytest.mark.asyncio
@@ -1558,23 +1576,32 @@ class TestNeo4jStorageRelationshipOperations:
                 [new_rel], batch_index=0, transform_id="tx-a"
             )
 
-        # Find the write call's params dict and verify both
-        # rel_id and transform_id are bound.
-        write_param_dicts = []
+        # Find the write call and verify rel_id + transform_id
+        # are both bound. Storage perf #3 routes Case 3 writes
+        # through batched UNWIND; the rel_id lives inside the
+        # $batch row payload while transform_id is a scalar
+        # kwarg shared across rows.
+        write_calls_with_rel_id = []
         for args, kwargs in captured_params:
+            # Per-rel fallback path: rel_id as scalar in the
+            # last positional arg or in kwargs.
             if args and isinstance(args[-1], dict):
                 d = args[-1]
                 if d.get("rel_id") == new_rel.id:
-                    write_param_dicts.append(d)
-            if "transform_id" in kwargs and "rel_id" in kwargs:
-                if kwargs["rel_id"] == new_rel.id:
-                    write_param_dicts.append(kwargs)
+                    write_calls_with_rel_id.append(("scalar", kwargs))
+            if kwargs.get("rel_id") == new_rel.id:
+                write_calls_with_rel_id.append(("scalar", kwargs))
+            # Batched UNWIND path: rel_id inside a $batch row.
+            if "batch" in kwargs and isinstance(kwargs["batch"], list):
+                for row in kwargs["batch"]:
+                    if isinstance(row, dict) and row.get("rel_id") == new_rel.id:
+                        write_calls_with_rel_id.append(("batch", kwargs))
 
-        assert write_param_dicts, "No write call carried rel_id"
-        write_params = write_param_dicts[0]
-        assert write_params.get("transform_id") == "tx-a", (
+        assert write_calls_with_rel_id, "No write call carried rel_id"
+        _shape, write_kwargs = write_calls_with_rel_id[0]
+        assert write_kwargs.get("transform_id") == "tx-a", (
             f"transform_id wasn't bound to the MERGE call's params "
-            f"(got: {dict(write_params)}). The MERGE pattern's "
+            f"(got: {dict(write_kwargs)}). The MERGE pattern's "
             f"__tid predicate references $transform_id; if it isn't "
             f"in the params dict, the predicate fails to bind."
         )
@@ -1709,6 +1736,193 @@ class TestNeo4jStorageRelationshipOperations:
         # type-level failures.
         assert existing_lookup == {}
         assert find_failed_types == set()
+
+    @pytest.mark.asyncio
+    async def test_batched_create_collapses_first_time_writes_to_one_query_per_type(
+        self,
+    ):
+        """Storage perf #3 regression pin.
+
+        Pre-fix: store_relationships's per-rel loop issued one
+        MERGE round-trip per first-time write. For an N-rel
+        batch that's N writes round-trips.
+
+        Post-fix: _batched_create_first_time_relationships groups
+        Case 3 rels by type and issues ONE UNWIND MERGE per type
+        group. N first-time writes across K distinct types →
+        K writes round-trips.
+
+        Mirrors the perf #2 pin's structure (collapses N→K) but
+        on the write side. Pin: 7 first-time writes across 2 types
+        → exactly 2 write queries. Without this pin a future
+        refactor that reverts to per-rel writes (or accidentally
+        flattens types into one query, which would lock-contend on
+        every rel) wouldn't be caught."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        executed_queries: list[str] = []
+
+        async def fake_run(query, *args, **kwargs):
+            executed_queries.append(query)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        # 7 first-time writes across 2 types.
+        rels = [
+            RelationshipInstance(
+                id=f"rel-w-{i}",
+                type="WORKS_AT",
+                source_id=f"p{i}",
+                target_id="acme",
+                source_type="Person",
+                target_type="Company",
+            )
+            for i in range(3)
+        ] + [
+            RelationshipInstance(
+                id=f"rel-k-{i}",
+                type="KNOWS",
+                source_id=f"p{i}",
+                target_id=f"q{i}",
+                source_type="Person",
+                target_type="Person",
+            )
+            for i in range(4)
+        ]
+
+        write_results, write_failed_types = (
+            await storage._batched_create_first_time_relationships(
+                rels, transform_id="tx-perf"
+            )
+        )
+
+        # Pre-fix: 7 round-trips. Post-fix: 2 (one per type group).
+        # The write queries are UNWIND-driven MERGEs distinct from
+        # the find queries; filter by the MERGE shape.
+        write_queries = [
+            q for q in executed_queries if "UNWIND $batch" in q and "MERGE" in q
+        ]
+        assert len(write_queries) == 2, (
+            f"Expected 2 write queries (one per rel-type group), got "
+            f"{len(write_queries)}. Storage perf #3 batched the per-rel "
+            "first-time writes; if this pin fires you've either "
+            "reverted to per-rel MERGE or merged types into a single "
+            "label-less MERGE (which would lock-contend on every rel). "
+            f"Queries: {write_queries!r}"
+        )
+
+        # All 7 rels accounted for in write_results, no type-level
+        # failures.
+        assert len(write_results) == 7
+        assert write_failed_types == set()
+
+    @pytest.mark.asyncio
+    async def test_batched_create_writes_use_predicate_bearing_merge(
+        self,
+    ):
+        """Storage perf #3 atomicity pin. The batched UNWIND MERGE
+        must still use the predicate-bearing pattern
+        ``MERGE (s)-[r:T {id: row.rel_id, __tid: $transform_id}]->(t)``
+        — same atomicity + cross-transform-isolation guarantee
+        the per-rel path used to give. Without the predicate, the
+        batched MERGE would either (a) match across transforms
+        (no __tid) or (b) lose its concurrency safety (no id
+        anchor on the pattern).
+
+        Pin the predicate shape directly so a future "simplify
+        the UNWIND" refactor can't accidentally drop the
+        predicate."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        executed_queries: list[str] = []
+        captured_kwargs: list = []
+
+        async def fake_run(query, *args, **kwargs):
+            executed_queries.append(query)
+            captured_kwargs.append(kwargs)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        rel = RelationshipInstance(
+            id="rel-1",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+        )
+
+        await storage._batched_create_first_time_relationships(
+            [rel], transform_id="tx-1"
+        )
+
+        [write_query] = executed_queries
+        # Predicate shape: id from the row payload, __tid from
+        # the scalar param (one per batch).
+        assert (
+            "id: row.rel_id" in write_query
+        ), f"MERGE pattern missing id predicate: {write_query!r}"
+        assert (
+            "__tid: $transform_id" in write_query
+        ), f"MERGE pattern missing __tid predicate: {write_query!r}"
+        # And the transform_id binding is supplied.
+        [kwargs] = captured_kwargs
+        assert kwargs["transform_id"] == "tx-1"
+        # The batch payload carries rel_id + source_id + target_id
+        # + properties per row.
+        assert kwargs["batch"][0]["rel_id"] == "rel-1"
+        assert kwargs["batch"][0]["source_id"] == "alice"
+        assert kwargs["batch"][0]["target_id"] == "acme"
 
     @pytest.mark.asyncio
     async def test_in_batch_duplicate_logical_rels_dont_create_two_active_edges(
