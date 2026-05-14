@@ -1081,10 +1081,23 @@ class TestDisputedPairsTools:
 # need the [mcp] extra. Earlier this file used pytest.importorskip
 # at module scope, which would skip the entire file (including all
 # the helper-level tests that don't need FastMCP) on a default dev
-# install. Using importlib.util.find_spec lets us check availability
-# without actually importing the module here, then attach the skip
-# only to the class that needs it.
-_HAS_MCP_FASTMCP = _importlib_util.find_spec("mcp.server.fastmcp") is not None
+# install. The find_spec check below isolates the availability
+# probe to this one symbol so the rest of the module loads cleanly.
+#
+# Reviewer-flagged on commit a4e7859: ``find_spec("mcp.server.fastmcp")``
+# does NOT return None when the top-level ``mcp`` package is
+# absent — it raises ModuleNotFoundError because dotted lookups
+# implicitly import the parent first. On default dev installs (no
+# [mcp] extra) that bubbles up at collection time and breaks the
+# whole module. The try/except converts the not-installed signal
+# into a clean False, mirroring what callers expect from a
+# "feature-flag" check.
+try:
+    _HAS_MCP_FASTMCP = _importlib_util.find_spec("mcp.server.fastmcp") is not None
+except ModuleNotFoundError:
+    # Top-level ``mcp`` package isn't installed — equivalent to
+    # the extra not being available. Skip the class.
+    _HAS_MCP_FASTMCP = False
 
 
 @pytest.mark.skipif(
