@@ -120,6 +120,25 @@ class DisputedPair:
 _DEFAULT_MEMORY_STORE: List[DisputedPair] = []
 
 
+def _canonical_pair_key(
+    user_id: str,
+    transform_id: str,
+    source_stage: SourceStage,
+    node_a_id: str,
+    node_b_id: str,
+) -> tuple:
+    """Order-independent canonical key for dedup.
+
+    Mirrors the Postgres expression unique index from migration 18
+    (user_id, transform_id, source_stage, LEAST(node_a, node_b),
+    GREATEST(node_a, node_b)). Used by the memory backend to match
+    the Postgres ON CONFLICT semantics so both backends behave
+    identically when the hook fires twice on the same pair (task
+    retries, re-extractions)."""
+    lo, hi = sorted([node_a_id, node_b_id])
+    return (user_id, transform_id, source_stage, lo, hi)
+
+
 def _reset_default_memory_store_for_tests() -> None:
     """Clear the dev-mode shared memory store. Test fixtures
     that exercise the production path (no ``memory_store=`` arg)
@@ -178,14 +197,31 @@ class DisputedPairsService:
     # Writes -------------------------------------------------------------------
 
     async def enqueue(self, pair: DisputedPair) -> DisputedPair:
-        """Persist a new pending pair. Returns the pair with id
-        and created_at populated (server-side defaults on
-        Postgres, client-side mint on memory backend so both
-        backends produce equally-shaped objects).
+        """Persist a new pending pair OR return the existing row
+        when the (user_id, transform_id, source_stage, unordered
+        node pair) key already exists.
+
+        Returns the pair with id and created_at populated. When
+        the call inserted a new row, those are the values just
+        minted. When the call collided with an existing row, those
+        reflect the EXISTING row — including any prior label, which
+        is preserved (re-extractions don't re-open labeled pairs).
 
         Caller MUST set ``user_id`` to the owning tenant. Status
-        is forced to PENDING — labels happen via ``label()``,
-        not at enqueue."""
+        on the insert path is forced to PENDING — labels happen
+        via ``label()``, not at enqueue. On the conflict path the
+        existing row's status (which may be labeled) is returned
+        verbatim.
+
+        Idempotency is critical: the slice-B write hook in
+        ``_compare_and_merge_nodes`` fires every time a 2-node
+        candidate comes back as all-singletons. Task retries +
+        re-extractions surface the same candidate multiple times
+        with deterministic node IDs — without ON CONFLICT DO NOTHING
+        the queue accumulates duplicate PENDING rows and labeling
+        one leaves siblings still pending. Migration 18 adds the
+        backing unique index; this method does the conflict
+        handling."""
         if pair.id is None:
             pair.id = str(uuid.uuid4())
         if pair.created_at is None:
@@ -200,10 +236,15 @@ class DisputedPairsService:
         pair.label_reason = None
 
         if self._enabled:
-            from psycopg.types.json import Json  # noqa: F401 — imported for symmetry
-
             try:
-                query = """
+                # ON CONFLICT references the same expression list as
+                # the unique index from migration 18. Postgres infers
+                # the index from this expression list. RETURNING is
+                # empty on conflict (DO NOTHING swallows the insert);
+                # the followup SELECT fetches the existing row so the
+                # service contract — "always return a real persisted
+                # pair" — is preserved.
+                insert_query = """
                     INSERT INTO disputed_pairs (
                         id,
                         user_id,
@@ -219,9 +260,21 @@ class DisputedPairsService:
                         created_at
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (
+                        user_id,
+                        transform_id,
+                        source_stage,
+                        LEAST(node_a_id, node_b_id),
+                        GREATEST(node_a_id, node_b_id)
+                    ) DO NOTHING
+                    RETURNING id, user_id, transform_id, node_a_id, node_b_id,
+                              entity_type, node_a_canonical_key,
+                              node_b_canonical_key, similarity_score,
+                              source_stage, status, labeled_at,
+                              labeled_by_user_id, label_reason, created_at
                 """
-                await db.execute(
-                    query,
+                row = await db.fetchrow(
+                    insert_query,
                     pair.id,
                     pair.user_id,
                     pair.transform_id,
@@ -235,6 +288,54 @@ class DisputedPairsService:
                     pair.status.value,
                     pair.created_at,
                 )
+                if row is not None:
+                    return _row_to_pair(row)
+                # Conflict path: fetch the existing canonical row.
+                # Computing lo/hi Python-side keeps params primitive
+                # and the WHERE clause's LEAST/GREATEST evaluation
+                # matches the unique-index expression — Postgres
+                # uses the index for an index-only scan.
+                node_lo, node_hi = sorted([pair.node_a_id, pair.node_b_id])
+                existing_query = """
+                    SELECT id, user_id, transform_id, node_a_id, node_b_id,
+                           entity_type, node_a_canonical_key,
+                           node_b_canonical_key, similarity_score,
+                           source_stage, status, labeled_at,
+                           labeled_by_user_id, label_reason, created_at
+                    FROM disputed_pairs
+                    WHERE user_id = %s
+                      AND transform_id = %s
+                      AND source_stage = %s
+                      AND LEAST(node_a_id, node_b_id) = %s
+                      AND GREATEST(node_a_id, node_b_id) = %s
+                """
+                existing_row = await db.fetchrow(
+                    existing_query,
+                    pair.user_id,
+                    pair.transform_id,
+                    pair.source_stage.value,
+                    node_lo,
+                    node_hi,
+                )
+                if existing_row is None:
+                    # Defensive: ON CONFLICT fired but the row isn't
+                    # visible. Shouldn't happen outside of a concurrent
+                    # DELETE race that the queue surface doesn't expose
+                    # (slice A's API has no DELETE). Log + return the
+                    # caller's input so the surface contract holds.
+                    logger.warning(
+                        "Disputed-pair conflict on enqueue but no "
+                        "matching row found (user=%s, transform=%s, "
+                        "stage=%s, pair=%s/%s). Possible concurrent "
+                        "delete or schema drift.",
+                        pair.user_id,
+                        pair.transform_id,
+                        pair.source_stage.value,
+                        node_lo,
+                        node_hi,
+                    )
+                    return pair
+                return _row_to_pair(existing_row)
             except Exception as exc:
                 logger.error(
                     "Failed to enqueue disputed pair for user %s: %s",
@@ -242,8 +343,28 @@ class DisputedPairsService:
                     exc,
                 )
                 raise
-        else:
-            self._memory_store.append(pair)
+        # Memory backend — mirror the canonical-key dedup so both
+        # backends behave identically when the hook fires twice.
+        canon = _canonical_pair_key(
+            pair.user_id,
+            pair.transform_id,
+            pair.source_stage,
+            pair.node_a_id,
+            pair.node_b_id,
+        )
+        for existing in self._memory_store:
+            if (
+                _canonical_pair_key(
+                    existing.user_id,
+                    existing.transform_id,
+                    existing.source_stage,
+                    existing.node_a_id,
+                    existing.node_b_id,
+                )
+                == canon
+            ):
+                return existing
+        self._memory_store.append(pair)
         return pair
 
     async def label(

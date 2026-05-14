@@ -309,16 +309,56 @@ def postgres_service(monkeypatch):
 @pytest.mark.asyncio
 async def test_postgres_enqueue_inserts_pending_row(postgres_service):
     """Pin the SQL shape: INSERT into disputed_pairs with status
-    forced to ``pending`` regardless of the caller's value."""
+    forced to ``pending`` regardless of the caller's value, plus
+    the ON CONFLICT clause that backs idempotency (P2 fix on
+    commit 150677a). Without the conflict clause the queue
+    accumulates duplicate pending rows from task retries."""
+    # Mock fetchrow to return the just-inserted row so the
+    # service's _row_to_pair path produces a valid DisputedPair.
+    inserted_row = {
+        "id": "pair-id-1",
+        "user_id": "user-1",
+        "transform_id": "tx-1",
+        "node_a_id": "n-a",
+        "node_b_id": "n-b",
+        "entity_type": "Person",
+        "node_a_canonical_key": None,
+        "node_b_canonical_key": None,
+        "similarity_score": None,
+        "source_stage": "embedding_blocker",
+        "status": "pending",
+        "labeled_at": None,
+        "labeled_by_user_id": None,
+        "label_reason": None,
+        "created_at": "2026-05-14T00:00:00+00:00",
+    }
     with patch(
-        "graphora_server.services.disputed_pairs_service.db.execute",
-        new=AsyncMock(),
-    ) as mock_execute:
+        "graphora_server.services.disputed_pairs_service.db.fetchrow",
+        new=AsyncMock(return_value=inserted_row),
+    ) as mock_fetchrow:
         pair = await postgres_service.enqueue(_make_pair())
-    assert mock_execute.await_count == 1
-    args = mock_execute.await_args.args
+    assert mock_fetchrow.await_count == 1, (
+        "On the insert path (no conflict) we expect a single "
+        "fetchrow call. A second call only happens on the "
+        "conflict-fallback SELECT path."
+    )
+    args = mock_fetchrow.await_args.args
     query = args[0]
     assert "INSERT INTO disputed_pairs" in query
+    assert "ON CONFLICT" in query, (
+        "P2 pin (commit 150677a): the INSERT must carry an "
+        "ON CONFLICT clause so duplicate enqueues don't pile up "
+        "pending rows. Without it, task retries / re-extractions "
+        "would create N rows for the same gray-zone pair."
+    )
+    assert "DO NOTHING" in query
+    assert "LEAST(node_a_id, node_b_id)" in query and (
+        "GREATEST(node_a_id, node_b_id)" in query
+    ), (
+        "ON CONFLICT must reference the unordered pair expression "
+        "matching migration 18's unique index — otherwise "
+        "(node_a, node_b) and (node_b, node_a) bypass dedup."
+    )
     # status arg is the 11th positional (after id, user_id,
     # transform_id, node_a_id, node_b_id, entity_type,
     # node_a_canonical_key, node_b_canonical_key,
@@ -471,10 +511,226 @@ async def test_postgres_enqueue_failures_propagate(postgres_service):
     """A degraded Postgres on the write path raises. The service
     deliberately does NOT swallow — losing an enqueued pair means
     silently losing an ER decision that the pipeline already
-    deferred. Mirrors the budget-service fail-closed contract."""
+    deferred. Mirrors the budget-service fail-closed contract.
+
+    Note: the upstream hook in graph_transformer.py wraps THIS
+    call in a try/except that swallows for observability. The
+    service itself stays fail-closed; the wrapping decision lives
+    at the call site."""
     with patch(
-        "graphora_server.services.disputed_pairs_service.db.execute",
+        "graphora_server.services.disputed_pairs_service.db.fetchrow",
         new=AsyncMock(side_effect=RuntimeError("postgres down")),
     ):
         with pytest.raises(RuntimeError, match="postgres down"):
             await postgres_service.enqueue(_make_pair())
+
+
+# ============================================================
+# Idempotency (reviewer P2 on commit 150677a)
+#
+# Slice B's write hook fires every time a 2-node candidate
+# resolves as all-singletons. Task retries / re-extractions
+# surface the SAME pair multiple times with deterministic node
+# IDs — without an unordered-pair unique key the queue
+# accumulates duplicates and labeling one leaves siblings
+# pending. These tests pin the dedup contract on both backends.
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_memory_duplicate_enqueue_is_idempotent(memory_service):
+    """Calling enqueue twice with the same (user_id, transform_id,
+    source_stage, node pair) must NOT create a second row. The
+    second call returns the SAME pair instance (same id,
+    same created_at) as the first."""
+    first = await memory_service.enqueue(_make_pair(node_a="x", node_b="y"))
+    second = await memory_service.enqueue(_make_pair(node_a="x", node_b="y"))
+
+    assert first.id == second.id, (
+        "Duplicate enqueue returned a different id — the dedup "
+        "logic missed the existing row. Memory backend must "
+        "mirror the Postgres ON CONFLICT semantics."
+    )
+    pending = await memory_service.list_pending("user-1")
+    assert len(pending) == 1, (
+        f"Expected one pending row after duplicate enqueue; got "
+        f"{len(pending)}. Pre-fix: every call appended a new row."
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_enqueue_is_order_independent(memory_service):
+    """(node_a, node_b) and (node_b, node_a) represent the same
+    candidate pair — the disputed-pair concept is unordered.
+    Migration 18's index uses LEAST/GREATEST to canonicalize;
+    the memory backend mirrors with sorted() on the canonical
+    key. Pin so a future "simpler" refactor that drops the
+    sort doesn't quietly start duplicating reversed pairs."""
+    first = await memory_service.enqueue(_make_pair(node_a="alpha", node_b="beta"))
+    reversed_pair = await memory_service.enqueue(
+        _make_pair(node_a="beta", node_b="alpha")
+    )
+
+    assert first.id == reversed_pair.id, (
+        "Reversed enqueue created a new row — the canonical key "
+        "isn't order-independent. (a,b) and (b,a) must dedup."
+    )
+    pending = await memory_service.list_pending("user-1")
+    assert len(pending) == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_same_pair_different_stage_creates_separate_rows(memory_service):
+    """The same node pair surfaced by ``property_blocker`` vs
+    ``embedding_blocker`` is two different signals — both are
+    worth showing on the queue surface so reviewers can see
+    which blocker raised each pair. Pin source_stage as part of
+    the dedup key."""
+    property_pair = await memory_service.enqueue(
+        _make_pair(node_a="x", node_b="y", source_stage=SourceStage.PROPERTY_BLOCKER)
+    )
+    embedding_pair = await memory_service.enqueue(
+        _make_pair(node_a="x", node_b="y", source_stage=SourceStage.EMBEDDING_BLOCKER)
+    )
+
+    assert property_pair.id != embedding_pair.id, (
+        "source_stage was incorrectly collapsed into a single row "
+        "— reviewers lose the diagnostic signal of which blocker "
+        "raised the candidate."
+    )
+    pending = await memory_service.list_pending("user-1")
+    assert len(pending) == 2
+
+
+@pytest.mark.asyncio
+async def test_memory_re_enqueue_preserves_label_sticky(memory_service):
+    """If a user already labeled a pair and the pipeline
+    re-extracts (different chunk batch, task retry, etc.), the
+    re-enqueue must NOT reset the row to pending. The user's
+    decision sticks. Returning the existing labeled row on
+    conflict (rather than overwriting) is what enforces this."""
+    first = await memory_service.enqueue(_make_pair(node_a="x", node_b="y"))
+    labeled = await memory_service.label(
+        pair_id=first.id, user_id="user-1", decision=Decision.MATCH
+    )
+    assert labeled.status == Status.LABELED_MATCH
+
+    # Re-extract surfaces the same pair again. The pipeline
+    # blindly enqueues; the service must keep the label intact.
+    re_enqueued = await memory_service.enqueue(_make_pair(node_a="x", node_b="y"))
+
+    assert re_enqueued.id == first.id
+    assert re_enqueued.status == Status.LABELED_MATCH, (
+        "Re-enqueue overwrote a labeled pair back to pending. "
+        "The user's labeling work would be silently destroyed "
+        "by every task retry — the queue is supposed to be the "
+        "user's audit trail, not the pipeline's scratchpad."
+    )
+    # And the queue still shows only one row total — labeled,
+    # not pending, so list_pending must return nothing.
+    pending = await memory_service.list_pending("user-1")
+    assert pending == []
+
+
+@pytest.mark.asyncio
+async def test_memory_different_transforms_have_independent_pairs(memory_service):
+    """transform_id IS part of the dedup key — the same node
+    pair from a different transform_id is a different pair
+    (different extraction run, different reviewer context). Pin
+    so a future "global pair store" refactor surfaces the
+    design decision intentionally."""
+    pair_a = await memory_service.enqueue(
+        _make_pair(transform_id="tx-1", node_a="x", node_b="y")
+    )
+    pair_b = await memory_service.enqueue(
+        _make_pair(transform_id="tx-2", node_a="x", node_b="y")
+    )
+
+    assert pair_a.id != pair_b.id
+    pending = await memory_service.list_pending("user-1")
+    assert len(pending) == 2
+
+
+@pytest.mark.asyncio
+async def test_postgres_enqueue_returns_existing_on_conflict(postgres_service):
+    """On the Postgres path, when the INSERT collides with the
+    unique-pair index, ``DO NOTHING`` swallows the insert and
+    RETURNING is empty. The service then fetches the existing
+    row by the canonical key and returns it.
+
+    Two fetchrow calls expected: the INSERT (returns None) and
+    the followup SELECT (returns the existing labeled row). The
+    returned pair reflects the EXISTING row's state — including
+    any prior label — not the input pair."""
+    existing_labeled_row = {
+        "id": "existing-pair-id",
+        "user_id": "user-1",
+        "transform_id": "tx-1",
+        "node_a_id": "n-a",
+        "node_b_id": "n-b",
+        "entity_type": "Person",
+        "node_a_canonical_key": None,
+        "node_b_canonical_key": None,
+        "similarity_score": None,
+        "source_stage": "embedding_blocker",
+        "status": "labeled_match",  # User already labeled this
+        "labeled_at": "2026-05-13T12:00:00+00:00",
+        "labeled_by_user_id": "user-1",
+        "label_reason": "same Alice",
+        "created_at": "2026-05-13T11:00:00+00:00",
+    }
+    # First fetchrow (INSERT ON CONFLICT) returns None; second
+    # (SELECT existing) returns the labeled row.
+    fetchrow_mock = AsyncMock(side_effect=[None, existing_labeled_row])
+    with patch(
+        "graphora_server.services.disputed_pairs_service.db.fetchrow",
+        new=fetchrow_mock,
+    ):
+        returned = await postgres_service.enqueue(_make_pair())
+
+    assert fetchrow_mock.await_count == 2, (
+        "Expected two fetchrow calls on the conflict path: "
+        "INSERT ON CONFLICT DO NOTHING (returns None) + SELECT "
+        "for the existing row. Got: "
+        f"{fetchrow_mock.await_count}"
+    )
+    # The second call must be a SELECT against the canonical
+    # key — order-independent via LEAST/GREATEST so node_a/node_b
+    # in either order finds the existing row.
+    second_call_query = fetchrow_mock.await_args_list[1].args[0]
+    assert "SELECT" in second_call_query
+    assert "LEAST(node_a_id, node_b_id) = %s" in second_call_query
+    assert "GREATEST(node_a_id, node_b_id) = %s" in second_call_query
+
+    # And the returned pair reflects the existing labeled state,
+    # not the caller's freshly-minted PENDING input.
+    assert returned.id == "existing-pair-id"
+    assert returned.status == Status.LABELED_MATCH, (
+        "On conflict the service returned the input pair (PENDING) "
+        "instead of the existing labeled row. Re-extractions would "
+        "appear to silently re-open labeled work."
+    )
+    assert returned.label_reason == "same Alice"
+
+
+@pytest.mark.asyncio
+async def test_postgres_enqueue_handles_missing_existing_row_defensively(
+    postgres_service, caplog
+):
+    """Edge case: ON CONFLICT fires (INSERT returned None) but
+    the followup SELECT also returns None (e.g., concurrent
+    DELETE — slice A has no DELETE endpoint, but defense in
+    depth). The service must log a warning and return the
+    caller's input pair rather than crashing or returning None
+    (which the typed return wouldn't allow)."""
+    fetchrow_mock = AsyncMock(side_effect=[None, None])
+    with patch(
+        "graphora_server.services.disputed_pairs_service.db.fetchrow",
+        new=fetchrow_mock,
+    ):
+        returned = await postgres_service.enqueue(_make_pair())
+
+    assert returned is not None
+    assert any(
+        "no matching row found" in rec.message for rec in caplog.records
+    ), "Defensive branch must log a warning so operators can spot the anomaly."
