@@ -18,6 +18,8 @@ from graphora_server.mcp.server import (
     _tool_impl_get_budget_status,
     _tool_impl_get_cost_report,
     _tool_impl_get_evidence,
+    _tool_impl_label_disputed_pair,
+    _tool_impl_list_disputed_pairs,
     _tool_impl_query_graph,
     _tool_impl_refine_ontology,
     _tool_impl_review_diff,
@@ -45,6 +47,10 @@ class FakeAPIClient:
         budget_status_error: Optional[Exception] = None,
         diff_return: Optional[Dict[str, Any]] = None,
         diff_error: Optional[Exception] = None,
+        list_disputed_pairs_return: Optional[List[Dict[str, Any]]] = None,
+        list_disputed_pairs_error: Optional[Exception] = None,
+        label_disputed_pair_return: Optional[Dict[str, Any]] = None,
+        label_disputed_pair_error: Optional[Exception] = None,
     ):
         self.upload_file_return = upload_file_return or {
             "transform_id": "tx_file",
@@ -101,6 +107,15 @@ class FakeAPIClient:
             "changed_edges": [],
         }
         self.diff_error = diff_error
+        self.list_disputed_pairs_return = (
+            list_disputed_pairs_return if list_disputed_pairs_return is not None else []
+        )
+        self.list_disputed_pairs_error = list_disputed_pairs_error
+        self.label_disputed_pair_return = label_disputed_pair_return or {
+            "id": "p-1",
+            "status": "labeled_match",
+        }
+        self.label_disputed_pair_error = label_disputed_pair_error
         self.calls: List[tuple] = []
 
     async def upload_file(
@@ -201,6 +216,28 @@ class FakeAPIClient:
         if self.diff_error is not None:
             raise self.diff_error
         return self.diff_return
+
+    async def list_disputed_pairs(
+        self,
+        transform_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list:
+        self.calls.append(("list_disputed_pairs", transform_id, limit, offset))
+        if self.list_disputed_pairs_error is not None:
+            raise self.list_disputed_pairs_error
+        return self.list_disputed_pairs_return
+
+    async def label_disputed_pair(
+        self,
+        pair_id: str,
+        decision: str,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        self.calls.append(("label_disputed_pair", pair_id, decision, reason))
+        if self.label_disputed_pair_error is not None:
+            raise self.label_disputed_pair_error
+        return self.label_disputed_pair_return
 
 
 # ---- extract_document ------------------------------------------------------
@@ -787,3 +824,98 @@ class TestReviewDiff:
         )
         with pytest.raises(GraphoraClientError):
             await _tool_impl_review_diff(api, "tx-1", "tx-2")
+
+
+# ---- list_disputed_pairs / label_disputed_pair ----------------------------
+
+
+class TestDisputedPairsTools:
+    """B2-active backend slice A: agent-facing read+label surface
+    for the disputed-pairs queue. Pure passthrough — same
+    architectural pattern as get_cost_report and review_diff."""
+
+    @pytest.mark.asyncio
+    async def test_list_passthrough_returns_endpoint_payload_unchanged(
+        self,
+    ) -> None:
+        payload = [
+            {
+                "id": "p-1",
+                "user_id": "user-1",
+                "transform_id": "tx-1",
+                "node_a_id": "alice-1",
+                "node_b_id": "alice-2",
+                "entity_type": "Person",
+                "similarity_score": "0.85",
+                "source_stage": "embedding_blocker",
+                "status": "pending",
+                "created_at": "2026-05-14T00:00:00+00:00",
+            },
+        ]
+        api = FakeAPIClient(list_disputed_pairs_return=payload)
+        result = await _tool_impl_list_disputed_pairs(api)
+        assert result == payload
+        assert api.calls == [("list_disputed_pairs", None, 50, 0)]
+
+    @pytest.mark.asyncio
+    async def test_list_threads_transform_id_filter(self) -> None:
+        api = FakeAPIClient(list_disputed_pairs_return=[])
+        await _tool_impl_list_disputed_pairs(api, transform_id="tx-1")
+        assert api.calls == [("list_disputed_pairs", "tx-1", 50, 0)]
+
+    @pytest.mark.asyncio
+    async def test_list_transport_error_propagates(self) -> None:
+        """The queue is a primary answer the agent asked for —
+        errors propagate so agents see real failures rather than
+        an empty queue that masks a degraded backend."""
+        from graphora_server.mcp.client import GraphoraClientError
+
+        api = FakeAPIClient(
+            list_disputed_pairs_error=GraphoraClientError(500, "boom"),
+        )
+        with pytest.raises(GraphoraClientError):
+            await _tool_impl_list_disputed_pairs(api)
+
+    @pytest.mark.asyncio
+    async def test_label_passthrough_returns_endpoint_payload_unchanged(
+        self,
+    ) -> None:
+        """Tool forwards pair_id + decision + reason to the
+        client unchanged. Response from the endpoint surfaces
+        verbatim so the agent can render the new status without
+        re-fetching."""
+        payload = {
+            "id": "p-1",
+            "status": "labeled_match",
+            "labeled_at": "2026-05-14T01:00:00+00:00",
+            "labeled_by_user_id": "user-1",
+            "label_reason": "same person",
+        }
+        api = FakeAPIClient(label_disputed_pair_return=payload)
+        result = await _tool_impl_label_disputed_pair(
+            api, pair_id="p-1", decision="match", reason="same person"
+        )
+        assert result == payload
+        assert api.calls == [("label_disputed_pair", "p-1", "match", "same person")]
+
+    @pytest.mark.asyncio
+    async def test_label_without_reason_passes_none(self) -> None:
+        """The reason kwarg is optional — pin that omitting it
+        passes None to the client rather than an empty string
+        (which the API might reject or render confusingly)."""
+        api = FakeAPIClient()
+        await _tool_impl_label_disputed_pair(api, "p-1", "match")
+        assert api.calls == [("label_disputed_pair", "p-1", "match", None)]
+
+    @pytest.mark.asyncio
+    async def test_label_transport_error_propagates(self) -> None:
+        """Labels are writes — errors must propagate so the
+        agent knows the label didn't land. Silent success would
+        be much worse than a propagated 404 / 5xx."""
+        from graphora_server.mcp.client import GraphoraClientError
+
+        api = FakeAPIClient(
+            label_disputed_pair_error=GraphoraClientError(404, "not found"),
+        )
+        with pytest.raises(GraphoraClientError):
+            await _tool_impl_label_disputed_pair(api, "p-bad", "match")

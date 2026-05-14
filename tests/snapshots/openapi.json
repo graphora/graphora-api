@@ -1366,6 +1366,134 @@
         "title": "DetailedTransformStatus",
         "type": "object"
       },
+      "DisputedPairResponse": {
+        "description": "Wire shape for a single disputed pair. Decimals serialize\nas strings for precision (same convention as /cost's\nestimated_cost_usd).",
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label Reason"
+          },
+          "labeled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labeled At"
+          },
+          "labeled_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labeled By User Id"
+          },
+          "node_a_canonical_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node A Canonical Key"
+          },
+          "node_a_id": {
+            "title": "Node A Id",
+            "type": "string"
+          },
+          "node_b_canonical_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node B Canonical Key"
+          },
+          "node_b_id": {
+            "title": "Node B Id",
+            "type": "string"
+          },
+          "similarity_score": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Similarity Score"
+          },
+          "source_stage": {
+            "description": "One of: property_blocker, embedding_blocker, splink_blocker, llm_review",
+            "title": "Source Stage",
+            "type": "string"
+          },
+          "status": {
+            "description": "One of: pending, labeled_match, labeled_not_match, skipped",
+            "title": "Status",
+            "type": "string"
+          },
+          "transform_id": {
+            "title": "Transform Id",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "transform_id",
+          "node_a_id",
+          "node_b_id",
+          "entity_type",
+          "source_stage",
+          "status"
+        ],
+        "title": "DisputedPairResponse",
+        "type": "object"
+      },
       "DocumentAnalysisRequest": {
         "description": "Request for document analysis",
         "properties": {
@@ -1940,6 +2068,33 @@
           }
         },
         "title": "LLMUsageSummary",
+        "type": "object"
+      },
+      "LabelRequest": {
+        "description": "Body shape for POST /label. Closed-set decision enum at\nthe wire layer too \u2014 Pydantic enforces it before the service\nsees the value.",
+        "properties": {
+          "decision": {
+            "description": "One of: match, not_match, skip",
+            "title": "Decision",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional free-text reason the operator/agent supplies.",
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "LabelRequest",
         "type": "object"
       },
       "LimitCheckResult": {
@@ -6909,6 +7064,246 @@
         "summary": "Get Dashboard Summary",
         "tags": [
           "Dashboard"
+        ]
+      }
+    },
+    "/api/v1/disputed-pairs": {
+      "get": {
+        "description": "Pending disputed pairs for the authenticated user, newest first. Optional transform_id filter restricts to a single run.",
+        "operationId": "list_pending_pairs_api_v1_disputed_pairs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "transform_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Transform Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DisputedPairResponse"
+                  },
+                  "title": "Response List Pending Pairs Api V1 Disputed Pairs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Pending Pairs",
+        "tags": [
+          "Disputed Pairs"
+        ]
+      }
+    },
+    "/api/v1/disputed-pairs/transform/{transform_id}": {
+      "get": {
+        "description": "All disputed pairs (any status) for a specific transform owned by the authenticated user. Used by the per-transform review view.",
+        "operationId": "list_pairs_for_transform_api_v1_disputed_pairs_transform__transform_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transform_id",
+            "required": true,
+            "schema": {
+              "title": "Transform Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DisputedPairResponse"
+                  },
+                  "title": "Response List Pairs For Transform Api V1 Disputed Pairs Transform  Transform Id  Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Pairs For Transform",
+        "tags": [
+          "Disputed Pairs"
+        ]
+      }
+    },
+    "/api/v1/disputed-pairs/{pair_id}": {
+      "get": {
+        "description": "Fetch a single disputed pair.",
+        "operationId": "get_pair_api_v1_disputed_pairs__pair_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pair_id",
+            "required": true,
+            "schema": {
+              "title": "Pair Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisputedPairResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Pair",
+        "tags": [
+          "Disputed Pairs"
+        ]
+      }
+    },
+    "/api/v1/disputed-pairs/{pair_id}/label": {
+      "post": {
+        "description": "Apply a label to a disputed pair. Decision is one of match / not_match / skip. Re-labeling overwrites prior labels (supports the 'I changed my mind' UX without a separate undo endpoint).",
+        "operationId": "label_pair_api_v1_disputed_pairs__pair_id__label_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pair_id",
+            "required": true,
+            "schema": {
+              "title": "Pair Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisputedPairResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Label Pair",
+        "tags": [
+          "Disputed Pairs"
         ]
       }
     },

@@ -222,6 +222,40 @@ async def _tool_impl_review_diff(
     return await api.diff_transforms(base_transform_id, compare_transform_id)
 
 
+async def _tool_impl_list_disputed_pairs(
+    api: GraphoraClient,
+    transform_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """B2-active: list the user's pending disputed-pairs queue.
+
+    Pure HTTP passthrough — same shape as the other agent-facing
+    tools. Errors propagate because the queue is a primary
+    answer (the agent needs to know WHAT to label before it can
+    label anything)."""
+    return await api.list_disputed_pairs(
+        transform_id=transform_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+async def _tool_impl_label_disputed_pair(
+    api: GraphoraClient,
+    pair_id: str,
+    decision: str,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """B2-active: apply a label to a disputed pair. Decision is
+    one of match / not_match / skip. Errors propagate so the
+    agent sees real failures (404 for missing pair, 400 for
+    invalid decision)."""
+    return await api.label_disputed_pair(
+        pair_id=pair_id, decision=decision, reason=reason
+    )
+
+
 # ---- FastMCP wiring --------------------------------------------------------
 
 
@@ -463,6 +497,74 @@ def build_server(client: Optional[GraphoraClient] = None):
             api, base_transform_id, compare_transform_id
         )
 
+    @mcp.tool()
+    async def list_disputed_pairs(
+        transform_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Pending entity-resolution disputes for the authenticated
+        user, newest first.
+
+        Each pair represents two entities the pipeline wasn't
+        confident enough to auto-merge. The agent reviews them
+        and labels each as ``match`` (they're the same entity),
+        ``not_match`` (they're different), or ``skip`` (defer for
+        later). Labels feed back into the entity-resolution
+        learner.
+
+        Args:
+            transform_id: Optional filter — restrict to a single
+                run's pending pairs.
+            limit: Page size (default 50, max 200).
+            offset: Pagination offset.
+
+        Returns a list of dicts, each with:
+            id (str): Pair id, used for the label endpoint.
+            transform_id (str): Run that surfaced the pair.
+            node_a_id / node_b_id (str): The two candidate nodes.
+            entity_type (str): Shared type (Person, Company, etc.)
+            node_a_canonical_key / node_b_canonical_key (str|None):
+                Canonical keys when ER had them.
+            similarity_score (str|None): Stage's confidence
+                (Decimal-precision string).
+            source_stage (str): Which ER stage flagged this —
+                ``property_blocker`` / ``embedding_blocker`` /
+                ``splink_blocker`` / ``llm_review``.
+            status (str): Always ``pending`` from this endpoint.
+            created_at (str): ISO8601.
+        """
+        return await _tool_impl_list_disputed_pairs(
+            api, transform_id=transform_id, limit=limit, offset=offset
+        )
+
+    @mcp.tool()
+    async def label_disputed_pair(
+        pair_id: str,
+        decision: str,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Label a disputed entity-resolution pair.
+
+        Args:
+            pair_id: From a prior ``list_disputed_pairs`` result.
+            decision: One of ``match`` (the two entities ARE the
+                same), ``not_match`` (they're different), or
+                ``skip`` (defer this one).
+            reason: Optional free-text rationale the operator can
+                see in the audit trail.
+
+        Returns the updated pair with:
+            status: One of ``labeled_match`` / ``labeled_not_match``
+                / ``skipped``.
+            labeled_at (str): ISO8601 timestamp.
+            labeled_by_user_id (str): Who labeled it.
+            label_reason (str|None): Echoed reason.
+        """
+        return await _tool_impl_label_disputed_pair(
+            api, pair_id=pair_id, decision=decision, reason=reason
+        )
+
     return mcp
 
 
@@ -532,5 +634,7 @@ __all__ = [
     "_tool_impl_get_cost_report",
     "_tool_impl_get_budget_status",
     "_tool_impl_review_diff",
+    "_tool_impl_list_disputed_pairs",
+    "_tool_impl_label_disputed_pair",
     "_tool_impl_refine_ontology",
 ]

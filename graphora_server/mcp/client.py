@@ -298,6 +298,44 @@ class GraphoraClient:
         )
         return _ok(resp)
 
+    async def list_disputed_pairs(
+        self,
+        transform_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list:
+        """B2-active: pending disputed pairs for the authenticated
+        user (newest first). When ``transform_id`` is set, filters
+        to a single run. The endpoint returns a list of pair
+        dicts; this method passes the list through unchanged."""
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if transform_id is not None:
+            params["transform_id"] = transform_id
+        resp = await self._client.get(
+            f"{_API_V1}/disputed-pairs",
+            params=params,
+        )
+        return _ok(resp)
+
+    async def label_disputed_pair(
+        self,
+        pair_id: str,
+        decision: str,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """B2-active: apply a label to a disputed pair. Decision
+        is one of ``match`` / ``not_match`` / ``skip``. Returns
+        the updated pair dict — agents can render the new status
+        without re-fetching."""
+        body: Dict[str, Any] = {"decision": decision}
+        if reason is not None:
+            body["reason"] = reason
+        resp = await self._client.post(
+            f"{_API_V1}/disputed-pairs/{pair_id}/label",
+            json=body,
+        )
+        return _ok(resp)
+
 
 def _ok(resp: httpx.Response) -> Dict[str, Any]:
     if resp.status_code >= 400:
