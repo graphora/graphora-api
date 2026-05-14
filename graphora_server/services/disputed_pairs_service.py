@@ -399,36 +399,62 @@ class DisputedPairsService:
 
         if self._enabled:
             try:
-                # CTE pattern: ``old`` reads the row's status BEFORE
-                # the update materialises, ``upd`` performs the
-                # actual UPDATE and RETURNING. The final SELECT
-                # joins them so one round-trip returns the new row
-                # PLUS the previous status. When no row matches
-                # (cross-tenant or missing), both CTE legs are empty
-                # and the SELECT yields no row — fetchrow returns
-                # None — same shape as the pre-CTE query.
+                # Reviewer-flagged P2 on commit a1775c5: the earlier
+                # two-CTE pattern (SELECT old, then UPDATE upd) used a
+                # NON-locking SELECT for old.status. Concurrent label
+                # submits for the same pair could both read
+                # old.status='pending' before either UPDATE committed,
+                # then each would tell merge_learning to apply a
+                # pending→labeled_match nudge — the same double-nudge
+                # bug the slice-C transition-aware redesign was meant
+                # to prevent, just at a different concurrency level.
+                #
+                # The fix: lock-bearing read in the ``old`` CTE
+                # (``FOR UPDATE``) plus ``MATERIALIZED`` so PG can't
+                # inline the CTE in a way that would lose the lock
+                # semantics. Under read-committed isolation, the
+                # second concurrent statement BLOCKS at the FOR UPDATE
+                # until the first commits, then re-reads the row's
+                # NEW state. apply_pair_label then sees
+                # old_status=labeled_match, new_status=labeled_match,
+                # delta=0 → no-op. Both submits hit the row; only the
+                # first contributes a threshold nudge.
+                #
+                # CTE shape: one MATERIALIZED CTE with the lock-
+                # bearing read, then the main statement is the
+                # UPDATE ... FROM old. RETURNING references dp.*
+                # (the updated row) plus old.status as the
+                # pre-update value. Single round-trip; statement-
+                # scope row lock handles the concurrency window.
+                #
+                # Testing gap: a real-DB concurrency test would
+                # round-trip through psycopg under two coroutines
+                # against an actual Postgres instance. This codebase
+                # doesn't yet have a testcontainers fixture; the
+                # unit-level SQL-shape pins below catch query-string
+                # regressions. Future work: add a tests/integration
+                # case once the testcontainers harness lands.
                 query = """
-                    WITH old AS (
-                        SELECT status FROM disputed_pairs
+                    WITH old AS MATERIALIZED (
+                        SELECT id, status FROM disputed_pairs
                         WHERE id = %s AND user_id = %s
-                    ),
-                    upd AS (
-                        UPDATE disputed_pairs
-                        SET status = %s,
-                            labeled_at = %s,
-                            labeled_by_user_id = %s,
-                            label_reason = %s
-                        WHERE id = %s AND user_id = %s
-                        RETURNING id, user_id, transform_id, node_a_id,
-                                  node_b_id, entity_type,
-                                  node_a_canonical_key,
-                                  node_b_canonical_key, similarity_score,
-                                  source_stage, status, labeled_at,
-                                  labeled_by_user_id, label_reason,
-                                  created_at
+                        FOR UPDATE
                     )
-                    SELECT upd.*, old.status AS old_status
-                    FROM upd, old
+                    UPDATE disputed_pairs dp
+                    SET status = %s,
+                        labeled_at = %s,
+                        labeled_by_user_id = %s,
+                        label_reason = %s
+                    FROM old
+                    WHERE dp.id = old.id
+                    RETURNING dp.id, dp.user_id, dp.transform_id,
+                              dp.node_a_id, dp.node_b_id, dp.entity_type,
+                              dp.node_a_canonical_key,
+                              dp.node_b_canonical_key, dp.similarity_score,
+                              dp.source_stage, dp.status, dp.labeled_at,
+                              dp.labeled_by_user_id, dp.label_reason,
+                              dp.created_at,
+                              old.status AS old_status
                 """
                 row = await db.fetchrow(
                     query,
@@ -438,8 +464,6 @@ class DisputedPairsService:
                     labeled_at,
                     user_id,
                     reason,
-                    pair_id,
-                    user_id,
                 )
                 if row:
                     # The CTE returns an extra ``old_status``

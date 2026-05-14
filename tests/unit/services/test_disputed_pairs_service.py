@@ -1037,17 +1037,28 @@ async def test_match_to_skip_undoes_match_contribution(
 
 
 @pytest.mark.asyncio
-async def test_postgres_label_query_uses_cte_for_old_status(postgres_service):
-    """Postgres SQL shape pin. The UPDATE must be wrapped in a
-    CTE that also reads the pre-update status so the
-    merge_learning hook can compute a transition delta. Without
-    the CTE, the same double-submit P2 bug recurs on the
-    Postgres path because the old status isn't available.
+async def test_postgres_label_query_uses_locking_cte_for_old_status(postgres_service):
+    """Postgres SQL shape pin. The pre-update status capture must
+    use a LOCK-BEARING read so concurrent label submits don't
+    both read old_status='pending' before either UPDATE commits.
 
-    Patches db.fetchrow to verify the query string carries
-    the CTE pattern."""
-    # Mock returns a row with old_status=pending so the label
-    # path runs through to the merge_learning hook normally.
+    Reviewer-flagged P2 (commit a1775c5): the prior two-CTE
+    pattern used a plain SELECT for ``old``, which gave correct
+    semantics for SEQUENTIAL double-submits (idempotency) but
+    leaked the same double-nudge bug at concurrent execution.
+    The fix wraps the ``old`` read in ``MATERIALIZED`` +
+    ``FOR UPDATE`` so PG's row-level lock serializes the two
+    statements; the second-in-line re-reads the post-commit
+    state and apply_pair_label sees a same-status transition.
+
+    Pin BOTH keywords because dropping either compromises the
+    contract:
+      * Without FOR UPDATE: no lock, concurrent reads race.
+      * Without MATERIALIZED: PG 12+ may inline the CTE in a
+        way that doesn't preserve lock semantics through future
+        planner changes.
+
+    Patches db.fetchrow to inspect the query string."""
     row = {
         "id": "p-1",
         "user_id": "user-1",
@@ -1076,18 +1087,31 @@ async def test_postgres_label_query_uses_cte_for_old_status(postgres_service):
         )
 
     query = fetchrow_mock.await_args.args[0]
-    assert "WITH old AS" in query, (
-        "Label SQL must use a CTE to capture the pre-update "
-        "status. Pre-fix: a plain UPDATE returned only the "
-        "post-update row, leaving the merge_learning hook with "
-        "no way to compute a transition delta."
+    # Lock-bearing read.
+    assert "FOR UPDATE" in query, (
+        "Label SQL must use SELECT ... FOR UPDATE in the old "
+        "CTE so concurrent submits serialize on the row lock. "
+        "Without it, two clients can both read old_status="
+        "'pending' before either UPDATE commits and each "
+        "applies a full nudge for a single human decision."
     )
-    assert (
-        "UPDATE disputed_pairs" in query
-    ), "Inner CTE must still UPDATE the row — only the wrapper changed."
+    # Explicit materialization so future PG planner changes
+    # can't inline the CTE in a way that drops the lock scope.
+    assert "MATERIALIZED" in query, (
+        "Label SQL must mark the old CTE MATERIALIZED so PG "
+        "12+ doesn't inline it. Implicit inlining could "
+        "theoretically reorder evaluation in a way that loses "
+        "the FOR UPDATE lock contract."
+    )
+    # CTE-then-UPDATE-FROM pattern (vs the older two-CTE +
+    # final SELECT shape) — the UPDATE references old via FROM
+    # so RETURNING can surface dp.* alongside old.status.
+    assert "WITH old AS" in query
+    assert "UPDATE disputed_pairs dp" in query
+    assert "FROM old" in query
     assert (
         "old.status AS old_status" in query
-    ), "Final SELECT must surface the pre-update status alongside the new row."
+    ), "RETURNING must surface old.status alongside dp.* so the merge_learning hook receives the pre-update status."
 
 
 @pytest.mark.asyncio
