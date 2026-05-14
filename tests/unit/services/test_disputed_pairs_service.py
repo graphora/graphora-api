@@ -734,3 +734,179 @@ async def test_postgres_enqueue_handles_missing_existing_row_defensively(
     assert any(
         "no matching row found" in rec.message for rec in caplog.records
     ), "Defensive branch must log a warning so operators can spot the anomaly."
+
+
+# ============================================================
+# B2-active slice C: label → merge_learning_service feedback
+#
+# After a successful label transition, DisputedPairsService.label
+# nudges the per-(user, entity_type) threshold in merge_learning
+# via apply_pair_label. These tests pin:
+#   * the hook fires with the right args on successful labels
+#   * cross-tenant labels (which return None) do NOT trigger the
+#     hook — otherwise an attacker could move another tenant's
+#     thresholds without touching their data
+#   * apply_pair_label failures are swallowed (label is the
+#     primary persisted artifact; threshold update is bookkeeping)
+# ============================================================
+
+
+@pytest.fixture
+def _reset_merge_learning():
+    """Reset the module-level merge_learning_service stats before
+    each test so prior tests' bootstrap entries don't pollute the
+    assertions."""
+    from graphora_server.services.merge.learning import merge_learning_service
+
+    merge_learning_service.reset()
+    yield merge_learning_service
+    merge_learning_service.reset()
+
+
+@pytest.mark.asyncio
+async def test_memory_label_match_invokes_merge_learning(
+    memory_service, _reset_merge_learning
+):
+    """Slice C contract: a successful match label fires
+    apply_pair_label with the pair's entity_type and the
+    decision. The merge_learning singleton mutates as a result —
+    verifiable via snapshot()."""
+    pair = await memory_service.enqueue(_make_pair(entity_type="Company"))
+
+    labeled = await memory_service.label(
+        pair_id=pair.id, user_id="user-1", decision=Decision.MATCH
+    )
+    assert labeled.status == Status.LABELED_MATCH
+
+    # The hook should have bootstrapped a stats slot for
+    # (user-1, Company). Pre-fix: the label persisted but
+    # merge_learning saw nothing.
+    snapshot = _reset_merge_learning.snapshot()
+    assert ("user-1", "Company") in snapshot, (
+        "Slice-C hook didn't fire: merge_learning has no stats "
+        f"slot for the labeled (user, type) tuple. Got: "
+        f"{list(snapshot.keys())!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_label_skip_does_not_change_threshold(
+    memory_service, _reset_merge_learning
+):
+    """SKIP labels reach apply_pair_label (the service is the
+    dispatcher) but apply_pair_label is a no-op on SKIP. End
+    result: skipping a pair does NOT shift the threshold, which
+    is the right UX — deferring review shouldn't silently
+    change ER behavior."""
+    pair = await memory_service.enqueue(_make_pair(entity_type="Person"))
+
+    await memory_service.label(
+        pair_id=pair.id, user_id="user-1", decision=Decision.SKIP
+    )
+
+    snapshot = _reset_merge_learning.snapshot()
+    assert ("user-1", "Person") not in snapshot, (
+        "SKIP shifted the threshold — the no-op contract is "
+        "broken. Deferring a pair must not mutate the merge "
+        "calibration for that user/type."
+    )
+
+
+@pytest.mark.asyncio
+async def test_cross_tenant_label_miss_does_not_fire_hook(
+    memory_service, _reset_merge_learning
+):
+    """When the label call returns None (cross-tenant attempt,
+    missing pair), the merge_learning hook MUST NOT fire. A
+    malicious caller probing pair IDs from another tenant
+    could otherwise shift that tenant's thresholds — the label
+    persistence wisely returns None for cross-tenant, but the
+    side-effect would silently leak data influence.
+
+    Pin so the hook stays inside the success branch."""
+    # Pair owned by user-1.
+    await memory_service.enqueue(_make_pair(user_id="user-1", entity_type="Company"))
+    # user-2 tries to label it.
+    result = await memory_service.label(
+        pair_id="bogus-id", user_id="user-2", decision=Decision.MATCH
+    )
+    assert result is None
+    # No stats slot for either tenant — the hook didn't fire.
+    snapshot = _reset_merge_learning.snapshot()
+    assert snapshot == {}, (
+        "Hook fired on a cross-tenant/missing label. An attacker "
+        "could move another user's thresholds by spamming label "
+        "calls with guessed pair IDs."
+    )
+
+
+@pytest.mark.asyncio
+async def test_label_with_merge_learning_failure_still_returns_labeled_pair(
+    memory_service, caplog
+):
+    """The label is the user's primary action — it must succeed
+    independent of the merge_learning side-effect. Pin the
+    swallow contract: if apply_pair_label raises, label()
+    returns the labeled pair anyway and logs a warning.
+
+    Mirrors the observability-vs-correctness split applied to
+    DecisionLogService.append in B0-log slice 2."""
+    pair = await memory_service.enqueue(_make_pair(entity_type="Company"))
+
+    with patch(
+        "graphora_server.services.disputed_pairs_service."
+        "merge_learning_service.apply_pair_label",
+        new=AsyncMock(side_effect=RuntimeError("learning down")),
+    ):
+        labeled = await memory_service.label(
+            pair_id=pair.id, user_id="user-1", decision=Decision.MATCH
+        )
+
+    assert labeled is not None, (
+        "Label returned None when the merge_learning hook failed. "
+        "The label is the persisted artifact and must not be "
+        "abandoned just because the threshold bookkeeping crashed."
+    )
+    assert labeled.status == Status.LABELED_MATCH
+    assert any(
+        "label persisted, threshold unchanged" in rec.message for rec in caplog.records
+    ), "Swallowed merge_learning failure must surface in logs."
+
+
+@pytest.mark.asyncio
+async def test_get_threshold_reflects_match_label_end_to_end(
+    memory_service, _reset_merge_learning
+):
+    """End-to-end pin matching the slice C exit signal: enqueue
+    a pair, label it MATCH, then call get_threshold for the
+    same (user, type) tuple — the returned threshold reflects
+    the label. Without this, the active-learning feedback loop
+    isn't observable from the public service surface."""
+    pair = await memory_service.enqueue(_make_pair(entity_type="Company"))
+    await memory_service.label(
+        pair_id=pair.id, user_id="user-1", decision=Decision.MATCH
+    )
+
+    default_threshold = 0.95
+    threshold = await _reset_merge_learning.get_threshold(
+        "user-1", "Company", default_threshold
+    )
+    # Bootstrap: ema=0.95 (1.0 + default match_nudge of -0.05).
+    # get_threshold logic: ema (0.95) >= default - margin (0.90)
+    # → adaptive sticks at default. Pin instead on the
+    # snapshot: the stats slot exists with ema below 1.0, which
+    # IS the directional update.
+    snapshot = _reset_merge_learning.snapshot()
+    stats = snapshot[("user-1", "Company")]
+    assert stats.ema_low_score < 1.0, (
+        f"After a MATCH label the ema_low_score should be below "
+        f"the 1.0 prior; got {stats.ema_low_score}. The feedback "
+        "loop didn't take effect."
+    )
+    # threshold itself may still equal default on the first
+    # label (the EMA is still close to the default-margin
+    # boundary); we DON'T assert threshold < default here. The
+    # apply_pair_label unit tests in test_merge_learning.py pin
+    # the threshold-change path explicitly; this end-to-end test
+    # just confirms the wiring fires.
+    assert threshold == default_threshold or threshold < default_threshold

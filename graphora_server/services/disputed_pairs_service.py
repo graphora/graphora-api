@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional
 
 from graphora_server.config import settings
 from graphora_server.db import postgres as db
+from graphora_server.services.merge.learning import merge_learning_service
 
 logger = logging.getLogger(__name__)
 
@@ -387,6 +388,7 @@ class DisputedPairsService:
         separate "undo" endpoint."""
         new_status = _DECISION_TO_STATUS[decision]
         labeled_at = datetime.now(timezone.utc).isoformat()
+        labeled_pair: Optional[DisputedPair] = None
 
         if self._enabled:
             try:
@@ -412,9 +414,8 @@ class DisputedPairsService:
                     pair_id,
                     user_id,
                 )
-                if not row:
-                    return None
-                return _row_to_pair(row)
+                if row:
+                    labeled_pair = _row_to_pair(row)
             except Exception as exc:
                 logger.error(
                     "Failed to label disputed pair %s for user %s: %s",
@@ -423,15 +424,52 @@ class DisputedPairsService:
                     exc,
                 )
                 raise
-        # Memory backend.
-        for pair in self._memory_store:
-            if pair.id == pair_id and pair.user_id == user_id:
-                pair.status = new_status
-                pair.labeled_at = labeled_at
-                pair.labeled_by_user_id = user_id
-                pair.label_reason = reason
-                return pair
-        return None
+        else:
+            # Memory backend.
+            for pair in self._memory_store:
+                if pair.id == pair_id and pair.user_id == user_id:
+                    pair.status = new_status
+                    pair.labeled_at = labeled_at
+                    pair.labeled_by_user_id = user_id
+                    pair.label_reason = reason
+                    labeled_pair = pair
+                    break
+
+        if labeled_pair is None:
+            return None
+
+        # B2-active slice C: close the active-learning feedback
+        # loop. The user has just judged a candidate pair; that
+        # judgment is a high-confidence signal for merge_learning
+        # to adjust the per-(user, entity_type) threshold used by
+        # cluster_entities_with_splink. MATCH labels nudge the
+        # threshold lower (more permissive); NOT_MATCH labels
+        # nudge it higher (more strict); SKIP is a no-op.
+        #
+        # Failures here are swallowed — the user's label is the
+        # primary persisted artifact and MUST succeed independent
+        # of an in-memory bookkeeping side-effect. Mirrors the
+        # observability-vs-correctness split applied to
+        # DecisionLogService.append.
+        try:
+            await merge_learning_service.apply_pair_label(
+                user_id=user_id,
+                entity_type=labeled_pair.entity_type,
+                decision=decision,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to apply disputed-pair label %s to "
+                "merge_learning for pair=%s user=%s type=%s: %s — "
+                "label persisted, threshold unchanged",
+                decision.value,
+                pair_id,
+                user_id,
+                labeled_pair.entity_type,
+                exc,
+            )
+
+        return labeled_pair
 
     # Reads --------------------------------------------------------------------
 
