@@ -910,3 +910,243 @@ async def test_get_threshold_reflects_match_label_end_to_end(
     # the threshold-change path explicitly; this end-to-end test
     # just confirms the wiring fires.
     assert threshold == default_threshold or threshold < default_threshold
+
+
+# ============================================================
+# Reviewer-flagged P2 (commit 72381b4): label() must be
+# idempotent w.r.t. merge_learning. A client retry, browser
+# double-submit, or re-saving the same MATCH label was moving
+# the threshold N times for one human decision. The fix:
+# label() captures the PRE-update status and passes it to
+# apply_pair_label, which now operates on a (old, new)
+# transition rather than a single decision. These tests pin
+# the idempotency + transition semantics from the service
+# surface.
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_double_submit_match_label_does_not_double_nudge(
+    memory_service, _reset_merge_learning
+):
+    """The central P2 pin. Pre-fix: labeling the same pair MATCH
+    twice (browser retry, double-click, etc.) moved the
+    Company threshold from 0.95 to 0.90 — one nudge per call.
+    Post-fix: the second call sees old_status=LABELED_MATCH and
+    new_status=LABELED_MATCH, computes delta=0, no-ops the
+    merge_learning hook."""
+    pair = await memory_service.enqueue(_make_pair(entity_type="Company"))
+
+    # First submit.
+    await memory_service.label(
+        pair_id=pair.id, user_id="user-1", decision=Decision.MATCH
+    )
+    after_first = _reset_merge_learning.snapshot()[("user-1", "Company")].ema_low_score
+
+    # Double-submit: same pair, same decision.
+    await memory_service.label(
+        pair_id=pair.id, user_id="user-1", decision=Decision.MATCH
+    )
+    after_second = _reset_merge_learning.snapshot()[("user-1", "Company")].ema_low_score
+
+    assert pytest.approx(after_first, rel=1e-9) == after_second, (
+        "Double-submit moved the threshold twice. Pre-fix: "
+        f"after_first={after_first}, after_second={after_second} "
+        "— the threshold should remain steady on idempotent "
+        "re-labels because delta=0 for same-status transitions."
+    )
+
+
+@pytest.mark.asyncio
+async def test_match_to_not_match_relabel_applies_full_swing(
+    memory_service, _reset_merge_learning
+):
+    """User changes their mind from MATCH to NOT_MATCH. The
+    label endpoint already supports re-labeling (overwrite);
+    the threshold must reflect BOTH undoing the prior match
+    contribution AND applying the new not_match contribution
+    in a single transition.
+
+    With default nudges (±0.05): pending→match seeds ema at 0.95;
+    match→not_match delta = +0.05 - (-0.05) = +0.10. ema goes
+    to 0.95 + 0.10 = 1.05, clamped to 1.00.
+
+    Pre-fix bug: each label call applied its OWN nudge in
+    isolation, so MATCH then NOT_MATCH would have left the ema
+    at 0.95 + 0.05 = 1.00 by accident. Post-fix, the test
+    structure makes the transition-aware semantics explicit."""
+    pair = await memory_service.enqueue(_make_pair(entity_type="Company"))
+
+    # MATCH first.
+    await memory_service.label(
+        pair_id=pair.id, user_id="user-1", decision=Decision.MATCH
+    )
+    after_match = _reset_merge_learning.snapshot()[("user-1", "Company")].ema_low_score
+    # Bootstrap: 1.0 + (-0.05) = 0.95.
+    assert pytest.approx(after_match, rel=1e-9) == 0.95
+
+    # User re-labels NOT_MATCH.
+    await memory_service.label(
+        pair_id=pair.id, user_id="user-1", decision=Decision.NOT_MATCH
+    )
+    after_relabel = _reset_merge_learning.snapshot()[
+        ("user-1", "Company")
+    ].ema_low_score
+    # delta = +0.05 - (-0.05) = +0.10. 0.95 + 0.10 = 1.05 →
+    # clamped at 1.0.
+    assert pytest.approx(after_relabel, rel=1e-9) == 1.0, (
+        f"Match→not_match transition didn't apply the full swing. "
+        f"Got ema={after_relabel}. Expected 1.0 (0.95 + 2*0.05 "
+        "clamped at 1.0). The transition delta must include "
+        "BOTH the undo of the prior match contribution and the "
+        "new not_match contribution."
+    )
+
+
+@pytest.mark.asyncio
+async def test_match_to_skip_undoes_match_contribution(
+    memory_service, _reset_merge_learning
+):
+    """User downgrades a MATCH label to SKIP. The match
+    contribution is undone (delta = 0 - match_nudge = +nudge),
+    moving the threshold back toward neutral.
+
+    Pre-fix: SKIP was a hard no-op regardless of prior status,
+    so a MATCH followed by SKIP left the threshold lowered
+    forever. Post-fix: SKIP correctly undoes any prior labeled
+    contribution."""
+    pair = await memory_service.enqueue(_make_pair(entity_type="Company"))
+
+    await memory_service.label(
+        pair_id=pair.id, user_id="user-1", decision=Decision.MATCH
+    )
+    after_match = _reset_merge_learning.snapshot()[("user-1", "Company")].ema_low_score
+    assert pytest.approx(after_match, rel=1e-9) == 0.95
+
+    # Now skip — should undo the match contribution.
+    await memory_service.label(
+        pair_id=pair.id, user_id="user-1", decision=Decision.SKIP
+    )
+    after_skip = _reset_merge_learning.snapshot()[("user-1", "Company")].ema_low_score
+    # delta = 0 - (-0.05) = +0.05. 0.95 + 0.05 = 1.00.
+    assert pytest.approx(after_skip, rel=1e-9) == 1.00, (
+        f"Match→skip didn't undo the prior match contribution. "
+        f"Got ema={after_skip}. Pre-fix: skip was a hard no-op "
+        "and the match nudge would have stuck around forever."
+    )
+
+
+@pytest.mark.asyncio
+async def test_postgres_label_query_uses_cte_for_old_status(postgres_service):
+    """Postgres SQL shape pin. The UPDATE must be wrapped in a
+    CTE that also reads the pre-update status so the
+    merge_learning hook can compute a transition delta. Without
+    the CTE, the same double-submit P2 bug recurs on the
+    Postgres path because the old status isn't available.
+
+    Patches db.fetchrow to verify the query string carries
+    the CTE pattern."""
+    # Mock returns a row with old_status=pending so the label
+    # path runs through to the merge_learning hook normally.
+    row = {
+        "id": "p-1",
+        "user_id": "user-1",
+        "transform_id": "tx-1",
+        "node_a_id": "n-a",
+        "node_b_id": "n-b",
+        "entity_type": "Company",
+        "node_a_canonical_key": None,
+        "node_b_canonical_key": None,
+        "similarity_score": None,
+        "source_stage": "embedding_blocker",
+        "status": "labeled_match",
+        "labeled_at": "2026-05-14T01:00:00+00:00",
+        "labeled_by_user_id": "user-1",
+        "label_reason": None,
+        "created_at": "2026-05-14T00:00:00+00:00",
+        "old_status": "pending",
+    }
+    fetchrow_mock = AsyncMock(return_value=row)
+    with patch(
+        "graphora_server.services.disputed_pairs_service.db.fetchrow",
+        new=fetchrow_mock,
+    ):
+        await postgres_service.label(
+            pair_id="p-1", user_id="user-1", decision=Decision.MATCH
+        )
+
+    query = fetchrow_mock.await_args.args[0]
+    assert "WITH old AS" in query, (
+        "Label SQL must use a CTE to capture the pre-update "
+        "status. Pre-fix: a plain UPDATE returned only the "
+        "post-update row, leaving the merge_learning hook with "
+        "no way to compute a transition delta."
+    )
+    assert (
+        "UPDATE disputed_pairs" in query
+    ), "Inner CTE must still UPDATE the row — only the wrapper changed."
+    assert (
+        "old.status AS old_status" in query
+    ), "Final SELECT must surface the pre-update status alongside the new row."
+
+
+@pytest.mark.asyncio
+async def test_postgres_label_threads_old_status_to_merge_learning(
+    postgres_service, _reset_merge_learning
+):
+    """End-to-end Postgres path: when the CTE returns a row with
+    old_status=labeled_match and the user re-submits MATCH,
+    apply_pair_label sees old=new=labeled_match and treats it
+    as a no-op. Pin for the Postgres parity with the memory
+    backend's idempotency contract."""
+    # Pre-seed merge_learning with a labeled_match contribution
+    # so we can verify the no-op (no further change after the
+    # re-label).
+    await _reset_merge_learning.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status="pending",
+        new_status="labeled_match",
+    )
+    seeded_ema = _reset_merge_learning.snapshot()[("user-1", "Company")].ema_low_score
+    assert pytest.approx(seeded_ema, rel=1e-9) == 0.95
+
+    # Mock returns the row with old_status="labeled_match"
+    # (i.e., the pair was already labeled MATCH).
+    row = {
+        "id": "p-1",
+        "user_id": "user-1",
+        "transform_id": "tx-1",
+        "node_a_id": "n-a",
+        "node_b_id": "n-b",
+        "entity_type": "Company",
+        "node_a_canonical_key": None,
+        "node_b_canonical_key": None,
+        "similarity_score": None,
+        "source_stage": "embedding_blocker",
+        "status": "labeled_match",
+        "labeled_at": "2026-05-14T01:00:00+00:00",
+        "labeled_by_user_id": "user-1",
+        "label_reason": None,
+        "created_at": "2026-05-14T00:00:00+00:00",
+        "old_status": "labeled_match",  # already labeled
+    }
+    with patch(
+        "graphora_server.services.disputed_pairs_service.db.fetchrow",
+        new=AsyncMock(return_value=row),
+    ):
+        await postgres_service.label(
+            pair_id="p-1", user_id="user-1", decision=Decision.MATCH
+        )
+
+    # The double-label should be a merge_learning no-op.
+    after_relabel = _reset_merge_learning.snapshot()[
+        ("user-1", "Company")
+    ].ema_low_score
+    assert pytest.approx(after_relabel, rel=1e-9) == seeded_ema, (
+        "Postgres double-label moved the threshold. The CTE "
+        "returned old_status=labeled_match and the service "
+        "passed it through, but apply_pair_label still applied "
+        "a delta — the no-op semantics are broken on the "
+        "Postgres path."
+    )

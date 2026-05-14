@@ -389,24 +389,51 @@ class DisputedPairsService:
         new_status = _DECISION_TO_STATUS[decision]
         labeled_at = datetime.now(timezone.utc).isoformat()
         labeled_pair: Optional[DisputedPair] = None
+        # Reviewer-flagged P2 on commit 72381b4: must capture the
+        # PRE-update status so the merge_learning hook can apply a
+        # transition-aware delta (no-op on idempotent re-labels,
+        # swing on match↔not_match). The Postgres path materializes
+        # it via CTE; the memory path reads pair.status before
+        # mutating.
+        old_status: Optional[Status] = None
 
         if self._enabled:
             try:
+                # CTE pattern: ``old`` reads the row's status BEFORE
+                # the update materialises, ``upd`` performs the
+                # actual UPDATE and RETURNING. The final SELECT
+                # joins them so one round-trip returns the new row
+                # PLUS the previous status. When no row matches
+                # (cross-tenant or missing), both CTE legs are empty
+                # and the SELECT yields no row — fetchrow returns
+                # None — same shape as the pre-CTE query.
                 query = """
-                    UPDATE disputed_pairs
-                    SET status = %s,
-                        labeled_at = %s,
-                        labeled_by_user_id = %s,
-                        label_reason = %s
-                    WHERE id = %s AND user_id = %s
-                    RETURNING id, user_id, transform_id, node_a_id, node_b_id,
-                              entity_type, node_a_canonical_key,
-                              node_b_canonical_key, similarity_score,
-                              source_stage, status, labeled_at,
-                              labeled_by_user_id, label_reason, created_at
+                    WITH old AS (
+                        SELECT status FROM disputed_pairs
+                        WHERE id = %s AND user_id = %s
+                    ),
+                    upd AS (
+                        UPDATE disputed_pairs
+                        SET status = %s,
+                            labeled_at = %s,
+                            labeled_by_user_id = %s,
+                            label_reason = %s
+                        WHERE id = %s AND user_id = %s
+                        RETURNING id, user_id, transform_id, node_a_id,
+                                  node_b_id, entity_type,
+                                  node_a_canonical_key,
+                                  node_b_canonical_key, similarity_score,
+                                  source_stage, status, labeled_at,
+                                  labeled_by_user_id, label_reason,
+                                  created_at
+                    )
+                    SELECT upd.*, old.status AS old_status
+                    FROM upd, old
                 """
                 row = await db.fetchrow(
                     query,
+                    pair_id,
+                    user_id,
                     new_status.value,
                     labeled_at,
                     user_id,
@@ -415,6 +442,23 @@ class DisputedPairsService:
                     user_id,
                 )
                 if row:
+                    # The CTE returns an extra ``old_status``
+                    # column alongside the canonical pair columns;
+                    # _row_to_pair pulls only the keys it knows so
+                    # the extra column is harmless. We just read it
+                    # here to thread the pre-update status to the
+                    # merge_learning hook below.
+                    old_status_value = row.get("old_status")
+                    if old_status_value is not None:
+                        try:
+                            old_status = Status(old_status_value)
+                        except ValueError:
+                            # Unknown stored status (schema drift) —
+                            # treat as None contribution so the
+                            # delta defaults to "apply new
+                            # contribution from neutral", matching
+                            # the bootstrap path.
+                            old_status = None
                     labeled_pair = _row_to_pair(row)
             except Exception as exc:
                 logger.error(
@@ -428,6 +472,7 @@ class DisputedPairsService:
             # Memory backend.
             for pair in self._memory_store:
                 if pair.id == pair_id and pair.user_id == user_id:
+                    old_status = pair.status
                     pair.status = new_status
                     pair.labeled_at = labeled_at
                     pair.labeled_by_user_id = user_id
@@ -438,13 +483,15 @@ class DisputedPairsService:
         if labeled_pair is None:
             return None
 
-        # B2-active slice C: close the active-learning feedback
-        # loop. The user has just judged a candidate pair; that
-        # judgment is a high-confidence signal for merge_learning
-        # to adjust the per-(user, entity_type) threshold used by
-        # cluster_entities_with_splink. MATCH labels nudge the
-        # threshold lower (more permissive); NOT_MATCH labels
-        # nudge it higher (more strict); SKIP is a no-op.
+        # B2-active slice C (transition-aware after P2 fix on
+        # commit 72381b4): close the active-learning feedback loop.
+        # The merge_learning hook applies the NET delta between
+        # old_status and new_status so:
+        #   * pending → labeled_match: one match nudge applied
+        #   * labeled_match → labeled_match: zero (no-op,
+        #     idempotent re-label)
+        #   * labeled_match → labeled_not_match: full swing
+        #   * labeled_match → skipped: undo the match nudge
         #
         # Failures here are swallowed — the user's label is the
         # primary persisted artifact and MUST succeed independent
@@ -455,7 +502,8 @@ class DisputedPairsService:
             await merge_learning_service.apply_pair_label(
                 user_id=user_id,
                 entity_type=labeled_pair.entity_type,
-                decision=decision,
+                old_status=old_status,
+                new_status=new_status,
             )
         except Exception as exc:
             logger.warning(

@@ -126,56 +126,83 @@ class MergeLearningService:
             },
         )
 
+    def _status_contribution(self, status: Any) -> float:
+        """Map a disputed-pair status to its threshold contribution.
+
+        Only terminal LABELED_* statuses carry directional signal —
+        pending and skipped contribute zero. Match labels pull the
+        threshold toward more-permissive (negative contribution);
+        not_match labels pull toward more-strict (positive). The
+        transition logic in ``apply_pair_label`` then applies a
+        NET delta of ``contribution(new) - contribution(old)``,
+        which makes re-labels idempotent (same status → zero delta)
+        and re-decisions correct (match→not_match swings by the
+        sum of both nudges).
+
+        Accepts ``Any`` (raw string OR ``Status`` enum) to avoid a
+        circular import with ``disputed_pairs_service``; matches by
+        ``.value`` so both representations work."""
+        status_value = getattr(status, "value", status)
+        if status_value == "labeled_match":
+            return self._label_match_nudge
+        if status_value == "labeled_not_match":
+            return self._label_not_match_nudge
+        # pending / skipped / None / unknown → zero contribution.
+        return 0.0
+
     async def apply_pair_label(
         self,
         user_id: Optional[str],
         entity_type: str,
-        decision: Any,
+        *,
+        old_status: Any,
+        new_status: Any,
     ) -> Optional[Tuple[float, float]]:
-        """B2-active slice C: close the active-learning feedback
-        loop. When a user/agent labels a previously-disputed pair,
-        nudge the adaptive merge threshold in the direction the
-        label implies.
+        """B2-active slice C (transition-aware): close the
+        active-learning feedback loop by applying the NET delta of
+        a status transition to the per-(user, entity_type)
+        threshold.
 
-        Decision semantics:
-          * ``MATCH``  — the blocker grouped this pair correctly.
-            Lower ema_low_score so future runs accept similar
-            pairs more readily (a small, accumulating nudge —
-            ``self._label_match_nudge``).
-          * ``NOT_MATCH`` — the blocker grouped this pair WRONGLY.
-            Raise ema_low_score so future runs reject similar
-            pairs (``self._label_not_match_nudge``).
-          * Anything else (``SKIP``, unknown): no-op. Skip is a
-            valid review outcome but carries no directional signal.
+        Reviewer-flagged P2 on commit 72381b4: the previous
+        decision-based signature applied a full nudge on every
+        successful label call, including idempotent re-labels of
+        the same pair. A client retry or double-submit of the same
+        MATCH label moved the threshold twice for one human
+        decision. The transition-aware version computes
+        ``delta = contribution(new_status) - contribution(old_status)``
+        so:
 
-        On first label for a (user, type) pair the stats slot is
-        bootstrapped from the nudge alone (seed = 1.0 + nudge,
-        clamped to [floor, 1.0]). After that, the nudge is added
-        to the current ema_low_score and clamped. Clamping at
-        ``self._floor`` prevents arbitrarily-low thresholds from
-        accumulated MATCH labels; clamping at 1.0 prevents
-        impossible-to-meet thresholds from accumulated NOT_MATCH
-        labels.
+          * pending → labeled_match: one match nudge applied
+          * labeled_match → labeled_match: delta == 0, no-op
+          * labeled_match → labeled_not_match: ``+2*|nudge|`` swing
+            (undo the prior match nudge, apply the not_match nudge)
+          * labeled_match → skipped: undo the match nudge (return
+            to neutral)
+          * skipped → labeled_match: apply the match nudge
 
-        Returns ``(old_ema_low_score, new_ema_low_score)`` so the
-        caller can log/audit the adjustment. Returns ``None`` when
-        no adjustment was made (SKIP / unrecognized decision).
+        Where "contribution" maps:
+          * labeled_match → ``label_match_nudge`` (negative default)
+          * labeled_not_match → ``label_not_match_nudge`` (positive)
+          * pending / skipped / unknown → 0.0
 
-        Type-flexible on ``decision`` (accepts ``Any``) to avoid a
-        circular import between ``merge.learning`` and
-        ``disputed_pairs_service`` — the actual matching is by
-        string value, mirroring how the Postgres CHECK constraint
-        identifies decisions."""
-        decision_value = getattr(decision, "value", decision)
-        if decision_value == "match":
-            nudge = self._label_match_nudge
-        elif decision_value == "not_match":
-            nudge = self._label_not_match_nudge
-        else:
-            # SKIP, unknown, or None — no directional signal to
-            # apply. Returning None lets the caller surface
-            # "no-op" in their own logging without inspecting
-            # the threshold directly.
+        Bootstrap path (stats slot empty): seed = 1.0 + delta,
+        clamped into ``[floor, 1.0]``. Clamping at ``floor`` prevents
+        accumulated MATCH labels from driving the threshold to 0
+        (accept-everything); clamping at 1.0 prevents accumulated
+        NOT_MATCH labels from making any future merge impossible.
+
+        Returns ``(old_ema_low_score, new_ema_low_score)`` when
+        stats mutated. Returns ``None`` when delta is 0 (same-status
+        transition, or transition between non-labeled states like
+        pending→skipped). Caller treats None as "no threshold
+        change — nothing to audit"."""
+        delta = self._status_contribution(new_status) - self._status_contribution(
+            old_status
+        )
+        if delta == 0:
+            # Same-status transition (idempotent re-label) or a
+            # transition between two non-labeled states. Either way
+            # nothing directional to apply.
             return None
 
         key = self._key(user_id, entity_type)
@@ -184,10 +211,9 @@ class MergeLearningService:
 
         if stats is None:
             # Bootstrap: no prior observation. Seed with 1.0
-            # (perfect-match prior) + nudge so the first label
-            # has its full directional effect from a neutral
-            # baseline. Clamp into [floor, 1.0].
-            seed = max(self._floor, min(1.0, 1.0 + nudge))
+            # (perfect-match prior) + delta so the first transition
+            # has its full directional effect from a neutral baseline.
+            seed = max(self._floor, min(1.0, 1.0 + delta))
             stats = EntityMergeLearningStats(
                 ema_low_score=seed,
                 sample_count=1,
@@ -196,29 +222,33 @@ class MergeLearningService:
             )
             self._stats[key] = stats
             logger.debug(
-                "Bootstrapped merge threshold from first user label",
+                "Bootstrapped merge threshold from first label transition",
                 extra={
                     "user": key[0],
                     "entity_type": entity_type,
-                    "decision": decision_value,
+                    "old_status": getattr(old_status, "value", old_status),
+                    "new_status": getattr(new_status, "value", new_status),
+                    "delta": delta,
                     "ema_low_score": seed,
                 },
             )
             return (1.0, seed)
 
         old = stats.ema_low_score
-        new = max(self._floor, min(1.0, old + nudge))
+        new = max(self._floor, min(1.0, old + delta))
         stats.ema_low_score = new
         stats.sample_count += 1
         stats.last_observed = new
         stats.last_updated = timestamp
 
         logger.debug(
-            "Nudged merge threshold from user label",
+            "Applied label-transition delta to merge threshold",
             extra={
                 "user": key[0],
                 "entity_type": entity_type,
-                "decision": decision_value,
+                "old_status": getattr(old_status, "value", old_status),
+                "new_status": getattr(new_status, "value", new_status),
+                "delta": delta,
                 "old_ema_low_score": old,
                 "new_ema_low_score": new,
             },

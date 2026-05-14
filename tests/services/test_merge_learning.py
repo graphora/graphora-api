@@ -28,42 +28,43 @@ async def test_learning_respects_default_ceiling():
 
 
 # ============================================================
-# B2-active slice C: apply_pair_label feedback loop
-#
-# The disputed-pairs queue closes the loop on entity resolution:
-# users label ambiguous pairs as match / not_match / skip and
-# the service nudges the per-(user, entity_type) threshold so
-# future ER runs adapt to the user's judgment. These tests pin
-# the directional semantics (match → more permissive,
-# not_match → more strict, skip → no-op) and the bootstrap
-# behavior on first label.
+# B2-active slice C (transition-aware after P2 fix on 72381b4):
+# apply_pair_label is now keyed on a (old_status, new_status)
+# transition rather than a single decision. The threshold delta
+# = contribution(new) - contribution(old) makes:
+#   * idempotent re-labels (same status both sides) no-ops
+#   * match↔not_match swings carry the full 2x nudge magnitude
+#   * match→skip undoes the prior contribution
+# These tests pin those semantics.
 # ============================================================
 
 
-class _FakeDecision:
-    """Local stand-in for graphora_server.services.disputed_pairs_service.Decision.
-
-    apply_pair_label accepts ``Any`` and matches on
-    ``getattr(decision, "value", decision)`` to avoid a circular
-    import between merge.learning and disputed_pairs_service.
-    These tests use a tiny stand-in so the unit-level test
-    doesn't pull the disputed-pairs module in transitively."""
-
-    def __init__(self, value: str) -> None:
-        self.value = value
+# Status string values — match what the disputed_pairs_service
+# Status enum emits via .value. We deliberately use raw strings
+# here to keep this unit test independent of disputed_pairs
+# imports (apply_pair_label accepts Any and matches by .value).
+_PENDING = "pending"
+_LABELED_MATCH = "labeled_match"
+_LABELED_NOT_MATCH = "labeled_not_match"
+_SKIPPED = "skipped"
 
 
 @pytest.mark.asyncio
-async def test_apply_label_match_bootstrap_from_empty():
+async def test_apply_label_pending_to_match_bootstrap_from_empty():
     """First-ever label on a (user, type) slot. No prior stats,
-    so the seed is 1.0 (perfect-match prior) + match_nudge.
-    Returns (1.0, seed) so callers can log the bootstrap.
+    so seed = 1.0 (perfect-match prior) + delta. Pending → match
+    delta = match_nudge (=-0.05 default) → seed = 0.95.
 
     Pin so a refactor that drops the bootstrap branch (which
     would crash on stats=None) is caught immediately."""
     service = MergeLearningService(label_match_nudge=-0.05)
 
-    result = await service.apply_pair_label("user-1", "Company", _FakeDecision("match"))
+    result = await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status=_LABELED_MATCH,
+    )
 
     assert result == (1.0, 0.95)
     snapshot = service.snapshot()
@@ -71,94 +72,167 @@ async def test_apply_label_match_bootstrap_from_empty():
 
 
 @pytest.mark.asyncio
-async def test_apply_label_not_match_bootstrap_clamps_at_one():
-    """NOT_MATCH on empty stats: seed = 1.0 + (+nudge) → clamped
-    at 1.0 (we can't exceed perfect-match prior). Pin the
-    ceiling clamp so a refactor that drops it doesn't quietly
-    let the threshold drift > 1.0."""
+async def test_apply_label_pending_to_not_match_bootstrap_clamps_at_one():
+    """Pending → not_match on empty stats: seed = 1.0 + nudge
+    → clamped at 1.0 (we can't exceed perfect-match prior). Pin
+    the ceiling clamp so a refactor that drops it doesn't
+    quietly let the threshold drift > 1.0."""
     service = MergeLearningService(label_not_match_nudge=0.05)
 
     result = await service.apply_pair_label(
-        "user-1", "Company", _FakeDecision("not_match")
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status=_LABELED_NOT_MATCH,
     )
 
-    assert result == (1.0, 1.0), (
-        "not_match nudge on empty stats should clamp at 1.0 — "
-        "an ema_low_score > 1.0 would make every future "
-        "comparison fall below the (already-clamped) threshold "
-        "and effectively turn ER off for this type."
-    )
+    assert result == (1.0, 1.0)
 
 
 @pytest.mark.asyncio
-async def test_apply_label_skip_is_noop():
-    """SKIP is a valid review outcome (operators may defer pairs
-    they don't have enough context for) but carries no
-    directional signal. apply_pair_label MUST NOT mutate stats
-    on SKIP — otherwise deferring a pair would silently shift
-    the threshold."""
+async def test_apply_label_pending_to_skipped_is_noop():
+    """SKIP carries no directional signal. Transitioning from
+    pending → skipped applies no delta and leaves stats
+    untouched."""
     service = MergeLearningService()
-    result = await service.apply_pair_label("user-1", "Company", _FakeDecision("skip"))
+    result = await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status=_SKIPPED,
+    )
 
     assert result is None
     assert service.snapshot() == {}
 
 
 @pytest.mark.asyncio
-async def test_apply_label_match_lowers_existing_threshold():
-    """With prior stats, a match nudge LOWERS ema_low_score by
-    the nudge magnitude. Reviewer-visible direction: user
-    confirms the blocker grouped the pair correctly → be more
-    permissive (i.e. lower the EMA so the threshold-from-EMA
-    formula yields a lower threshold)."""
+async def test_apply_label_same_status_is_idempotent():
+    """Reviewer-flagged P2 (commit 72381b4): a client retry or
+    double-submit of the SAME match label must not move the
+    threshold twice. apply_pair_label must be idempotent on
+    same-status transitions.
+
+    This is the central pin for the transition-aware redesign.
+    Pre-fix: each label call moved the threshold by a full
+    nudge regardless of whether the row's status actually
+    changed."""
     service = MergeLearningService(label_match_nudge=-0.10)
-    await service.record_outcome("user-1", "Company", [0.85])
-    # record_outcome seeds ema_low_score=0.85
+    # First label: pending → labeled_match.
+    first = await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status=_LABELED_MATCH,
+    )
+    assert first == (1.0, 0.90)
 
-    result = await service.apply_pair_label("user-1", "Company", _FakeDecision("match"))
-
-    assert result is not None
-    old, new = result
-    assert pytest.approx(old, rel=1e-9) == 0.85
-    assert pytest.approx(new, rel=1e-9) == 0.75
+    # Double-submit: labeled_match → labeled_match (idempotent).
+    # Must be a no-op — delta = 0.
+    second = await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_LABELED_MATCH,
+        new_status=_LABELED_MATCH,
+    )
+    assert second is None, (
+        "Same-status transition wasn't a no-op. A double-submit "
+        "of the same label is now applying its nudge twice — "
+        "exactly the bug the transition redesign fixes."
+    )
+    snapshot = service.snapshot()
+    assert (
+        pytest.approx(snapshot[("user-1", "Company")].ema_low_score, rel=1e-9) == 0.90
+    ), "ema_low_score moved on the no-op re-label"
 
 
 @pytest.mark.asyncio
-async def test_apply_label_match_clamps_at_floor():
-    """Match labels accumulate until the floor stops them. Pin
-    so a refactor that drops the floor clamp doesn't let
-    repeated matches drive the threshold to 0 (which would
-    accept every pair regardless of similarity)."""
+async def test_apply_label_match_to_not_match_full_swing():
+    """User changes their mind: match → not_match. The delta
+    is contribution(not_match) - contribution(match) =
+    +nudge - (-nudge) = 2*|nudge|. The threshold must reflect
+    BOTH undoing the prior match nudge AND applying the
+    not_match nudge in a single transition."""
+    service = MergeLearningService(
+        label_match_nudge=-0.10,
+        label_not_match_nudge=+0.10,
+    )
+    # Seed via pending → match.
+    await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status=_LABELED_MATCH,
+    )
+    # ema = 0.90.
+
+    swing = await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_LABELED_MATCH,
+        new_status=_LABELED_NOT_MATCH,
+    )
+
+    assert swing is not None
+    old, new = swing
+    assert pytest.approx(old, rel=1e-9) == 0.90
+    # delta = +0.10 - (-0.10) = +0.20. new = 0.90 + 0.20 = 1.10
+    # → clamped at 1.0.
+    assert pytest.approx(new, rel=1e-9) == 1.0
+
+
+@pytest.mark.asyncio
+async def test_apply_label_match_to_skip_undoes_prior_contribution():
+    """User downgrades a match label to skip (they're no longer
+    confident). The delta is contribution(skip)=0 minus
+    contribution(match)=-nudge → +nudge. Effect: the prior
+    match nudge is undone and the threshold returns toward
+    neutral."""
+    service = MergeLearningService(label_match_nudge=-0.10)
+    # Seed via pending → match.
+    await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status=_LABELED_MATCH,
+    )
+    # ema = 0.90.
+
+    undo = await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_LABELED_MATCH,
+        new_status=_SKIPPED,
+    )
+
+    assert undo is not None
+    old, new = undo
+    assert pytest.approx(old, rel=1e-9) == 0.90
+    # delta = 0 - (-0.10) = +0.10. new = 0.90 + 0.10 = 1.00.
+    assert pytest.approx(new, rel=1e-9) == 1.00
+
+
+@pytest.mark.asyncio
+async def test_apply_label_match_clamps_at_floor_across_transitions():
+    """Repeated match contributions can't drive the threshold
+    below the floor. Pin so a refactor that drops the floor
+    clamp doesn't let repeated matches go to 0 (accept
+    everything)."""
     service = MergeLearningService(floor=0.70, label_match_nudge=-0.10)
-    # Pre-seed at slightly above floor so one nudge takes us
-    # to the floor.
+    # Manually seed near the floor.
     await service.record_outcome("user-1", "Company", [0.75])
 
-    result = await service.apply_pair_label("user-1", "Company", _FakeDecision("match"))
+    # First time labeling: pending → match. delta = -0.10.
+    # new = 0.75 + (-0.10) = 0.65 → clamped at floor 0.70.
+    result = await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status=_LABELED_MATCH,
+    )
     old, new = result
     assert pytest.approx(old, rel=1e-9) == 0.75
     assert pytest.approx(new, rel=1e-9) == 0.70
-
-    # A second match should NOT push below the floor.
-    second = await service.apply_pair_label("user-1", "Company", _FakeDecision("match"))
-    assert pytest.approx(second[1], rel=1e-9) == 0.70
-
-
-@pytest.mark.asyncio
-async def test_apply_label_not_match_raises_existing_threshold():
-    """NOT_MATCH on existing stats: ema_low_score rises by the
-    nudge. User rejected a previously-grouped pair, so future
-    runs should require a higher similarity to merge."""
-    service = MergeLearningService(label_not_match_nudge=+0.05)
-    await service.record_outcome("user-1", "Company", [0.85])
-
-    old_new = await service.apply_pair_label(
-        "user-1", "Company", _FakeDecision("not_match")
-    )
-
-    old, new = old_new
-    assert pytest.approx(old, rel=1e-9) == 0.85
-    assert pytest.approx(new, rel=1e-9) == 0.90
 
 
 @pytest.mark.asyncio
@@ -171,7 +245,12 @@ async def test_apply_label_isolates_user_and_entity_type():
     another's."""
     service = MergeLearningService(label_match_nudge=-0.05)
 
-    await service.apply_pair_label("user-1", "Company", _FakeDecision("match"))
+    await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status=_LABELED_MATCH,
+    )
 
     snapshot = service.snapshot()
     assert ("user-1", "Company") in snapshot
@@ -180,26 +259,39 @@ async def test_apply_label_isolates_user_and_entity_type():
 
 
 @pytest.mark.asyncio
-async def test_apply_label_unknown_decision_is_noop():
-    """A garbage decision (typo / stale enum after schema drift)
-    is treated as a no-op rather than crashing or applying a
-    surprising direction. The closed-set enum on the wire
-    already prevents this from real callers — this test
-    pins the defensive branch for the programmatic path."""
-    service = MergeLearningService()
+async def test_apply_label_unknown_status_treated_as_zero_contribution():
+    """A garbage status (typo / stale enum after schema drift)
+    contributes zero. Pending → unknown is a no-op (0 - 0 = 0).
+    Unknown → labeled_match applies a full match nudge (the
+    transition reads as "from neutral to labeled_match")."""
+    service = MergeLearningService(label_match_nudge=-0.05)
+
+    # pending → garbage: both contribute 0; delta = 0.
     result = await service.apply_pair_label(
-        "user-1", "Company", _FakeDecision("unknown_value")
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status="garbage_status",
     )
     assert result is None
     assert service.snapshot() == {}
 
+    # garbage → labeled_match: garbage contributes 0, match
+    # contributes nudge. delta = nudge. Bootstrap seed = 0.95.
+    bootstrap = await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status="garbage_status",
+        new_status=_LABELED_MATCH,
+    )
+    assert bootstrap == (1.0, 0.95)
+
 
 @pytest.mark.asyncio
 async def test_apply_label_threshold_change_propagates_to_get_threshold():
-    """End-to-end at the service surface: apply a match label,
-    then call get_threshold and verify the returned threshold
-    is below the default. Pins the contract that the feedback
-    loop closes — labels alter what get_threshold returns.
+    """End-to-end at the service surface: apply transitions, then
+    call get_threshold. Pin the contract that the feedback loop
+    closes via the public read API.
 
     This is the exit-signal-level pin for slice C: "weights
     have updated" verifiable by reading get_threshold."""
@@ -209,13 +301,21 @@ async def test_apply_label_threshold_change_propagates_to_get_threshold():
     before = await service.get_threshold("user-1", "Company", default_threshold)
     assert before == default_threshold
 
-    # Bootstrap with a single match label.
-    await service.apply_pair_label("user-1", "Company", _FakeDecision("match"))
-    # ema_low_score = 1.0 + (-0.10) = 0.90. With margin=0.05,
-    # default - margin = 0.90, so ema_low_score >= default-margin
-    # → adaptive sticks at default. Apply another match.
-    await service.apply_pair_label("user-1", "Company", _FakeDecision("match"))
-    # ema_low_score now 0.80. adaptive = 0.80 - 0.05 = 0.75.
+    # pending → match. ema = 1.0 + (-0.10) = 0.90.
+    await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status=_LABELED_MATCH,
+    )
+    # Another distinct pair: pending → match on top of existing
+    # stats. ema = 0.90 + (-0.10) = 0.80.
+    await service.apply_pair_label(
+        "user-1",
+        "Company",
+        old_status=_PENDING,
+        new_status=_LABELED_MATCH,
+    )
 
     after = await service.get_threshold("user-1", "Company", default_threshold)
     assert after < default_threshold, (
