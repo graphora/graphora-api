@@ -12,6 +12,7 @@ Pins three concerns:
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -1174,3 +1175,157 @@ async def test_postgres_label_threads_old_status_to_merge_learning(
         "a delta — the no-op semantics are broken on the "
         "Postgres path."
     )
+
+
+# ============================================================
+# Reviewer-flagged P3 on commit 1f8d8d5: even with the DB-level
+# FOR UPDATE serializing the SQL, the merge_learning hook that
+# runs after the SQL is NOT part of that serialization. A future
+# refactor that adds an ``await`` between the fetchrow and the
+# hook (e.g., DB persistence for merge_learning in slice C-2)
+# would open a window for the hook to fire out of DB-commit
+# order — leaving the ema inconsistent with the DB final state.
+#
+# The per-(user_id, pair_id) asyncio.Lock around the SQL + hook
+# closes that window. These tests pin both the lock acquisition
+# itself (mock-level) and the convergence-with-DB-state property
+# (behavioral).
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_label_acquires_per_pair_lock(memory_service):
+    """Mock-level pin: every label() call acquires a per-pair
+    asyncio.Lock around the SQL + hook. Without the lock, the
+    P3 race is reachable as soon as any future ``await`` is
+    introduced between the read of old_status and the
+    merge_learning hook."""
+    pair = await memory_service.enqueue(_make_pair())
+
+    mock_lock = AsyncMock()
+    mock_lock.__aenter__ = AsyncMock(return_value=mock_lock)
+    mock_lock.__aexit__ = AsyncMock(return_value=None)
+
+    captured_key = None
+
+    def fake_get_lock(user_id, pair_id):
+        nonlocal captured_key
+        captured_key = (user_id, pair_id)
+        return mock_lock
+
+    with patch(
+        "graphora_server.services.disputed_pairs_service._get_label_lock",
+        new=fake_get_lock,
+    ):
+        await memory_service.label(
+            pair_id=pair.id, user_id="user-1", decision=Decision.MATCH
+        )
+
+    mock_lock.__aenter__.assert_awaited_once()
+    mock_lock.__aexit__.assert_awaited_once()
+    assert captured_key == ("user-1", pair.id), (
+        "Lock key must be (user_id, pair_id). Coarser keys "
+        "(per-user, global) over-serialize; finer keys (per-"
+        "user-per-type) miss the case where two clients label "
+        "the same pair concurrently."
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_labels_for_same_pair_share_one_lock(memory_service):
+    """The lock dict must return the SAME asyncio.Lock object for
+    repeated (user_id, pair_id) lookups, otherwise two concurrent
+    labelers would each acquire their own lock and the
+    serialization would be lost."""
+    from graphora_server.services.disputed_pairs_service import _get_label_lock
+
+    lock_a = _get_label_lock("user-1", "pair-1")
+    lock_b = _get_label_lock("user-1", "pair-1")
+
+    assert lock_a is lock_b, (
+        "Repeated lookups returned different lock objects. The "
+        "WeakValueDictionary either GC'd the lock between calls "
+        "(no strong reference being held by this test) or the "
+        "lookup-or-create isn't atomic. Holding lock_a in scope "
+        "for the second call should pin the dict entry."
+    )
+
+    # Different pair → different lock.
+    lock_c = _get_label_lock("user-1", "pair-2")
+    assert lock_c is not lock_a
+
+    # Different user, same pair_id → different lock (tenant
+    # isolation at the lock layer too).
+    lock_d = _get_label_lock("user-2", "pair-1")
+    assert lock_d is not lock_a
+
+
+@pytest.mark.asyncio
+async def test_concurrent_conflicting_labels_converge_to_db_consistent_ema(
+    memory_service, _reset_merge_learning
+):
+    """Behavioral pin: under asyncio.gather of two conflicting
+    labels on the same pair, the final ema must be consistent
+    with the final DB state. Whichever decision wins the lock
+    order ALSO wins the DB last-write; the ema reflects that
+    final decision's net contribution from baseline.
+
+    With the lock: both flows serialize end-to-end. The second-in
+    label sees old_status=<first's new state>, applies the
+    transition delta, and ema converges.
+
+    Without the lock (future-refactor scenario where an await is
+    added between read-old-status and hook): the second-in hook
+    could race ahead and bootstrap from empty stats, then the
+    first-in hook would overwrite. The reviewer's example: DB
+    order pending→match→not_match leaves ema=0.95 (consistent
+    with labeled_match, not labeled_not_match). With this lock,
+    the ema instead reflects whatever DB final state actually
+    landed."""
+    pair = await memory_service.enqueue(_make_pair(entity_type="Company"))
+
+    # Fire two conflicting labels concurrently.
+    await asyncio.gather(
+        memory_service.label(
+            pair_id=pair.id, user_id="user-1", decision=Decision.MATCH
+        ),
+        memory_service.label(
+            pair_id=pair.id, user_id="user-1", decision=Decision.NOT_MATCH
+        ),
+    )
+
+    final_pair = await memory_service.get(pair.id, "user-1")
+    snapshot = _reset_merge_learning.snapshot()
+    final_ema = snapshot[("user-1", "Company")].ema_low_score
+
+    # Default nudges: match=-0.05, not_match=+0.05. Baseline ema=1.0.
+    #
+    # Case A: lock order MATCH-then-NOT_MATCH.
+    #   DB: pending → labeled_match → labeled_not_match.
+    #   Hook deltas: -0.05 (pending→match), +0.10 (match→not_match).
+    #   ema = 1.0 + (-0.05) + 0.10 = 1.05 → clamped to 1.0.
+    #   DB final: labeled_not_match.
+    #
+    # Case B: lock order NOT_MATCH-then-MATCH.
+    #   DB: pending → labeled_not_match → labeled_match.
+    #   Hook deltas: +0.05 (pending→not_match), -0.10 (not_match→match).
+    #   ema = 1.0 + 0.05 + (-0.10) = 0.95.
+    #   DB final: labeled_match.
+    if final_pair.status == Status.LABELED_NOT_MATCH:
+        # Case A.
+        assert pytest.approx(final_ema, rel=1e-9) == 1.0, (
+            f"Final DB state is labeled_not_match but ema={final_ema}. "
+            "The serialization broke: hook deltas didn't compose "
+            "into the expected end state. Without the lock the "
+            "reviewer's repro: ema=0.95 (consistent with "
+            "labeled_match) despite DB final = labeled_not_match."
+        )
+    else:
+        # Case B.
+        assert final_pair.status == Status.LABELED_MATCH
+        assert pytest.approx(final_ema, rel=1e-9) == 0.95, (
+            f"Final DB state is labeled_match but ema={final_ema}. "
+            "The lock-ordering broke: hooks ran out of order so "
+            "the ema reflects a different sequence than the DB "
+            "actually committed."
+        )

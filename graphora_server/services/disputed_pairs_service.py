@@ -32,19 +32,71 @@ across the B0/B5 commits)."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
+import weakref
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from graphora_server.config import settings
 from graphora_server.db import postgres as db
 from graphora_server.services.merge.learning import merge_learning_service
 
 logger = logging.getLogger(__name__)
+
+
+# Reviewer-flagged P3 on commit 1f8d8d5: the Postgres FOR UPDATE
+# serializes the SQL across concurrent label submissions, but the
+# Python merge_learning hook that runs AFTER the SQL is not part of
+# that serialization. Two concurrent conflicting labels (pending→
+# match then match→not_match) could in theory have their hooks fire
+# out of DB-commit order — the second-in hook would race ahead and
+# bootstrap stats from an empty slot using its own (old, new)
+# values, then the first-in hook would overwrite with stale args.
+# The result: an ema inconsistent with the DB final state.
+#
+# In current code the race is essentially unreachable because
+# apply_pair_label has no inner await — so between
+# ``await db.fetchrow`` and the function return there's no yield
+# point for another coroutine to interleave. But that's a property
+# of the implementation, not a contract. A future refactor that
+# adds DB persistence to merge_learning (slice C-2), an audit-log
+# hook, or any other awaitable side-effect inside the label flow
+# would open the race. The per-(user, pair_id) asyncio.Lock makes
+# the serialization explicit and immune to those refactors.
+#
+# WeakValueDictionary so locks self-clean once all holders' strong
+# references die (one from the active ``async with`` block, any
+# others from coroutines that were queued and acquired in turn).
+# No background cleanup thread; bounded memory growth.
+#
+# Cross-process consistency is a separate concern: merge_learning
+# is an in-process singleton, so labels processed by different API
+# workers update different ema state regardless. Slice C-2
+# (DB-backed merge_learning) addresses that — out of scope here.
+_LABEL_LOCKS: "weakref.WeakValueDictionary[Tuple[str, str], asyncio.Lock]" = (
+    weakref.WeakValueDictionary()
+)
+
+
+def _get_label_lock(user_id: str, pair_id: str) -> asyncio.Lock:
+    """Return the asyncio.Lock for a given (user_id, pair_id) tuple,
+    lazily creating it on first access.
+
+    The get/create sequence is intentionally synchronous (no
+    awaits) so that within a single asyncio iteration the lookup-
+    and-insert is atomic — two concurrent callers see the same
+    lock object."""
+    key = (user_id, pair_id)
+    lock = _LABEL_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _LABEL_LOCKS[key] = lock
+    return lock
 
 
 class SourceStage(str, Enum):
@@ -385,7 +437,34 @@ class DisputedPairsService:
         relabeled with a different decision, overwriting
         labeled_at + labeled_by_user_id with the latest. This
         supports the "I changed my mind" UX without forcing a
-        separate "undo" endpoint."""
+        separate "undo" endpoint.
+
+        Reviewer-flagged P3 on commit 1f8d8d5: the SQL + the
+        merge_learning hook are serialized end-to-end via a
+        per-(user_id, pair_id) asyncio.Lock (see ``_LABEL_LOCKS``
+        and ``_get_label_lock`` at module scope). This prevents
+        the hook from firing out of DB-commit order when concurrent
+        conflicting labels are submitted for the same pair, even if
+        a future refactor inserts ``await`` calls between the SQL
+        and the hook."""
+        # Acquire the per-pair lock for the whole label flow
+        # (SQL + merge_learning hook). The lock object is fetched
+        # synchronously to keep the lookup-or-create atomic relative
+        # to other coroutines on the same event loop.
+        lock = _get_label_lock(user_id, pair_id)
+        async with lock:
+            return await self._label_locked(pair_id, user_id, decision, reason)
+
+    async def _label_locked(
+        self,
+        pair_id: str,
+        user_id: str,
+        decision: Decision,
+        reason: Optional[str],
+    ) -> Optional[DisputedPair]:
+        """Inner body of ``label`` that runs under the per-pair
+        lock. Split out so the lock-acquisition is the only
+        wrapping concern at the public entry point."""
         new_status = _DECISION_TO_STATUS[decision]
         labeled_at = datetime.now(timezone.utc).isoformat()
         labeled_pair: Optional[DisputedPair] = None
