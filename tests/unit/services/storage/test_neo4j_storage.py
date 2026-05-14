@@ -1956,6 +1956,206 @@ class TestNeo4jStorageRelationshipOperations:
         assert props["__tid"] == "tx-1"
 
     @pytest.mark.asyncio
+    async def test_replay_with_dict_list_props_does_not_fire_versioning(
+        self,
+    ):
+        """Reviewer-flagged P2 on commit c32f91f. After the
+        sanitizer extraction, batched first-time writes store
+        dict/list props as JSON-stringified values. The Case 1/2
+        comparison was comparing raw incoming ``rel.properties``
+        against the stored (sanitized) properties — an identical
+        replay with ``{"tags": ["a"]}`` saw stored ``'["a"]'``
+        vs raw ``["a"]`` and falsely entered Case 2 versioning.
+
+        Pin: a rel re-stored with IDENTICAL dict/list properties
+        does NOT trigger versioning. Both Close-existing and
+        CREATE-new queries must be absent — the Case 1
+        unchanged-skip branch is the correct path."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        executed: list[str] = []
+
+        async def fake_run(query, *args, **kwargs):
+            executed.append(query)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        # Stored-side rel: simulates what a previous write left
+        # in storage. dict/list values are sanitized (JSON-
+        # stringified) — that's how the batched/per-rel write
+        # paths persist them.
+        class _FakeNeo4jRelationship:
+            """Duck-typed neo4j-driver Relationship — items() returns
+            the sanitized property bag from storage."""
+
+            def __init__(self, props):
+                self._props = dict(props)
+
+            def items(self):
+                return self._props.items()
+
+            def __getitem__(self, key):
+                return self._props[key]
+
+            def get(self, key, default=None):
+                return self._props.get(key, default)
+
+        fake_stored = _FakeNeo4jRelationship(
+            {
+                "id": "rel-1",
+                "tags": '["python", "rust"]',  # stored as JSON string
+                "metadata": '{"team": "infra"}',  # stored as JSON string
+                "__tid": "tx-1",
+                "__valid_from": "2026-01-01T00:00:00+00:00",
+                "__valid_to": None,
+            }
+        )
+
+        # Incoming rel: dict/list values RAW (same as what
+        # extraction emits). Pre-fix this compared raw lists
+        # to JSON-stringified storage → false inequality →
+        # Case 2 versioning fired on every replay.
+        new_rel = RelationshipInstance(
+            id="rel-1",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+            properties={
+                "tags": ["python", "rust"],
+                "metadata": {"team": "infra"},
+            },
+        )
+
+        # Pre-populate the lookup with the fake stored rel so
+        # the Case 1/2 path runs (not Case 3 batched write).
+        precomputed = {
+            (new_rel.type, new_rel.source_id, new_rel.target_id): fake_stored
+        }
+        with patch.object(
+            storage,
+            "_batched_find_existing_relationships",
+            new=AsyncMock(return_value=(precomputed, set())),
+        ):
+            await storage.store_relationships(
+                [new_rel], batch_index=0, transform_id="tx-1"
+            )
+
+        # Neither close-existing (SET __valid_to) nor versioning
+        # CREATE fired — Case 1 unchanged-skip is the correct path.
+        close_queries = [q for q in executed if "__valid_to" in q and "SET" in q]
+        assert close_queries == [], (
+            "Pre-fix: dict/list props compared raw incoming vs "
+            "stored sanitized form, falsely fired versioning even "
+            "when nothing user-meaningful changed. Got close-existing "
+            f"queries: {close_queries!r}"
+        )
+        create_queries = [q for q in executed if "CREATE" in q and "WORKS_AT" in q]
+        assert create_queries == [], (
+            "Pre-fix: false versioning also created a v2 edge. "
+            f"Got CREATE queries: {create_queries!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_batched_write_uses_utc_aware_timestamp(self):
+        """Reviewer-flagged P3 on commit c32f91f. Pre-fix the
+        batched path used naive ``datetime.now().isoformat()``
+        while the shared sanitizer's default uses UTC-aware
+        ``datetime.now(timezone.utc).isoformat()``. The naive
+        variant produces ``"2026-...T12:30:00"`` (no offset);
+        the UTC variant adds ``+00:00``. Mixed-format VALID_FROM
+        across paths would never string-compare equal, falsely
+        firing versioning on subsequent re-stores.
+
+        Pin: the batched payload's VALID_FROM is an ISO-8601
+        string carrying a timezone offset."""
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        from graphora_server.services.storage.neo4j import Neo4jStorage
+        from graphora_server.services.transform.models import (
+            RelationshipInstance,
+        )
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage.max_retries = 1
+
+        captured_kwargs: list = []
+
+        async def fake_run(query, *args, **kwargs):
+            captured_kwargs.append(kwargs)
+            mock_result = MagicMock()
+            mock_result.single = AsyncMock(return_value=None)
+            mock_result.__aiter__ = lambda self: iter([])
+            return mock_result
+
+        session = MagicMock()
+        session.run = AsyncMock(side_effect=fake_run)
+
+        @asynccontextmanager
+        async def fake_get_session():
+            yield session
+
+        storage._get_session = fake_get_session
+
+        async def fake_execute_with_retry(op):
+            return await op()
+
+        storage._execute_with_retry = fake_execute_with_retry
+
+        rel = RelationshipInstance(
+            id="rel-1",
+            type="WORKS_AT",
+            source_id="alice",
+            target_id="acme",
+            source_type="Person",
+            target_type="Company",
+        )
+
+        await storage._batched_create_first_time_relationships(
+            [rel], transform_id="tx-1"
+        )
+
+        [kwargs] = captured_kwargs
+        [row] = kwargs["batch"]
+        valid_from = row["properties"]["__valid_from"]
+        # UTC-aware ISO strings end with ``+00:00`` (or rarely
+        # ``Z`` — but Python's isoformat emits ``+00:00``).
+        # Naive strings have no offset at all.
+        assert valid_from.endswith("+00:00") or valid_from.endswith("Z"), (
+            f"VALID_FROM is timezone-naive: {valid_from!r}. "
+            "Per-rel/sanitizer path uses UTC-aware "
+            "datetime.now(timezone.utc).isoformat(); batched path "
+            "must match or stored values disagree on string compare."
+        )
+
+    @pytest.mark.asyncio
     async def test_batched_create_sanitization_matches_per_rel_path(
         self,
     ):

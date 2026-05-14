@@ -602,6 +602,45 @@ class Neo4jStorage(GraphStorageInterface):
         )
 
     @staticmethod
+    def _normalize_user_props_for_comparison(
+        props: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Apply the same dict/list/None rules as
+        ``_sanitize_relationship_properties`` for comparison
+        purposes — WITHOUT stamping system fields.
+
+        Reviewer-flagged on commit c32f91f. After the sanitizer
+        was extracted, batched first-time writes JSON-stringify
+        dict/list values before storage. The Case 1/2 comparison
+        loop then compared raw incoming ``rel.properties``
+        against the stored (sanitized) properties — an identical
+        replay with ``{"tags": ["a"]}`` saw stored ``'["a"]'``
+        vs raw ``["a"]`` and falsely entered Case 2 versioning,
+        churning the version chain on every re-store.
+
+        Normalizing BOTH sides through this helper compares
+        like-for-like. The existing side has already-sanitized
+        string values (from storage); re-running them is
+        idempotent since a string isn't a dict/list. The
+        incoming side runs through the same dict/list-stringify
+        rule, putting them on equal footing.
+
+        Also filters SYSTEM_PROPERTIES — same scope as the
+        pre-fix inline comparison loop — so the comparison
+        covers user-meaningful fields only."""
+        normalized: Dict[str, Any] = {}
+        for key, value in props.items():
+            if key in SYSTEM_PROPERTIES:
+                continue
+            if isinstance(value, (dict, list)):
+                normalized[key] = json.dumps(value)
+            elif value is None:
+                continue
+            else:
+                normalized[key] = value
+        return normalized
+
+    @staticmethod
     def _sanitize_relationship_properties(
         rel_properties: Dict[str, Any],
         *,
@@ -815,7 +854,17 @@ class Neo4jStorage(GraphStorageInterface):
         # share VALID_FROM (consistent with how the per-rel loop
         # uses datetime.now() at write time — every call to
         # store_relationships emits writes within a brief window).
-        timestamp = datetime.now().isoformat()
+        # Reviewer-flagged on commit c32f91f: use UTC-aware
+        # ``datetime.now(timezone.utc).isoformat()`` to match the
+        # shared sanitizer's default at
+        # _sanitize_relationship_properties. The naive variant
+        # produces ``"2026-...T12:30:00"`` (no offset); the
+        # UTC-aware variant adds ``+00:00``. Mixed-format
+        # VALID_FROM values stored across paths would never
+        # string-compare equal, causing false re-versioning on
+        # subsequent re-stores even when nothing user-meaningful
+        # changed.
+        timestamp = datetime.now(timezone.utc).isoformat()
 
         for rel_type, type_rels in rels_by_type.items():
             try:
@@ -1054,16 +1103,25 @@ class Neo4jStorage(GraphStorageInterface):
                             # re-stores → versioning fired on every
                             # replay/retry → unbounded version churn.
                             # Reviewer caught this on commit f476aa3.
-                            existing_props = {
-                                k: v
-                                for k, v in existing_rel.items()
-                                if k not in SYSTEM_PROPERTIES
-                            }
-                            new_props = {
-                                k: v
-                                for k, v in rel.properties.items()
-                                if k not in SYSTEM_PROPERTIES
-                            }
+                            # Normalize BOTH sides through the
+                            # shared dict/list/None sanitization
+                            # rules. Reviewer-flagged on commit
+                            # c32f91f: post-fix the batched
+                            # first-time write stores
+                            # JSON-stringified dict/list values,
+                            # so an identical replay's raw
+                            # ``rel.properties`` would compare
+                            # unequal against the stored
+                            # sanitized form and falsely fire
+                            # Case 2 versioning. Both sides
+                            # through the same normalizer puts
+                            # them on equal footing.
+                            existing_props = self._normalize_user_props_for_comparison(
+                                dict(existing_rel.items())
+                            )
+                            new_props = self._normalize_user_props_for_comparison(
+                                rel.properties
+                            )
 
                             # Skip-on-empty branch only fires when
                             # BOTH sides have no user-meaningful
