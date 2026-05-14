@@ -9,6 +9,7 @@ tests against respx).
 
 from __future__ import annotations
 
+import importlib.util as _importlib_util
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -1076,12 +1077,23 @@ class TestDisputedPairsTools:
 # ============================================================
 
 
-fastmcp = pytest.importorskip(
-    "mcp.server.fastmcp",
-    reason="build_server tests require graphora-server[mcp]; skip if not installed",
+# Class-scoped skip: ONLY the TestBuildServerRegisteredTools tests
+# need the [mcp] extra. Earlier this file used pytest.importorskip
+# at module scope, which would skip the entire file (including all
+# the helper-level tests that don't need FastMCP) on a default dev
+# install. Using importlib.util.find_spec lets us check availability
+# without actually importing the module here, then attach the skip
+# only to the class that needs it.
+_HAS_MCP_FASTMCP = _importlib_util.find_spec("mcp.server.fastmcp") is not None
+
+
+@pytest.mark.skipif(
+    not _HAS_MCP_FASTMCP,
+    reason=(
+        "build_server tests require graphora-server[mcp]; install with "
+        "`pip install graphora-server[mcp]` or `uv sync --extra mcp`"
+    ),
 )
-
-
 class TestBuildServerRegisteredTools:
     """Pin the FastMCP-registered tool surface, not just the helper.
 
