@@ -15,6 +15,7 @@ from graphora_server.services.transform.graph_transformer import (
     build_graph_from_pdfs,
 )
 from graphora_server.services.decision_log_service import DecisionLogService
+from graphora_server.services.disputed_pairs_service import DisputedPairsService
 from graphora_server.config import settings
 
 
@@ -200,6 +201,17 @@ async def construct_knowledge_graph(
         # Decision Log can never block extraction itself.
         decision_log = DecisionLogService()
 
+        # B2-active slice B: per-transform DisputedPairsService.
+        # Same dual-backend pattern as the Decision Log (Postgres
+        # when DATABASE_URL is set, shared in-memory store
+        # otherwise). The graph builder's gray-zone hook
+        # enqueues 2-node candidates that blockers grouped but
+        # the LLM resolver split — "blocker said yes, LLM said
+        # no" — for human/agent review. Hook failures are
+        # swallowed by the helper so the disputed-pairs queue
+        # can never block extraction.
+        disputed_pairs_service = DisputedPairsService()
+
         # Process chunks with controlled concurrency
         concurrency = settings.EXTRACTION_CONCURRENCY
         if len(chunks) < concurrency:
@@ -219,6 +231,7 @@ async def construct_knowledge_graph(
                 chunk_metadatas=chunk_metadatas,
                 extractor_model=extractor_model,
                 decision_log=decision_log,
+                disputed_pairs_service=disputed_pairs_service,
             )
         elif pdf_paths:
             graph = await build_graph_from_pdfs(
@@ -230,6 +243,7 @@ async def construct_knowledge_graph(
                 chunk_metadatas=chunk_metadatas,
                 extractor_model=extractor_model,
                 decision_log=decision_log,
+                disputed_pairs_service=disputed_pairs_service,
             )
 
         metrics = ExtractionMetrics(

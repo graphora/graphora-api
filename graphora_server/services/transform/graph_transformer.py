@@ -23,6 +23,11 @@ from graphora_server.services.decision_log_service import (
     DecisionType,
     TargetKind,
 )
+from graphora_server.services.disputed_pairs_service import (
+    DisputedPair,
+    DisputedPairsService,
+    SourceStage,
+)
 from graphora_server.services.extraction.prompt_versions import (
     get_prompt_version as _resolve_prompt_version,
 )
@@ -392,6 +397,7 @@ async def build_graph_from_chunks(
     chunk_metadatas: Optional[List[Any]] = None,
     extractor_model: Optional[str] = None,
     decision_log: Optional[DecisionLogService] = None,
+    disputed_pairs_service: Optional[DisputedPairsService] = None,
 ) -> DocumentKnowledgeGraph:
     """Build knowledge graph from text chunks.
 
@@ -429,6 +435,7 @@ async def build_graph_from_chunks(
             chunk_metadatas=chunk_metadatas,
             extractor_model=extractor_model,
             decision_log=decision_log,
+            disputed_pairs_service=disputed_pairs_service,
         )
 
     # Default single-pass extraction
@@ -446,6 +453,7 @@ async def build_graph_from_chunks(
         node_baml_function="ExtractNodesFromChunk",
         rel_baml_function="ExtractRelationshipsFromChunk",
         decision_log=decision_log,
+        disputed_pairs_service=disputed_pairs_service,
     )
 
 
@@ -459,6 +467,7 @@ async def build_graph_from_pdfs(
     chunk_metadatas: Optional[List[Any]] = None,
     extractor_model: Optional[str] = None,
     decision_log: Optional[DecisionLogService] = None,
+    disputed_pairs_service: Optional[DisputedPairsService] = None,
 ) -> DocumentKnowledgeGraph:
     """Build a graph by sending each PDF split file to Gemini's
     multimodal API. Caller may pass per-split ``chunk_metadatas``;
@@ -484,6 +493,7 @@ async def build_graph_from_pdfs(
         node_baml_function="ExtractNodesFromPdf",
         rel_baml_function="ExtractRelationshipsFromPdf",
         decision_log=decision_log,
+        disputed_pairs_service=disputed_pairs_service,
     )
 
 
@@ -502,6 +512,7 @@ async def _build_graph_from(
     node_baml_function: Optional[str] = None,
     rel_baml_function: Optional[str] = None,
     decision_log: Optional[DecisionLogService] = None,
+    disputed_pairs_service: Optional[DisputedPairsService] = None,
 ) -> DocumentKnowledgeGraph:
     nodes_only_ontology = ontology_parser.build_entities_only_model()
     nodes: List[BaseNode] = []
@@ -593,6 +604,7 @@ async def _build_graph_from(
         document_usage_id=document_usage_id,
         parsed_ontology=ontology_parser.parsed_ontology,
         decision_log=decision_log,
+        disputed_pairs_service=disputed_pairs_service,
     )
     logger.info(f"Nodes after comparison: {nodes}")
 
@@ -1225,6 +1237,77 @@ async def _emit_entity_merged_decision(
     )
 
 
+async def _enqueue_disputed_pair_if_unresolved(
+    *,
+    disputed_pairs_service: Optional[DisputedPairsService],
+    user_id: Optional[str],
+    transform_id: Optional[str],
+    candidate_group: List[BaseNode],
+    resolved_groups: List[List[BaseNode]],
+    source_stage: SourceStage,
+) -> None:
+    """B2-active slice B: enqueue a disputed pair when the LLM
+    rejected a 2-node candidate that a blocker had flagged.
+
+    Fires when:
+      * The candidate group has exactly 2 nodes (slice B keeps
+        the signal tight — larger candidate groups can produce
+        combinatorial disputed pairs and are deferred to a
+        future slice).
+      * The LLM resolver returned BOTH nodes as singletons (no
+        merge happened). That's the clearest "blocker said yes,
+        LLM said no" signal worth human review.
+
+    Short-circuits when service / user / transform missing — same
+    safe-default pattern as ``_emit_entity_merged_decision``.
+
+    Failures during enqueue are logged-and-swallowed. The
+    disputed-pairs queue is OBSERVABILITY FOR ER here (the merge
+    pipeline already committed to the LLM's verdict); the
+    correctness-strict propagation lives in the API path where
+    losing a row means losing an explicit user-initiated request.
+    Mirrors the same observability-vs-correctness split applied
+    to DecisionLogService.append earlier."""
+    if not disputed_pairs_service or not user_id or not transform_id:
+        return
+    if len(candidate_group) != 2:
+        return
+    # All-singletons check: both nodes came back unmerged.
+    if len(resolved_groups) != 2:
+        return
+    if any(len(g) != 1 for g in resolved_groups):
+        return
+
+    a, b = candidate_group
+    pair = DisputedPair(
+        user_id=user_id,
+        transform_id=transform_id,
+        node_a_id=a.id,
+        node_b_id=b.id,
+        entity_type=a.type,
+        node_a_canonical_key=a.canonical_key,
+        node_b_canonical_key=b.canonical_key,
+        source_stage=source_stage,
+        # No single similarity score across the blocker stages —
+        # property uses canonical_key match, embedding uses
+        # cosine, splink uses m/u probability. Leaving None
+        # rather than picking a stage-specific number that would
+        # surface as misleading.
+        similarity_score=None,
+    )
+    try:
+        await disputed_pairs_service.enqueue(pair)
+    except Exception as exc:
+        logger.warning(
+            "Failed to enqueue disputed pair (%s, %s) for " "transform=%s stage=%s: %s",
+            a.id,
+            b.id,
+            transform_id,
+            source_stage.value,
+            exc,
+        )
+
+
 async def _compare_and_merge_nodes(
     nodes: List[BaseNode],
     user_id: Optional[str] = None,
@@ -1232,6 +1315,7 @@ async def _compare_and_merge_nodes(
     document_usage_id: Optional[str] = None,
     parsed_ontology: Optional[Dict[str, Any]] = None,
     decision_log: Optional[DecisionLogService] = None,
+    disputed_pairs_service: Optional[DisputedPairsService] = None,
 ) -> List[BaseNode]:
     """Compare all nodes and resolve them using LLM, with a
     layered blocking stack that bounds the LLM input size.
@@ -1288,6 +1372,16 @@ async def _compare_and_merge_nodes(
             transform_id=transform_id,
             document_usage_id=document_usage_id,
         )
+        # B2-active slice B: enqueue if the LLM rejected a 2-node
+        # candidate that the property blocker had flagged.
+        await _enqueue_disputed_pair_if_unresolved(
+            disputed_pairs_service=disputed_pairs_service,
+            user_id=user_id,
+            transform_id=transform_id,
+            candidate_group=candidate_group,
+            resolved_groups=resolved_groups,
+            source_stage=SourceStage.PROPERTY_BLOCKER,
+        )
         for group in resolved_groups:
             if len(group) == 1:
                 final_nodes.append(group[0])
@@ -1329,6 +1423,16 @@ async def _compare_and_merge_nodes(
             user_id=user_id,
             transform_id=transform_id,
             document_usage_id=document_usage_id,
+        )
+        # B2-active slice B: enqueue if embedding blocker's
+        # 2-node candidate was rejected by the LLM.
+        await _enqueue_disputed_pair_if_unresolved(
+            disputed_pairs_service=disputed_pairs_service,
+            user_id=user_id,
+            transform_id=transform_id,
+            candidate_group=candidate_group,
+            resolved_groups=resolved_groups,
+            source_stage=SourceStage.EMBEDDING_BLOCKER,
         )
         for group in resolved_groups:
             if len(group) == 1:
@@ -1376,6 +1480,19 @@ async def _compare_and_merge_nodes(
             user_id=user_id,
             transform_id=transform_id,
             document_usage_id=document_usage_id,
+        )
+        # B2-active slice B: enqueue if Splink's 2-node candidate
+        # was rejected by the LLM. Splink tends to produce the
+        # noisiest blocker hits (m/u probability is generous), so
+        # this stage may dominate the queue — operators can filter
+        # by source_stage in the review UI.
+        await _enqueue_disputed_pair_if_unresolved(
+            disputed_pairs_service=disputed_pairs_service,
+            user_id=user_id,
+            transform_id=transform_id,
+            candidate_group=candidate_group,
+            resolved_groups=resolved_groups,
+            source_stage=SourceStage.SPLINK_BLOCKER,
         )
         for group in resolved_groups:
             if len(group) == 1:
@@ -1475,6 +1592,7 @@ async def _build_graph_with_multi_pass(
     chunk_metadatas: Optional[List[Any]] = None,
     extractor_model: Optional[str] = None,
     decision_log: Optional[DecisionLogService] = None,
+    disputed_pairs_service: Optional[DisputedPairsService] = None,
 ) -> DocumentKnowledgeGraph:
     """Build knowledge graph using multi-pass extraction with validation.
 
@@ -1548,6 +1666,7 @@ async def _build_graph_with_multi_pass(
         document_usage_id=document_usage_id,
         parsed_ontology=ontology_parser.parsed_ontology,
         decision_log=decision_log,
+        disputed_pairs_service=disputed_pairs_service,
     )
     nodes, relationships = await deduplicate_entities_with_splink(
         entities=nodes,
