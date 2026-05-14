@@ -111,6 +111,25 @@ class DisputedPair:
     created_at: Optional[str] = None
 
 
+# Module-level shared store for dev mode (no DATABASE_URL).
+# See DisputedPairsService.__init__ for the rationale —
+# instances constructed by different request handlers share
+# this list so writes survive cross-request reads. Tenant
+# isolation is enforced at read time via user_id filtering, so
+# the shared list is safe across tenants in dev.
+_DEFAULT_MEMORY_STORE: List[DisputedPair] = []
+
+
+def _reset_default_memory_store_for_tests() -> None:
+    """Clear the dev-mode shared memory store. Test fixtures
+    that exercise the production path (no ``memory_store=`` arg)
+    should call this between scenarios to keep tests isolated.
+    Most tests pass ``memory_store=[]`` directly and don't need
+    this — it's only for direct-DB-mock tests that fall back to
+    constructing a default service."""
+    _DEFAULT_MEMORY_STORE.clear()
+
+
 class DisputedPairsService:
     """CRUD + label-transition for the disputed-pairs queue.
 
@@ -133,9 +152,28 @@ class DisputedPairsService:
         memory_store: Optional[List[DisputedPair]] = None,
     ) -> None:
         self._enabled = bool(settings.DATABASE_URL or settings.resolved_database_url)
-        self._memory_store: List[DisputedPair] = (
-            memory_store if memory_store is not None else []
-        )
+        # Reviewer-flagged on commit 26d3e89. When DATABASE_URL
+        # isn't configured, every endpoint constructs its own
+        # service instance (mirroring the budget / decision-log
+        # pattern). If each instance got a fresh list, a pair
+        # enqueued by the transform pipeline in one service
+        # instance would be invisible to GET /disputed-pairs +
+        # POST /label in another — the queue would always look
+        # empty and labels would 404.
+        #
+        # Module-level ``_DEFAULT_MEMORY_STORE`` shares the dev-
+        # mode list across all instances in the same process so
+        # writes survive cross-request reads. Tenant filtering
+        # happens at the read methods (user_id on every pair), so
+        # tenants stay isolated even on the shared list.
+        #
+        # Tests pass ``memory_store=[]`` explicitly for isolation
+        # — the per-test list bypasses the module default. That
+        # contract keeps the test suite parallel-safe.
+        if memory_store is not None:
+            self._memory_store = memory_store
+        else:
+            self._memory_store = _DEFAULT_MEMORY_STORE
 
     # Writes -------------------------------------------------------------------
 

@@ -1275,6 +1275,16 @@
         "title": "DatabaseConfigUpdate",
         "type": "object"
       },
+      "Decision": {
+        "description": "Inputs from the operator/agent when labeling. The service\ntranslates these to the matching status values. Skip is a\nvalid decision \u2014 operators may legitimately defer a pair\nthey don't have enough context for, and we track that\nseparately from \"labeled\" so the queue surface can\ndistinguish \"reviewed\" from \"skipped-for-now\".",
+        "enum": [
+          "match",
+          "not_match",
+          "skip"
+        ],
+        "title": "Decision",
+        "type": "string"
+      },
       "DetailedTransformStatus": {
         "description": "Detailed transformation status",
         "properties": {
@@ -2071,12 +2081,11 @@
         "type": "object"
       },
       "LabelRequest": {
-        "description": "Body shape for POST /label. Closed-set decision enum at\nthe wire layer too \u2014 Pydantic enforces it before the service\nsees the value.",
+        "description": "Body shape for POST /label. The ``decision`` field is the\ntyped ``Decision`` enum so the OpenAPI schema exposes the\nclosed set (``match`` / ``not_match`` / ``skip``) to generated\nclients + docs. Pre-fix it was a plain ``str`` with manual\nvalidation \u2014 the validation worked at runtime but the schema\nleaked ``string`` to downstream consumers.",
         "properties": {
           "decision": {
-            "description": "One of: match, not_match, skip",
-            "title": "Decision",
-            "type": "string"
+            "$ref": "#/components/schemas/Decision",
+            "description": "One of: match, not_match, skip."
           },
           "reason": {
             "anyOf": [

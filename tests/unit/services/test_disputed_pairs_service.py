@@ -377,6 +377,96 @@ async def test_postgres_list_pending_filters_user_and_status(
 
 
 @pytest.mark.asyncio
+async def test_dev_mode_shares_memory_store_across_service_instances(monkeypatch):
+    """Reviewer-flagged P2 on commit 26d3e89. Pre-fix every
+    ``DisputedPairsService()`` instance got a fresh empty list,
+    and the API constructs a new service inside each handler.
+    So in dev mode (no DATABASE_URL): a pair enqueued via one
+    request was invisible to GET / POST in subsequent requests
+    — the queue always looked empty, labels always 404'd.
+
+    Pin: in dev mode, two service instances constructed without
+    an explicit ``memory_store`` argument share the module-level
+    default. Enqueue via one, read via the other, the pair is
+    visible.
+
+    Tests that need isolation continue to pass
+    ``memory_store=[]`` — that path bypasses the shared default
+    so parallel test runs don't trample each other (existing
+    tests in this file all use the per-test isolated list)."""
+    from graphora_server.services.disputed_pairs_service import (
+        _reset_default_memory_store_for_tests,
+    )
+
+    monkeypatch.setattr(settings, "DATABASE_URL", "")
+    monkeypatch.setattr(settings, "POSTGRES_HOST", None)
+    # Reset between tests so the module-level default doesn't
+    # carry state across the suite.
+    _reset_default_memory_store_for_tests()
+
+    # Two distinct service instances — both constructed without
+    # ``memory_store=``, mirroring how the API endpoints build
+    # their services per-request.
+    writer = DisputedPairsService()
+    reader = DisputedPairsService()
+    assert writer is not reader
+
+    pair = await writer.enqueue(_make_pair(user_id="user-1"))
+
+    # The reader must see the just-enqueued pair.
+    pending = await reader.list_pending("user-1")
+    assert len(pending) == 1, (
+        "Pre-fix: each service instance had a private list, so "
+        "the reader saw nothing. Module-level shared store fixes "
+        "this. Got pending pairs: "
+        f"{[p.id for p in pending]!r}"
+    )
+    assert pending[0].id == pair.id
+
+    # Cross-tenant filtering still works on the shared store.
+    other_tenant_pending = await reader.list_pending("user-other")
+    assert other_tenant_pending == [], (
+        "Shared store leaked across tenants. user_id filter must " "still apply."
+    )
+
+    # Cleanup so the next test sees an empty shared store.
+    _reset_default_memory_store_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_explicit_memory_store_isolates_from_shared_default(monkeypatch):
+    """Tests that pass ``memory_store=[]`` must NOT see writes
+    from the module-level default — otherwise parallel test
+    runs would trample each other. Pin the isolation
+    contract."""
+    from graphora_server.services.disputed_pairs_service import (
+        _reset_default_memory_store_for_tests,
+    )
+
+    monkeypatch.setattr(settings, "DATABASE_URL", "")
+    monkeypatch.setattr(settings, "POSTGRES_HOST", None)
+    _reset_default_memory_store_for_tests()
+
+    # Default-store writer.
+    default_writer = DisputedPairsService()
+    await default_writer.enqueue(
+        _make_pair(user_id="user-1", node_a="default-store-pair")
+    )
+
+    # Explicit-store reader. Should NOT see the default-store
+    # pair.
+    isolated = DisputedPairsService(memory_store=[])
+    pending = await isolated.list_pending("user-1")
+    assert pending == [], (
+        "Explicit memory_store=[] must isolate from the module-"
+        "level default. Got: "
+        f"{[p.node_a_id for p in pending]!r}"
+    )
+
+    _reset_default_memory_store_for_tests()
+
+
+@pytest.mark.asyncio
 async def test_postgres_enqueue_failures_propagate(postgres_service):
     """A degraded Postgres on the write path raises. The service
     deliberately does NOT swallow — losing an enqueued pair means

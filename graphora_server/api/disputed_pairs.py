@@ -69,13 +69,16 @@ class DisputedPairResponse(BaseModel):
 
 
 class LabelRequest(BaseModel):
-    """Body shape for POST /label. Closed-set decision enum at
-    the wire layer too — Pydantic enforces it before the service
-    sees the value."""
+    """Body shape for POST /label. The ``decision`` field is the
+    typed ``Decision`` enum so the OpenAPI schema exposes the
+    closed set (``match`` / ``not_match`` / ``skip``) to generated
+    clients + docs. Pre-fix it was a plain ``str`` with manual
+    validation — the validation worked at runtime but the schema
+    leaked ``string`` to downstream consumers."""
 
-    decision: str = Field(
+    decision: Decision = Field(
         ...,
-        description="One of: match, not_match, skip",
+        description="One of: match, not_match, skip.",
     )
     reason: Optional[str] = Field(
         None,
@@ -214,29 +217,16 @@ async def label_pair(
     body: LabelRequest,
     auth: AuthContext = Depends(get_current_auth),
 ) -> DisputedPairResponse:
-    # Validate the decision string against the closed set BEFORE
-    # touching the service. Pydantic could enforce this via an
-    # Enum field, but staying as ``str`` keeps the wire JSON
-    # plain — agents posting `{"decision": "match"}` are common,
-    # and a Pydantic Enum field would either reject or coerce
-    # surprisingly depending on the version.
-    try:
-        decision = Decision(body.decision)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Invalid decision: {body.decision!r}. Must be one "
-                "of: match, not_match, skip."
-            ),
-        )
-
+    # Pydantic enforces ``body.decision`` ∈ Decision before the
+    # handler runs (see LabelRequest). Invalid values return 422
+    # with a structured validation-error body — both more
+    # informative and more conventional than the pre-fix 400.
     service = DisputedPairsService()
     try:
         pair = await service.label(
             pair_id=pair_id,
             user_id=auth.user_id,
-            decision=decision,
+            decision=body.decision,
             reason=body.reason,
         )
     except Exception as exc:

@@ -195,12 +195,15 @@ def test_label_pair_happy_path(test_client):
     assert call_kwargs["user_id"] == "test-user-1"
 
 
-def test_label_pair_rejects_invalid_decision_with_400(test_client):
-    """Closed-set enum at the wire layer. An unrecognized
-    decision string is rejected BEFORE the service is touched.
-    Pre-fix a malformed decision would either coerce to
-    something unexpected or land at the service layer for a
-    less-helpful error."""
+def test_label_pair_rejects_invalid_decision_with_422(test_client):
+    """Closed-set enum at the wire layer, exposed via Pydantic
+    so generated clients / OpenAPI docs see the closed set
+    (match / not_match / skip) instead of a plain ``string``
+    type. An unrecognized decision string is rejected BEFORE
+    the service is touched — Pydantic returns 422 with a
+    structured validation-error body. Pre-fix the manual
+    check returned 400 with a free-form detail; switching to
+    the typed field exposes the enum to schema consumers."""
     with patch("graphora_server.api.disputed_pairs.DisputedPairsService") as mock_class:
         mock = AsyncMock()
         mock.label = AsyncMock()
@@ -211,8 +214,12 @@ def test_label_pair_rejects_invalid_decision_with_400(test_client):
             json={"decision": "maybe"},  # not in {match, not_match, skip}
         )
 
-    assert response.status_code == 400
-    assert "decision" in response.json()["detail"].lower()
+    assert response.status_code == 422, (
+        "Pydantic validation should reject invalid decision "
+        "BEFORE the handler runs (returns 422). Pre-fix the "
+        "manual check returned 400 but didn't surface the enum "
+        "in the OpenAPI schema."
+    )
     # Service was NOT touched.
     mock.label.assert_not_awaited()
 
