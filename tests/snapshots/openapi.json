@@ -7565,7 +7565,7 @@
     },
     "/api/v1/graph/{transform_id}/decisions": {
       "get": {
-        "description": "Decision Log entries for a transform. With ``node_id`` set, returns schema-level decisions plus the per-node decisions for that node, schema-first. Without ``node_id``, returns only schema-level decisions.",
+        "description": "Decision Log entries for a transform. Optionally narrow to a single target by setting ``node_id`` OR ``edge_id`` (mutually exclusive). Schema-level decisions are always returned first as the causation prefix. Without either id, returns only schema-level decisions.",
         "operationId": "get_decisions_by_transform_id_api_v1_graph__transform_id__decisions_get",
         "parameters": [
           {
@@ -7591,6 +7591,22 @@
                 }
               ],
               "title": "Node Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "edge_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Edge Id"
             }
           }
         ],
