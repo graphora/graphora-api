@@ -1060,3 +1060,164 @@ class TestDisputedPairsTools:
         )
         with pytest.raises(GraphoraClientError):
             await _tool_impl_label_disputed_pair(api, "p-bad", "match")
+
+
+# ============================================================
+# Registered-tool surface (Gate-4-wrap edge-evidence follow-up)
+#
+# Reviewer-flagged on commit b8504e7: the _tool_impl_* helpers
+# all support both node_id and edge_id, but the FastMCP-
+# registered tools in build_server() are what the agent
+# actually sees. If the registered signature lags behind the
+# helper, edge_id passes through `node_id` and gets searched
+# as a node — wrong target, wrong evidence shape. These tests
+# exercise the registered tool surface via FastMCP's introspection
+# (list_tools) and execution (call_tool) APIs.
+# ============================================================
+
+
+fastmcp = pytest.importorskip(
+    "mcp.server.fastmcp",
+    reason="build_server tests require graphora-server[mcp]; skip if not installed",
+)
+
+
+class TestBuildServerRegisteredTools:
+    """Pin the FastMCP-registered tool surface, not just the helper.
+
+    The _tool_impl_* functions pass through helper tests cleanly,
+    but the agent invokes the @mcp.tool()-decorated wrappers
+    inside build_server(). A regression where the wrapper's
+    signature lags the helper would let edge_id args silently
+    bind to node_id (positionally) or get dropped (kwarg
+    mismatch) — neither would surface in the existing helper-only
+    tests."""
+
+    @pytest.fixture
+    def server_and_api(self):
+        from graphora_server.mcp.server import build_server
+
+        api = FakeAPIClient(
+            graph_return={
+                "nodes": [
+                    {"id": "n1", "label": "Alice", "type": "Person", "properties": {}},
+                    {"id": "n2", "label": "Acme", "type": "Org", "properties": {}},
+                ],
+                "edges": [
+                    {
+                        "id": "e1",
+                        "source": "n1",
+                        "target": "n2",
+                        "type": "WORKS_AT",
+                        "properties": {"source_chunk_id": "chunk-77"},
+                    },
+                ],
+                "total_nodes": 2,
+                "total_edges": 1,
+            },
+        )
+        server = build_server(client=api)
+        return server, api
+
+    @pytest.mark.asyncio
+    async def test_get_evidence_schema_advertises_node_id_and_edge_id(
+        self, server_and_api
+    ):
+        """The FastMCP JSON Schema MCP clients see must list BOTH
+        node_id and edge_id as optional params. Pre-fix the schema
+        listed node_id as required and edge_id wasn't present at
+        all — agents had no way to pass an edge through the
+        wire protocol."""
+        server, _ = server_and_api
+        tools = await server.list_tools()
+        get_evidence = next(t for t in tools if t.name == "get_evidence")
+        props = get_evidence.inputSchema["properties"]
+
+        assert "node_id" in props, (
+            "Registered get_evidence is missing node_id. The agent "
+            "can't request node evidence at all."
+        )
+        assert "edge_id" in props, (
+            "Registered get_evidence is missing edge_id — even "
+            "though the helper supports it, the agent can't reach "
+            "it through the MCP schema. This is the exact gap "
+            "the reviewer flagged."
+        )
+
+        # Both should be optional (not in required). transform_id
+        # is the only required arg.
+        required = get_evidence.inputSchema.get("required", [])
+        assert "transform_id" in required
+        assert "node_id" not in required, (
+            "node_id is now optional (edge_id is the alternative). "
+            "Marking it required forces every call to set node_id, "
+            "which breaks the edge_id-only path."
+        )
+        assert "edge_id" not in required
+
+    @pytest.mark.asyncio
+    async def test_get_evidence_call_with_edge_id_returns_edge_shape(
+        self, server_and_api
+    ):
+        """End-to-end: invoke the REGISTERED tool with edge_id, see
+        a kind=edge response. This is what an MCP client actually
+        does. The pre-fix registered signature would have either
+        rejected edge_id as an unknown arg or silently passed it
+        through as node_id."""
+        server, api = server_and_api
+
+        result = await server.call_tool(
+            "get_evidence",
+            {"transform_id": "tx1", "edge_id": "e1"},
+        )
+        # FastMCP returns a list of content blocks; the dict
+        # payload comes through as JSON in a TextContent. Parse
+        # the first block.
+        import json
+
+        # FastMCP versions vary on the return shape; handle both
+        # the bare list (older) and the (content, structured)
+        # tuple (newer) forms by extracting the text payload.
+        content = result[0] if isinstance(result, (list, tuple)) else result
+        if isinstance(content, list):
+            content = content[0]
+        text = getattr(content, "text", None)
+        assert text is not None, f"Unexpected call_tool shape: {result!r}"
+        payload = json.loads(text)
+
+        assert payload["kind"] == "edge", (
+            "Registered tool with edge_id=e1 didn't return a "
+            "kind=edge response. Either edge_id wasn't forwarded "
+            "or the dispatch fell through to the node path."
+        )
+        assert payload["edge"]["id"] == "e1"
+
+        # The api saw find_edge (not find_node) — pin that the
+        # wire-level call routed through the edge helper.
+        assert any(c[0] == "find_edge" for c in api.calls)
+        assert not any(c[0] == "find_node" for c in api.calls)
+
+    @pytest.mark.asyncio
+    async def test_get_evidence_call_with_node_id_returns_node_shape(
+        self, server_and_api
+    ):
+        """Backwards-compat: node_id calls still work via the
+        registered tool. Pin so the signature widening didn't
+        break the node path."""
+        server, _ = server_and_api
+
+        result = await server.call_tool(
+            "get_evidence",
+            {"transform_id": "tx1", "node_id": "n1"},
+        )
+        import json
+
+        content = result[0] if isinstance(result, (list, tuple)) else result
+        if isinstance(content, list):
+            content = content[0]
+        text = getattr(content, "text", None)
+        assert text is not None
+        payload = json.loads(text)
+
+        assert payload["kind"] == "node"
+        assert payload["node"]["id"] == "n1"

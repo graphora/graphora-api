@@ -474,39 +474,61 @@ def build_server(client: Optional[GraphoraClient] = None):
         return await _tool_impl_query_graph(api, transform_id, filter_type, limit)
 
     @mcp.tool()
-    async def get_evidence(transform_id: str, node_id: str) -> Dict[str, Any]:
-        """Return the source-document context that supports a node.
+    async def get_evidence(
+        transform_id: str,
+        node_id: Optional[str] = None,
+        edge_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return the source-document context that supports a node OR
+        an edge.
 
-        Surfaces provenance fields stored on the node (source chunk
-        text, document name, offsets) plus any relationships the
-        node participates in AND the Decision Log history — useful
-        for an agent that wants to explain *why* an entity is in
-        the graph before citing it.
+        Surfaces provenance fields stored on the target (source chunk
+        text, document name, offsets) plus the Decision Log history —
+        useful for an agent that wants to explain *why* an entity or
+        relationship is in the graph before citing it.
+
+        Exactly one of ``node_id`` or ``edge_id`` must be provided.
+        The response carries a ``kind`` discriminator (``"node"`` or
+        ``"edge"``) so callers route on the shape.
 
         Args:
-            transform_id: The extraction that produced the node.
-            node_id: The ID of the node to inspect.
+            transform_id: The extraction that produced the target.
+            node_id: ID of the node to inspect. Mutually exclusive
+                with edge_id.
+            edge_id: ID of the edge (relationship) to inspect.
+                Mutually exclusive with node_id.
 
-        Returns a dict with:
-            node (dict | None): Full node with properties, or None
-                if the ID is unknown at this transform_id.
-            incoming_edges (list): Edges where this node is the target.
-            outgoing_edges (list): Edges where this node is the source.
-            evidence (dict): Provenance-related properties pulled out of
-                the node (e.g. source_chunk, source_text, document_id).
-            decision_log (list): All decisions the pipeline made about
-                this node (entity merges, LLM disambiguations) plus
-                schema-level decisions for the transform (schema
-                inference). Each entry: ``{id, transform_id,
-                target_id, target_kind, decision_type, reason,
-                evidence, alternatives, created_at}``.
-            alternatives (list): Aggregated candidate entities the
-                pipeline considered for this node across all merge
-                decisions. Each entry: ``{id, type, canonical_key,
-                confidence_score}``. Empty when the node had no
-                merge events.
+        Returns a dict whose shape depends on ``kind``:
+
+            kind=node:
+                node (dict | None): Full node with properties, or
+                    None if unknown.
+                incoming_edges (list): Edges where this node is target.
+                outgoing_edges (list): Edges where this node is source.
+                evidence (dict): Provenance-related properties pulled
+                    out of the node (source_chunk_id, source_text,
+                    document_name, page_number, etc.).
+                decision_log (list): Schema-level decisions for the
+                    transform plus per-node decisions (entity merges,
+                    LLM disambiguations).
+                alternatives (list): Aggregated candidate entities
+                    the pipeline considered across all merge events.
+
+            kind=edge:
+                edge (dict | None): Full edge with properties.
+                source_node (dict | None): Summary of the source node.
+                target_node (dict | None): Summary of the target node.
+                evidence (dict): Source-span fields stamped on the
+                    edge at extraction time.
+                decision_log (list): Schema-level decisions plus
+                    relationship-accepted/rejected decisions for this
+                    edge.
+                alternatives (list): Candidate relationships the
+                    pipeline considered before settling on this one.
         """
-        return await _tool_impl_get_evidence(api, transform_id, node_id)
+        return await _tool_impl_get_evidence(
+            api, transform_id, node_id=node_id, edge_id=edge_id
+        )
 
     @mcp.tool()
     async def get_cost_report(transform_id: str) -> Dict[str, Any]:
