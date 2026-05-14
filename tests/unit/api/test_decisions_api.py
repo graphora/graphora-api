@@ -321,3 +321,154 @@ def test_decisions_endpoint_serializes_enums_to_strings(test_client):
     [d] = response.json()["decision_log"]
     assert d["target_kind"] == "node"
     assert d["decision_type"] == "entity_merged"
+
+
+# ============================================================
+# Gate-4-wrap edge-evidence backend (reviewer flagged on slice C
+# wrap-up): /decisions must accept edge_id so ``graphora explain
+# <edge>`` can return source text + decision log. The
+# DecisionLogService is already generic over target_id; the gap
+# was the query-path. These tests pin the edge_id surface and the
+# node_id/edge_id mutex.
+# ============================================================
+
+
+def test_decisions_endpoint_accepts_edge_id(test_client):
+    """Edge-targeted decisions return alongside the schema prefix.
+    Same response shape as the node case — only the
+    DecisionType.RELATIONSHIP_ACCEPTED / RELATIONSHIP_REJECTED
+    target_kind=edge rows distinguish the result."""
+    from graphora_server.services.decision_log_service import (
+        Decision,
+        DecisionType,
+        TargetKind,
+    )
+
+    edge_decision = Decision(
+        id="d-edge",
+        transform_id="tx1",
+        target_id="e1",
+        target_kind=TargetKind.EDGE,
+        decision_type=DecisionType.RELATIONSHIP_ACCEPTED,
+        reason="validator confirmed",
+        evidence={"stage": "validator"},
+        alternatives=[],
+        created_at="2026-05-14T00:00:00+00:00",
+    )
+
+    with patch("graphora_server.api.graph.DecisionLogService") as mock_log_class:
+        mock_log = AsyncMock()
+        mock_log.for_decision_type = AsyncMock(return_value=[])
+        mock_log.for_target = AsyncMock(return_value=[edge_decision])
+        mock_log_class.return_value = mock_log
+
+        response = test_client.get("/api/v1/graph/tx1/decisions?edge_id=e1")
+
+    assert response.status_code == 200
+    body = response.json()
+    [d] = body["decision_log"]
+    assert d["target_kind"] == "edge"
+    assert d["target_id"] == "e1"
+    assert d["decision_type"] == "relationship_accepted"
+
+    # Pin: for_target was called with the edge_id, not a node_id.
+    mock_log.for_target.assert_awaited_once()
+    call_args = mock_log.for_target.await_args
+    assert call_args.args[1] == "e1", (
+        "for_target should have been called with edge_id='e1'. "
+        "If the endpoint accidentally swapped to node_id we'd "
+        "fetch the wrong target's decisions."
+    )
+
+
+def test_decisions_endpoint_aggregates_edge_alternatives(test_client):
+    """Like the node path, edge decisions contribute their
+    alternatives to the aggregate. Pin so a refactor that
+    forgets to thread the alternatives list (e.g., by introducing
+    a separate edge code path that doesn't aggregate) fails
+    loud."""
+    from graphora_server.services.decision_log_service import (
+        Decision,
+        DecisionType,
+        TargetKind,
+    )
+
+    edge_decision = Decision(
+        id="d-edge",
+        transform_id="tx1",
+        target_id="e1",
+        target_kind=TargetKind.EDGE,
+        decision_type=DecisionType.RELATIONSHIP_REJECTED,
+        reason="confidence below threshold",
+        evidence={},
+        alternatives=[
+            {"reason": "below validator score 0.6"},
+            {"reason": "no source span match"},
+        ],
+        created_at="2026-05-14T00:00:00+00:00",
+    )
+
+    with patch("graphora_server.api.graph.DecisionLogService") as mock_log_class:
+        mock_log = AsyncMock()
+        mock_log.for_decision_type = AsyncMock(return_value=[])
+        mock_log.for_target = AsyncMock(return_value=[edge_decision])
+        mock_log_class.return_value = mock_log
+
+        response = test_client.get("/api/v1/graph/tx1/decisions?edge_id=e1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["alternatives"]) == 2
+
+
+def test_decisions_endpoint_rejects_both_node_id_and_edge_id(test_client):
+    """Mutex pin: setting both ids in one request is ambiguous —
+    a Decision's target_id belongs to one kind only, and mixing
+    them would either over-fetch (do both queries) or surface
+    ambiguous results. Returning 400 at the API surface is the
+    right shape; the alternative (server silently picks one) is
+    a footgun for clients."""
+    response = test_client.get(
+        "/api/v1/graph/tx1/decisions?node_id=n1&edge_id=e1",
+    )
+    assert response.status_code == 400
+    assert "mutually exclusive" in response.json()["detail"]
+
+
+def test_decisions_endpoint_returns_only_schema_when_neither_id(test_client):
+    """No node_id and no edge_id is a legitimate request — return
+    the schema prefix only. Pin so a future tightening that
+    rejects "neither" surfaces the design choice intentionally."""
+    from graphora_server.services.decision_log_service import (
+        Decision,
+        DecisionType,
+        TargetKind,
+    )
+
+    schema_decision = Decision(
+        id="d-schema",
+        transform_id="tx1",
+        target_id=None,
+        target_kind=TargetKind.SCHEMA,
+        decision_type=DecisionType.SCHEMA_INFERRED,
+        reason="inferred from chunk 0",
+        evidence={},
+        alternatives=[],
+        created_at="2026-05-14T00:00:00+00:00",
+    )
+
+    with patch("graphora_server.api.graph.DecisionLogService") as mock_log_class:
+        mock_log = AsyncMock()
+        mock_log.for_decision_type = AsyncMock(return_value=[schema_decision])
+        mock_log.for_target = AsyncMock()
+        mock_log_class.return_value = mock_log
+
+        response = test_client.get("/api/v1/graph/tx1/decisions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["decision_log"]) == 1
+    assert body["decision_log"][0]["target_kind"] == "schema"
+    # for_target was NOT called when neither id is set — the
+    # schema prefix is all the caller asked for.
+    mock_log.for_target.assert_not_awaited()

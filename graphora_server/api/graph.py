@@ -155,15 +155,17 @@ def _decision_to_dict(decision: Any) -> Dict[str, Any]:
 @router.get(
     "/{transform_id}/decisions",
     description=(
-        "Decision Log entries for a transform. With ``node_id`` set, "
-        "returns schema-level decisions plus the per-node decisions "
-        "for that node, schema-first. Without ``node_id``, returns "
-        "only schema-level decisions."
+        "Decision Log entries for a transform. Optionally narrow to "
+        "a single target by setting ``node_id`` OR ``edge_id`` "
+        "(mutually exclusive). Schema-level decisions are always "
+        "returned first as the causation prefix. Without either id, "
+        "returns only schema-level decisions."
     ),
 )
 async def get_decisions_by_transform_id(
     transform_id: str,
     node_id: Optional[str] = None,
+    edge_id: Optional[str] = None,
     auth: AuthContext = Depends(get_current_auth),
 ) -> Dict[str, Any]:
     """B0-explain (reviewer-flagged on commit 9ac9bb5): the Decision
@@ -177,24 +179,49 @@ async def get_decisions_by_transform_id(
 
     Schema-level decisions (target_kind=schema, decision_type=
     schema_inferred) are always included for context — they're
-    transform-level prerequisites for any per-node "why is this
-    here?" answer. Node decisions follow if ``node_id`` is supplied.
+    transform-level prerequisites for any per-node/per-edge
+    "why is this here?" answer. Per-target decisions follow if
+    ``node_id`` OR ``edge_id`` is supplied.
+
+    Edge support (reviewer-flagged on slice C wrap-up): the closed
+    set of DecisionTypes already includes RELATIONSHIP_ACCEPTED and
+    RELATIONSHIP_REJECTED, and ``DecisionLogService.for_target`` is
+    generic over target_id (works for any target_kind). What was
+    missing pre-fix was the query-path that lets callers ASK for a
+    specific edge's decisions — without it, ``graphora explain
+    <edge>`` couldn't return source text. The ``edge_id`` query
+    param closes that gap. ``node_id`` and ``edge_id`` are mutually
+    exclusive because a single Decision target_id belongs to one
+    kind only; mixing them in a single request would either
+    over-fetch or surface ambiguous results.
 
     Performance pin: schema decisions are fetched via
     ``for_decision_type`` (uses the (transform_id, decision_type)
-    index from migration 14) so node-evidence lookups don't scale
+    index from migration 14) so target-evidence lookups don't scale
     with the total decision count for the transform.
 
     Returns:
-        decision_log (list): Schema decisions first, then node
-            decisions if ``node_id`` is supplied. Each entry: ``{id,
-            transform_id, target_id, target_kind, decision_type,
-            reason, evidence, alternatives, created_at}``.
+        decision_log (list): Schema decisions first, then per-target
+            decisions if a node_id/edge_id is supplied. Each entry:
+            ``{id, transform_id, target_id, target_kind,
+            decision_type, reason, evidence, alternatives,
+            created_at}``.
         alternatives (list): Aggregated candidate entities the
-            pipeline considered for ``node_id`` across all merge
-            decisions. Empty when ``node_id`` is None or the node
-            had no merge events.
+            pipeline considered for the target across all merge
+            decisions. Empty when no node_id/edge_id is supplied or
+            the target had no merge events.
     """
+    # Mutex check: node and edge target_ids occupy different identity
+    # namespaces in real data (UUIDs are globally unique in practice)
+    # but the SEMANTIC contract is one-target-per-request. Returning
+    # 400 surfaces the ambiguity at the API surface instead of
+    # silently picking one.
+    if node_id is not None and edge_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="node_id and edge_id are mutually exclusive; pass exactly one.",
+        )
+
     try:
         log = DecisionLogService()
 
@@ -211,29 +238,33 @@ async def get_decisions_by_transform_id(
             user_id=auth.user_id,
         )
 
-        node_decisions: List[Any] = []
+        target_decisions: List[Any] = []
         alternatives: List[Dict[str, Any]] = []
-        if node_id:
-            node_decisions = await log.for_target(
-                transform_id, node_id, user_id=auth.user_id
+        target_id = node_id or edge_id
+        if target_id:
+            target_decisions = await log.for_target(
+                transform_id, target_id, user_id=auth.user_id
             )
-            for d in node_decisions:
+            for d in target_decisions:
                 alternatives.extend(d.alternatives)
 
         # Schema first (causation chain: schema is the prerequisite
-        # for the node merges that followed). The Evidence tab
+        # for the node/edge merges that followed). The Evidence tab
         # renders this as a top-down narrative; flattening to
         # walltime would mis-narrate causation for re-extractions
-        # where node merges land before a schema decision in
+        # where target merges land before a schema decision in
         # walltime.
         decision_dicts = [
-            _decision_to_dict(d) for d in schema_decisions + node_decisions
+            _decision_to_dict(d) for d in schema_decisions + target_decisions
         ]
 
         return {
             "decision_log": decision_dicts,
             "alternatives": alternatives,
         }
+    except HTTPException:
+        # Don't swallow the mutex 400 with the broad-Exception 500.
+        raise
     except Exception as e:
         traceback.print_exc()
         logger.error(

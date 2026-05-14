@@ -281,7 +281,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 |------|---------|
 | `extract_document(file_path \| url, ontology_id?, schemaless?)` | Run extraction on a local file or URL. Auto-infers schema if `ontology_id` is omitted. Set `schemaless=True` to skip pre-extraction schema inference entirely (see Schema-less mode below). Returns a `transform_id`. |
 | `query_graph(transform_id, filter_type?, limit?)` | Fetch nodes + edges. Filter by entity type (case-insensitive), limit capped at 200 to keep agent context usable. |
-| `get_evidence(transform_id, node_id)` | Return a node's full properties, its incoming/outgoing edges, and the provenance fields (source chunk, document id, offsets) that justify it being in the graph. |
+| `get_evidence(transform_id, node_id? \| edge_id?)` | Return source-span evidence + decision log for a node or an edge (exactly one of the two ids). Response carries a `kind` discriminator: `kind=node` yields `{node, incoming_edges, outgoing_edges, evidence, decision_log, alternatives}`; `kind=edge` yields `{edge, source_node, target_node, evidence, decision_log, alternatives}`. |
 | `refine_ontology(transform_id, save?)` | Run post-hoc ontology inference over what was extracted. `save=False` (default) returns YAML inline; `save=True` persists it as a new ontology and returns the `ontology_id`. |
 
 ## Schema-less extraction mode

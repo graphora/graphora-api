@@ -180,17 +180,36 @@ class FakeAPIClient:
             return self.graph_return
         return None
 
+    async def find_edge(
+        self,
+        transform_id: str,
+        edge_id: str,
+        *,
+        page_size: int = 1000,
+        max_pages: int = 10,
+    ) -> Optional[Dict[str, Any]]:
+        """Edge-evidence counterpart to find_node. Same pagination
+        contract; returns the graph slice containing the edge so
+        callers can pull source/target node summaries without a
+        second roundtrip."""
+        self.calls.append(("find_edge", transform_id, edge_id))
+        edges = self.graph_return.get("edges", []) or []
+        if any(e.get("id") == edge_id for e in edges):
+            return self.graph_return
+        return None
+
     async def get_decisions(
         self,
         transform_id: str,
         node_id: Optional[str] = None,
+        edge_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         # Mirrors GraphoraClient.get_decisions: returns whatever the
         # test pre-seeded, raises whatever the test injected. The
         # MCP tool catches GraphoraClientError specifically and
         # degrades to empty arrays — pinned by
         # test_get_decisions_failure_degrades_to_empty.
-        self.calls.append(("get_decisions", transform_id, node_id))
+        self.calls.append(("get_decisions", transform_id, node_id, edge_id))
         if self.decisions_error is not None:
             raise self.decisions_error
         return self.decisions_return
@@ -500,9 +519,11 @@ class TestGetEvidence:
 
         # The api.get_decisions call must happen — pin that the
         # MCP tool delegated to the HTTP boundary rather than going
-        # to a local DB.
+        # to a local DB. The 4th tuple slot is edge_id (None for
+        # the node-evidence path — pin both ids in the assertion
+        # so a future regression that flips them surfaces).
         decision_calls = [c for c in api.calls if c[0] == "get_decisions"]
-        assert decision_calls == [("get_decisions", "tx1", "n1")], (
+        assert decision_calls == [("get_decisions", "tx1", "n1", None)], (
             f"_tool_impl_get_evidence must read decisions through "
             f"api.get_decisions, not a local DecisionLogService. "
             f"Calls seen: {api.calls}"
@@ -570,6 +591,126 @@ class TestGetEvidence:
         # Decision-related keys present, empty.
         assert result["decision_log"] == []
         assert result["alternatives"] == []
+
+    # ---- mutex + edge path (Gate-4-wrap edge-evidence) ---------------
+
+    @pytest.mark.asyncio
+    async def test_rejects_neither_node_id_nor_edge_id(self) -> None:
+        """The Gate-4-wrap dispatch requires exactly one of
+        node_id/edge_id. Calling with neither is a usage error —
+        the caller has to opt into one shape or the other so the
+        agent knows which response schema to expect."""
+        api = FakeAPIClient(graph_return=self._graph())
+        with pytest.raises(ValueError, match="exactly one"):
+            await _tool_impl_get_evidence(api, "tx1")
+
+    @pytest.mark.asyncio
+    async def test_rejects_both_node_id_and_edge_id(self) -> None:
+        """Both ids supplied is also a usage error. A single
+        target_id belongs to one kind only; the response shape
+        differs between node and edge paths, so the caller has
+        to declare which one they want."""
+        api = FakeAPIClient(graph_return=self._graph())
+        with pytest.raises(ValueError, match="exactly one"):
+            await _tool_impl_get_evidence(api, "tx1", node_id="n1", edge_id="e1")
+
+    @pytest.mark.asyncio
+    async def test_edge_evidence_returns_edge_with_source_and_target(self) -> None:
+        """The edge path returns the edge plus summaries of its
+        source/target nodes (so the agent doesn't need a second
+        roundtrip to render context). Source-span evidence comes
+        from the edge's OWN properties (A1-prov stamps these at
+        extraction time)."""
+        graph = self._graph()
+        # Edge gets its own source-span evidence properties.
+        graph["edges"][0]["properties"] = {
+            "source_chunk_id": "chunk-99",
+            "source_text": "Alice works at Acme.",
+            "document_name": "bio.pdf",
+            "page_number": 1,
+            "some_other_prop": "ignored",
+        }
+        api = FakeAPIClient(graph_return=graph)
+
+        result = await _tool_impl_get_evidence(api, "tx1", edge_id="e1")
+
+        assert result["kind"] == "edge"
+        assert result["edge"]["id"] == "e1"
+        assert result["edge"]["properties"]["source_chunk_id"] == "chunk-99"
+        # Source/target node summaries come from the same payload —
+        # no extra find_node calls. Pin to catch a regression where
+        # the impl helpfully issues additional roundtrips.
+        assert result["source_node"]["id"] == "n1"
+        assert result["target_node"]["id"] == "n2"
+        # Evidence keys filtered the same way as the node path.
+        assert "source_chunk_id" in result["evidence"]
+        assert "some_other_prop" not in result["evidence"]
+        # No extra find_node calls — the source/target lookup
+        # reuses the find_edge result. Pin to catch a regression
+        # where the impl helpfully issues additional roundtrips
+        # for source/target node fetches.
+        assert not any(c[0] == "find_node" for c in api.calls), (
+            f"Edge evidence path issued extra find_node calls. " f"Calls: {api.calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_edge_evidence_passes_edge_id_to_decisions(self) -> None:
+        """The decisions read must use the edge_id query param so
+        the REST endpoint filters by edge target_id. Pin the call
+        shape — a regression that flips edge_id to node_id would
+        over-fetch the wrong target's decisions."""
+        api = FakeAPIClient(
+            graph_return=self._graph(),
+            decisions_return={
+                "decision_log": [
+                    {
+                        "id": "d1",
+                        "transform_id": "tx1",
+                        "target_id": "e1",
+                        "target_kind": "edge",
+                        "decision_type": "relationship_accepted",
+                        "reason": "validator confirmed",
+                        "evidence": {},
+                        "alternatives": [],
+                        "created_at": "2026-05-14T00:00:00+00:00",
+                    }
+                ],
+                "alternatives": [],
+            },
+        )
+
+        await _tool_impl_get_evidence(api, "tx1", edge_id="e1")
+
+        decision_calls = [c for c in api.calls if c[0] == "get_decisions"]
+        assert decision_calls == [("get_decisions", "tx1", None, "e1")], (
+            f"Edge evidence path must call get_decisions with "
+            f"edge_id (not node_id). Calls seen: {api.calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_edge_returns_null_edge_with_empty_lists(self) -> None:
+        """Missing-edge contract mirrors the missing-node path:
+        all response fields present but null/empty. The kind
+        discriminator stays ``edge`` so the agent can distinguish
+        'edge not found' from 'wrong id type used in request'."""
+        api = FakeAPIClient(graph_return=self._graph())
+        result = await _tool_impl_get_evidence(api, "tx1", edge_id="no-such-edge")
+        assert result["kind"] == "edge"
+        assert result["edge"] is None
+        assert result["source_node"] is None
+        assert result["target_node"] is None
+        assert result["evidence"] == {}
+        assert result["decision_log"] == []
+        assert result["alternatives"] == []
+
+    @pytest.mark.asyncio
+    async def test_node_path_carries_kind_discriminator(self) -> None:
+        """Node-path response also carries the new ``kind`` field
+        (always ``"node"``) so agents can use a single discriminator
+        across both paths."""
+        api = FakeAPIClient(graph_return=self._graph())
+        result = await _tool_impl_get_evidence(api, "tx1", node_id="n1")
+        assert result["kind"] == "node"
 
 
 # ---- schemaless + refine_ontology -----------------------------------------

@@ -97,6 +97,39 @@ async def _tool_impl_query_graph(
 async def _tool_impl_get_evidence(
     api: GraphoraClient,
     transform_id: str,
+    node_id: Optional[str] = None,
+    edge_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return source-span evidence + decision log for a node OR an
+    edge. Exactly one of ``node_id`` / ``edge_id`` must be set.
+
+    The response carries a ``kind`` discriminator (``"node"`` or
+    ``"edge"``) so agents can route on the response shape:
+      * ``kind=node``: ``{node, incoming_edges, outgoing_edges,
+        evidence, decision_log, alternatives}``
+      * ``kind=edge``: ``{edge, source_node, target_node, evidence,
+        decision_log, alternatives}``
+
+    Reviewer-flagged on Gate-4-wrap: the prior signature only
+    accepted ``node_id`` and the corresponding REST/decision-log
+    plumbing was node-only. The Gate 4 exit signal "for every edge
+    ``graphora explain <edge>`` returns the exact source text"
+    needs both paths; this dispatch closes the gap.
+    """
+    if bool(node_id) == bool(edge_id):
+        raise ValueError(
+            "Provide exactly one of node_id or edge_id (not both, not neither)."
+        )
+
+    if node_id:
+        return await _get_node_evidence(api, transform_id, node_id)
+    assert edge_id is not None
+    return await _get_edge_evidence(api, transform_id, edge_id)
+
+
+async def _get_node_evidence(
+    api: GraphoraClient,
+    transform_id: str,
     node_id: str,
 ) -> Dict[str, Any]:
     # Paginate through the graph rather than hard-capping at 200 — a
@@ -105,6 +138,7 @@ async def _tool_impl_get_evidence(
     data = await api.find_node(transform_id, node_id)
     if data is None:
         return {
+            "kind": "node",
             "node": None,
             "incoming_edges": [],
             "outgoing_edges": [],
@@ -123,6 +157,7 @@ async def _tool_impl_get_evidence(
     node = next((n for n in nodes if n.get("id") == node_id), None)
     if node is None:  # pragma: no cover — find_node contract guarantees node presence
         return {
+            "kind": "node",
             "node": None,
             "incoming_edges": [],
             "outgoing_edges": [],
@@ -134,40 +169,12 @@ async def _tool_impl_get_evidence(
     incoming = [_trim_edge(e) for e in edges if e.get("target") == node_id]
     outgoing = [_trim_edge(e) for e in edges if e.get("source") == node_id]
 
-    # B0-explain reviewer fix (commit 9ac9bb5 → this fix): pull
-    # decisions through the REST/API client boundary, not from a
-    # local DecisionLogService. MCP is documented + implemented as
-    # a pure HTTP client; reading the DB directly here either
-    # silently returns empty (no DATABASE_URL configured locally)
-    # or creates a new direct DB dependency / secret surface
-    # (DATABASE_URL configured locally). The API endpoint owns
-    # the DB read instead.
-    decisions_payload: Dict[str, Any] = {"decision_log": [], "alternatives": []}
-    try:
-        decisions_payload = await api.get_decisions(transform_id, node_id=node_id)
-    except (GraphoraClientError, httpx.HTTPError) as exc:
-        # Decisions are observability — a transient API error here
-        # must not blank the rest of the evidence response. Log
-        # and degrade to empty arrays so the agent still sees the
-        # source-span / edges payload.
-        #
-        # Reviewer-flagged on commit eb22a79 (P3): the catch
-        # initially named only GraphoraClientError, which is
-        # raised AFTER the HTTP response is parsed. Transport
-        # errors (timeout, connect reset) raise httpx.HTTPError
-        # before we reach _ok(), so a flaky network would have
-        # blanked the entire evidence response. Catching both
-        # keeps the "decision failures never blank source
-        # evidence" contract honest.
-        logger = __import__("logging").getLogger(__name__)
-        logger.warning(
-            "get_decisions failed for transform=%s node=%s: %s",
-            transform_id,
-            node_id,
-            exc,
-        )
+    decisions_payload = await _fetch_decisions_safely(
+        api, transform_id, kind="node", target_id=node_id
+    )
 
     return {
+        "kind": "node",
         "node": _trim_node(node, full_properties=True),
         "incoming_edges": incoming,
         "outgoing_edges": outgoing,
@@ -175,6 +182,103 @@ async def _tool_impl_get_evidence(
         "decision_log": decisions_payload.get("decision_log", []),
         "alternatives": decisions_payload.get("alternatives", []),
     }
+
+
+async def _get_edge_evidence(
+    api: GraphoraClient,
+    transform_id: str,
+    edge_id: str,
+) -> Dict[str, Any]:
+    """Edge-shaped get_evidence path. Mirrors node path's pagination
+    contract but yields edge-specific shape: the edge itself plus
+    summaries of its source and target nodes (so the agent doesn't
+    need an extra get_evidence(node_id) roundtrip to render context).
+
+    Edge source-span evidence comes from the edge's own properties
+    — A1-prov stamps source_chunk_id / source_text / document_name /
+    page_number / extraction_confidence on edges at extraction time
+    (mirrors the node-side stamping in graph_transformer.py)."""
+    data = await api.find_edge(transform_id, edge_id)
+    if data is None:
+        return {
+            "kind": "edge",
+            "edge": None,
+            "source_node": None,
+            "target_node": None,
+            "evidence": {},
+            "decision_log": [],
+            "alternatives": [],
+        }
+
+    nodes = data.get("nodes", []) or []
+    edges = data.get("edges", []) or []
+
+    edge = next((e for e in edges if e.get("id") == edge_id), None)
+    if edge is None:  # pragma: no cover — find_edge contract guarantees presence
+        return {
+            "kind": "edge",
+            "edge": None,
+            "source_node": None,
+            "target_node": None,
+            "evidence": {},
+            "decision_log": [],
+            "alternatives": [],
+        }
+
+    # Look up source/target node summaries from the same graph slice
+    # we got back from find_edge — avoids a second roundtrip.
+    source_id = edge.get("source")
+    target_id = edge.get("target")
+    source_node = next((_trim_node(n) for n in nodes if n.get("id") == source_id), None)
+    target_node = next((_trim_node(n) for n in nodes if n.get("id") == target_id), None)
+
+    decisions_payload = await _fetch_decisions_safely(
+        api, transform_id, kind="edge", target_id=edge_id
+    )
+
+    return {
+        "kind": "edge",
+        "edge": _trim_edge(edge, full_properties=True),
+        "source_node": source_node,
+        "target_node": target_node,
+        "evidence": _extract_evidence_fields(edge.get("properties", {})),
+        "decision_log": decisions_payload.get("decision_log", []),
+        "alternatives": decisions_payload.get("alternatives", []),
+    }
+
+
+async def _fetch_decisions_safely(
+    api: GraphoraClient,
+    transform_id: str,
+    *,
+    kind: str,
+    target_id: str,
+) -> Dict[str, Any]:
+    """Wrap the get_decisions HTTP call with the same fail-open
+    pattern get_evidence has used since commit eb22a79 (P3):
+    decisions are observability; transient API errors must not
+    blank the rest of the evidence response. Catching both
+    GraphoraClientError (post-parse) and httpx.HTTPError
+    (transport-level) keeps "decision failures never blank source
+    evidence" honest.
+
+    Shared between node and edge paths so both inherit the same
+    fail-open semantics — and so a future refactor that tightens
+    the error handling has a single call site to update."""
+    try:
+        if kind == "node":
+            return await api.get_decisions(transform_id, node_id=target_id)
+        return await api.get_decisions(transform_id, edge_id=target_id)
+    except (GraphoraClientError, httpx.HTTPError) as exc:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning(
+            "get_decisions failed for transform=%s %s=%s: %s",
+            transform_id,
+            kind,
+            target_id,
+            exc,
+        )
+        return {"decision_log": [], "alternatives": []}
 
 
 async def _tool_impl_get_cost_report(
@@ -615,13 +719,25 @@ def _trim_node(
     return out
 
 
-def _trim_edge(edge: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+def _trim_edge(
+    edge: Dict[str, Any], *, full_properties: bool = False
+) -> Dict[str, Any]:
+    """Edge summary for query_graph results (default) or full edge
+    payload for get_evidence's edge path (full_properties=True).
+
+    full_properties=True surfaces the property bag so the source-
+    span fields (source_chunk_id, source_text, page_number,
+    document_name, extraction_confidence, plus the B0-prov-extend
+    fields) flow through. Mirrors _trim_node's contract."""
+    out: Dict[str, Any] = {
         "id": edge.get("id"),
         "source": edge.get("source"),
         "target": edge.get("target"),
         "type": edge.get("type"),
     }
+    if full_properties:
+        out["properties"] = edge.get("properties", {}) or {}
+    return out
 
 
 __all__ = [

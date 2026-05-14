@@ -301,6 +301,119 @@ class TestGraphEndpoints:
         assert result is None
         await client.aclose()
 
+    # ---- find_edge (Gate-4-wrap edge-evidence) -------------------
+
+    @pytest.mark.asyncio
+    async def test_find_edge_finds_on_first_page(self) -> None:
+        """Single-page short-circuit mirroring find_node's contract.
+        The Gate-4-wrap edge-evidence work needs the same
+        pagination semantics for edges so ``graphora explain
+        <edge>`` doesn't miss edges beyond the first page."""
+        call_count = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            call_count["n"] += 1
+            return httpx.Response(
+                200,
+                json={
+                    "nodes": [
+                        {"id": "n1", "label": "x", "type": "T"},
+                        {"id": "n2", "label": "y", "type": "T"},
+                    ],
+                    "edges": [
+                        {"id": "e42", "source": "n1", "target": "n2", "type": "REL"}
+                    ],
+                    "total_nodes": 2,
+                    "total_edges": 1,
+                },
+            )
+
+        client = _make_client(handler)
+        result = await client.find_edge("tx1", "e42")
+        assert result is not None
+        assert any(e["id"] == "e42" for e in result["edges"])
+        assert call_count["n"] == 1
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_find_edge_paginates_until_found(self) -> None:
+        """Edges incident to nodes beyond the first page must still
+        be discoverable. Pagination terminates when the NODE page
+        is short (page_size on nodes is the server-side chunk; we
+        scan across node pages to surface their edges)."""
+        pages_served: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            skip = int(request.url.params.get("skip", "0"))
+            pages_served.append(skip)
+            if skip == 0:
+                nodes = [
+                    {"id": f"n{i}", "label": "x", "type": "T"} for i in range(1000)
+                ]
+                edges: list[dict] = []
+            elif skip == 1000:
+                nodes = [{"id": "n1001", "label": "x", "type": "T"}]
+                edges = [
+                    {
+                        "id": "target-edge",
+                        "source": "n1001",
+                        "target": "n1000",
+                        "type": "REL",
+                    }
+                ]
+            else:
+                nodes = []
+                edges = []
+            return httpx.Response(
+                200,
+                json={
+                    "nodes": nodes,
+                    "edges": edges,
+                    "total_nodes": 1001,
+                    "total_edges": 1,
+                },
+            )
+
+        client = _make_client(handler)
+        result = await client.find_edge("tx1", "target-edge", page_size=1000)
+        assert result is not None
+        assert any(e["id"] == "target-edge" for e in result["edges"])
+        assert pages_served == [0, 1000]
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_find_edge_returns_none_when_exhausted(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0},
+            )
+
+        client = _make_client(handler)
+        result = await client.find_edge("tx1", "missing-edge", page_size=1000)
+        assert result is None
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_get_decisions_forwards_edge_id_as_query_param(self) -> None:
+        """The client must send edge_id as a query param so the
+        endpoint can filter by edge target. Pin so a refactor that
+        drops the kwarg threading silently regresses to schema-
+        only fetches."""
+        seen_params = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_params.update(request.url.params)
+            return httpx.Response(
+                200,
+                json={"decision_log": [], "alternatives": []},
+            )
+
+        client = _make_client(handler)
+        await client.get_decisions("tx1", edge_id="e42")
+        assert seen_params == {"edge_id": "e42"}
+        await client.aclose()
+
     @pytest.mark.asyncio
     async def test_get_status_hits_status_endpoint(self) -> None:
         seen_paths = []

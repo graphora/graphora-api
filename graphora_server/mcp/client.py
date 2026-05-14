@@ -225,10 +225,55 @@ class GraphoraClient:
                 break
         return None
 
+    async def find_edge(
+        self,
+        transform_id: str,
+        edge_id: str,
+        *,
+        page_size: int = 1000,
+        max_pages: int = 10,
+    ) -> Optional[Dict[str, Any]]:
+        """Locate an edge by id, paginating until found or exhausted.
+
+        Mirrors ``find_node``'s pagination contract — same chunk
+        size, same ``max_pages`` ceiling. Returns the full graph
+        slice containing the edge so callers can pull the source
+        and target node summaries from the same payload without a
+        second roundtrip.
+
+        Edge ids are stable across pagination pages because the
+        predicate-bearing MERGE pattern (commit 797a75c — "Make
+        Case 3 atomic via predicate-bearing MERGE") stamps each
+        relationship with a UUID at creation. The id survives
+        re-extractions of the same transform and is what the
+        Decision Log's RELATIONSHIP_ACCEPTED/REJECTED entries
+        carry as target_id.
+
+        Returns None when the edge isn't present on any page within
+        the ceiling. Same shape contract as ``find_node``.
+        """
+        for page in range(max_pages):
+            skip = page * page_size
+            data = await self.get_graph(transform_id, limit=page_size, skip=skip)
+            edges = data.get("edges", []) or []
+            if any(e.get("id") == edge_id for e in edges):
+                return data
+            # Page-size short-circuit: if we got fewer than page_size
+            # nodes, we've seen the tail of the graph and don't need
+            # more pages. We check nodes (not edges) for the
+            # termination signal because pagination is keyed on
+            # nodes server-side — a page with N nodes ships all
+            # edges incident to those nodes, but the next page is
+            # ``skip=N``, scoped to the next node window.
+            if len(data.get("nodes", []) or []) < page_size:
+                break
+        return None
+
     async def get_decisions(
         self,
         transform_id: str,
         node_id: Optional[str] = None,
+        edge_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Fetch Decision Log entries for a transform via the API.
 
@@ -238,15 +283,23 @@ class GraphoraClient:
         a pure HTTP client. The /decisions endpoint owns the read
         so MCP stays decoupled.
 
+        Pass ``node_id`` OR ``edge_id`` to narrow to a single
+        target's decisions; the endpoint rejects setting both with
+        a 400. The schema-decision prefix is always returned for
+        causation context regardless of which target kind is
+        queried.
+
         Returns ``{decision_log, alternatives}``. ``alternatives``
-        is empty when ``node_id`` is None (schema-only fetch) or
-        when the node had no merge events. The endpoint always
-        returns both keys regardless of state, so callers can
-        rely on the response shape unconditionally.
+        is empty when neither id is supplied (schema-only fetch) or
+        when the target had no merge events. The endpoint always
+        returns both keys regardless of state, so callers can rely
+        on the response shape unconditionally.
         """
         params: Dict[str, Any] = {}
         if node_id is not None:
             params["node_id"] = node_id
+        if edge_id is not None:
+            params["edge_id"] = edge_id
         resp = await self._client.get(
             f"{_API_V1}/graph/{transform_id}/decisions",
             params=params,
