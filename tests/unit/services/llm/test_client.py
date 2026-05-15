@@ -675,3 +675,45 @@ class TestRetryIntegration:
             await always_fails()
 
         assert attempt_count == 2
+
+
+# ============================================================
+# B5-obs slice 3 P2 fix: provider-string → enum mapping
+# (graphora_server/services/llm/client.py::_provider_string_to_enum).
+# Sits at the boundary between get_baml_registry_for_user (which
+# returns lowercased provider strings) and BAMLUsageTracker (which
+# wants ModelProvider enums). Pin so a future expansion of the
+# provider matrix doesn't quietly drop a provider on the floor.
+# ============================================================
+
+
+class TestProviderStringToEnum:
+    def test_known_providers_round_trip(self) -> None:
+        from graphora_server.schemas.usage import ModelProvider
+        from graphora_server.services.llm.client import _provider_string_to_enum
+
+        assert _provider_string_to_enum("gemini") == ModelProvider.GEMINI
+        assert _provider_string_to_enum("ollama") == ModelProvider.OLLAMA
+        assert _provider_string_to_enum("openai") == ModelProvider.OPENAI
+        assert _provider_string_to_enum("anthropic") == ModelProvider.ANTHROPIC
+
+    def test_case_insensitive_match(self) -> None:
+        """get_baml_registry_for_user already normalizes, but pin
+        the case-insensitive map so a future caller that forgets
+        to lowercase doesn't silently get None."""
+        from graphora_server.schemas.usage import ModelProvider
+        from graphora_server.services.llm.client import _provider_string_to_enum
+
+        assert _provider_string_to_enum("GEMINI") == ModelProvider.GEMINI
+        assert _provider_string_to_enum("Ollama") == ModelProvider.OLLAMA
+
+    def test_unknown_returns_none_for_fallthrough(self) -> None:
+        """Returning None lets the tracker fall through to its
+        FunctionLog-based inference for legacy / unrecognized
+        providers. Better than guessing wrong."""
+        from graphora_server.services.llm.client import _provider_string_to_enum
+
+        assert _provider_string_to_enum("") is None
+        assert _provider_string_to_enum(None) is None
+        assert _provider_string_to_enum("vertex") is None
+        assert _provider_string_to_enum("groq") is None

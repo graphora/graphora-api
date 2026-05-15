@@ -170,6 +170,44 @@ def _preview(text: Optional[str], limit: int = 200) -> str:
     return clean[:limit] + ("…" if len(clean) > limit else "")
 
 
+def _provider_string_to_enum(provider: Optional[str]):
+    """Map the provider string returned by
+    ``get_baml_registry_for_user`` to the ``ModelProvider`` enum
+    used in usage tracking.
+
+    Reviewer-flagged P2 on commit 89aee97: BAML's
+    ``call.provider`` string is the *transport* provider (e.g.,
+    ``openai-generic`` for Ollama because Ollama exposes an
+    OpenAI-compatible API). The string returned by
+    get_baml_registry_for_user is the *logical* provider — what
+    the user actually configured. Threading the logical mapping
+    here keeps the cost-reporting layer honest about which
+    provider was used, not which transport.
+
+    Returns ``None`` for unknown/missing provider strings so the
+    tracker falls through to its existing FunctionLog-based
+    inference (preserving back-compat for the legacy paths that
+    don't supply a provider).
+    """
+    # Lazy import to avoid pulling the schemas module at LLM client
+    # module load (the schemas package imports pydantic chains that
+    # are heavy at import time).
+    from graphora_server.schemas.usage import ModelProvider
+
+    if not provider:
+        return None
+    normalized = provider.lower()
+    if normalized == "gemini":
+        return ModelProvider.GEMINI
+    if normalized == "ollama":
+        return ModelProvider.OLLAMA
+    if normalized == "openai":
+        return ModelProvider.OPENAI
+    if normalized == "anthropic":
+        return ModelProvider.ANTHROPIC
+    return None
+
+
 class LLMClient:
     """Client for LLM-based extraction"""
 
@@ -627,7 +665,7 @@ class LLMClient:
         # reflects the override (when provided) — feed THAT into the
         # cache key so refinement-pass calls don't collide with
         # primary-pass calls in the chunk-nodes cache.
-        client_registry, model_name, _provider = await get_baml_registry_for_user(
+        client_registry, model_name, provider = await get_baml_registry_for_user(
             user_id, model_override=model_override
         )
 
@@ -689,6 +727,11 @@ class LLMClient:
                 # it to the tracker means llm_usage records the real
                 # routed model name, not the synthetic BAML alias.
                 effective_model_name=model_name,
+                # P2 fix on commit 89aee97: also thread the effective
+                # provider so Ollama (which BAML reports as
+                # ``openai-generic``) doesn't get misclassified as
+                # ModelProvider.OPENAI in cost reports.
+                effective_provider=_provider_string_to_enum(provider),
             )
         else:
             tb = TypeBuilder()
@@ -736,7 +779,7 @@ class LLMClient:
         # model_override is forwarded to get_baml_registry_for_user;
         # returned model_name reflects the override and feeds the
         # cache key so refinement vs primary results don't collide.
-        client_registry, model_name, _provider = await get_baml_registry_for_user(
+        client_registry, model_name, provider = await get_baml_registry_for_user(
             user_id, model_override=model_override
         )
 
@@ -795,6 +838,12 @@ class LLMClient:
                 # ``model_name`` is the routed model from
                 # get_baml_registry_for_user.
                 effective_model_name=model_name,
+                # P2 fix on commit 89aee97: thread the real provider
+                # so cost reports show ollama:<model> for Ollama
+                # rather than openai:<model> (which is what BAML's
+                # openai-generic provider string would otherwise
+                # infer).
+                effective_provider=_provider_string_to_enum(provider),
             )
         else:
             tb = TypeBuilder()

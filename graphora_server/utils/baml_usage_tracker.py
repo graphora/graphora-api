@@ -27,6 +27,7 @@ class BAMLUsageTracker:
         operation_context: Optional[str] = None,
         collector_name: Optional[str] = None,
         effective_model_name: Optional[str] = None,
+        effective_provider: Optional[ModelProvider] = None,
     ):
         self.user_id = user_id
         self.operation_type = operation_type
@@ -51,6 +52,18 @@ class BAMLUsageTracker:
         # the FunctionLog probe so callers that don't supply it
         # behave as before.
         self.effective_model_name = effective_model_name
+        # Reviewer-flagged P2 on commit 89aee97: Ollama-backed BAML
+        # calls go through BAML's ``openai-generic`` provider string
+        # (because Ollama exposes an OpenAI-compatible API). The
+        # FunctionLog-based provider inference therefore reports
+        # ModelProvider.OPENAI for what is really an Ollama call —
+        # so /cost shows ``openai:<ollama-model>`` rows. Threading
+        # an explicit ``effective_provider`` from the LLM client
+        # (which already knows the real provider from
+        # get_baml_registry_for_user's tuple) lets _extract_model_info
+        # report the truth. When unset, FunctionLog inference is
+        # preserved for back-compat.
+        self.effective_provider = effective_provider
 
         # Create BAML collector
         self.collector = Collector(name=collector_name or f"{operation_type}_{user_id}")
@@ -103,11 +116,17 @@ class BAMLUsageTracker:
                 if failed_calls and failed_calls[-1].http_response:
                     error_message = f"HTTP {failed_calls[-1].http_response.status}"
 
-            # Create usage request
+            # Create usage request. Pre-fix the model_provider here
+            # was hardcoded ModelProvider.BAML — _extract_model_info
+            # returned the correct provider but it was discarded.
+            # That was harmless before (everything ended up as BAML
+            # anyway) but with effective_provider plumbed in for
+            # Ollama vs Gemini disambiguation, the model_provider on
+            # the LLMUsageRequest needs to actually flow through.
             usage_request = LLMUsageRequest(
                 transform_id=self.transform_id,
                 document_usage_id=self.document_usage_id,
-                model_provider=ModelProvider.BAML,
+                model_provider=model_provider,
                 model_name=model_name,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -159,6 +178,19 @@ class BAMLUsageTracker:
                 # what /cost should aggregate by.
                 model_name = self.effective_model_name or call.client_name
 
+                # Reviewer-flagged P2 on commit 89aee97: prefer the
+                # caller-supplied ``effective_provider`` over BAML's
+                # ``call.provider`` string. The Ollama path routes
+                # through BAML's ``openai-generic`` provider (Ollama
+                # exposes an OpenAI-compatible API), which the
+                # infer-from-string branches below would map to
+                # ModelProvider.OPENAI — wrong for cost reporting.
+                # The LLM client knows the real provider via
+                # get_baml_registry_for_user's tuple; threading it
+                # through cuts out the lossy inference step.
+                if self.effective_provider is not None:
+                    return self.effective_provider, model_name
+
                 # Map BAML providers to our ModelProvider enum
                 if "openai" in provider:
                     return ModelProvider.OPENAI, model_name
@@ -176,11 +208,15 @@ class BAMLUsageTracker:
 
         # Last-resort fallback: still surface the effective model
         # if the caller provided one, even when FunctionLog probing
-        # failed. Better to record the routed model with
-        # provider=BAML than lose it entirely as "unknown".
+        # failed. Better to record (effective_provider, model_name)
+        # than lose either entirely. Prefer effective_provider when
+        # set; fall through to BAML otherwise.
         if self.effective_model_name:
-            return ModelProvider.BAML, self.effective_model_name
-        return ModelProvider.BAML, "unknown"
+            return (
+                self.effective_provider or ModelProvider.BAML,
+                self.effective_model_name,
+            )
+        return self.effective_provider or ModelProvider.BAML, "unknown"
 
     def get_usage_summary(self) -> Dict[str, Any]:
         """
@@ -296,6 +332,7 @@ async def track_baml_extract_nodes_from_chunk(
     document_usage_id: Optional[str] = None,
     client_registry=None,
     effective_model_name: Optional[str] = None,
+    effective_provider: Optional[ModelProvider] = None,
 ):
     """
     Track BAML ExtractNodesFromChunk function call.
@@ -305,6 +342,12 @@ async def track_baml_extract_nodes_from_chunk(
     pass overrides the model, this carries the override so the
     emitted LLMUsageRequest records the real model name, not the
     synthetic BAML registry alias.
+
+    ``effective_provider`` (P2 fix on commit 89aee97): the provider
+    enum value matching the routed model. Bypasses BAML's
+    ``call.provider`` string for cost-reporting purposes — needed
+    because Ollama's openai-generic provider would otherwise be
+    misreported as ``ModelProvider.OPENAI``.
     """
     from graphora_server.baml_client import b
     from graphora_server.baml_client.type_builder import TypeBuilder
@@ -319,6 +362,7 @@ async def track_baml_extract_nodes_from_chunk(
         operation_context=f"chunk_processing:{len(chunk)} chars",
         collector_name=f"extract_nodes_{user_id}",
         effective_model_name=effective_model_name,
+        effective_provider=effective_provider,
     )
 
     try:
@@ -354,12 +398,13 @@ async def track_baml_extract_relationships_from_chunk(
     document_usage_id: Optional[str] = None,
     client_registry=None,
     effective_model_name: Optional[str] = None,
+    effective_provider: Optional[ModelProvider] = None,
 ):
     """
     Track BAML ExtractRelationshipsFromChunk function call.
 
     See ``track_baml_extract_nodes_from_chunk`` for the
-    ``effective_model_name`` contract.
+    ``effective_model_name`` and ``effective_provider`` contracts.
     """
     from graphora_server.baml_client import b
     from graphora_server.baml_client.type_builder import TypeBuilder
@@ -374,6 +419,7 @@ async def track_baml_extract_relationships_from_chunk(
         operation_context=f"chunk_processing:{len(chunk)} chars",
         collector_name=f"extract_relationships_{user_id}",
         effective_model_name=effective_model_name,
+        effective_provider=effective_provider,
     )
 
     try:
