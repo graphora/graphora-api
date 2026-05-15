@@ -6,7 +6,15 @@ entities:
       name:
         type: str
         required: true
-        description: Full name as it appears in the text.
+        unique: true
+        description: |
+          Full name as it appears in the text. ``unique: true`` makes
+          this the sole input to ``_generate_node_key`` —
+          ``canonical_key`` becomes ``Person:name=<lowercased name>``
+          regardless of which optional properties were extracted. Without
+          this flag the key would include every non-empty property,
+          which makes the canonical_id unstable across extractions that
+          surface different optional fields.
       title:
         type: str
         required: false
@@ -17,7 +25,11 @@ entities:
       name:
         type: str
         required: true
-        description: Organization name as it appears in the text.
+        unique: true
+        description: |
+          Organization name. Same ``unique: true`` rationale as
+          Person.name above — pins the canonical_key derivation to a
+          single stable property.
 relationships:
   WORKS_AT:
     source: Person

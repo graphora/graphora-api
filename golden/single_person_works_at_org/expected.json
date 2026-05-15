@@ -1,24 +1,24 @@
 {
   "nodes": [
     {
-      "id": "alice-martinez",
+      "id": "7efce47d-a49d-57e7-ad90-4f9c1a874fea",
       "type": "Person",
       "label": "Alice Martinez",
       "properties": {
         "name": "Alice Martinez",
         "title": "senior engineer",
-        "canonical_id": "alice-martinez",
-        "canonical_key": "alice martinez"
+        "canonical_id": "7efce47d-a49d-57e7-ad90-4f9c1a874fea",
+        "canonical_key": "Person:name=alice martinez"
       }
     },
     {
-      "id": "acme-corp",
+      "id": "0bc97b26-c2ef-5bef-b04f-5dc95df76600",
       "type": "Organization",
       "label": "Acme Corp",
       "properties": {
         "name": "Acme Corp",
-        "canonical_id": "acme-corp",
-        "canonical_key": "acme corp"
+        "canonical_id": "0bc97b26-c2ef-5bef-b04f-5dc95df76600",
+        "canonical_key": "Organization:name=acme corp"
       }
     }
   ],
@@ -26,8 +26,8 @@
     {
       "id": "alice-works-at-acme",
       "type": "WORKS_AT",
-      "source": "alice-martinez",
-      "target": "acme-corp",
+      "source": "7efce47d-a49d-57e7-ad90-4f9c1a874fea",
+      "target": "0bc97b26-c2ef-5bef-b04f-5dc95df76600",
       "properties": {
         "start_date": "March 2019"
       }

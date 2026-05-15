@@ -38,6 +38,24 @@ golden/<slug>/
                       # to per-side local IDs, which never match
                       # across an expected/actual pair — every fact
                       # ends up as added+removed.
+                      #
+                      # The VALUES must match what the extraction
+                      # helpers actually compute. Hand-writing
+                      # ``"canonical_id": "alice-martinez"`` is a
+                      # foot-gun: the live extractor calls
+                      # ``_generate_node_key`` +
+                      # ``_make_canonical_node_id`` (in
+                      # graphora_server/services/transform/helpers.py)
+                      # which produce a UUID-shaped canonical_id
+                      # derived from the ontology's ``unique: true``
+                      # properties. If your expected canonical_id
+                      # differs from the helper output, the
+                      # DiffService's "conflicting canonical IDs
+                      # stay unmatched" rule (asymmetric ER
+                      # constraint, commit a261321) refuses the
+                      # canonical_key fallback and every node
+                      # surfaces as FP+FN. The corpus contract test
+                      # verifies the values match the helpers.
   README.md           # Brief description of what this doc tests:
                       # which entity types, what edge patterns, any
                       # known edge cases.

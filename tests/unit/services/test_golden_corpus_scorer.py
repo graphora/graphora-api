@@ -436,3 +436,67 @@ def test_seed_corpus_doc_parses_into_graph_response():
             "visible to the diff service. Same property-bag "
             "shape rule applies."
         )
+
+
+def test_seed_expected_canonical_values_match_helper_derivation():
+    """Reviewer-flagged High on commit 9e1cd30: hand-written
+    canonical_id / canonical_key values in expected.json must
+    match what the live extraction helpers actually produce —
+    otherwise a CORRECT extraction would diff against the
+    expected fixture as all FP/FN, because DiffService's
+    "conflicting canonical IDs stay unmatched" contract
+    (asymmetric ER constraint, commit a261321) refuses the
+    canonical_key fallback when both sides have explicit-but-
+    different canonical_ids.
+
+    This test loads the ontology + expected.json, recomputes the
+    canonical fields from each node's properties via the SAME
+    helpers used at extraction time (``_generate_node_key`` +
+    ``_make_canonical_node_id``), and asserts the values stored
+    in expected.json match. Drift here means the seed is broken
+    against a real extractor — surface it loud."""
+    import yaml
+
+    from graphora_server.services.transform.helpers import (
+        _generate_node_key,
+        _make_canonical_node_id,
+    )
+
+    repo_root = Path(__file__).resolve().parents[3]
+    seed_dir = repo_root / "golden" / "single_person_works_at_org"
+    parsed_ontology = yaml.safe_load((seed_dir / "ontology.yaml").read_text())
+    expected_raw = json.loads((seed_dir / "expected.json").read_text())
+
+    for node in expected_raw["nodes"]:
+        props = node["properties"]
+        # The helpers don't read canonical_id / canonical_key from
+        # the property bag — they only consult schema-declared
+        # fields (filtered by ``unique: true`` when any are
+        # marked). Passing the full property bag here mirrors what
+        # the live extractor does after parsing the LLM output.
+        recomputed_key = _generate_node_key(
+            parsed_ontology=parsed_ontology,
+            entity_type=node["type"],
+            properties=props,
+        )
+        recomputed_id = _make_canonical_node_id(recomputed_key)
+
+        assert props["canonical_key"] == recomputed_key, (
+            f"Node {node['id']!r} (type={node['type']}) has a "
+            f"hand-written canonical_key that doesn't match the "
+            f"helper derivation. A live extraction would produce "
+            f"{recomputed_key!r} but expected.json says "
+            f"{props['canonical_key']!r}. Either update the "
+            f"expected to match, or change the ontology's "
+            f"``unique: true`` declarations to drive the helper "
+            f"toward the value you want."
+        )
+        assert props["canonical_id"] == recomputed_id, (
+            f"Node {node['id']!r} (type={node['type']}) has a "
+            f"hand-written canonical_id that doesn't match the "
+            f"helper derivation. Expected.json says "
+            f"{props['canonical_id']!r} but the helpers produce "
+            f"{recomputed_id!r}. canonical_id is a deterministic "
+            f"UUID5 over the canonical_key — fix the key first "
+            f"and the id follows."
+        )
