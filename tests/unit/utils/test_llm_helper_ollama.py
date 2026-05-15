@@ -391,3 +391,105 @@ class TestBamlRegistryForUser:
         ):
             with pytest.raises(UnsupportedProviderError):
                 await llm_helper.get_baml_registry_for_user("u1")
+
+    # ---- B5-obs slice 3: model_override routing ------------------------
+
+    @pytest.mark.asyncio
+    async def test_model_override_supersedes_user_stored_model_gemini(self) -> None:
+        """B5-obs slice 3: when ``model_override`` is supplied, the
+        registry is built with the override model_name instead of
+        the user's stored one. Provider + auth stay intact — we
+        don't want refinement-pass routing to accidentally swap
+        provider or leak a different user's API key."""
+        fake_settings = MagicMock(LLM_PROVIDER=None, OLLAMA_HOST="x", OLLAMA_MODEL="x")
+        fake_ai = MagicMock()
+        fake_ai.get_user_ai_config = AsyncMock(return_value={"x": 1})
+        fake_ai.get_user_provider_secret = AsyncMock(
+            return_value=("gemini", "real-key", "gemini-1.5-flash"),
+        )
+        captured: dict = {}
+
+        def capture_registry(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        with (
+            patch("graphora_server.config.get_settings", return_value=fake_settings),
+            patch(
+                "graphora_server.utils.llm_helper.AIConfigService", return_value=fake_ai
+            ),
+            patch(
+                "graphora_server.utils.llm_helper.create_baml_client_registry",
+                side_effect=capture_registry,
+            ),
+        ):
+            _registry, model, provider = await llm_helper.get_baml_registry_for_user(
+                "u1", model_override="gemini-2.5-pro"
+            )
+
+        assert provider == "gemini"
+        # Returned model_name reflects the override — callers
+        # logging "which model produced this fact" see the truth.
+        assert model == "gemini-2.5-pro"
+        # Registry was built with the override, not the stored model.
+        assert captured["model_name"] == "gemini-2.5-pro"
+        # Provider + auth survived.
+        assert captured["provider"] == "gemini"
+        assert captured["api_key"] == "real-key"
+
+    @pytest.mark.asyncio
+    async def test_model_override_none_preserves_user_model(self) -> None:
+        """Pre-slice-3 behavior: when override is None, the user's
+        stored model_name flows through unchanged. Pin so a refactor
+        that accidentally always overrides surfaces here."""
+        fake_settings = MagicMock(LLM_PROVIDER=None, OLLAMA_HOST="x", OLLAMA_MODEL="x")
+        fake_ai = MagicMock()
+        fake_ai.get_user_ai_config = AsyncMock(return_value={"x": 1})
+        fake_ai.get_user_provider_secret = AsyncMock(
+            return_value=("gemini", "k", "gemini-2.5-flash"),
+        )
+        with (
+            patch("graphora_server.config.get_settings", return_value=fake_settings),
+            patch(
+                "graphora_server.utils.llm_helper.AIConfigService", return_value=fake_ai
+            ),
+        ):
+            _registry, model, provider = await llm_helper.get_baml_registry_for_user(
+                "u1"
+            )
+        assert provider == "gemini"
+        assert model == "gemini-2.5-flash"
+
+    @pytest.mark.asyncio
+    async def test_model_override_applies_on_ollama_env_path_too(self) -> None:
+        """The env-var Ollama fast path (LLM_PROVIDER=ollama) skips
+        the DB lookup entirely. Override must still apply — that's
+        the whole point of routing: a deployment running Ollama for
+        primary extraction can route refinement to a beefier model
+        WITHOUT touching the user-config flow."""
+        fake_settings = MagicMock(
+            LLM_PROVIDER="ollama",
+            OLLAMA_HOST="http://localhost:11434",
+            OLLAMA_MODEL="llama3.2",
+        )
+        captured: dict = {}
+
+        def capture_registry(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        with (
+            patch("graphora_server.config.get_settings", return_value=fake_settings),
+            patch(
+                "graphora_server.utils.llm_helper.create_baml_client_registry",
+                side_effect=capture_registry,
+            ),
+        ):
+            _registry, model, _provider = await llm_helper.get_baml_registry_for_user(
+                "u1", model_override="qwen2.5:14b"
+            )
+        assert model == "qwen2.5:14b"
+        assert captured["model_name"] == "qwen2.5:14b"
+        # Host / provider stays — only the model_name changed.
+        assert captured["provider"] == "ollama"
+        assert captured["base_url"] == "http://localhost:11434"

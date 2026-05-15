@@ -610,14 +610,25 @@ class LLMClient:
         user_id: Optional[str] = None,
         transform_id: Optional[str] = None,
         document_usage_id: Optional[str] = None,
+        model_override: Optional[str] = None,
     ) -> BaseModel:
-        """Extract entities from text chunk"""
+        """Extract entities from text chunk.
+
+        ``model_override`` swaps the model used for this call without
+        changing the user's stored provider/auth — B5-obs slice 3
+        uses this for refinement-pass model routing. None preserves
+        the user's configured model.
+        """
         if not user_id:
             raise ValueError("user_id is required to get LLM credentials")
 
-        # Get user's LLM credentials and create client registry
+        # Get user's LLM credentials and create client registry. The
+        # effective model_name returned by get_baml_registry_for_user
+        # reflects the override (when provided) — feed THAT into the
+        # cache key so refinement-pass calls don't collide with
+        # primary-pass calls in the chunk-nodes cache.
         client_registry, model_name, _provider = await get_baml_registry_for_user(
-            user_id
+            user_id, model_override=model_override
         )
 
         chunk_hash = md5(chunk)
@@ -706,14 +717,20 @@ class LLMClient:
         user_id: Optional[str] = None,
         transform_id: Optional[str] = None,
         document_usage_id: Optional[str] = None,
+        model_override: Optional[str] = None,
     ) -> BaseModel:
-        """Extract relationships from text chunk"""
+        """Extract relationships from text chunk. See
+        ``extract_nodes_from_chunk`` for the ``model_override``
+        contract (B5-obs slice 3 refinement-pass routing)."""
         if not user_id:
             raise ValueError("user_id is required to get LLM credentials")
 
-        # Get user's LLM credentials and create client registry
+        # Get user's LLM credentials and create client registry.
+        # model_override is forwarded to get_baml_registry_for_user;
+        # returned model_name reflects the override and feeds the
+        # cache key so refinement vs primary results don't collide.
         client_registry, model_name, _provider = await get_baml_registry_for_user(
-            user_id
+            user_id, model_override=model_override
         )
 
         chunk_hash = md5(chunk)

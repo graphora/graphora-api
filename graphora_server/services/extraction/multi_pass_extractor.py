@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Tuple, Any
 
+from graphora_server.config import get_settings
 from graphora_server.services.transform.models import BaseNode, RelationshipInstance
 from graphora_server.services.transform.ontology_helper import OntologyParser
 from graphora_server.services.transform.helpers import (
@@ -23,6 +24,25 @@ from .validator import ExtractionValidator
 from .context_builder import EnhancedContextBuilder
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_refinement_model(extractor_model: Optional[str]) -> Optional[str]:
+    """B5-obs slice 3: pick the refinement-pass model.
+
+    Returns ``settings.REFINEMENT_MODEL`` when configured, else
+    falls through to ``extractor_model`` so the refinement pass
+    uses the same model as the initial pass — the pre-slice-3
+    behavior.
+
+    Reading from settings inside the extractor (rather than passing
+    through every constructor) lets a deployment opt into routing
+    without touching the pipeline glue. The trade-off: tests
+    monkeypatch the setting rather than the extractor's
+    constructor, which mirrors the pattern other settings-driven
+    routing decisions use in the codebase.
+    """
+    refinement = (get_settings().REFINEMENT_MODEL or "").strip()
+    return refinement or extractor_model
 
 
 def _backfill_validator_score(
@@ -199,6 +219,26 @@ class MultiPassExtractor:
                 },
             )
 
+            # B5-obs slice 3: route the refinement pass to the
+            # configured REFINEMENT_MODEL when set. Falls through
+            # to the primary extractor_model otherwise — single-
+            # model behavior unchanged for deployments that don't
+            # opt in. The resolved name is also what gets stamped
+            # on per-fact provenance via the extractor_model arg,
+            # so the Evidence tab + Decision Log accurately
+            # attribute facts to the model that produced them.
+            refinement_model = _resolve_refinement_model(extractor_model)
+            if refinement_model != extractor_model:
+                logger.info(
+                    "Refinement routing to alternate model",
+                    extra={
+                        "transform_id": transform_id,
+                        "pass_number": pass_num,
+                        "primary_model": extractor_model,
+                        "refinement_model": refinement_model,
+                    },
+                )
+
             # Perform refinement pass
             new_nodes, new_relationships, refinement_result = (
                 await self._refinement_pass(
@@ -210,7 +250,12 @@ class MultiPassExtractor:
                     user_id,
                     pass_num,
                     chunk_metadatas=chunk_metadatas,
-                    extractor_model=extractor_model,
+                    extractor_model=refinement_model,
+                    model_override=(
+                        refinement_model
+                        if refinement_model != extractor_model
+                        else None
+                    ),
                 )
             )
 
@@ -442,6 +487,7 @@ class MultiPassExtractor:
         pass_number: int,
         chunk_metadatas: Optional[List[Any]] = None,
         extractor_model: Optional[str] = None,
+        model_override: Optional[str] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance], RefinementResult]:
         """Perform targeted refinement for identified gaps.
 
@@ -476,6 +522,7 @@ class MultiPassExtractor:
                     user_id,
                     chunk_metadatas=chunk_metadatas,
                     extractor_model=extractor_model,
+                    model_override=model_override,
                 )
                 for chunk_gaps in gaps_by_chunk.values()
             ]
@@ -495,6 +542,7 @@ class MultiPassExtractor:
                     user_id,
                     chunk_metadatas=chunk_metadatas,
                     extractor_model=extractor_model,
+                    model_override=model_override,
                 )
                 new_nodes.extend(chunk_nodes)
                 new_relationships.extend(chunk_rels)
@@ -516,6 +564,7 @@ class MultiPassExtractor:
         user_id: Optional[str],
         chunk_metadatas: Optional[List[Any]] = None,
         extractor_model: Optional[str] = None,
+        model_override: Optional[str] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Extract entities/relationships for specific gaps.
 
@@ -584,6 +633,7 @@ class MultiPassExtractor:
                         ontology_yaml=self.ontology_parser.ontology_yaml,
                         user_id=user_id,
                         transform_id=transform_id,
+                        model_override=model_override,
                     )
 
                     extracted_nodes = transform_as_nodes(
@@ -630,6 +680,7 @@ class MultiPassExtractor:
                         ontology_yaml=self.ontology_parser.ontology_yaml,
                         user_id=user_id,
                         transform_id=transform_id,
+                        model_override=model_override,
                     )
 
                     extracted_rels = transform_as_relationships(

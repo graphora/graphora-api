@@ -390,6 +390,34 @@ class Settings(BaseSettings):
         description="Ollama model name when LLM_PROVIDER=ollama",
     )
 
+    # B5-obs slice 3: per-pass model routing. When REFINEMENT_MODEL
+    # is set, multi-pass extraction's refinement passes (triggered
+    # when the validator surfaces gaps) use this model instead of
+    # the user's configured primary model. Pattern: cheap-first-pass
+    # / strong-on-validator-gaps. The strong model only runs on the
+    # fraction of chunks the validator flagged as needing refinement,
+    # bounding the cost increase.
+    #
+    # When unset (None), single-model behavior is preserved — the
+    # user's stored model_name is used for every pass. Production
+    # deployments opt in by setting REFINEMENT_MODEL to a stronger
+    # model name (e.g., "gemini-2.5-pro" while the primary is
+    # "gemini-1.5-flash").
+    #
+    # Model-name validation is intentionally NOT done here — the
+    # value is forwarded verbatim to the BAML registry, which is
+    # the layer that knows what the provider accepts. A bad model
+    # name surfaces as a BAML error at first call, not as a silent
+    # fallback.
+    REFINEMENT_MODEL: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional strong model used by multi-pass refinement when the "
+            "validator surfaces gaps. When unset, refinement uses the same "
+            "model as the initial pass."
+        ),
+    )
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def split_cors_origins(cls, value):

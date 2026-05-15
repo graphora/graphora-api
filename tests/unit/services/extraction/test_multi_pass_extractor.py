@@ -398,3 +398,224 @@ class TestExtractAsync:
 
         # With max_passes=1, should only do initial pass
         assert isinstance(nodes, list)
+
+
+# ============================================================
+# B5-obs slice 3: model routing — refinement pass swaps the
+# extractor model when REFINEMENT_MODEL is configured. These
+# tests pin the resolution helper and the wiring through
+# _refinement_pass → _extract_for_gaps → LLMClient calls.
+# ============================================================
+
+
+class TestRefinementModelRouting:
+    def test_resolve_refinement_model_falls_through_when_unset(self, monkeypatch):
+        """Pre-slice-3 behavior: REFINEMENT_MODEL unset (None or
+        empty) → refinement pass uses the same extractor_model as
+        pass 1. Single-model deployments keep working unchanged."""
+        from graphora_server.services.extraction.multi_pass_extractor import (
+            _resolve_refinement_model,
+        )
+        from graphora_server.config import settings
+
+        monkeypatch.setattr(settings, "REFINEMENT_MODEL", None)
+        assert _resolve_refinement_model("gemini-1.5-flash") == "gemini-1.5-flash"
+
+        # Empty string is also "unset" — env var unset and env var
+        # set to "" both reach pydantic-settings as the same value
+        # in some configurations. Pin both forms.
+        monkeypatch.setattr(settings, "REFINEMENT_MODEL", "")
+        assert _resolve_refinement_model("gemini-1.5-flash") == "gemini-1.5-flash"
+
+    def test_resolve_refinement_model_uses_setting_when_set(self, monkeypatch):
+        """When REFINEMENT_MODEL is configured, the refinement
+        pass uses it instead of the user's primary model."""
+        from graphora_server.services.extraction.multi_pass_extractor import (
+            _resolve_refinement_model,
+        )
+        from graphora_server.config import settings
+
+        monkeypatch.setattr(settings, "REFINEMENT_MODEL", "gemini-2.5-pro")
+        assert _resolve_refinement_model("gemini-1.5-flash") == "gemini-2.5-pro"
+
+    @pytest.mark.asyncio
+    async def test_refinement_pass_routes_model_override(
+        self, mock_ontology_parser, mock_llm_client, monkeypatch
+    ):
+        """End-to-end pin: REFINEMENT_MODEL configured → the
+        refinement-pass LLM calls receive ``model_override=<setting>``.
+        The initial pass calls do NOT carry the override — they
+        run on the user's primary model.
+
+        Repro: a validation gap kicks off a refinement pass; we
+        verify the second batch of LLM calls (refinement) carries
+        model_override while the first batch (initial) doesn't."""
+        from graphora_server.services.extraction.config import MultiPassConfig
+        from graphora_server.services.extraction.models import (
+            ValidationResult,
+            ExtractionGap,
+            GapType,
+        )
+        from graphora_server.config import settings
+
+        monkeypatch.setattr(settings, "REFINEMENT_MODEL", "gemini-2.5-pro")
+
+        # Make the validator surface a high-severity gap so the
+        # refinement pass actually runs. Without this, the loop
+        # short-circuits after pass 1.
+        gap = ExtractionGap(
+            gap_type=GapType.LOW_CONFIDENCE,
+            severity=0.9,  # above default gap_severity_threshold (0.5)
+            description="forced gap",
+            chunk_indices=[0],
+        )
+        validation_with_gap = ValidationResult(
+            is_valid=False,
+            overall_confidence=0.5,
+            gaps=[gap],
+        )
+        validation_clean = ValidationResult(
+            is_valid=True,
+            overall_confidence=0.95,
+            gaps=[],
+        )
+        # First validate() (after pass 1) finds the gap; second
+        # (after refinement) is clean so the loop exits.
+        mock_validator = MagicMock()
+        mock_validator.validate.side_effect = [
+            validation_with_gap,
+            validation_clean,
+        ]
+
+        mock_llm_client.extract_nodes_from_chunk.return_value = MagicMock()
+        mock_llm_client.extract_relationships_from_chunk.return_value = MagicMock()
+
+        config = MultiPassConfig(max_passes=2)
+        extractor = MultiPassExtractor(
+            mock_ontology_parser, mock_llm_client, config=config
+        )
+        extractor.validator = mock_validator
+
+        # Force the refinement-result path to "is_improvement=True"
+        # by patching the merge helpers — we don't care about the
+        # final node/edge state here, only the LLM call shape.
+        with (
+            patch(
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_nodes",
+                return_value=[],
+            ),
+            patch(
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_relationships",
+                return_value=[],
+            ),
+        ):
+            await extractor.extract(
+                chunks=["chunk1"],
+                transform_id="tx-1",
+                user_id="u-1",
+                max_passes=2,
+                extractor_model="gemini-1.5-flash",
+            )
+
+        # Pin the model_override flow across the call sequence.
+        # Each call to extract_nodes_from_chunk surfaces its kwargs;
+        # the initial pass calls must have model_override=None
+        # (single-model behavior on the primary path), and any
+        # refinement-pass call must carry model_override=<setting>.
+        nodes_calls = mock_llm_client.extract_nodes_from_chunk.call_args_list
+        # The first pass-1 call is at index 0; its model_override
+        # is None (or absent — kwargs default).
+        first_override = nodes_calls[0].kwargs.get("model_override")
+        assert first_override is None, (
+            f"Initial pass should run on the primary model "
+            f"(model_override=None), got {first_override!r}"
+        )
+        # If a refinement call fired, it carries the routing
+        # model. We allow >=1 refinement call — depending on
+        # how many gaps surfaced. The presence of the override on
+        # at least one call is the contract.
+        override_calls = [
+            c for c in nodes_calls if c.kwargs.get("model_override") is not None
+        ]
+        assert override_calls, (
+            "Refinement pass did not pass model_override through. "
+            "Either the validator didn't surface the forced gap or "
+            "the routing wiring is broken."
+        )
+        assert all(
+            c.kwargs.get("model_override") == "gemini-2.5-pro" for c in override_calls
+        ), (
+            f"Refinement-pass calls used the wrong model: "
+            f"{[c.kwargs.get('model_override') for c in override_calls]!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_refinement_pass_no_override_when_setting_unset(
+        self, mock_ontology_parser, mock_llm_client, monkeypatch
+    ):
+        """When REFINEMENT_MODEL is unset, both passes run on the
+        user's primary model and NO LLM call carries
+        model_override (single-model behavior preserved). The
+        cache-key collision concern from slice 3's design relies
+        on the override being None when there's no separate
+        refinement model, so this pin doubles as a cache-key
+        invariant."""
+        from graphora_server.services.extraction.config import MultiPassConfig
+        from graphora_server.services.extraction.models import (
+            ValidationResult,
+            ExtractionGap,
+            GapType,
+        )
+        from graphora_server.config import settings
+
+        monkeypatch.setattr(settings, "REFINEMENT_MODEL", None)
+
+        gap = ExtractionGap(
+            gap_type=GapType.LOW_CONFIDENCE,
+            severity=0.9,  # above default gap_severity_threshold (0.5)
+            description="forced gap",
+            chunk_indices=[0],
+        )
+        mock_validator = MagicMock()
+        mock_validator.validate.side_effect = [
+            ValidationResult(is_valid=False, overall_confidence=0.5, gaps=[gap]),
+            ValidationResult(is_valid=True, overall_confidence=0.95, gaps=[]),
+        ]
+
+        mock_llm_client.extract_nodes_from_chunk.return_value = MagicMock()
+        mock_llm_client.extract_relationships_from_chunk.return_value = MagicMock()
+
+        extractor = MultiPassExtractor(
+            mock_ontology_parser,
+            mock_llm_client,
+            config=MultiPassConfig(max_passes=2),
+        )
+        extractor.validator = mock_validator
+
+        with (
+            patch(
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_nodes",
+                return_value=[],
+            ),
+            patch(
+                "graphora_server.services.extraction.multi_pass_extractor.transform_as_relationships",
+                return_value=[],
+            ),
+        ):
+            await extractor.extract(
+                chunks=["chunk1"],
+                transform_id="tx-1",
+                user_id="u-1",
+                max_passes=2,
+                extractor_model="gemini-1.5-flash",
+            )
+
+        # No call should carry model_override when the setting
+        # is unset. This is the "pre-slice-3 path" — pin so a
+        # regression that always passes the override surfaces here.
+        nodes_calls = mock_llm_client.extract_nodes_from_chunk.call_args_list
+        all_overrides = [c.kwargs.get("model_override") for c in nodes_calls]
+        assert all(o is None for o in all_overrides), (
+            f"Some LLM calls received a non-None model_override even "
+            f"though REFINEMENT_MODEL is unset: {all_overrides!r}"
+        )

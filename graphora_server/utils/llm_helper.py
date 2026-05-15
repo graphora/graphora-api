@@ -235,6 +235,8 @@ def create_ollama_client(host: str, model: str) -> _OllamaGenAICompat:
 
 async def get_baml_registry_for_user(
     user_id: str,
+    *,
+    model_override: Optional[str] = None,
 ) -> Tuple[baml_py.ClientRegistry, str, str]:
     """Resolve a BAML ClientRegistry for the active provider.
 
@@ -247,19 +249,29 @@ async def get_baml_registry_for_user(
         3. User's stored provider == "ollama" → DynamicOllama registry,
            api_key column doubles as the host URL (empty falls back
            to OLLAMA_HOST env)
+
+    B5-obs slice 3: ``model_override`` lets the multi-pass extractor
+    swap the model name without re-deriving the provider or
+    re-fetching the user's API key. The override is applied to the
+    final registry construction, AFTER provider resolution, so the
+    user's auth and provider choice stay intact — only the model
+    name changes. Returns the EFFECTIVE model_name (override when
+    provided, user's stored name otherwise), so callers logging
+    "which model was used for this call" see the truth.
     """
     from graphora_server.config import get_settings
 
     settings = get_settings()
 
     if (settings.LLM_PROVIDER or "").lower() == "ollama":
+        effective_model = model_override or settings.OLLAMA_MODEL
         registry = create_baml_client_registry(
             api_key="",
-            model_name=settings.OLLAMA_MODEL,
+            model_name=effective_model,
             provider="ollama",
             base_url=settings.OLLAMA_HOST,
         )
-        return registry, settings.OLLAMA_MODEL, "ollama"
+        return registry, effective_model, "ollama"
 
     ai_config_service = AIConfigService()
     user_config = await ai_config_service.get_user_ai_config(user_id)
@@ -272,20 +284,22 @@ async def get_baml_registry_for_user(
     if not provider_name:
         raise InvalidAPIKeyError(provider="Unknown", user_id=user_id)
 
+    effective_model = model_override or model_name
+
     if provider_name == "gemini":
         registry = create_baml_client_registry(
-            api_key=api_key, model_name=model_name, provider="gemini"
+            api_key=api_key, model_name=effective_model, provider="gemini"
         )
-        return registry, model_name, "gemini"
+        return registry, effective_model, "gemini"
     if provider_name == "ollama":
         host = api_key or settings.OLLAMA_HOST
         registry = create_baml_client_registry(
             api_key="",
-            model_name=model_name,
+            model_name=effective_model,
             provider="ollama",
             base_url=host,
         )
-        return registry, model_name, "ollama"
+        return registry, effective_model, "ollama"
     raise UnsupportedProviderError(provider_name)
 
 
