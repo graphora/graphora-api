@@ -4,21 +4,21 @@
       "id": "alice-martinez",
       "type": "Person",
       "label": "Alice Martinez",
-      "canonical_id": "alice-martinez",
-      "canonical_key": "alice martinez",
       "properties": {
         "name": "Alice Martinez",
-        "title": "senior engineer"
+        "title": "senior engineer",
+        "canonical_id": "alice-martinez",
+        "canonical_key": "alice martinez"
       }
     },
     {
       "id": "acme-corp",
       "type": "Organization",
       "label": "Acme Corp",
-      "canonical_id": "acme-corp",
-      "canonical_key": "acme corp",
       "properties": {
-        "name": "Acme Corp"
+        "name": "Acme Corp",
+        "canonical_id": "acme-corp",
+        "canonical_key": "acme corp"
       }
     }
   ],

@@ -18,11 +18,26 @@ golden/<slug>/
                       # Matches the format /api/v1/ontology accepts.
   expected.json       # Ground-truth nodes + edges. Same shape as
                       # the /api/v1/graph/{transform_id} response,
-                      # minus pagination metadata. Identity matching
-                      # happens by canonical_id (preferred) or
-                      # `<type>:<canonical_key>` fallback — see the
-                      # graphora_server/services/diff_service.py
-                      # contract.
+                      # minus pagination metadata.
+                      #
+                      # Identity matching uses `canonical_id` /
+                      # `canonical_key` on each node — read by the
+                      # diff service via the property bag. The Node
+                      # schema (graphora_server/schemas/graph.py)
+                      # only declares id/label/type/properties; any
+                      # top-level canonical_* would be silently
+                      # dropped by Pydantic. Put canonical_id and
+                      # canonical_key INSIDE properties:
+                      #
+                      #   {"id":"alice", "type":"Person",
+                      #    "properties":{"canonical_id":"alice",
+                      #                  "canonical_key":"alice",
+                      #                  "name":"Alice"}}
+                      #
+                      # Failing to do so makes the scorer fall back
+                      # to per-side local IDs, which never match
+                      # across an expected/actual pair — every fact
+                      # ends up as added+removed.
   README.md           # Brief description of what this doc tests:
                       # which entity types, what edge patterns, any
                       # known edge cases.

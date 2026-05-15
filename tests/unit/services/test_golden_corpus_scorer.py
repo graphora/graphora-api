@@ -266,6 +266,54 @@ def test_empty_graphs_yield_zero_not_nan():
     assert report.nodes.f1 == 0.0
 
 
+def test_type_mismatch_with_same_canonical_id_scores_as_fp_plus_fn():
+    """Reviewer-flagged Medium on commit 48dbe0a: a wrong-typed
+    extraction that shares a canonical_id with the expected node
+    used to score as a full TP for the EXPECTED type — masking
+    a real failure mode (the extractor produced an Organization
+    where a Person was expected, but downstream cost/aggregate
+    surfaces showed "Person extraction perfect").
+
+    Post-fix: the diff service keys canonical_id matching by
+    (cid, type), so type-mismatched nodes never collapse. The
+    scorer correctly records the expected-side Person as FN and
+    the actual-side Organization as FP — Person scores plummet,
+    Organization shows up as a hallucinated extraction."""
+    alice_person = _node(
+        id="n1",
+        type="Person",
+        canonical_id="shared-cid",
+        canonical_key="alice",
+        name="Alice",
+    )
+    alice_org = _node(
+        id="n2",
+        type="Organization",
+        canonical_id="shared-cid",  # same cid — pre-fix this matched
+        canonical_key="alice",
+        name="Alice",
+    )
+    expected = GraphResponse(
+        nodes=[alice_person], edges=[], total_nodes=1, total_edges=0
+    )
+    actual = GraphResponse(nodes=[alice_org], edges=[], total_nodes=1, total_edges=0)
+
+    report = CorpusScorer().score(expected, actual)
+
+    # Person on expected side: 0 TP, 0 FP, 1 FN (missing).
+    person = report.nodes.by_type["Person"]
+    assert person.true_positives == 0, (
+        f"Wrong-typed actual was scored as a Person TP — pre-fix "
+        f"this happened because the diff service matched on bare "
+        f"canonical_id. Got {person.true_positives} TP for Person."
+    )
+    assert person.false_negatives == 1
+    # Organization on actual side: 0 TP, 1 FP, 0 FN.
+    org = report.nodes.by_type["Organization"]
+    assert org.false_positives == 1
+    assert org.true_positives == 0
+
+
 def test_edges_scored_by_type():
     """Edges score the same way as nodes — per-type breakdown
     keyed on edge type. Pin a mixed case so a future refactor
@@ -362,3 +410,29 @@ def test_seed_corpus_doc_parses_into_graph_response():
     assert any(n.type == "Person" for n in expected.nodes)
     assert any(n.type == "Organization" for n in expected.nodes)
     assert any(e.type == "WORKS_AT" for e in expected.edges)
+
+    # Reviewer-flagged High: the Node schema only declares
+    # id/label/type/properties — top-level canonical_id /
+    # canonical_key are silently dropped by GraphResponse
+    # .model_validate. The diff service reads identity from
+    # properties, so canonical fields MUST live in properties
+    # for cross-extraction matching to work. Pin so a future doc
+    # author who puts them at top level (as the seed originally
+    # did) fails loud rather than silently mis-scoring.
+    from graphora_server.services.diff_service import (
+        _canonical_id_or_none,
+        _canonical_key_or_none,
+    )
+
+    for n in expected.nodes:
+        assert _canonical_id_or_none(n) is not None, (
+            f"Node {n.id!r} (type={n.type}) has no canonical_id "
+            "visible to the diff service. The seed/expected.json "
+            "shape requires canonical_id INSIDE properties — not "
+            "at top level, where Pydantic drops it."
+        )
+        assert _canonical_key_or_none(n) is not None, (
+            f"Node {n.id!r} (type={n.type}) has no canonical_key "
+            "visible to the diff service. Same property-bag "
+            "shape rule applies."
+        )

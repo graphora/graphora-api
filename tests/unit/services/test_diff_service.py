@@ -60,8 +60,18 @@ class TestNodeKey:
     diff show 100% added/removed)."""
 
     def test_canonical_id_wins(self) -> None:
-        n = _make_node("local-1", canonical_id="cid-abc", canonical_key="alice")
-        assert _node_key(n) == "cid-abc"
+        """canonical_id is the strongest identity signal but is now
+        type-prefixed (reviewer-flagged Medium on commit 48dbe0a)
+        so a stale or corpus-error canonical_id shared across
+        types doesn't collapse a Person and an Organization into
+        one node. The bare form was a footgun for both B4-corpus
+        scoring (full credit to wrong-typed matches) and the
+        B3-diff UI's ``changed_node`` rendering (which silently
+        flipped the base type to the compare type)."""
+        n = _make_node(
+            "local-1", type="Person", canonical_id="cid-abc", canonical_key="alice"
+        )
+        assert _node_key(n) == "Person:cid-abc"
 
     def test_falls_back_to_type_and_canonical_key(self) -> None:
         n = _make_node("local-1", type="Person", canonical_key="alice")
@@ -130,12 +140,15 @@ class TestPropertyDelta:
 
 class TestEdgeKey:
     def test_edge_key_composes_endpoint_keys(self) -> None:
-        alice = _make_node("a", canonical_id="cid-alice")
-        acme = _make_node("b", canonical_id="cid-acme")
+        # _node_key type-prefixes the canonical_id branch after the
+        # Medium fix on commit 48dbe0a, so edge keys carry the
+        # type prefix on each endpoint.
+        alice = _make_node("a", type="Person", canonical_id="cid-alice")
+        acme = _make_node("b", type="Organization", canonical_id="cid-acme")
         lookup = {_node_key(alice): alice, _node_key(acme): acme}
         edge = _make_edge("e1", source="a", target="b", type="WORKS_AT")
         key = _edge_key(edge, lookup)
-        assert key == ("cid-alice", "cid-acme", "WORKS_AT")
+        assert key == ("Person:cid-alice", "Organization:cid-acme", "WORKS_AT")
 
     def test_edge_with_orphan_endpoint_returns_none(self) -> None:
         """An edge whose source/target id isn't in the node
@@ -315,10 +328,12 @@ class TestDiffService:
         assert result.added_edges[0].type == "WORKS_AT"
 
     def test_changed_edge_records_property_delta(self) -> None:
-        alice_b = _make_node("a1", canonical_id="cid-alice")
-        acme_b = _make_node("b1", canonical_id="cid-acme")
-        alice_c = _make_node("a2", canonical_id="cid-alice")
-        acme_c = _make_node("b2", canonical_id="cid-acme")
+        # source_key / target_key now carry the type prefix
+        # (commit 48dbe0a Medium fix).
+        alice_b = _make_node("a1", type="Person", canonical_id="cid-alice")
+        acme_b = _make_node("b1", type="Organization", canonical_id="cid-acme")
+        alice_c = _make_node("a2", type="Person", canonical_id="cid-alice")
+        acme_c = _make_node("b2", type="Organization", canonical_id="cid-acme")
 
         base_edge = _make_edge(
             "e-base", source="a1", target="b1", properties={"role": "engineer"}
@@ -337,8 +352,8 @@ class TestDiffService:
 
         assert result.summary.edges_changed == 1
         delta = result.changed_edges[0]
-        assert delta.source_key == "cid-alice"
-        assert delta.target_key == "cid-acme"
+        assert delta.source_key == "Person:cid-alice"
+        assert delta.target_key == "Organization:cid-acme"
         assert delta.type == "WORKS_AT"
         assert "role" in delta.property_changes
         assert delta.property_changes["role"].base == "engineer"
@@ -628,3 +643,37 @@ class TestDiffService:
         # is deterministic. Documenting via assert so a future
         # change to the fallback is visible.
         assert result.summary.nodes_unchanged == 1
+
+    def test_same_canonical_id_across_different_types_surfaces_as_added_plus_removed(
+        self,
+    ) -> None:
+        """Reviewer-flagged Medium on commit 48dbe0a: pre-fix the
+        canonical_id pass keyed on the bare cid, so a Person and
+        an Organization sharing the same canonical_id matched
+        as the SAME node — surfacing as a ``changed_node`` whose
+        type silently flipped to the compare side. That's wrong
+        for both B3-diff (UI loses the base type) and B4-corpus
+        scoring (a wrong-typed extraction gets full credit).
+
+        Post-fix: the canonical_id pass keys on (type, cid). A
+        type mismatch falls through pass 2 (type:canonical_key
+        also includes type) and lands as removed+added — the
+        honest signal."""
+        person = _make_node("n-base", type="Person", canonical_id="shared-cid")
+        org = _make_node("n-compare", type="Organization", canonical_id="shared-cid")
+        base = GraphResponse(nodes=[person], edges=[])
+        compare = GraphResponse(nodes=[org], edges=[])
+
+        result = self._service().diff(base, compare, "tx-1", "tx-2")
+
+        assert result.summary.nodes_changed == 0, (
+            "Pre-fix the canonical_id pass collapsed type-mismatched "
+            "nodes into a changed_node. Post-fix they should be a "
+            "clean added+removed pair."
+        )
+        assert result.summary.nodes_added == 1
+        assert result.summary.nodes_removed == 1
+        # The Organization-side node is "added"; the Person-side
+        # is "removed". The type signal survives the diff.
+        assert any(n.type == "Organization" for n in result.added_nodes)
+        assert any(n.type == "Person" for n in result.removed_nodes)

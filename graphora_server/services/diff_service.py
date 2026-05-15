@@ -292,8 +292,12 @@ def _node_key(node: Node) -> NodeKey:
     """Identity key used for cross-transform matching.
 
     Preference order:
-      1. ``canonical_id`` — Gate 4 entity resolution assigns this;
-         stable across runs of the same user when ER works.
+      1. ``type:canonical_id`` — Gate 4 entity resolution assigns
+         the canonical_id; stable across runs of the same user
+         when ER works. We TYPE-PREFIX it so a stale canonical_id
+         that ends up on entities of different types (a corpus
+         error or a confused extraction) doesn't collapse a
+         Person and an Organization into a single match.
       2. ``type:canonical_key`` — present at extraction time
          before ER runs. Stable as long as the canonical-key
          derivation rule doesn't drift.
@@ -301,10 +305,18 @@ def _node_key(node: Node) -> NodeKey:
          shows up on ITS OWN side of the diff (because the other
          side won't share the same id), which is the honest
          answer when we can't tell whether it's "the same node"
-         across transforms."""
+         across transforms.
+
+    Reviewer-flagged Medium on commit 48dbe0a: pre-fix the
+    canonical_id branch returned the bare cid, which meant
+    Person(cid-a) and Organization(cid-a) matched as the same
+    node. For the B3-diff payload that surfaced as a `changed_node`
+    with type=compare.type — losing the base type silently. For
+    B4-corpus scoring it gave full P/R/F1 credit to wrong-typed
+    matches. Type-prefixing closes both holes."""
     cid = _canonical_id_or_none(node)
     if cid:
-        return cid
+        return f"{node.type}:{cid}"
     ckey = _canonical_key_or_none(node)
     if ckey:
         return f"{node.type}:{ckey}"
@@ -356,29 +368,42 @@ def _match_nodes(
     base_match_key: Dict[str, str] = {}
     compare_match_key: Dict[str, str] = {}
 
-    # ---- Pass 1: canonical_id ------------------------------------------
-    base_by_cid: Dict[str, Node] = {}
+    # ---- Pass 1: type:canonical_id -------------------------------------
+    #
+    # Reviewer-flagged Medium on commit 48dbe0a: pre-fix this pass
+    # keyed on the bare canonical_id, so a Person(cid-a) in base and
+    # an Organization(cid-a) in compare collapsed into a match —
+    # surfacing as a `changed_node` whose type silently flipped to
+    # the compare side. The fix is to key on (canonical_id, type)
+    # via _node_key (which now type-prefixes the cid case). Type-
+    # mismatched nodes fall through to pass 2, fail there too
+    # (different types → different type:canonical_key), and end
+    # up as removed+added — the honest signal.
+    base_by_key: Dict[str, Node] = {}
     for b in base_nodes:
         cid = _canonical_id_or_none(b)
         if cid:
             # If multiple base nodes share a canonical_id (a
             # post-ER mistake), the last one wins — diffing
             # such an ambiguous graph is best-effort.
-            base_by_cid[cid] = b
+            base_by_key[_node_key(b)] = b
 
     for c in compare_nodes:
         cid = _canonical_id_or_none(c)
-        if cid and cid in base_by_cid:
-            b = base_by_cid[cid]
+        if not cid:
+            continue
+        match_key = _node_key(c)
+        if match_key in base_by_key:
+            b = base_by_key[match_key]
             if b.id in consumed_base:
                 # Compare has multiple nodes with the same
-                # canonical_id; only the first one matches.
+                # canonical_id+type; only the first one matches.
                 continue
-            matched.append((b, c, cid))
+            matched.append((b, c, match_key))
             consumed_base.add(b.id)
             consumed_compare.add(c.id)
-            base_match_key[b.id] = cid
-            compare_match_key[c.id] = cid
+            base_match_key[b.id] = match_key
+            compare_match_key[c.id] = match_key
 
     # ---- Pass 2: type:canonical_key (asymmetric ER signal only) --------
     #

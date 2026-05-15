@@ -456,10 +456,12 @@ def test_diff_endpoint_handles_edge_property_change(test_client):
     different edge properties. The endpoint surfaces it as a
     changed_edge with the {source_key, target_key, type,
     property_changes} shape."""
-    alice_b = _node("a1", canonical_id="cid-alice")
-    acme_b = _node("b1", canonical_id="cid-acme")
-    alice_c = _node("a2", canonical_id="cid-alice")
-    acme_c = _node("b2", canonical_id="cid-acme")
+    # Type-prefixed canonical_id keys (commit 48dbe0a Medium fix)
+    # mean the endpoint identity carries the type up to the wire.
+    alice_b = _node("a1", type="Person", canonical_id="cid-alice")
+    acme_b = _node("b1", type="Organization", canonical_id="cid-acme")
+    alice_c = _node("a2", type="Person", canonical_id="cid-alice")
+    acme_c = _node("b2", type="Organization", canonical_id="cid-acme")
 
     base_edge = Edge(
         id="e-base",
@@ -492,9 +494,11 @@ def test_diff_endpoint_handles_edge_property_change(test_client):
     assert body["summary"]["edges"]["changed"] == 1
     [delta] = body["changed_edges"]
     # Endpoint identity composed of canonical_ids — survives the
-    # storage-layer id churn.
-    assert delta["source_key"] == "cid-alice"
-    assert delta["target_key"] == "cid-acme"
+    # storage-layer id churn. Type-prefixed since 48dbe0a so a
+    # stale cid shared across types can't collapse a Person and
+    # an Organization into one edge endpoint.
+    assert delta["source_key"] == "Person:cid-alice"
+    assert delta["target_key"] == "Organization:cid-acme"
     assert delta["type"] == "WORKS_AT"
     assert delta["property_changes"]["role"] == {
         "base": "engineer",
