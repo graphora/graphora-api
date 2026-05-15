@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 import pytest
 
@@ -79,13 +79,27 @@ def _patch_credentials(
     async def fake_creds(user_id: str) -> Tuple[str, str]:
         return gemini_api_key, gemini_model
 
-    async def fake_registry(user_id: str):
+    async def fake_registry(
+        user_id: str,
+        *,
+        model_override: Optional[str] = None,
+    ):
+        """Match get_baml_registry_for_user's slice-3 signature.
+
+        ``model_override`` (B5-obs slice 3, commit 71923d4) lets
+        the multi-pass extractor route refinement passes to a
+        stronger model. In the E2E harness we always exercise the
+        configured ``gemini_model``, so the override (if any) is
+        applied to the returned model_name — matching production
+        semantics where the effective name reflects the override.
+        """
+        effective_model = model_override or gemini_model
         registry = create_baml_client_registry(
             api_key=gemini_api_key,
-            model_name=gemini_model,
+            model_name=effective_model,
             provider="gemini",
         )
-        return registry, gemini_model, "gemini"
+        return registry, effective_model, "gemini"
 
     # Legacy 2-tuple — covers extract_*_from_pdf callsites.
     monkeypatch.setattr(
