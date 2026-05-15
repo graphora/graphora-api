@@ -20,6 +20,7 @@ from graphora_server.api.disputed_pairs import router as disputed_pairs_router
 from graphora_server.api.chunking import router as chunking_router
 from graphora_server.api.config import router as config_router
 from graphora_server.api.dashboard import router as dashboard_router
+from graphora_server.api.golden import router as golden_router
 from graphora_server.api.graph import router as graph_router
 from graphora_server.api.merge import router as merge_router
 from graphora_server.api.ontology import router as ontology_router
@@ -143,6 +144,7 @@ app.include_router(chunking_router)
 app.include_router(dashboard_router)
 app.include_router(budgets_router)
 app.include_router(disputed_pairs_router)
+app.include_router(golden_router)
 
 
 @app.get("/health")

@@ -4234,6 +4234,32 @@
         "title": "SchemaSearchResult",
         "type": "object"
       },
+      "ScoreRequest": {
+        "description": "Request body for POST /api/v1/golden/score.\n\n``expected`` is the ground-truth graph (typically loaded from\na ``golden/<slug>/expected.json`` corpus file by the CLI runner).\n``transform_id`` is a live transform owned by the authenticated\nuser \u2014 the actual graph is fetched server-side via the same\nbackend-selection logic ``/diff`` uses (in-memory vs staging\nDB), so the caller doesn't have to ship the actual payload.\n``corpus_slug`` is echoed onto the response for batch-aggregation\nconvenience (the CLI tags each report with its slug).",
+        "properties": {
+          "corpus_slug": {
+            "default": "",
+            "description": "Optional corpus directory name; echoed back on the response.",
+            "title": "Corpus Slug",
+            "type": "string"
+          },
+          "expected": {
+            "$ref": "#/components/schemas/GraphResponse",
+            "description": "Ground-truth graph for scoring (caller-supplied)."
+          },
+          "transform_id": {
+            "description": "Live transform whose extraction will be compared against ``expected``. Must belong to the authenticated user \u2014 cross-tenant attempts return 404 without leaking whether the transform exists.",
+            "title": "Transform Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected",
+          "transform_id"
+        ],
+        "title": "ScoreRequest",
+        "type": "object"
+      },
       "SendMessageRequest": {
         "description": "Request model for sending a message to a chat session",
         "properties": {
@@ -7313,6 +7339,55 @@
         "summary": "Label Pair",
         "tags": [
           "Disputed Pairs"
+        ]
+      }
+    },
+    "/api/v1/golden/score": {
+      "post": {
+        "description": "Score a live transform's extraction against a caller-supplied ground-truth graph. Returns per-type and aggregate precision/recall/F1 plus raw TP/FP/FN counts. The scoring logic wraps the same identity-matching service the diff endpoint uses, so a node's canonical_id / canonical_key drives match identity \u2014 see graphora_server/services/golden_corpus/scorer.py for the full contract.",
+        "operationId": "score_against_golden_api_v1_golden_score_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Score Against Golden Api V1 Golden Score Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Score Against Golden",
+        "tags": [
+          "Golden Corpus"
         ]
       }
     },
