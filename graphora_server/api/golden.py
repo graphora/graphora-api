@@ -65,8 +65,13 @@ class ScoreRequest(BaseModel):
         description=(
             "Live transform whose extraction will be compared "
             "against ``expected``. Must belong to the authenticated "
-            "user — cross-tenant attempts return 404 without "
-            "leaking whether the transform exists."
+            "user — the loader uses the per-user storage factory, "
+            "so a missing or cross-tenant transform_id surfaces as "
+            "an empty actual graph (rather than a distinct 404). "
+            "Scoring proceeds against the empty actual, producing "
+            "an all-false-negatives report. CLI callers should "
+            "treat 0-recall reports as a signal to verify the "
+            "transform_id, not just to flag a regression."
         ),
     )
     corpus_slug: str = Field(
@@ -97,11 +102,16 @@ async def score_against_golden(
     ``expected`` payload, and returns the structured
     ``ScoringReport`` dict.
 
-    Tenant scoping mirrors the /diff endpoint: ``_load_graph_for_diff``
-    uses the per-user storage factory, so a request that names
-    another user's transform_id receives the same "no graph"
-    treatment as a request for a missing transform — no leakage
-    of cross-tenant existence.
+    Tenant scoping: ``_load_graph_for_diff`` uses the per-user
+    storage factory, so a request that names another user's
+    transform_id receives an empty graph — indistinguishable on
+    the wire from a missing transform or a legitimate zero-
+    extraction outcome. The scorer then produces an all-FN
+    report (every expected node becomes FN, recall 0). The CLI
+    runner reads 0-recall as a "regression signal that may also
+    mean a malformed transform_id" — see the ``transform_id``
+    Field description on ScoreRequest for the contract the
+    OpenAPI snapshot pins.
     """
     try:
         actual = await _load_graph_for_diff(body.transform_id, auth.user_id)
