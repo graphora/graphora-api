@@ -1,0 +1,36 @@
+{
+  "nodes": [
+    {
+      "id": "alice-martinez",
+      "type": "Person",
+      "label": "Alice Martinez",
+      "canonical_id": "alice-martinez",
+      "canonical_key": "alice martinez",
+      "properties": {
+        "name": "Alice Martinez",
+        "title": "senior engineer"
+      }
+    },
+    {
+      "id": "acme-corp",
+      "type": "Organization",
+      "label": "Acme Corp",
+      "canonical_id": "acme-corp",
+      "canonical_key": "acme corp",
+      "properties": {
+        "name": "Acme Corp"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "alice-works-at-acme",
+      "type": "WORKS_AT",
+      "source": "alice-martinez",
+      "target": "acme-corp",
+      "properties": {
+        "start_date": "March 2019"
+      }
+    }
+  ]
+}

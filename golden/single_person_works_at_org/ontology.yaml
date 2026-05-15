@@ -1,0 +1,30 @@
+version: "0.1.0"
+entities:
+  Person:
+    description: A named human individual mentioned in the text.
+    properties:
+      name:
+        type: str
+        required: true
+        description: Full name as it appears in the text.
+      title:
+        type: str
+        required: false
+        description: Job title or role.
+  Organization:
+    description: A company, institution, or other named organization.
+    properties:
+      name:
+        type: str
+        required: true
+        description: Organization name as it appears in the text.
+relationships:
+  WORKS_AT:
+    source: Person
+    target: Organization
+    description: Employment or affiliation relationship.
+    properties:
+      start_date:
+        type: str
+        required: false
+        description: When the person started working at the organization.
