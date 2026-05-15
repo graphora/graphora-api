@@ -34,8 +34,10 @@ from graphora_server.utils.logger import logger
 # Lazily-imported to avoid pulling the graph_for_diff loader's
 # transitive deps (storage backends, user-DB service) at module
 # load. The endpoint pays one attribute-lookup per call; cleaner
-# than copy-pasting the loader.
-from graphora_server.api.graph import _load_graph_for_diff
+# than copy-pasting the loader. ``_check_truncated`` rides along
+# because the truncation guard contract must stay aligned with
+# the diff endpoint — see the High reviewer fix below.
+from graphora_server.api.graph import _check_truncated, _load_graph_for_diff
 
 
 router = APIRouter(prefix="/api/v1/golden", tags=["Golden Corpus"])
@@ -107,11 +109,11 @@ async def score_against_golden(
         # _load_graph_for_diff doesn't raise HTTPException itself,
         # but other layers below it can (e.g. user-DB lookup
         # failures). Pass through without wrapping so the status
-        # code (e.g. 413 for oversized graphs) stays accurate.
+        # code stays accurate.
         raise
     except Exception as exc:
         logger.error(
-            "Error loading graph for golden scoring " "(transform=%s, user=%s): %s",
+            "Error loading graph for golden scoring (transform=%s, user=%s): %s",
             body.transform_id,
             auth.user_id,
             exc,
@@ -122,20 +124,31 @@ async def score_against_golden(
             detail=f"Error loading graph for scoring: {exc}",
         )
 
-    if not actual or not actual.nodes:
-        # An empty result here means either the transform doesn't
-        # exist or it belongs to another user. Surface 404 without
-        # distinguishing — same privacy posture as the rest of the
-        # graph endpoints.
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"No graph found for transform_id {body.transform_id!r}. "
-                "Either the transform doesn't exist or it belongs to "
-                "another user."
-            ),
-        )
+    # Reviewer-flagged High on commit 9fb4909: mirror the /diff
+    # endpoint's truncation guard. The same 10k-node loader cap
+    # applies — without this guard, a transform that exceeds the
+    # cap would be scored against a partial actual graph, silently
+    # producing a confident-but-wrong report (typically a string
+    # of false negatives that aren't really missing). Surface as
+    # 413 so the CLI runner can either short-circuit the corpus
+    # entry or surface a clear error rather than write a bogus
+    # score to its batch report.
+    _check_truncated(actual, "actual", body.transform_id)
 
+    # Reviewer-flagged Medium on commit 9fb4909: pre-fix this
+    # branch rejected an empty ``actual.nodes`` as 404, conflating
+    # three distinct cases — missing transform, cross-tenant
+    # attempt, and a legitimate "the extractor produced zero
+    # entities" outcome. For B4-test, the third case is exactly
+    # what scoring should surface (every expected node becomes
+    # FN, recall drops to 0, the CLI runner flags the doc as a
+    # regression). Mirroring /diff's posture: proceed with
+    # scoring regardless of emptiness; missing/cross-tenant
+    # transforms produce the same all-FN report a real
+    # zero-extraction would. The trade-off is a malformed
+    # transform_id no longer 404s — but the CLI runner controls
+    # transform_id (it just uploaded the doc), and direct API
+    # users get the same posture /diff already has.
     report = CorpusScorer().score(
         expected=body.expected,
         actual=actual,

@@ -4,8 +4,12 @@ The endpoint takes a caller-supplied expected graph + a live
 transform_id and returns the P/R/F1 ScoringReport. Tests cover:
   * Happy path: matching expected + actual → perfect scores
   * Mismatched extraction → expected FP/FN counts surface
-  * Tenant scoping: cross-tenant transform → 404 (same posture
-    as /diff)
+  * Tenant scoping: loader is called with auth.user_id
+  * Truncation guard: oversized actual → 413 (mirrors /diff;
+    reviewer-flagged High on commit 9fb4909)
+  * Empty actual scores as all-FN, not 404 (reviewer-flagged
+    Medium on commit 9fb4909 — a real "extractor found nothing"
+    outcome is a domain result, not an infrastructure error)
   * Malformed request → 422 (Pydantic validation)
   * The seed corpus expected.json roundtrips cleanly when paired
     with a mock-graph identical to it
@@ -223,12 +227,82 @@ def test_score_endpoint_passes_auth_user_id_to_loader(test_client):
     )
 
 
-def test_score_endpoint_returns_404_when_transform_unknown(test_client):
-    """Cross-tenant or missing transform: loader returns an
-    empty graph. The endpoint maps this to 404 to avoid leaking
-    the distinction between "doesn't exist" and "belongs to
-    another tenant" (same posture as /diff and /decisions)."""
+def test_score_endpoint_413s_when_actual_truncated(test_client):
+    """Reviewer-flagged High on commit 9fb4909: mirror /diff's
+    truncation guard. If the loader returns a graph with
+    ``total_nodes`` exceeding the 10k diff cap, scoring against
+    a partial actual would silently produce a confident-but-wrong
+    report (typically all-FN for the missing tail). Pin so a
+    refactor that drops _check_truncated regresses noisily.
+
+    The 413 detail body shape (truncated_dimension, side,
+    transform_id) is inherited from /diff — re-checking those
+    fields catches contract drift, not just status code drift."""
+    oversized_actual = GraphResponse(
+        nodes=[
+            _node_obj(
+                id="n1",
+                type="Person",
+                canonical_id="cid-a",
+                canonical_key="Person:name=a",
+                name="A",
+            )
+        ],
+        edges=[],
+        total_nodes=15000,  # exceeds _DIFF_NODE_LIMIT (10000)
+        total_edges=0,
+    )
+    with patch(
+        "graphora_server.api.golden._load_graph_for_diff",
+        new=AsyncMock(return_value=oversized_actual),
+    ):
+        response = test_client.post(
+            "/api/v1/golden/score",
+            json={
+                "expected": {"nodes": [], "edges": []},
+                "transform_id": "tx-too-big",
+            },
+        )
+
+    assert response.status_code == 413, (
+        "/golden/score must 413 on truncated actual graphs, same "
+        "as /diff. Got "
+        f"{response.status_code} — the truncation guard is missing."
+    )
+    body = response.json()["detail"]
+    assert body["error"] == "transform_too_large_to_diff"
+    assert body["side"] == "actual"
+    assert body["transform_id"] == "tx-too-big"
+    assert body["truncated_dimension"] == "nodes"
+
+
+def test_score_endpoint_scores_empty_actual_as_all_fn(test_client):
+    """Reviewer-flagged Medium on commit 9fb4909: empty actual
+    graphs are a legitimate "extractor found nothing" outcome,
+    not a 404. The CLI runner needs to see this as a regression
+    signal — every expected node becomes FN, recall drops to 0.
+    Pin so a future refactor that re-adds the 404 branch
+    regresses noisily.
+
+    Note: this also covers the "missing or cross-tenant
+    transform_id" case (loader returns empty for both). The
+    trade-off is documented inline in golden.py: a malformed
+    transform_id no longer 404s, but the CLI runner controls
+    transform_id (it just uploaded the doc) so this is
+    acceptable."""
     empty_graph = GraphResponse(nodes=[], edges=[], total_nodes=0, total_edges=0)
+    expected_payload = {
+        "nodes": [
+            _node(
+                id="n1",
+                type="Person",
+                canonical_id="cid-alice",
+                canonical_key="Person:name=alice",
+                name="Alice",
+            )
+        ],
+        "edges": [],
+    }
     with patch(
         "graphora_server.api.golden._load_graph_for_diff",
         new=AsyncMock(return_value=empty_graph),
@@ -236,13 +310,31 @@ def test_score_endpoint_returns_404_when_transform_unknown(test_client):
         response = test_client.post(
             "/api/v1/golden/score",
             json={
-                "expected": {"nodes": [], "edges": []},
-                "transform_id": "missing-tx",
+                "expected": expected_payload,
+                "transform_id": "tx-zero",
+                "corpus_slug": "regression-doc",
             },
         )
 
-    assert response.status_code == 404
-    assert "missing-tx" in response.json()["detail"]
+    assert response.status_code == 200, (
+        "Empty actual must score, not 404. Got "
+        f"{response.status_code}: {response.text}"
+    )
+    body = response.json()
+    assert body["corpus_slug"] == "regression-doc"
+    person = body["nodes"]["by_type"]["Person"]
+    assert person["true_positives"] == 0
+    assert person["false_positives"] == 0
+    assert person["false_negatives"] == 1, (
+        "Empty actual + 1 expected Person must produce 1 FN, but "
+        f"got {person['false_negatives']}. The all-FN contract is "
+        "what the CLI runner reads to flag the corpus doc as a "
+        "regression."
+    )
+    # Recall must be 0 (0 TP out of 1 expected); precision is 0/0
+    # which the scorer maps to 0.0 (not NaN) for JSON cleanliness.
+    assert body["nodes"]["recall"] == 0.0
+    assert body["nodes"]["precision"] == 0.0
 
 
 def test_score_endpoint_rejects_malformed_expected(test_client):
