@@ -682,6 +682,13 @@ class LLMClient:
                 transform_id=transform_id,
                 document_usage_id=document_usage_id,
                 client_registry=client_registry,
+                # B5-obs slice 3: ``model_name`` here is the
+                # EFFECTIVE model returned by
+                # get_baml_registry_for_user (already reflects
+                # ``model_override`` when one was applied). Threading
+                # it to the tracker means llm_usage records the real
+                # routed model name, not the synthetic BAML alias.
+                effective_model_name=model_name,
             )
         else:
             tb = TypeBuilder()
@@ -784,6 +791,10 @@ class LLMClient:
                 transform_id=transform_id,
                 document_usage_id=document_usage_id,
                 client_registry=client_registry,
+                # B5-obs slice 3: mirror the nodes path —
+                # ``model_name`` is the routed model from
+                # get_baml_registry_for_user.
+                effective_model_name=model_name,
             )
         else:
             tb = TypeBuilder()

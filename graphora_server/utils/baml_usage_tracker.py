@@ -26,12 +26,31 @@ class BAMLUsageTracker:
         document_usage_id: Optional[str] = None,
         operation_context: Optional[str] = None,
         collector_name: Optional[str] = None,
+        effective_model_name: Optional[str] = None,
     ):
         self.user_id = user_id
         self.operation_type = operation_type
         self.transform_id = transform_id
         self.document_usage_id = document_usage_id
         self.operation_context = operation_context
+        # Reviewer-flagged P2 on commit 71923d4 (B5-obs slice 3): the
+        # FunctionLog's ``call.client_name`` is the synthetic BAML
+        # alias (``DynamicGemini`` / ``DynamicOllama``), set at
+        # registry construction time in
+        # graphora_server/utils/llm_helper.py::create_baml_client_registry.
+        # That means a primary ``gemini-1.5-flash`` call and a
+        # refinement ``gemini-2.5-pro`` call would BOTH land in
+        # llm_usage as the same synthetic name — useless for the
+        # B5-obs cost reports and ``models_used`` aggregation.
+        #
+        # ``effective_model_name`` carries the actual routed model
+        # from the LLM client (which got it from
+        # get_baml_registry_for_user's returned tuple — that value
+        # already reflects ``model_override`` when one was applied).
+        # _extract_model_info prefers this when set; falls back to
+        # the FunctionLog probe so callers that don't supply it
+        # behave as before.
+        self.effective_model_name = effective_model_name
 
         # Create BAML collector
         self.collector = Collector(name=collector_name or f"{operation_type}_{user_id}")
@@ -130,23 +149,37 @@ class BAMLUsageTracker:
                 call = selected_calls[0] if selected_calls else function_log.calls[-1]
 
                 provider = call.provider.lower()
-                client_name = call.client_name
+                # Prefer the routed model name when the caller
+                # supplied one (B5-obs slice 3): ``call.client_name``
+                # is the synthetic BAML alias which collapses every
+                # call from the same registry into the same string,
+                # making model-level cost analysis impossible. The
+                # effective name is the real provider model
+                # ("gemini-2.5-pro", "qwen2.5:14b", etc.) and is
+                # what /cost should aggregate by.
+                model_name = self.effective_model_name or call.client_name
 
                 # Map BAML providers to our ModelProvider enum
                 if "openai" in provider:
-                    return ModelProvider.OPENAI, client_name
+                    return ModelProvider.OPENAI, model_name
                 elif "anthropic" in provider or "claude" in provider:
-                    return ModelProvider.ANTHROPIC, client_name
+                    return ModelProvider.ANTHROPIC, model_name
                 elif (
                     "google" in provider or "gemini" in provider or "vertex" in provider
                 ):
-                    return ModelProvider.GEMINI, client_name
+                    return ModelProvider.GEMINI, model_name
                 else:
-                    return ModelProvider.BAML, client_name
+                    return ModelProvider.BAML, model_name
 
         except Exception as e:
             logger.warning(f"Could not extract model info from BAML call: {str(e)}")
 
+        # Last-resort fallback: still surface the effective model
+        # if the caller provided one, even when FunctionLog probing
+        # failed. Better to record the routed model with
+        # provider=BAML than lose it entirely as "unknown".
+        if self.effective_model_name:
+            return ModelProvider.BAML, self.effective_model_name
         return ModelProvider.BAML, "unknown"
 
     def get_usage_summary(self) -> Dict[str, Any]:
@@ -262,9 +295,16 @@ async def track_baml_extract_nodes_from_chunk(
     transform_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
     client_registry=None,
+    effective_model_name: Optional[str] = None,
 ):
     """
-    Track BAML ExtractNodesFromChunk function call
+    Track BAML ExtractNodesFromChunk function call.
+
+    ``effective_model_name`` (B5-obs slice 3): the model actually
+    routed for this call. When the multi-pass extractor's refinement
+    pass overrides the model, this carries the override so the
+    emitted LLMUsageRequest records the real model name, not the
+    synthetic BAML registry alias.
     """
     from graphora_server.baml_client import b
     from graphora_server.baml_client.type_builder import TypeBuilder
@@ -278,6 +318,7 @@ async def track_baml_extract_nodes_from_chunk(
         document_usage_id=document_usage_id,
         operation_context=f"chunk_processing:{len(chunk)} chars",
         collector_name=f"extract_nodes_{user_id}",
+        effective_model_name=effective_model_name,
     )
 
     try:
@@ -312,9 +353,13 @@ async def track_baml_extract_relationships_from_chunk(
     transform_id: Optional[str] = None,
     document_usage_id: Optional[str] = None,
     client_registry=None,
+    effective_model_name: Optional[str] = None,
 ):
     """
-    Track BAML ExtractRelationshipsFromChunk function call
+    Track BAML ExtractRelationshipsFromChunk function call.
+
+    See ``track_baml_extract_nodes_from_chunk`` for the
+    ``effective_model_name`` contract.
     """
     from graphora_server.baml_client import b
     from graphora_server.baml_client.type_builder import TypeBuilder
@@ -328,6 +373,7 @@ async def track_baml_extract_relationships_from_chunk(
         document_usage_id=document_usage_id,
         operation_context=f"chunk_processing:{len(chunk)} chars",
         collector_name=f"extract_relationships_{user_id}",
+        effective_model_name=effective_model_name,
     )
 
     try:
