@@ -242,6 +242,45 @@ def test_create_scenario_413_when_source_truncated(test_client):
     assert body["side"] == "scenario_source"
 
 
+def test_create_scenario_413_when_source_truncated_with_empty_nodes(
+    test_client,
+):
+    """Reviewer-flagged Medium on commit d7a1f6e. Pre-fix the
+    empty-graph 404 check fired BEFORE _check_truncated, so a
+    transform with total_nodes=15000 + nodes=[] (the staging
+    reader's "cap truncated everything" outcome) returned 404
+    instead of 413. The status confusion makes the failure
+    debuggable only via logs — the caller sees "no such
+    transform" but the transform exists and is just too big.
+
+    Pin the corrected ordering: truncation runs first, so any
+    transform exceeding the cap surfaces as 413 regardless of
+    whether the loader returned nodes."""
+    truncated_to_empty = GraphResponse(
+        nodes=[],  # cap fired, returned empty
+        edges=[],
+        total_nodes=15000,  # > 10k cap
+        total_edges=0,
+    )
+    with patch(
+        "graphora_server.api.scenarios._load_graph_for_diff",
+        new=AsyncMock(return_value=truncated_to_empty),
+    ):
+        response = test_client.post(
+            "/api/v1/scenarios",
+            json={"transform_id": "tx-truncated-empty", "name": "x"},
+        )
+
+    assert response.status_code == 413, (
+        "Oversized + empty-nodes must surface as 413 (the truncation "
+        f"signal), not 404. Got {response.status_code}: "
+        f"{response.text}"
+    )
+    body = response.json()["detail"]
+    assert body["error"] == "transform_too_large_to_diff"
+    assert body["side"] == "scenario_source"
+
+
 def test_create_scenario_rejects_missing_name(test_client):
     """Pydantic validation: name is required + min-length 1.
     422 before any service call. Pin so a refactor that loosens

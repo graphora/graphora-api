@@ -24,6 +24,8 @@ from graphora_server.services.scenario_service import (
     ScenarioConflictError,
     ScenarioNotFoundError,
     ScenarioService,
+    _DEFAULT_MEMORY_STORE,
+    _reset_default_memory_store_for_tests,
 )
 
 
@@ -370,3 +372,136 @@ async def test_postgres_create_maps_unique_violation_to_conflict(
                 name="race-name",
                 graph=_graph(),
             )
+
+
+# ============================================================
+# Reviewer-fix: shared dev-mode store across instances
+# ============================================================
+
+
+@pytest.fixture
+def shared_store_reset(monkeypatch):
+    """Force memory mode AND clear the module-level store before
+    + after each test. The shared store is process-wide by design
+    (mirrors DisputedPairsService), so tests that exercise it
+    must isolate themselves explicitly."""
+    monkeypatch.setattr(settings, "DATABASE_URL", "")
+    monkeypatch.setattr(settings, "POSTGRES_HOST", None)
+    _reset_default_memory_store_for_tests()
+    yield
+    _reset_default_memory_store_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_default_constructor_shares_memory_across_instances(
+    shared_store_reset,
+):
+    """Reviewer-flagged High on commit d7a1f6e. Default-constructed
+    services (no ``memory_store=`` arg) must share the same
+    underlying list so dev-mode CRUD persists across API
+    requests — each request gets its own service instance.
+
+    Pre-fix each instance allocated a fresh empty list, so a
+    POST landed data in one and a follow-up GET read from
+    another. Pin so a refactor that re-introduces per-instance
+    allocation regresses noisily."""
+    writer = ScenarioService()
+    reader = ScenarioService()
+
+    record = await writer.create_from_transform(
+        user_id="user-shared",
+        transform_id="tx-shared",
+        name="visible-everywhere",
+        graph=_graph(),
+    )
+
+    # A different service instance must see the same record —
+    # this is the load-bearing assertion.
+    listed = await reader.list_for_user("user-shared")
+    assert len(listed) == 1
+    assert listed[0].id == record.id, (
+        "Default-constructed service instances must share the "
+        "dev-mode memory store. The reader saw an empty list, "
+        "which means writes are lost between API requests."
+    )
+
+    # get also resolves cross-instance.
+    fetched = await reader.get(record.id, "user-shared")
+    assert fetched.id == record.id
+
+
+@pytest.mark.asyncio
+async def test_explicit_memory_store_isolates_from_shared(
+    shared_store_reset,
+):
+    """The ``memory_store=[]`` test escape hatch must NOT share
+    state with the module-level dev store — otherwise tests
+    pollute the shared store and break later runs. Pin so a
+    refactor that removes the per-instance override regresses."""
+    isolated = ScenarioService(memory_store=[])
+    shared = ScenarioService()
+
+    await isolated.create_from_transform(
+        user_id="user-x",
+        transform_id="tx-x",
+        name="in-isolated",
+        graph=_graph(),
+    )
+
+    # Shared store must NOT see the write.
+    shared_listed = await shared.list_for_user("user-x")
+    assert shared_listed == []
+    # Module-level store stays empty.
+    assert _DEFAULT_MEMORY_STORE == []
+
+
+# ============================================================
+# Reviewer-fix: DB exceptions propagate (don't masquerade as
+# empty / not-found)
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_postgres_list_propagates_db_exception(monkeypatch):
+    """Reviewer-flagged High on commit d7a1f6e. Scenarios are
+    user-owned data, not best-effort observability — a DB outage
+    must NOT masquerade as "you have no scenarios" (empty list).
+    Pin that list_for_user propagates DB exceptions so the API
+    surfaces them as 5xx."""
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgres://fake/url")
+    service = ScenarioService()
+
+    fake_fetch = AsyncMock(side_effect=RuntimeError("connection refused"))
+    with patch("graphora_server.services.scenario_service.db.fetch", new=fake_fetch):
+        with pytest.raises(RuntimeError, match="connection refused"):
+            await service.list_for_user("user-x")
+
+
+@pytest.mark.asyncio
+async def test_postgres_get_propagates_db_exception(monkeypatch):
+    """Same posture as list: a "DB on fire" outcome must not
+    surface as 404. The API maps 5xx → user "the system is
+    broken"; the get-NotFound mapping is only for actual missing
+    rows (rows=[] after a successful query)."""
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgres://fake/url")
+    service = ScenarioService()
+
+    fake_fetch = AsyncMock(side_effect=RuntimeError("connection refused"))
+    with patch("graphora_server.services.scenario_service.db.fetch", new=fake_fetch):
+        with pytest.raises(RuntimeError, match="connection refused"):
+            await service.get("sc-1", "user-x")
+
+
+@pytest.mark.asyncio
+async def test_postgres_delete_propagates_db_exception(monkeypatch):
+    """Same posture as list + get. Delete must propagate DB
+    failures so the API can return 5xx — a 404 here would tell
+    a malicious caller "the row doesn't exist" even when the
+    real answer is "the DB is unreachable.""" ""
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgres://fake/url")
+    service = ScenarioService()
+
+    fake_fetch = AsyncMock(side_effect=RuntimeError("connection refused"))
+    with patch("graphora_server.services.scenario_service.db.fetch", new=fake_fetch):
+        with pytest.raises(RuntimeError, match="connection refused"):
+            await service.delete("sc-1", "user-x")

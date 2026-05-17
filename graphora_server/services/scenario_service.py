@@ -78,6 +78,28 @@ class Scenario:
     parent_scenario_id: Optional[str] = None
 
 
+# Module-level shared dev-mode store. Reviewer-flagged High on
+# commit d7a1f6e: the API constructs a fresh ScenarioService per
+# request, and the default constructor allocated a fresh empty
+# list each time. With no DATABASE_URL configured, POST landed
+# data in one instance and GET read from another, so the dev-
+# mode CRUD was effectively non-persistent across requests. The
+# fix mirrors DisputedPairsService's pattern (commit 26d3e89):
+# share one list across instances; tenant filtering at read time
+# keeps users isolated even though the underlying list is shared.
+_DEFAULT_MEMORY_STORE: List[Scenario] = []
+
+
+def _reset_default_memory_store_for_tests() -> None:
+    """Clear the dev-mode shared memory store. Test fixtures that
+    fall through to the production constructor (no
+    ``memory_store=`` arg) should call this between scenarios to
+    keep tests isolated. Most tests pass ``memory_store=[]``
+    explicitly and don't need this — it's only for direct-DB-mock
+    tests that construct a default service."""
+    _DEFAULT_MEMORY_STORE.clear()
+
+
 class ScenarioService:
     """Dual-backend store for scenario snapshots.
 
@@ -93,6 +115,20 @@ class ScenarioService:
     to accommodate (this is a fresh table from migration 19), so
     the user_id filter is unconditional — simpler than
     DecisionLogService's "optional for legacy" branch.
+
+    Failure posture on the Postgres path: DB exceptions
+    propagate. Reviewer-flagged High on commit d7a1f6e — unlike
+    DecisionLogService (where decision rows are observability
+    and a swallowed insert is acceptable), scenarios are
+    user-owned data. A DB outage or missing migration must
+    surface as 5xx at the API boundary rather than masquerading
+    as "you have no scenarios" (empty list) or "scenario not
+    found" (404). The API layer is responsible for translating
+    propagated DB exceptions into 5xx — same posture as
+    DisputedPairsService (commit 26d3e89). The create path's
+    UniqueViolation → ScenarioConflictError mapping is the
+    one exception: a typed business error needs typed
+    surfacing as 409, and is distinct from "the DB is on fire."
     """
 
     TABLE_NAME = "scenarios"
@@ -102,9 +138,18 @@ class ScenarioService:
         memory_store: Optional[List[Scenario]] = None,
     ) -> None:
         self._enabled = bool(settings.DATABASE_URL or settings.resolved_database_url)
-        self._memory_store: List[Scenario] = (
-            memory_store if memory_store is not None else []
-        )
+        # Reviewer-flagged High on commit d7a1f6e. See the
+        # _DEFAULT_MEMORY_STORE comment above for the full
+        # rationale: per-request service instances must share the
+        # dev-mode list, otherwise POST and GET land on different
+        # in-memory dictionaries and the CRUD looks broken.
+        # Tests pass ``memory_store=[]`` explicitly for isolation;
+        # production constructions fall through to the shared
+        # store.
+        if memory_store is not None:
+            self._memory_store = memory_store
+        else:
+            self._memory_store = _DEFAULT_MEMORY_STORE
 
     # Public API -----------------------------------------------------------------
 
@@ -201,23 +246,24 @@ class ScenarioService:
         :class:`ScenarioSummary` before returning to the wire.
         Keeping the projection at the API layer means the
         service doesn't have to expose two shapes.
+
+        DB exceptions propagate per the class docstring: an
+        empty list means "no scenarios," not "the DB read
+        failed." The API layer surfaces propagated errors as
+        5xx so operators can distinguish the two states.
         """
         if self._enabled:
-            try:
-                rows = await db.fetch(
-                    """
-                    SELECT id, user_id, transform_id, parent_scenario_id,
-                           name, description, graph_snapshot, created_at
-                    FROM scenarios
-                    WHERE user_id = %s
-                    ORDER BY created_at DESC
-                    """,
-                    user_id,
-                )
-                return self._rows_to_scenarios(rows)
-            except Exception as exc:
-                logger.error("Failed to list scenarios: %s", exc)
-                return []
+            rows = await db.fetch(
+                """
+                SELECT id, user_id, transform_id, parent_scenario_id,
+                       name, description, graph_snapshot, created_at
+                FROM scenarios
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                """,
+                user_id,
+            )
+            return self._rows_to_scenarios(rows)
         return sorted(
             (s for s in self._memory_store if s.user_id == user_id),
             key=lambda s: s.created_at,
@@ -231,24 +277,24 @@ class ScenarioService:
             ScenarioNotFoundError: id doesn't resolve OR belongs
                 to another tenant. Single exception for both
                 cases — never leak cross-tenant existence.
+
+        DB exceptions propagate — see class docstring. A
+        "DB on fire" outcome must not masquerade as "not
+        found"; the API maps the two to different status codes
+        (404 vs 5xx), which means the service has to surface
+        them as different exceptions too.
         """
         if self._enabled:
-            try:
-                rows = await db.fetch(
-                    """
-                    SELECT id, user_id, transform_id, parent_scenario_id,
-                           name, description, graph_snapshot, created_at
-                    FROM scenarios
-                    WHERE id = %s AND user_id = %s
-                    """,
-                    scenario_id,
-                    user_id,
-                )
-            except Exception as exc:
-                logger.error("Failed to fetch scenario %s: %s", scenario_id, exc)
-                raise ScenarioNotFoundError(
-                    f"Scenario {scenario_id!r} not found."
-                ) from exc
+            rows = await db.fetch(
+                """
+                SELECT id, user_id, transform_id, parent_scenario_id,
+                       name, description, graph_snapshot, created_at
+                FROM scenarios
+                WHERE id = %s AND user_id = %s
+                """,
+                scenario_id,
+                user_id,
+            )
             scenarios = self._rows_to_scenarios(rows)
             if not scenarios:
                 raise ScenarioNotFoundError(f"Scenario {scenario_id!r} not found.")
@@ -269,28 +315,28 @@ class ScenarioService:
         you don't own" returns the same 404 as "tell me about
         nothing." A silent 204 would let an attacker probe for
         existence by timing the response.
+
+        DB exceptions propagate — see class docstring. A
+        "DB unreachable" failure must NOT 404, because that
+        would tell a malicious client the row also doesn't
+        exist (which is information the operator may have, but
+        the client should not).
         """
         if self._enabled:
-            try:
-                # RETURNING confirms the row existed AND belonged
-                # to the caller. Without it we'd issue a DELETE
-                # with no rows affected and have to do a second
-                # SELECT to distinguish "didn't exist" from
-                # "existed but wrong tenant".
-                rows = await db.fetch(
-                    """
-                    DELETE FROM scenarios
-                    WHERE id = %s AND user_id = %s
-                    RETURNING id
-                    """,
-                    scenario_id,
-                    user_id,
-                )
-            except Exception as exc:
-                logger.error("Failed to delete scenario %s: %s", scenario_id, exc)
-                raise ScenarioNotFoundError(
-                    f"Scenario {scenario_id!r} not found."
-                ) from exc
+            # RETURNING confirms the row existed AND belonged
+            # to the caller. Without it we'd issue a DELETE
+            # with no rows affected and have to do a second
+            # SELECT to distinguish "didn't exist" from
+            # "existed but wrong tenant".
+            rows = await db.fetch(
+                """
+                DELETE FROM scenarios
+                WHERE id = %s AND user_id = %s
+                RETURNING id
+                """,
+                scenario_id,
+                user_id,
+            )
             if not rows:
                 raise ScenarioNotFoundError(f"Scenario {scenario_id!r} not found.")
             return
@@ -305,24 +351,29 @@ class ScenarioService:
     async def _find_by_name(
         self, *, user_id: str, transform_id: str, name: str
     ) -> Optional[Scenario]:
-        """Internal: pre-flight conflict check for create_from_transform."""
+        """Internal: pre-flight conflict check for create_from_transform.
+
+        DB exceptions propagate to the caller. The pre-flight is
+        technically best-effort (the DB unique constraint is the
+        canonical guarantor), but a degraded DB surfacing during
+        pre-flight + then again during INSERT just doubles the
+        latency before failure. Let the error propagate so the
+        API returns 5xx promptly instead of falling through to a
+        guaranteed-to-fail INSERT path.
+        """
         if self._enabled:
-            try:
-                rows = await db.fetch(
-                    """
-                    SELECT id, user_id, transform_id, parent_scenario_id,
-                           name, description, graph_snapshot, created_at
-                    FROM scenarios
-                    WHERE user_id = %s AND transform_id = %s AND name = %s
-                    LIMIT 1
-                    """,
-                    user_id,
-                    transform_id,
-                    name,
-                )
-            except Exception as exc:
-                logger.error("Failed to check scenario name conflict: %s", exc)
-                return None
+            rows = await db.fetch(
+                """
+                SELECT id, user_id, transform_id, parent_scenario_id,
+                       name, description, graph_snapshot, created_at
+                FROM scenarios
+                WHERE user_id = %s AND transform_id = %s AND name = %s
+                LIMIT 1
+                """,
+                user_id,
+                transform_id,
+                name,
+            )
             scenarios = self._rows_to_scenarios(rows)
             return scenarios[0] if scenarios else None
         for scenario in self._memory_store:

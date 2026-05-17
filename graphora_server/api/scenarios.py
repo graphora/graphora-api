@@ -128,6 +128,17 @@ async def create_scenario(
             detail=f"Error loading graph for scenario: {exc}",
         )
 
+    # Truncation guard runs FIRST so a transform with total_nodes
+    # above the cap surfaces as 413 even when its returned nodes
+    # list came back empty. Reviewer-flagged Medium on commit
+    # d7a1f6e: pre-fix the empty-graph 404 fired ahead of this
+    # check, so a transform with total_nodes=15000 and nodes=[]
+    # (the staging reader's "cap truncated everything" case)
+    # returned 404 instead of the intended 413 — a confusingly
+    # wrong status for the caller, who can't tell "this transform
+    # doesn't exist" from "this transform is too big to scenario."
+    _check_truncated(graph, "scenario_source", body.transform_id)
+
     if not graph or not graph.nodes:
         # Empty / missing / cross-tenant — collapses to the same
         # "transform not available" treatment /golden/score had
@@ -144,12 +155,6 @@ async def create_scenario(
                 "another user, or it produced zero entities."
             ),
         )
-
-    # Truncation guard — same contract as /diff and /golden/score.
-    # A scenario over the loader's cap would be a silently
-    # partial snapshot, which defeats the whole point of having
-    # a stable point-in-time reference graph.
-    _check_truncated(graph, "scenario_source", body.transform_id)
 
     try:
         record = await _service().create_from_transform(
