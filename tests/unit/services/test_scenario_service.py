@@ -380,11 +380,19 @@ async def test_postgres_create_maps_unique_violation_to_conflict(
 
 
 @pytest.fixture
-def shared_store_reset(monkeypatch):
+def _shared_store_reset(monkeypatch):
     """Force memory mode AND clear the module-level store before
     + after each test. The shared store is process-wide by design
     (mirrors DisputedPairsService), so tests that exercise it
-    must isolate themselves explicitly."""
+    must isolate themselves explicitly.
+
+    The leading underscore is intentional: tests pull this fixture
+    in for the side-effects (settings monkeypatch + store reset)
+    rather than to use any return value, so vulture would flag
+    the test-parameter name as "unused variable" (vulture doesn't
+    grok pytest's fixture-by-parameter-name DI). Vulture skips
+    underscore-prefixed names by default, which is the idiomatic
+    Python signal here too."""
     monkeypatch.setattr(settings, "DATABASE_URL", "")
     monkeypatch.setattr(settings, "POSTGRES_HOST", None)
     _reset_default_memory_store_for_tests()
@@ -394,7 +402,7 @@ def shared_store_reset(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_default_constructor_shares_memory_across_instances(
-    shared_store_reset,
+    _shared_store_reset,
 ):
     """Reviewer-flagged High on commit d7a1f6e. Default-constructed
     services (no ``memory_store=`` arg) must share the same
@@ -432,7 +440,7 @@ async def test_default_constructor_shares_memory_across_instances(
 
 @pytest.mark.asyncio
 async def test_explicit_memory_store_isolates_from_shared(
-    shared_store_reset,
+    _shared_store_reset,
 ):
     """The ``memory_store=[]`` test escape hatch must NOT share
     state with the module-level dev store — otherwise tests
