@@ -25,6 +25,7 @@ from graphora_server.api.graph import router as graph_router
 from graphora_server.api.merge import router as merge_router
 from graphora_server.api.ontology import router as ontology_router
 from graphora_server.api.quality import router as quality_router
+from graphora_server.api.scenarios import router as scenarios_router
 from graphora_server.api.schema import router as schema_router
 from graphora_server.api.transform import router as transform_router
 from graphora_server.api.usage import router as usage_router
@@ -145,6 +146,7 @@ app.include_router(dashboard_router)
 app.include_router(budgets_router)
 app.include_router(disputed_pairs_router)
 app.include_router(golden_router)
+app.include_router(scenarios_router)
 
 
 @app.get("/health")

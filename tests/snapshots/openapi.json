@@ -3865,6 +3865,42 @@
         "title": "SaveGraphResponse",
         "type": "object"
       },
+      "ScenarioCreateRequest": {
+        "description": "Request body for ``POST /api/v1/scenarios``.\n\n``transform_id`` is the live transform whose current graph is\nsnapshotted into the scenario at create time. ``name`` is\nunique per (user, transform) \u2014 the DB enforces this so a\nrepeat create with the same name surfaces as a 409 rather\nthan a silent second row.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional free-form description of why this scenario was created (e.g., 'what-if Alice and Alicia are the same entity'). Surfaced in list view + detail.",
+            "title": "Description"
+          },
+          "name": {
+            "description": "Human-readable scenario name. Unique per (user, transform) \u2014 repeat creates with the same name surface as 409 Conflict.",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "transform_id": {
+            "description": "Source transform whose current graph is snapshotted into the new scenario. Must belong to the authenticated user.",
+            "title": "Transform Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transform_id",
+          "name"
+        ],
+        "title": "ScenarioCreateRequest",
+        "type": "object"
+      },
       "SchemaGenerationContext": {
         "properties": {
           "complexity": {
@@ -9005,6 +9041,174 @@
         "summary": "List Quality Violations",
         "tags": [
           "quality"
+        ]
+      }
+    },
+    "/api/v1/scenarios": {
+      "get": {
+        "description": "List scenarios owned by the authenticated user, newest first. Returns lightweight summaries (no embedded graph) so the list stays fast even when scenarios carry large materialized snapshots \u2014 use GET /api/v1/scenarios/{id} to fetch the full graph for one scenario.",
+        "operationId": "list_scenarios_api_v1_scenarios_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Scenarios Api V1 Scenarios Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Scenarios",
+        "tags": [
+          "Scenarios"
+        ]
+      },
+      "post": {
+        "description": "Create a new scenario by snapshotting the named transform's current graph. Scenario name must be unique per (user, transform_id) \u2014 a duplicate returns 409.",
+        "operationId": "create_scenario_api_v1_scenarios_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScenarioCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Scenario Api V1 Scenarios Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Scenario",
+        "tags": [
+          "Scenarios"
+        ]
+      }
+    },
+    "/api/v1/scenarios/{scenario_id}": {
+      "delete": {
+        "description": "Delete one scenario by id. Tenant-scoped. 404 when the scenario doesn't exist for the caller (does not distinguish 'never existed' from 'belongs to another user' \u2014 see the service docstring for why).",
+        "operationId": "delete_scenario_api_v1_scenarios__scenario_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scenario_id",
+            "required": true,
+            "schema": {
+              "title": "Scenario Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Scenario",
+        "tags": [
+          "Scenarios"
+        ]
+      },
+      "get": {
+        "description": "Fetch one scenario by id, including the materialized graph snapshot. Tenant-scoped: cross-tenant or missing ids return 404 without distinguishing the two.",
+        "operationId": "get_scenario_api_v1_scenarios__scenario_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scenario_id",
+            "required": true,
+            "schema": {
+              "title": "Scenario Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Scenario Api V1 Scenarios  Scenario Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Scenario",
+        "tags": [
+          "Scenarios"
         ]
       }
     },
