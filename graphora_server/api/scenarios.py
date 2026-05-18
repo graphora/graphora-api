@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from graphora_server.auth import AuthContext, get_current_auth
 from graphora_server.schemas.graph import GraphResponse
+from graphora_server.schemas.graph_changes import SaveGraphRequest
 from graphora_server.schemas.scenario import (
     Scenario as ScenarioResponse,
     ScenarioCreateRequest,
@@ -28,6 +29,7 @@ from graphora_server.schemas.scenario import (
 from graphora_server.services.scenario_service import (
     Scenario as ScenarioRecord,
     ScenarioConflictError,
+    ScenarioMutationError,
     ScenarioNotFoundError,
     ScenarioService,
 )
@@ -203,6 +205,45 @@ async def get_scenario(
         record = await _service().get(scenario_id, auth.user_id)
     except ScenarioNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    return _to_response(record).model_dump(mode="json")
+
+
+@router.patch(
+    "/{scenario_id}",
+    description=(
+        "B6-scenario slice 2b: apply node + edge mutations to "
+        "the scenario's graph snapshot. The request body reuses "
+        "the same SaveGraphRequest shape /graph/{tx} accepts — "
+        "nodes / edges each with created / updated / deleted "
+        "lists. Property updates use the same merge semantics "
+        "(set a value to None to delete that key from the "
+        "property bag). Mutations are validated atomically: a "
+        "request that would leave any dangling edge (source or "
+        "target node missing from the post-mutation state) is "
+        "rejected with 422; nothing is persisted."
+    ),
+)
+async def patch_scenario(
+    scenario_id: str,
+    body: SaveGraphRequest,
+    auth: AuthContext = Depends(get_current_auth),
+) -> Dict[str, Any]:
+    """Mutate a scenario's graph snapshot. Returns the full
+    updated scenario record (incl. the mutated graph payload)
+    on success."""
+    try:
+        record = await _service().apply_mutations(
+            scenario_id=scenario_id,
+            user_id=auth.user_id,
+            changes=body,
+        )
+    except ScenarioNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ScenarioMutationError as exc:
+        # 422 = "well-formed request, semantically invalid."
+        # Distinct from 404 (scenario doesn't exist) and 400
+        # (Pydantic validation failure on the request body).
+        raise HTTPException(status_code=422, detail=str(exc))
     return _to_response(record).model_dump(mode="json")
 
 

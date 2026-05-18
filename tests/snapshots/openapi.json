@@ -9210,6 +9210,64 @@
         "tags": [
           "Scenarios"
         ]
+      },
+      "patch": {
+        "description": "B6-scenario slice 2b: apply node + edge mutations to the scenario's graph snapshot. The request body reuses the same SaveGraphRequest shape /graph/{tx} accepts \u2014 nodes / edges each with created / updated / deleted lists. Property updates use the same merge semantics (set a value to None to delete that key from the property bag). Mutations are validated atomically: a request that would leave any dangling edge (source or target node missing from the post-mutation state) is rejected with 422; nothing is persisted.",
+        "operationId": "patch_scenario_api_v1_scenarios__scenario_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scenario_id",
+            "required": true,
+            "schema": {
+              "title": "Scenario Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveGraphRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Patch Scenario Api V1 Scenarios  Scenario Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch Scenario",
+        "tags": [
+          "Scenarios"
+        ]
       }
     },
     "/api/v1/schema": {

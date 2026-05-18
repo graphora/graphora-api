@@ -21,6 +21,7 @@ from graphora_server.schemas.graph import GraphResponse, Node
 from graphora_server.services.scenario_service import (
     Scenario,
     ScenarioConflictError,
+    ScenarioMutationError,
     ScenarioNotFoundError,
 )
 
@@ -403,3 +404,131 @@ def test_delete_scenario_404_when_unknown_or_cross_tenant(test_client):
         response = test_client.delete("/api/v1/scenarios/nope")
 
     assert response.status_code == 404
+
+
+# ============================================================
+# PATCH /api/v1/scenarios/{id} — slice 2b mutations
+# ============================================================
+
+
+def test_patch_scenario_applies_mutations_and_returns_full_record(test_client):
+    """Happy path: PATCH with a mutation body returns the full
+    updated scenario (matching the GET /scenarios/{id} shape).
+    Pin so a refactor that returns just the diff or a 204
+    regresses — the full record lets the caller skip a follow-up
+    GET, which is the main UX win over a separate fetch step."""
+    updated = _record(name="my-scenario", snapshot_nodes=3)
+    with patch("graphora_server.api.scenarios._service") as service_factory:
+        service = service_factory.return_value
+        service.apply_mutations = AsyncMock(return_value=updated)
+
+        response = test_client.patch(
+            "/api/v1/scenarios/sc-1",
+            json={
+                "nodes": {
+                    "created": [
+                        {
+                            "id": "n-new",
+                            "type": "Person",
+                            "label": "Carol",
+                            "properties": {"name": "Carol"},
+                        }
+                    ],
+                    "updated": [],
+                    "deleted": [],
+                },
+                "edges": None,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Full record shape — name + node_count + embedded graph.
+    assert body["id"] == "sc-1"
+    assert body["node_count"] == 3
+    assert "graph" in body
+
+
+def test_patch_scenario_passes_auth_user_id_to_service(test_client):
+    """Tenant scoping pin: auth.user_id must reach the service's
+    apply_mutations call. Pin so a refactor that drops the
+    kwarg silently lets users mutate scenarios under a
+    different tenant."""
+    with patch("graphora_server.api.scenarios._service") as service_factory:
+        service = service_factory.return_value
+        service.apply_mutations = AsyncMock(return_value=_record())
+
+        test_client.patch(
+            "/api/v1/scenarios/sc-1",
+            json={"nodes": None, "edges": None},
+        )
+
+    service.apply_mutations.assert_awaited_once()
+    kwargs = service.apply_mutations.await_args.kwargs
+    assert kwargs["scenario_id"] == "sc-1"
+    assert kwargs["user_id"] == "user-1"
+
+
+def test_patch_scenario_404_when_scenario_missing(test_client):
+    """ScenarioNotFoundError from the service → 404 on the
+    wire. Same posture as GET — cross-tenant and missing
+    collapse to 404 so existence isn't leaked."""
+    with patch("graphora_server.api.scenarios._service") as service_factory:
+        service = service_factory.return_value
+        service.apply_mutations = AsyncMock(
+            side_effect=ScenarioNotFoundError("not found")
+        )
+
+        response = test_client.patch(
+            "/api/v1/scenarios/missing",
+            json={"nodes": None, "edges": None},
+        )
+
+    assert response.status_code == 404
+
+
+def test_patch_scenario_422_on_mutation_error(test_client):
+    """ScenarioMutationError → 422. Distinct from 404 (scenario
+    missing) and from 400/422-from-Pydantic (request body
+    malformed). Pin the status code so CLI/SDK callers can
+    branch on it — 'fix the mutation batch' is a different
+    operator action from 'fix the request body'."""
+    with patch("graphora_server.api.scenarios._service") as service_factory:
+        service = service_factory.return_value
+        service.apply_mutations = AsyncMock(
+            side_effect=ScenarioMutationError(
+                "Mutation would leave dangling edges: ['e0']"
+            )
+        )
+
+        response = test_client.patch(
+            "/api/v1/scenarios/sc-1",
+            json={
+                "nodes": {"created": [], "updated": [], "deleted": ["n0"]},
+                "edges": None,
+            },
+        )
+
+    assert response.status_code == 422
+    assert "dangling" in response.text
+
+
+def test_patch_scenario_rejects_malformed_node_create(test_client):
+    """Pydantic validation pin: a node create missing required
+    fields (id / type / label) returns 422 BEFORE the service
+    layer is touched. Pin so a refactor that loosens the
+    schema lets bogus shapes through to the service (where
+    they'd KeyError at a less helpful location)."""
+    response = test_client.patch(
+        "/api/v1/scenarios/sc-1",
+        json={
+            "nodes": {
+                "created": [{"id": "n-bad"}],  # missing type + label
+                "updated": [],
+                "deleted": [],
+            },
+            "edges": None,
+        },
+    )
+
+    assert response.status_code == 422

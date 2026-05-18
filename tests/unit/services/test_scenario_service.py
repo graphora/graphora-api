@@ -20,8 +20,17 @@ from unittest.mock import AsyncMock, patch
 
 from graphora_server.config import settings
 from graphora_server.schemas.graph import Edge, GraphResponse, Node
+from graphora_server.schemas.graph_changes import (
+    EdgeChanges,
+    EdgeCreation,
+    NodeChanges,
+    NodeCreation,
+    NodeUpdate,
+    SaveGraphRequest,
+)
 from graphora_server.services.scenario_service import (
     ScenarioConflictError,
+    ScenarioMutationError,
     ScenarioNotFoundError,
     ScenarioService,
     _DEFAULT_MEMORY_STORE,
@@ -513,3 +522,327 @@ async def test_postgres_delete_propagates_db_exception(monkeypatch):
     with patch("graphora_server.services.scenario_service.db.fetch", new=fake_fetch):
         with pytest.raises(RuntimeError, match="connection refused"):
             await service.delete("sc-1", "user-x")
+
+
+# ============================================================
+# B6-scenario slice 2b: apply_mutations
+# ============================================================
+
+
+async def _seed(
+    service: ScenarioService,
+    *,
+    n_nodes: int = 2,
+    n_edges: int = 1,
+    user_id: str = "user-1",
+) -> str:
+    """Helper: create a fresh scenario with a known shape and
+    return its id. Saves test bodies from boilerplate when the
+    differential is the mutation, not the seed."""
+    record = await service.create_from_transform(
+        user_id=user_id,
+        transform_id="tx-1",
+        name="mutation-target",
+        graph=_graph(n_nodes=n_nodes, n_edges=n_edges),
+    )
+    return record.id
+
+
+def _request(
+    *,
+    node_creates: list = None,
+    node_updates: list = None,
+    node_deletes: list = None,
+    edge_creates: list = None,
+    edge_updates: list = None,
+    edge_deletes: list = None,
+) -> SaveGraphRequest:
+    """Build a SaveGraphRequest with only the fields the test
+    cares about. Defaults keep nodes/edges None when the test
+    isn't touching that side, mirroring the API where partial
+    requests are the common shape."""
+    nodes = None
+    edges = None
+    if node_creates or node_updates or node_deletes:
+        nodes = NodeChanges(
+            created=node_creates or [],
+            updated=node_updates or [],
+            deleted=node_deletes or [],
+        )
+    if edge_creates or edge_updates or edge_deletes:
+        edges = EdgeChanges(
+            created=edge_creates or [],
+            updated=edge_updates or [],
+            deleted=edge_deletes or [],
+        )
+    return SaveGraphRequest(nodes=nodes, edges=edges)
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_creates_node(memory_service):
+    """Minimum round-trip: a create lands in the snapshot.
+    Pin so a refactor that drops the persist step regresses."""
+    scenario_id = await _seed(memory_service)
+    new_node = NodeCreation(
+        id="n-new",
+        type="Person",
+        label="Carol",
+        properties={"name": "Carol"},
+    )
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(node_creates=[new_node]),
+    )
+
+    node_ids = {n["id"] for n in updated.graph_snapshot["nodes"]}
+    assert "n-new" in node_ids
+    # The seed's nodes are still there too — creates are
+    # additive, not a replace.
+    assert "n0" in node_ids
+    assert "n1" in node_ids
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_updates_node_properties_merge(memory_service):
+    """Property updates merge into the existing bag; setting a
+    key to None deletes it. Matches the existing
+    SaveGraphRequest semantics so callers can rely on the same
+    contract everywhere it's used."""
+    scenario_id = await _seed(memory_service)
+    # Seed n0 has properties {"name": "Node0"} — update name +
+    # add title; another mutation deletes the existing name.
+    update = NodeUpdate(
+        id="n0",
+        properties={"title": "Engineer", "name": None},
+    )
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(node_updates=[update]),
+    )
+
+    n0 = next(n for n in updated.graph_snapshot["nodes"] if n["id"] == "n0")
+    assert n0["properties"].get("title") == "Engineer", (
+        "Update should add the new key. Got " f"{n0['properties']!r}"
+    )
+    assert "name" not in n0["properties"], (
+        "Setting a property to None must DELETE it from the "
+        "property bag, not store None. Got "
+        f"{n0['properties']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_rejects_dangling_edge_after_node_delete(
+    memory_service,
+):
+    """The validation contract: deleting a node referenced by
+    an un-deleted edge raises ScenarioMutationError. The seed
+    has an edge e0 from n0 → n1; deleting n0 without also
+    deleting e0 must reject the WHOLE batch (nothing
+    persisted)."""
+    scenario_id = await _seed(memory_service)
+
+    with pytest.raises(ScenarioMutationError, match="dangling"):
+        await memory_service.apply_mutations(
+            scenario_id=scenario_id,
+            user_id="user-1",
+            changes=_request(node_deletes=["n0"]),
+        )
+
+    # Atomicity pin: nothing was persisted. The seed's nodes +
+    # edges must still all be there.
+    after = await memory_service.get(scenario_id, "user-1")
+    node_ids = {n["id"] for n in after.graph_snapshot["nodes"]}
+    edge_ids = {e["id"] for e in after.graph_snapshot["edges"]}
+    assert node_ids == {"n0", "n1"}
+    assert edge_ids == {"e0"}
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_node_delete_with_edge_delete_succeeds(
+    memory_service,
+):
+    """Mirror of the previous test: explicitly deleting the
+    incident edge first makes the node-delete legal. Pin so a
+    refactor that's overly strict (rejecting ANY node-delete
+    with any edges in the graph) regresses."""
+    scenario_id = await _seed(memory_service)
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(node_deletes=["n0"], edge_deletes=["e0"]),
+    )
+
+    node_ids = {n["id"] for n in updated.graph_snapshot["nodes"]}
+    edge_ids = {e["id"] for e in updated.graph_snapshot["edges"]}
+    assert node_ids == {"n1"}
+    assert edge_ids == set()
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_rejects_create_with_colliding_id(
+    memory_service,
+):
+    """A "create" with an existing id is a contract violation,
+    not an implicit update. Pin so a refactor that silently
+    overwrites regresses — callers who wanted an update should
+    use the updates list explicitly."""
+    scenario_id = await _seed(memory_service)
+    collision = NodeCreation(
+        id="n0",  # already exists in the seed
+        type="Person",
+        label="Replacement",
+    )
+
+    with pytest.raises(ScenarioMutationError, match="already exists"):
+        await memory_service.apply_mutations(
+            scenario_id=scenario_id,
+            user_id="user-1",
+            changes=_request(node_creates=[collision]),
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_rejects_edge_create_with_missing_endpoint(
+    memory_service,
+):
+    """An edge-create whose source or target doesn't exist
+    (post-mutation) is rejected. Pin so a refactor that drops
+    the dangling-edge check on creates regresses — same family
+    of bug as the node-delete-dangling case."""
+    scenario_id = await _seed(memory_service)
+    bad_edge = EdgeCreation(
+        id="e-bad",
+        source="n0",
+        target="n-does-not-exist",
+        type="KNOWS",
+        label="knows",
+    )
+
+    with pytest.raises(ScenarioMutationError, match="dangling"):
+        await memory_service.apply_mutations(
+            scenario_id=scenario_id,
+            user_id="user-1",
+            changes=_request(edge_creates=[bad_edge]),
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_create_node_then_edge_to_it_in_same_batch(
+    memory_service,
+):
+    """A batch can be self-consistent: create a new node + an
+    edge pointing at it in one call. The dangling-edge
+    validation must consider the POST-mutation state, not the
+    pre-state. Pin so a refactor that validates against the
+    pre-state breaks this legitimate batch."""
+    scenario_id = await _seed(memory_service)
+    new_node = NodeCreation(
+        id="n-new",
+        type="Person",
+        label="Dave",
+    )
+    new_edge = EdgeCreation(
+        id="e-new",
+        source="n0",
+        target="n-new",
+        type="KNOWS",
+        label="knows",
+    )
+
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(node_creates=[new_node], edge_creates=[new_edge]),
+    )
+
+    assert any(n["id"] == "n-new" for n in updated.graph_snapshot["nodes"])
+    assert any(e["id"] == "e-new" for e in updated.graph_snapshot["edges"])
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_404_on_cross_tenant(memory_service):
+    """Mutating a scenario owned by another user must NOT
+    succeed — get() raises NotFound which apply_mutations
+    propagates. Pin the tenant-scoping at the mutation boundary
+    so a refactor that skips get() and writes directly
+    regresses."""
+    # Two users with same-named scenarios. user-2 tries to
+    # mutate user-1's scenario.
+    record = await memory_service.create_from_transform(
+        user_id="user-1",
+        transform_id="tx-1",
+        name="ours",
+        graph=_graph(),
+    )
+    new_node = NodeCreation(id="n-bad", type="Person", label="Bad")
+    with pytest.raises(ScenarioNotFoundError):
+        await memory_service.apply_mutations(
+            scenario_id=record.id,
+            user_id="user-2",  # wrong tenant
+            changes=_request(node_creates=[new_node]),
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_postgres_writes_update_with_user_filter(
+    monkeypatch,
+):
+    """Postgres write path: the UPDATE must include the user_id
+    filter so a malicious caller with a guessed scenario_id
+    can't write to another user's scenario. Pin so a refactor
+    that drops user_id from the UPDATE WHERE clause regresses —
+    same defense as the read paths got in commit 088692b."""
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgres://fake/url")
+    service = ScenarioService()
+    assert service._enabled
+
+    # Mock the get() call (returns existing scenario) + the
+    # UPDATE execute + the re-read get() that returns the
+    # mutated record.
+    existing = {
+        "id": "sc-1",
+        "user_id": "user-1",
+        "transform_id": "tx-1",
+        "parent_scenario_id": None,
+        "name": "n",
+        "description": None,
+        "graph_snapshot": {
+            "nodes": [{"id": "n1", "label": "x", "type": "t", "properties": {}}],
+            "edges": [],
+        },
+        "created_at": "2026-05-18T00:00:00+00:00",
+    }
+    fake_fetch = AsyncMock(return_value=[existing])
+    fake_execute = AsyncMock()
+    with (
+        patch(
+            "graphora_server.services.scenario_service.db.fetch",
+            new=fake_fetch,
+        ),
+        patch(
+            "graphora_server.services.scenario_service.db.execute",
+            new=fake_execute,
+        ),
+    ):
+        update = NodeUpdate(id="n1", properties={"title": "new"})
+        await service.apply_mutations(
+            scenario_id="sc-1",
+            user_id="user-1",
+            changes=_request(node_updates=[update]),
+        )
+
+    fake_execute.assert_awaited_once()
+    args = fake_execute.await_args.args
+    sql = args[0]
+    assert "UPDATE scenarios" in sql
+    assert "user_id = %s" in sql, (
+        "UPDATE must filter on user_id — without it a "
+        "scenario_id alone is enough to write to another "
+        "tenant's row."
+    )
+    # Positional params: (sql, Json(snapshot), scenario_id, user_id).
+    assert args[2] == "sc-1"
+    assert args[3] == "user-1"

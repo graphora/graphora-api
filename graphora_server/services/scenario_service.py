@@ -31,6 +31,7 @@ from psycopg.types.json import Json
 from graphora_server.config import settings
 from graphora_server.db import postgres as db
 from graphora_server.schemas.graph import GraphResponse
+from graphora_server.schemas.graph_changes import SaveGraphRequest
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,27 @@ class ScenarioNotFoundError(Exception):
     exist" from "belongs to another tenant" — same posture as
     ``/decisions`` and ``/diff`` to avoid leaking cross-tenant
     existence.
+    """
+
+
+class ScenarioMutationError(Exception):
+    """Raised when a mutation request would leave the scenario in
+    an invalid state.
+
+    Validation cases:
+      * A node-delete leaves an edge with a dangling source or
+        target endpoint. The caller can fix this by either also
+        deleting the edge or by not deleting the node.
+      * A node-create with an id that collides with an existing
+        node id.
+      * An edge-create whose source or target id doesn't resolve
+        to a node in the final state (including newly-created
+        nodes in the same mutation batch).
+
+    Maps to HTTP 422 at the API layer — the request was
+    well-formed (Pydantic validation passed) but its semantic
+    contract failed. Distinct from 404 (which means "scenario
+    doesn't exist") and 409 (which is for name conflicts).
     """
 
 
@@ -345,6 +367,193 @@ class ScenarioService:
                 self._memory_store.pop(index)
                 return
         raise ScenarioNotFoundError(f"Scenario {scenario_id!r} not found.")
+
+    async def apply_mutations(
+        self,
+        scenario_id: str,
+        user_id: str,
+        changes: SaveGraphRequest,
+    ) -> Scenario:
+        """Apply node + edge mutations to a scenario's graph snapshot.
+
+        Slice 2b: this rewrites the materialized JSONB snapshot
+        in place. Slice 2c is expected to migrate to a
+        diff-from-parent (CoW) storage layout that keeps the
+        public API contract identical — callers see the same
+        mutated graph regardless of how it's stored.
+
+        Algorithm:
+          1. Load the current scenario (raises NotFound on
+             missing or cross-tenant).
+          2. Build the target graph in memory: start from the
+             current snapshot, apply node creates → node
+             updates → node deletes → edge creates → edge
+             updates → edge deletes. Order matters within
+             each pass — within nodes, creates/updates must
+             land BEFORE deletes so a mutation can add a new
+             node, update its properties, and delete the old
+             one in one batch.
+          3. Validate the target state:
+               - No id collisions between existing + newly
+                 created nodes/edges.
+               - Every edge's source + target id resolves to a
+                 surviving node.
+             Failures raise ScenarioMutationError → API 422.
+          4. Persist the new snapshot back to storage.
+
+        Returns the updated Scenario record so callers don't
+        need a follow-up get. Mirrors create_from_transform's
+        return shape.
+        """
+        scenario = await self.get(scenario_id, user_id)
+        snapshot = scenario.graph_snapshot or {"nodes": [], "edges": []}
+
+        # Build mutable index of the current graph. Dicts keyed
+        # by id make the apply loops O(1) per operation; the
+        # cost is one extra pass to repack to lists at the end.
+        nodes_by_id: Dict[str, Dict[str, Any]] = {
+            node["id"]: dict(node) for node in (snapshot.get("nodes") or [])
+        }
+        edges_by_id: Dict[str, Dict[str, Any]] = {
+            edge["id"]: dict(edge) for edge in (snapshot.get("edges") or [])
+        }
+
+        # ---- Nodes ----------------------------------------------------------
+        node_changes = changes.nodes
+        if node_changes is not None:
+            # Creates first — id-collision detection runs against
+            # the EXISTING set (a "create" with an id that
+            # already exists is a contract violation, not an
+            # implicit update).
+            for create in node_changes.created:
+                if create.id in nodes_by_id:
+                    raise ScenarioMutationError(
+                        f"Cannot create node {create.id!r}: a node with "
+                        f"that id already exists in the scenario."
+                    )
+                nodes_by_id[create.id] = {
+                    "id": create.id,
+                    "label": create.label,
+                    "type": create.type,
+                    "properties": dict(create.properties or {}),
+                }
+            # Updates second — merge properties, with None
+            # signalling "delete this key" (matches the existing
+            # SaveGraphRequest semantics).
+            for update in node_changes.updated:
+                existing = nodes_by_id.get(update.id)
+                if existing is None:
+                    raise ScenarioMutationError(
+                        f"Cannot update node {update.id!r}: no such node "
+                        f"in the scenario."
+                    )
+                props = dict(existing.get("properties") or {})
+                for key, value in update.properties.items():
+                    if value is None:
+                        props.pop(key, None)
+                    else:
+                        props[key] = value
+                existing["properties"] = props
+            # Deletes last — collect the ids being removed for
+            # the dangling-edge validation below.
+            for delete_id in node_changes.deleted:
+                if delete_id not in nodes_by_id:
+                    raise ScenarioMutationError(
+                        f"Cannot delete node {delete_id!r}: no such node "
+                        f"in the scenario."
+                    )
+                del nodes_by_id[delete_id]
+
+        # ---- Edges ----------------------------------------------------------
+        edge_changes = changes.edges
+        if edge_changes is not None:
+            for create in edge_changes.created:
+                if create.id in edges_by_id:
+                    raise ScenarioMutationError(
+                        f"Cannot create edge {create.id!r}: an edge with "
+                        f"that id already exists in the scenario."
+                    )
+                edges_by_id[create.id] = {
+                    "id": create.id,
+                    "source": create.source,
+                    "target": create.target,
+                    "type": create.type,
+                    "label": create.label,
+                    "properties": dict(create.properties or {}),
+                }
+            for update in edge_changes.updated:
+                existing = edges_by_id.get(update.id)
+                if existing is None:
+                    raise ScenarioMutationError(
+                        f"Cannot update edge {update.id!r}: no such edge "
+                        f"in the scenario."
+                    )
+                props = dict(existing.get("properties") or {})
+                for key, value in update.properties.items():
+                    if value is None:
+                        props.pop(key, None)
+                    else:
+                        props[key] = value
+                existing["properties"] = props
+            for delete_id in edge_changes.deleted:
+                if delete_id not in edges_by_id:
+                    raise ScenarioMutationError(
+                        f"Cannot delete edge {delete_id!r}: no such edge "
+                        f"in the scenario."
+                    )
+                del edges_by_id[delete_id]
+
+        # ---- Dangling-edge validation --------------------------------------
+        # After all mutations, every surviving edge must point
+        # at two surviving nodes. Catches the "delete a node
+        # but forget to delete its incident edges" case the
+        # API contract rejects. Reporting all offending edges
+        # at once (not just the first) helps the caller fix
+        # the batch in one shot.
+        node_ids = set(nodes_by_id.keys())
+        dangling: List[str] = []
+        for edge_id, edge in edges_by_id.items():
+            if edge.get("source") not in node_ids or edge.get("target") not in node_ids:
+                dangling.append(edge_id)
+        if dangling:
+            raise ScenarioMutationError(
+                f"Mutation would leave dangling edges: {dangling!r}. "
+                f"Delete these edges explicitly or keep their "
+                f"source/target nodes."
+            )
+
+        # ---- Persist --------------------------------------------------------
+        new_snapshot = {
+            "nodes": list(nodes_by_id.values()),
+            "edges": list(edges_by_id.values()),
+        }
+
+        if self._enabled:
+            await db.execute(
+                """
+                UPDATE scenarios
+                SET graph_snapshot = %s
+                WHERE id = %s AND user_id = %s
+                """,
+                Json(new_snapshot),
+                scenario_id,
+                user_id,
+            )
+            # Re-read to pick up any server-side defaults
+            # (timestamps, etc.) and return a consistent
+            # record. Costs one extra round-trip but keeps the
+            # contract simple ("apply_mutations returns the
+            # current scenario").
+            return await self.get(scenario_id, user_id)
+
+        # Memory path — mutate the in-memory record in place.
+        for stored in self._memory_store:
+            if stored.id == scenario_id and stored.user_id == user_id:
+                stored.graph_snapshot = new_snapshot
+                return stored
+        # Should be unreachable — get() returned successfully
+        # above. Defensive raise to avoid a silent None return.
+        raise ScenarioNotFoundError(f"Scenario {scenario_id!r} vanished mid-mutation.")
 
     # Helpers --------------------------------------------------------------------
 
