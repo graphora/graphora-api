@@ -141,6 +141,60 @@ def test_claim_requires_user_id_at_construction():
 
 
 # ============================================================
+# target_kind validation + normalization (reviewer-flagged
+# Medium on 00e7476)
+# ============================================================
+
+
+def test_claim_rejects_invalid_target_kind():
+    """Reviewer-flagged Medium on commit 00e7476. The migration
+    has ``CHECK (target_kind IN ('node', 'edge'))``; the dataclass
+    annotation ``target_kind: TargetKind`` is documentation, not
+    runtime enforcement, so Python lets through any value. Pre-
+    fix Claim(target_kind="schema") was accepted at construction
+    + at memory-mode append (the memory filter just compares
+    via ``==``), then Postgres would reject it at INSERT with
+    an opaque CHECK violation.
+
+    Pin: invalid kinds (the string "schema", a foreign enum's
+    member, literal None) raise ValueError at construction.
+    The constructor routes the input through TargetKind(...)
+    which raises ValueError for unknown values."""
+    with pytest.raises(ValueError):
+        _claim(target_kind="schema")
+    with pytest.raises(ValueError):
+        _claim(target_kind="foo")
+    with pytest.raises(ValueError):
+        # None routes through TargetKind(None) which also raises.
+        _claim(target_kind=None)
+
+
+def test_claim_normalizes_string_target_kind_to_enum():
+    """The constructor accepts the underlying string
+    ("node"/"edge") as well as the enum, and normalizes to the
+    enum so downstream code can rely on the type. Pin so a
+    refactor that drops the normalization regresses — callers
+    constructing claims from JSON payloads pass strings, and
+    they should not have to remember to wrap in TargetKind()
+    themselves."""
+    claim = _claim(target_kind="node")
+    assert claim.target_kind is TargetKind.NODE
+    claim = _claim(target_kind="edge")
+    assert claim.target_kind is TargetKind.EDGE
+
+
+def test_claim_passes_through_target_kind_enum():
+    """Idempotency pin: TargetKind(TargetKind.NODE) →
+    TargetKind.NODE. Pin so a future refactor that switches to
+    ``isinstance(value, str)``-only checking regresses on the
+    enum-input path (which is the typed Python caller's path)."""
+    claim = _claim(target_kind=TargetKind.NODE)
+    assert claim.target_kind is TargetKind.NODE
+    claim = _claim(target_kind=TargetKind.EDGE)
+    assert claim.target_kind is TargetKind.EDGE
+
+
+# ============================================================
 # Append + read round-trip on memory backend
 # ============================================================
 
@@ -271,6 +325,47 @@ async def test_for_target_filters_by_target_kind(memory_service):
     )
     assert len(edge_claims) == 1
     assert edge_claims[0].value == "from-edge"
+
+
+@pytest.mark.asyncio
+async def test_for_target_normalizes_string_target_kind(memory_service):
+    """Mirror the Claim-construction normalization at the
+    for_target boundary: a caller passing the underlying string
+    ("node"/"edge") must work identically to passing the enum.
+    Pre-fix the SQL path would AttributeError on
+    ``target_kind.value`` for a bare string, and the memory
+    path would silently mismatch (Python ``"node" ==
+    TargetKind.NODE`` is False). Pin so the two backends stay
+    consistent — same set of accepted inputs, same set of
+    rejected ones."""
+    await memory_service.append(_claim(target_kind=TargetKind.NODE, value="alice"))
+
+    # String input — must normalize internally and match the
+    # stored enum-typed claim.
+    fetched = await memory_service.for_target(
+        transform_id="tx-1",
+        target_id="node-alice",
+        target_kind="node",
+        user_id="user-1",
+    )
+    assert len(fetched) == 1
+    assert fetched[0].value == "alice"
+
+
+@pytest.mark.asyncio
+async def test_for_target_rejects_invalid_target_kind(memory_service):
+    """Invalid target_kind on the read side raises ValueError —
+    same posture as Claim construction. Pin so a caller passing
+    "schema" or any other not-in-{node,edge} value fails fast
+    at the service boundary instead of silently mismatching
+    (memory) or AttributeError-ing (postgres)."""
+    with pytest.raises(ValueError):
+        await memory_service.for_target(
+            transform_id="tx-1",
+            target_id="x",
+            target_kind="schema",
+            user_id="user-1",
+        )
 
 
 @pytest.mark.asyncio

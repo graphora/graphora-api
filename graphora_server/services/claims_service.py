@@ -114,6 +114,19 @@ class Claim:
         # quietly writing an orphan row.
         if not self.user_id:
             raise ValueError("user_id is required and must be non-empty")
+        # Reviewer-flagged Medium on commit 00e7476. The dataclass
+        # annotation ``target_kind: TargetKind`` is documentation,
+        # not runtime enforcement — Python lets through any
+        # value (the string "schema", a DecisionLogService enum
+        # member with value "schema", literal ``None``). The
+        # migration's ``CHECK (target_kind IN ('node', 'edge'))``
+        # is the canonical truth; this normalization closes the
+        # gap by routing every input through ``TargetKind(...)``.
+        # Pass-through semantics: TargetKind(TargetKind.NODE) →
+        # TargetKind.NODE; TargetKind("node") → TargetKind.NODE;
+        # TargetKind("schema") → ValueError. One line, both
+        # validate and normalize.
+        self.target_kind = TargetKind(self.target_kind)
 
 
 @dataclass
@@ -268,6 +281,14 @@ class ClaimsService:
         detector trusts the same ordering to identify the
         "default" claim vs the alternatives.
         """
+        # Same normalization pattern Claim.__post_init__ uses:
+        # accept either a TargetKind enum or the underlying
+        # string ("node" / "edge"). Invalid values raise ValueError
+        # before the SQL/memory path runs, so a bare-string
+        # caller fails consistently across backends rather than
+        # silently mismatching (memory) or AttributeError-ing on
+        # ``.value`` (postgres).
+        target_kind = TargetKind(target_kind)
         if self._enabled:
             rows = await db.fetch(
                 """
