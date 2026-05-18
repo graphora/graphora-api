@@ -229,6 +229,27 @@ class TestGeminiProvider:
                     f"Gemini free-tier quota exhausted; skipping "
                     f"live-extraction smoke test. {err_text[:200]}"
                 )
+            # 503 ServiceUnavailable from Gemini is the model-
+            # overloaded path ("This model is currently experiencing
+            # high demand. Spikes in demand are usually temporary.
+            # Please try again later."). Same operational-vs-code
+            # class as 429 — the BAML client returned a real
+            # response, our pipeline shipped a real request, the
+            # upstream just couldn't serve it. Skipping rather
+            # than failing keeps the harness from blocking
+            # otherwise-clean PRs during Google capacity
+            # incidents. The CI signal remains "the harness ran;
+            # provider returned an outage marker, retry later."
+            if "503" in err_text and (
+                "UNAVAILABLE" in err_text
+                or "Service Unavailable" in err_text
+                or "high demand" in err_text.lower()
+            ):
+                pytest.skip(
+                    f"Gemini upstream 503 (model overloaded); "
+                    f"skipping live-extraction smoke test. "
+                    f"{err_text[:200]}"
+                )
             raise
 
         assert graph is not None
