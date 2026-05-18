@@ -11,7 +11,9 @@ from graphora_server.services.transform.helpers import (
     transform_as_nodes,
     transform_as_relationships,
     merge_nodes,
+    emit_node_property_claims,
 )
+from graphora_server.services.claims_service import ClaimsService
 from graphora_server.services.llm.client import LLMClient
 from .models import (
     ExtractionGap,
@@ -117,6 +119,7 @@ class MultiPassExtractor:
         progress_callback: Optional[Any] = None,
         chunk_metadatas: Optional[List[Any]] = None,
         extractor_model: Optional[str] = None,
+        claims_service: Optional[ClaimsService] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Multi-pass extraction with validation-driven refinement.
 
@@ -153,6 +156,7 @@ class MultiPassExtractor:
             progress_callback,
             chunk_metadatas=chunk_metadatas,
             extractor_model=extractor_model,
+            claims_service=claims_service,
         )
 
         logger.info(
@@ -256,6 +260,7 @@ class MultiPassExtractor:
                         if refinement_model != extractor_model
                         else None
                     ),
+                    claims_service=claims_service,
                 )
             )
 
@@ -308,6 +313,7 @@ class MultiPassExtractor:
         progress_callback: Optional[Any] = None,
         chunk_metadatas: Optional[List[Any]] = None,
         extractor_model: Optional[str] = None,
+        claims_service: Optional[ClaimsService] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Perform initial extraction pass with relationship-aware entity context.
 
@@ -379,6 +385,21 @@ class MultiPassExtractor:
             for node in base_nodes:
                 if node.provenance:
                     node.provenance.chunk_ids.append(str(chunk_index))
+
+            # B1-prob slice 2b: emit claims for every per-chunk
+            # extraction BEFORE the dedup-into-existing-nodes loop
+            # below. The same reason as in graph_transformer's
+            # single-pass site: two chunks extracting the same
+            # canonical_id with different property values are
+            # exactly the contradiction signal — dedup would
+            # collapse them and we'd lose the cross-chunk
+            # disagreement.
+            await emit_node_property_claims(
+                claims_service,
+                base_nodes,
+                transform_id=transform_id,
+                user_id=user_id,
+            )
 
             # Deduplicate and add new nodes
             for new_node in base_nodes:
@@ -488,6 +509,7 @@ class MultiPassExtractor:
         chunk_metadatas: Optional[List[Any]] = None,
         extractor_model: Optional[str] = None,
         model_override: Optional[str] = None,
+        claims_service: Optional[ClaimsService] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance], RefinementResult]:
         """Perform targeted refinement for identified gaps.
 
@@ -523,6 +545,7 @@ class MultiPassExtractor:
                     chunk_metadatas=chunk_metadatas,
                     extractor_model=extractor_model,
                     model_override=model_override,
+                    claims_service=claims_service,
                 )
                 for chunk_gaps in gaps_by_chunk.values()
             ]
@@ -543,6 +566,7 @@ class MultiPassExtractor:
                     chunk_metadatas=chunk_metadatas,
                     extractor_model=extractor_model,
                     model_override=model_override,
+                    claims_service=claims_service,
                 )
                 new_nodes.extend(chunk_nodes)
                 new_relationships.extend(chunk_rels)
@@ -565,6 +589,7 @@ class MultiPassExtractor:
         chunk_metadatas: Optional[List[Any]] = None,
         extractor_model: Optional[str] = None,
         model_override: Optional[str] = None,
+        claims_service: Optional[ClaimsService] = None,
     ) -> Tuple[List[BaseNode], List[RelationshipInstance]]:
         """Extract entities/relationships for specific gaps.
 
@@ -644,6 +669,18 @@ class MultiPassExtractor:
                         chunk_text=chunk_text,
                         extractor_model=extractor_model,
                         prompt_version=get_prompt_version("ExtractNodesFromChunk"),
+                    )
+                    # B1-prob slice 2b: emit claims for refinement-
+                    # pass extractions too. Without this, a node
+                    # introduced by a refinement pass wouldn't
+                    # contribute to the contradiction surface even
+                    # though it's still per-chunk extraction
+                    # output the operator wants to review.
+                    await emit_node_property_claims(
+                        claims_service,
+                        extracted_nodes,
+                        transform_id=transform_id,
+                        user_id=user_id,
                     )
                     new_nodes.extend(extracted_nodes)
                 except Exception as e:

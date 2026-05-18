@@ -1,4 +1,4 @@
-"""Unit tests for _emit_node_property_claims (B1-prob slice 2b).
+"""Unit tests for emit_node_property_claims (B1-prob slice 2b).
 
 The hook fires inside graph_transformer's per-chunk extraction
 loop. It must:
@@ -26,8 +26,8 @@ from graphora_server.services.claims_service import (
     TargetKind,
     _reset_default_memory_store_for_tests,
 )
-from graphora_server.services.transform.graph_transformer import (
-    _emit_node_property_claims,
+from graphora_server.services.transform.helpers import (
+    emit_node_property_claims,
 )
 from graphora_server.services.transform.models import BaseNode, NodeProvenance
 
@@ -93,7 +93,7 @@ async def test_emits_one_claim_per_user_property(memory_service):
         }
     )
 
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [node],
         transform_id="tx-1",
@@ -120,7 +120,7 @@ async def test_uses_canonical_id_as_target_id(memory_service):
     separate contradiction groups and the disagreement would
     be invisible."""
     node = _node(node_id="alice_chunk_5", canonical_id="cid-stable")
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [node],
         transform_id="tx-1",
@@ -145,7 +145,7 @@ async def test_falls_back_to_id_when_no_canonical_id(memory_service):
     group cross-chunk for entities without unique properties.
     Graceful degrade, not crash."""
     node = _node(canonical_id=None, node_id="alice_42")
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [node],
         transform_id="tx-1",
@@ -172,7 +172,7 @@ async def test_propagates_provenance_fields(memory_service):
         extractor_model="gemini-2.5-pro",
         prompt_version="v2.1",
     )
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [node],
         transform_id="tx-1",
@@ -196,7 +196,7 @@ async def test_uses_provenance_confidence(memory_service):
     Pin so a refactor that hardcodes 1.0 (losing the extractor's
     self-assessment) regresses."""
     node = _node(confidence=0.55)
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [node],
         transform_id="tx-1",
@@ -233,7 +233,7 @@ async def test_filters_system_properties(memory_service):
             "extraction_confidence": 0.9,
         }
     )
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [node],
         transform_id="tx-1",
@@ -263,7 +263,7 @@ async def test_skips_none_values(memory_service):
             "title": None,
         }
     )
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [node],
         transform_id="tx-1",
@@ -292,7 +292,7 @@ async def test_noop_when_claims_service_is_none():
     stays intact and a refactor that hardens the type doesn't
     break older callers."""
     # No claims_service. Must not raise.
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         None,
         [_node()],
         transform_id="tx-1",
@@ -311,7 +311,7 @@ async def test_noop_when_user_id_is_none(memory_service):
     time."""
     # Save the store size before.
     pre_count = len(memory_service._memory_store)
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [_node()],
         transform_id="tx-1",
@@ -328,7 +328,7 @@ async def test_noop_when_transform_id_is_none(memory_service):
     so the helper degrades gracefully rather than writing
     orphan rows. Mirrors B0-log's similar guard."""
     pre_count = len(memory_service._memory_store)
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [_node()],
         transform_id=None,
@@ -356,7 +356,7 @@ async def test_swallows_append_failures(monkeypatch):
     failing_service.append = AsyncMock(side_effect=RuntimeError("DB on fire"))
 
     # Helper must NOT raise even though every row fails.
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         failing_service,
         [_node(properties={"name": "Alice", "title": "Engineer"})],
         transform_id="tx-1",
@@ -377,7 +377,7 @@ async def test_emits_for_each_node_in_batch(memory_service):
         _node(canonical_id="cid-alice", properties={"name": "Alice"}),
         _node(canonical_id="cid-bob", properties={"name": "Bob"}),
     ]
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         nodes,
         transform_id="tx-1",
@@ -436,13 +436,13 @@ async def test_cross_chunk_disagreement_surfaces_as_contradiction(
     )
 
     # Both extractions go through the helper.
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [chunk_1_node],
         transform_id="tx-1",
         user_id="user-1",
     )
-    await _emit_node_property_claims(
+    await emit_node_property_claims(
         memory_service,
         [chunk_2_node],
         transform_id="tx-1",

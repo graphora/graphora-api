@@ -13,15 +13,12 @@ from graphora_server.services.transform.helpers import (
     transform_as_relationships,
     prune_orphaned_nodes,
     deduplicate_entities_with_splink,
+    emit_node_property_claims,
 )
 from graphora_server.services.llm.client import LLMClient
 from graphora_server.services.transform.models import BaseNode, RelationshipInstance
 from graphora_server.services.entity_ledger_service import entity_ledger_service
-from graphora_server.services.claims_service import (
-    Claim,
-    ClaimsService,
-    TargetKind as ClaimTargetKind,
-)
+from graphora_server.services.claims_service import ClaimsService
 from graphora_server.services.decision_log_service import (
     Decision,
     DecisionLogService,
@@ -584,7 +581,7 @@ async def _build_graph_from(
         # but the dedup check would drop the second extraction.
         # Emitting first preserves the cross-chunk disagreement
         # so the /contradictions endpoint can surface it.
-        await _emit_node_property_claims(
+        await emit_node_property_claims(
             claims_service,
             base_nodes,
             transform_id=transform_id,
@@ -852,7 +849,6 @@ def _format_properties(properties: Optional[Dict[str, Any]]) -> str:
     """
     if not properties:
         return "{}"
-    from graphora_server.utils.constants import SYSTEM_PROPERTIES
 
     user_props = {
         k: v
@@ -992,7 +988,6 @@ def _node_to_embedding_text(node: BaseNode) -> str:
     text. Same shape of bug the C2-postgres slice 6 review caught
     for the AGE find_similar_nodes scoring path.
     """
-    from graphora_server.utils.constants import SYSTEM_PROPERTIES
 
     parts: List[str] = []
     canonical_props = node.canonical_properties or {}
@@ -1202,108 +1197,6 @@ async def _splink_candidate_groups(
             by_rep[rep_id].append(rep_node)
 
     return [grp for grp in by_rep.values() if len(grp) >= 2]
-
-
-async def _emit_node_property_claims(
-    claims_service: Optional[ClaimsService],
-    nodes: List[BaseNode],
-    transform_id: Optional[str],
-    user_id: Optional[str],
-) -> None:
-    """B1-prob slice 2b: emit one Claim per (node, property) pair
-    so the /contradictions surface can group cross-chunk
-    disagreements about the same entity.
-
-    Called from the per-chunk extraction loop BEFORE the
-    dedup-by-content check, so claims for "Alice extracted with
-    title=Engineer (chunk 1)" and "Alice extracted with
-    title=Senior Engineer (chunk 2)" both land — the
-    contradiction detector groups them by canonical_id +
-    property_key and surfaces the disagreement.
-
-    Target identity: ``canonical_id`` (the stable hash computed
-    from "unique"-flagged ontology properties) when available,
-    falling back to the per-chunk extraction id. The
-    contradictions endpoint groups by target_id, so without
-    canonical_id the per-chunk ids stay separate and no
-    contradiction surfaces — graceful degrade for ontologies
-    without unique properties.
-
-    Failure posture: log-and-swallow. Each claim is its own
-    try/except so one bad row doesn't poison the rest of the
-    batch. Mirrors B0-log's ``decision_log.append`` posture —
-    extraction must never fail because claim-writing failed.
-
-    No-ops when:
-      * claims_service is None (callers without claim wiring).
-      * transform_id is None (claims are keyed by transform).
-      * user_id is None (tenant-scoping invariant — would write
-        an orphan row the read endpoints can't surface anyway).
-    """
-    if not claims_service or not transform_id or not user_id:
-        return
-
-    for node in nodes:
-        target_id = node.canonical_id or node.id
-        # Per-node provenance for the source_* fields. The
-        # _attach_provenance_properties helper also mirrors these
-        # into node.properties, but reading from the typed model
-        # is cheaper than dict lookups + None-coalescing.
-        prov = node.provenance
-        confidence = 1.0
-        if prov is not None and prov.confidence_score is not None:
-            confidence = max(0.0, min(1.0, float(prov.confidence_score)))
-        source_chunk_id = None
-        source_extractor_model = None
-        source_prompt_version = None
-        if prov is not None:
-            # chunk_ids is a list because merged nodes union
-            # their sources; pre-merge each node still has one.
-            source_chunk_id = prov.chunk_ids[0] if prov.chunk_ids else None
-            source_extractor_model = prov.extractor_model
-            source_prompt_version = prov.prompt_version
-
-        for property_key, value in (node.properties or {}).items():
-            # System properties (source_chunk_id, extractor_model,
-            # extraction_confidence, etc.) are observability, not
-            # claims. The contradiction detector keyed on them
-            # would surface every cross-chunk provenance difference
-            # as a "contradiction" — exactly the wrong signal.
-            if property_key in SYSTEM_PROPERTIES:
-                continue
-            # The `id` literal is also in SYSTEM_PROPERTIES, but
-            # defensively skip None values too — extraction output
-            # can carry None for unset fields and we don't want to
-            # emit "claim that X has property K = None."
-            if value is None:
-                continue
-            try:
-                await claims_service.append(
-                    Claim(
-                        transform_id=transform_id,
-                        target_id=target_id,
-                        target_kind=ClaimTargetKind.NODE,
-                        property_key=property_key,
-                        value=value,
-                        confidence=confidence,
-                        user_id=user_id,
-                        source_chunk_id=source_chunk_id,
-                        source_extractor_model=source_extractor_model,
-                        source_prompt_version=source_prompt_version,
-                    )
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                # Log and continue — never let claim-emission
-                # block extraction. This mirrors the B0-log
-                # posture from commit 8cbc76b. The
-                # /contradictions surface gracefully degrades to
-                # whatever DID land.
-                logger.warning(
-                    "Failed to emit claim for node=%s property=%s: %s",
-                    target_id,
-                    property_key,
-                    exc,
-                )
 
 
 async def _emit_entity_merged_decision(
@@ -1720,10 +1613,11 @@ async def _build_graph_with_multi_pass(
     extractor_model: Optional[str] = None,
     decision_log: Optional[DecisionLogService] = None,
     disputed_pairs_service: Optional[DisputedPairsService] = None,
-    # B1-prob slice 2b: accepted for signature parity but the
-    # multi-pass extractor doesn't yet emit claims (each pass
-    # has its own internal extraction loop). Wiring the hook
-    # into MultiPassExtractor is a slice 2b follow-up.
+    # B1-prob slice 2b: now actually wires through to the
+    # MultiPassExtractor (reviewer-flagged Medium on commit
+    # 60aebe9). Both the initial-extraction pass and the
+    # refinement passes emit claims at their per-chunk
+    # transform_as_nodes site via emit_node_property_claims.
     claims_service: Optional[ClaimsService] = None,
 ) -> DocumentKnowledgeGraph:
     """Build knowledge graph using multi-pass extraction with validation.
@@ -1779,6 +1673,7 @@ async def _build_graph_with_multi_pass(
         progress_callback=progress_callback,
         chunk_metadatas=chunk_metadatas,
         extractor_model=extractor_model,
+        claims_service=claims_service,
     )
 
     # Hydrate nodes with entity ledger if user_id provided

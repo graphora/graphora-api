@@ -19,6 +19,11 @@ from graphora_server.utils.logger import logger
 from graphora_server.services.llm.client import LLMClient
 from graphora_server.utils.constants import SYSTEM_PROPERTIES
 from graphora_server.config import settings
+from graphora_server.services.claims_service import (
+    Claim,
+    ClaimsService,
+    TargetKind as ClaimTargetKind,
+)
 
 # Entity resolution via Splink is a [er] extra: splink + pandas pull
 # duckdb and numpy; heavy for installs that don't use ER. Module scope
@@ -3140,3 +3145,110 @@ def _apply_transitive_closure(mappings: Dict[str, str]) -> Dict[str, str]:
             final_mappings[entity_id] = root
 
     return final_mappings
+
+
+async def emit_node_property_claims(
+    claims_service: Optional[ClaimsService],
+    nodes: List[BaseNode],
+    transform_id: Optional[str],
+    user_id: Optional[str],
+) -> None:
+    """B1-prob slice 2b: emit one Claim per (node, property) pair
+    so the /contradictions surface can group cross-chunk
+    disagreements about the same entity.
+
+    Called from per-chunk extraction loops BEFORE any dedup-by-
+    content check, so claims for "Alice extracted with
+    title=Engineer (chunk 1)" and "Alice extracted with
+    title=Senior Engineer (chunk 2)" both land — the
+    contradiction detector groups them by canonical_id +
+    property_key and surfaces the disagreement.
+
+    Lives in :mod:`transform.helpers` (slice 2b reviewer-fix,
+    moved from ``graph_transformer.py``) so the multi-pass
+    extractor can call it without a circular import — both
+    paths share the same emission semantics.
+
+    Target identity: ``canonical_id`` (the stable hash computed
+    from "unique"-flagged ontology properties) when available,
+    falling back to the per-chunk extraction id. The
+    contradictions endpoint groups by target_id, so without
+    canonical_id the per-chunk ids stay separate and no
+    contradiction surfaces — graceful degrade for ontologies
+    without unique properties.
+
+    Failure posture: log-and-swallow. Each claim is its own
+    try/except so one bad row doesn't poison the rest of the
+    batch. Mirrors B0-log's ``decision_log.append`` posture —
+    extraction must never fail because claim-writing failed.
+
+    No-ops when:
+      * claims_service is None (callers without claim wiring).
+      * transform_id is None (claims are keyed by transform).
+      * user_id is None (tenant-scoping invariant — would write
+        an orphan row the read endpoints can't surface anyway).
+    """
+    if not claims_service or not transform_id or not user_id:
+        return
+
+    for node in nodes:
+        target_id = node.canonical_id or node.id
+        # Per-node provenance for the source_* fields. The
+        # _attach_provenance_properties helper also mirrors these
+        # into node.properties, but reading from the typed model
+        # is cheaper than dict lookups + None-coalescing.
+        prov = node.provenance
+        confidence = 1.0
+        if prov is not None and prov.confidence_score is not None:
+            confidence = max(0.0, min(1.0, float(prov.confidence_score)))
+        source_chunk_id = None
+        source_extractor_model = None
+        source_prompt_version = None
+        if prov is not None:
+            # chunk_ids is a list because merged nodes union
+            # their sources; pre-merge each node still has one.
+            source_chunk_id = prov.chunk_ids[0] if prov.chunk_ids else None
+            source_extractor_model = prov.extractor_model
+            source_prompt_version = prov.prompt_version
+
+        for property_key, value in (node.properties or {}).items():
+            # System properties (source_chunk_id, extractor_model,
+            # extraction_confidence, etc.) are observability, not
+            # claims. The contradiction detector keyed on them
+            # would surface every cross-chunk provenance difference
+            # as a "contradiction" — exactly the wrong signal.
+            if property_key in SYSTEM_PROPERTIES:
+                continue
+            # The `id` literal is also in SYSTEM_PROPERTIES, but
+            # defensively skip None values too — extraction output
+            # can carry None for unset fields and we don't want to
+            # emit "claim that X has property K = None."
+            if value is None:
+                continue
+            try:
+                await claims_service.append(
+                    Claim(
+                        transform_id=transform_id,
+                        target_id=target_id,
+                        target_kind=ClaimTargetKind.NODE,
+                        property_key=property_key,
+                        value=value,
+                        confidence=confidence,
+                        user_id=user_id,
+                        source_chunk_id=source_chunk_id,
+                        source_extractor_model=source_extractor_model,
+                        source_prompt_version=source_prompt_version,
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                # Log and continue — never let claim-emission
+                # block extraction. This mirrors the B0-log
+                # posture from commit 8cbc76b. The
+                # /contradictions surface gracefully degrades to
+                # whatever DID land.
+                logger.warning(
+                    "Failed to emit claim for node=%s property=%s: %s",
+                    target_id,
+                    property_key,
+                    exc,
+                )
