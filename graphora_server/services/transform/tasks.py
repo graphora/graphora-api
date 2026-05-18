@@ -14,6 +14,7 @@ from graphora_server.services.transform.graph_transformer import (
     build_graph_from_chunks,
     build_graph_from_pdfs,
 )
+from graphora_server.services.claims_service import ClaimsService
 from graphora_server.services.decision_log_service import DecisionLogService
 from graphora_server.services.disputed_pairs_service import DisputedPairsService
 from graphora_server.config import settings
@@ -212,6 +213,15 @@ async def construct_knowledge_graph(
         # can never block extraction.
         disputed_pairs_service = DisputedPairsService()
 
+        # B1-prob slice 2b: per-transform ClaimsService for
+        # emitting one Claim per (target, property) at extraction
+        # time. Same dual-backend + log-and-swallow posture as
+        # the Decision Log + DisputedPairsService — claim writes
+        # must never block the extraction itself. Without this
+        # the /contradictions endpoint shipped in slice 2a stays
+        # empty because no writer populates the claims table.
+        claims_service = ClaimsService()
+
         # Process chunks with controlled concurrency
         concurrency = settings.EXTRACTION_CONCURRENCY
         if len(chunks) < concurrency:
@@ -232,6 +242,7 @@ async def construct_knowledge_graph(
                 extractor_model=extractor_model,
                 decision_log=decision_log,
                 disputed_pairs_service=disputed_pairs_service,
+                claims_service=claims_service,
             )
         elif pdf_paths:
             graph = await build_graph_from_pdfs(
@@ -244,6 +255,7 @@ async def construct_knowledge_graph(
                 extractor_model=extractor_model,
                 decision_log=decision_log,
                 disputed_pairs_service=disputed_pairs_service,
+                claims_service=claims_service,
             )
 
         metrics = ExtractionMetrics(
