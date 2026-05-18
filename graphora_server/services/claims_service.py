@@ -75,10 +75,22 @@ class Claim:
     property_key: str
     value: Any
     confidence: float
+    # Reviewer-flagged Medium on commit 5331a46. user_id is
+    # ``TEXT NOT NULL`` in migration 20 — the dataclass must
+    # match the SQL schema. Pre-fix this was Optional[str], so
+    # in memory mode a Claim(user_id=None) was silently
+    # accepted by ``append`` and then dropped at read time
+    # (tenant filter excluded the orphan row); in Postgres
+    # mode the INSERT would 500 with a NOT NULL violation.
+    # No legacy data to worry about — this is a fresh table
+    # — so requiring the field outright is the right pin.
+    # Note: this field has to live above the optional-with-
+    # default fields below; Python dataclasses don't allow a
+    # non-default field after a defaulted one.
+    user_id: str
     source_chunk_id: Optional[str] = None
     source_extractor_model: Optional[str] = None
     source_prompt_version: Optional[str] = None
-    user_id: Optional[str] = None
     # Server-side defaults — populated by ``append`` so callers
     # don't have to mint them. Matches DecisionLogService /
     # ScenarioService conventions.
@@ -95,6 +107,13 @@ class Claim:
             raise ValueError(
                 f"confidence must be in [0.0, 1.0]; got {self.confidence!r}"
             )
+        # The dataclass type annotation enforces "must pass a
+        # value" but Python doesn't reject empty strings — pin
+        # the non-empty invariant here so a buggy writer that
+        # passes ``""`` fails at construction rather than
+        # quietly writing an orphan row.
+        if not self.user_id:
+            raise ValueError("user_id is required and must be non-empty")
 
 
 @dataclass
@@ -225,10 +244,23 @@ class ClaimsService:
         self,
         transform_id: str,
         target_id: str,
+        target_kind: TargetKind,
         user_id: str,
     ) -> List[Claim]:
-        """All claims for a specific node/edge in the given
+        """All claims for a specific node OR edge in the given
         transform, ordered by confidence DESC then created_at ASC.
+
+        Reviewer-flagged Medium on commit 5331a46. ``target_kind``
+        is required because target_id is unique only per kind: a
+        node and an edge can theoretically share the same id
+        string. Pre-fix this method only filtered on target_id,
+        so a node+edge collision would return both row sets
+        interleaved and confuse downstream consumers (slice 2's
+        node-evidence vs edge-evidence surfaces would silently
+        cross-pollinate). The contradiction detector already
+        keys on (target_id, target_kind, property_key) — this
+        change makes the single-target lookup use the same
+        identity rule.
 
         The "highest confidence first" ordering is load-bearing
         for downstream consumers: the Contradictions tab shows
@@ -244,11 +276,15 @@ class ClaimsService:
                        source_chunk_id, source_extractor_model,
                        source_prompt_version, created_at
                 FROM claims
-                WHERE transform_id = %s AND target_id = %s AND user_id = %s
+                WHERE transform_id = %s
+                  AND target_id = %s
+                  AND target_kind = %s
+                  AND user_id = %s
                 ORDER BY confidence DESC, created_at ASC
                 """,
                 transform_id,
                 target_id,
+                target_kind.value,
                 user_id,
             )
             return self._rows_to_claims(rows)
@@ -258,6 +294,7 @@ class ClaimsService:
                 for c in self._memory_store
                 if c.transform_id == transform_id
                 and c.target_id == target_id
+                and c.target_kind == target_kind
                 and c.user_id == user_id
             ),
             # Two-key sort to match the Postgres ORDER BY: high

@@ -99,6 +99,48 @@ def test_claim_accepts_boundary_values():
 
 
 # ============================================================
+# user_id invariant (reviewer-flagged Medium on 5331a46)
+# ============================================================
+
+
+def test_claim_requires_user_id_at_construction():
+    """Reviewer-flagged Medium on commit 5331a46. user_id is
+    ``TEXT NOT NULL`` in migration 20, and the dataclass must
+    match — pre-fix it was Optional[str], so:
+      * Memory mode: append accepted user_id=None and then the
+        tenant-scoped reads silently dropped the orphan.
+      * Postgres mode: INSERT failed with a NOT NULL violation
+        at the SQL layer — 500 to the operator.
+
+    Pin so a refactor that relaxes the type back to
+    Optional[str] regresses here. ``user_id`` is now a
+    positional/required field on the dataclass, so omitting
+    it raises TypeError. Passing an empty string raises
+    ValueError from __post_init__."""
+    # Missing user_id entirely → TypeError from dataclass.
+    with pytest.raises(TypeError):
+        Claim(
+            transform_id="tx-1",
+            target_id="node-alice",
+            target_kind=TargetKind.NODE,
+            property_key="title",
+            value="x",
+            confidence=0.9,
+        )  # noqa  ← intentionally drops user_id
+    # Empty-string user_id → ValueError from __post_init__.
+    with pytest.raises(ValueError, match="user_id"):
+        Claim(
+            transform_id="tx-1",
+            target_id="node-alice",
+            target_kind=TargetKind.NODE,
+            property_key="title",
+            value="x",
+            confidence=0.9,
+            user_id="",
+        )
+
+
+# ============================================================
 # Append + read round-trip on memory backend
 # ============================================================
 
@@ -114,7 +156,10 @@ async def test_memory_append_and_for_target_roundtrip(memory_service):
     assert written.created_at is not None, "created_at must be auto-populated"
 
     fetched = await memory_service.for_target(
-        transform_id="tx-1", target_id="node-alice", user_id="user-1"
+        transform_id="tx-1",
+        target_id="node-alice",
+        target_kind=TargetKind.NODE,
+        user_id="user-1",
     )
     assert len(fetched) == 1
     assert fetched[0].id == written.id
@@ -131,7 +176,10 @@ async def test_for_target_orders_by_confidence_desc(memory_service):
     await memory_service.append(_claim(confidence=0.7, source_chunk_id="chunk-c"))
 
     fetched = await memory_service.for_target(
-        transform_id="tx-1", target_id="node-alice", user_id="user-1"
+        transform_id="tx-1",
+        target_id="node-alice",
+        target_kind=TargetKind.NODE,
+        user_id="user-1",
     )
     # Highest confidence first.
     confidences = [c.confidence for c in fetched]
@@ -150,16 +198,79 @@ async def test_for_target_filters_by_tenant(memory_service):
     await memory_service.append(_claim(user_id="user-2"))
 
     user1_claims = await memory_service.for_target(
-        transform_id="tx-1", target_id="node-alice", user_id="user-1"
+        transform_id="tx-1",
+        target_id="node-alice",
+        target_kind=TargetKind.NODE,
+        user_id="user-1",
     )
     user2_claims = await memory_service.for_target(
-        transform_id="tx-1", target_id="node-alice", user_id="user-2"
+        transform_id="tx-1",
+        target_id="node-alice",
+        target_kind=TargetKind.NODE,
+        user_id="user-2",
     )
 
     assert len(user1_claims) == 1
     assert len(user2_claims) == 1
     assert user1_claims[0].user_id == "user-1"
     assert user2_claims[0].user_id == "user-2"
+
+
+@pytest.mark.asyncio
+async def test_for_target_filters_by_target_kind(memory_service):
+    """Reviewer-flagged Medium on commit 5331a46. target_id is
+    unique only PER kind: a node and an edge could theoretically
+    share the same id string. Pre-fix ``for_target`` filtered
+    only on (transform_id, target_id, user_id), so a same-id
+    node+edge collision returned both row sets interleaved —
+    slice 2's node-evidence vs edge-evidence surfaces would have
+    silently cross-pollinated. The contradiction detector
+    already keyed on (target_id, target_kind, property_key);
+    this pin ensures the single-target lookup uses the same
+    identity rule.
+
+    Test setup: a node and edge with the SAME id string and the
+    same property_key. for_target(NODE) must return only the
+    node claim; for_target(EDGE) must return only the edge
+    claim."""
+    shared_id = "same-id-string"
+    await memory_service.append(
+        _claim(
+            target_id=shared_id,
+            target_kind=TargetKind.NODE,
+            value="from-node",
+        )
+    )
+    await memory_service.append(
+        _claim(
+            target_id=shared_id,
+            target_kind=TargetKind.EDGE,
+            value="from-edge",
+        )
+    )
+
+    node_claims = await memory_service.for_target(
+        transform_id="tx-1",
+        target_id=shared_id,
+        target_kind=TargetKind.NODE,
+        user_id="user-1",
+    )
+    edge_claims = await memory_service.for_target(
+        transform_id="tx-1",
+        target_id=shared_id,
+        target_kind=TargetKind.EDGE,
+        user_id="user-1",
+    )
+
+    assert len(node_claims) == 1
+    assert node_claims[0].value == "from-node", (
+        "for_target(NODE) must return ONLY node claims; pre-fix "
+        "the missing target_kind filter caused edge claims to "
+        "leak through. Got value="
+        f"{node_claims[0].value!r}"
+    )
+    assert len(edge_claims) == 1
+    assert edge_claims[0].value == "from-edge"
 
 
 @pytest.mark.asyncio
@@ -441,7 +552,10 @@ async def test_default_constructor_shares_memory_across_instances(
 
     written = await writer.append(_claim())
     fetched = await reader.for_target(
-        transform_id="tx-1", target_id="node-alice", user_id="user-1"
+        transform_id="tx-1",
+        target_id="node-alice",
+        target_kind=TargetKind.NODE,
+        user_id="user-1",
     )
     assert len(fetched) == 1
     assert fetched[0].id == written.id, (
@@ -463,7 +577,10 @@ async def test_explicit_memory_store_isolates_from_shared(
 
     await isolated.append(_claim())
     shared_fetched = await shared.for_target(
-        transform_id="tx-1", target_id="node-alice", user_id="user-1"
+        transform_id="tx-1",
+        target_id="node-alice",
+        target_kind=TargetKind.NODE,
+        user_id="user-1",
     )
     assert shared_fetched == []
     assert _DEFAULT_MEMORY_STORE == []
@@ -535,7 +652,12 @@ async def test_postgres_for_target_propagates_db_exception(monkeypatch):
     fake_fetch = AsyncMock(side_effect=RuntimeError("connection refused"))
     with patch("graphora_server.services.claims_service.db.fetch", new=fake_fetch):
         with pytest.raises(RuntimeError, match="connection refused"):
-            await service.for_target(transform_id="tx", target_id="node", user_id="u")
+            await service.for_target(
+                transform_id="tx",
+                target_id="node",
+                target_kind=TargetKind.NODE,
+                user_id="u",
+            )
 
 
 @pytest.mark.asyncio
