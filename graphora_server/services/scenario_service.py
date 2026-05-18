@@ -523,10 +523,27 @@ class ScenarioService:
             )
 
         # ---- Persist --------------------------------------------------------
-        new_snapshot = {
-            "nodes": list(nodes_by_id.values()),
-            "edges": list(edges_by_id.values()),
-        }
+        # Reviewer-flagged Medium on commit 5e340ce. Pre-fix this
+        # rebuilt the snapshot as ``{"nodes": ..., "edges": ...}``
+        # only — which silently dropped ``total_nodes``,
+        # ``total_edges``, and ``metadata`` (the rest of the
+        # GraphResponse shape). The API layer then validated the
+        # truncated dict via ``GraphResponse.model_validate``
+        # which defaulted the totals back to 0, so a PATCH
+        # response showed N nodes but reported total_nodes=0 and
+        # any metadata field on the original snapshot was gone.
+        #
+        # Fix: start from the original snapshot dict (preserves
+        # metadata + any future GraphResponse fields we don't
+        # know about) and overwrite only the four fields that
+        # actually change on a mutation. The totals are
+        # recomputed from the post-mutation counts so they're
+        # internally consistent with the new nodes/edges lists.
+        new_snapshot = dict(snapshot)
+        new_snapshot["nodes"] = list(nodes_by_id.values())
+        new_snapshot["edges"] = list(edges_by_id.values())
+        new_snapshot["total_nodes"] = len(nodes_by_id)
+        new_snapshot["total_edges"] = len(edges_by_id)
 
         if self._enabled:
             await db.execute(

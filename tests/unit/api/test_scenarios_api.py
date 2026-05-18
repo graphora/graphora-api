@@ -532,3 +532,45 @@ def test_patch_scenario_rejects_malformed_node_create(test_client):
     )
 
     assert response.status_code == 422
+
+
+def test_patch_scenario_response_reports_consistent_totals(test_client):
+    """Reviewer-flagged Medium on commit 5e340ce. Wire-level
+    pin for the visible half of the snapshot-shape bug. Pre-fix
+    a PATCH response carried graph.nodes with N entries but
+    graph.total_nodes: 0 (the API's GraphResponse.model_validate
+    defaulted the missing field). Pin that the response's
+    embedded graph reports totals consistent with the actual
+    list lengths — otherwise downstream consumers (the
+    Explorer UI's node counter, the CLI's summary panel) lie
+    to operators."""
+    # Build a service-side record with totals matching the
+    # post-mutation state — this is the shape the fixed
+    # apply_mutations produces.
+    record = _record(snapshot_nodes=3, snapshot_edges=2)
+    record.graph_snapshot["total_nodes"] = 3
+    record.graph_snapshot["total_edges"] = 2
+
+    with patch("graphora_server.api.scenarios._service") as service_factory:
+        service = service_factory.return_value
+        service.apply_mutations = AsyncMock(return_value=record)
+
+        response = test_client.patch(
+            "/api/v1/scenarios/sc-1",
+            json={"nodes": None, "edges": None},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    # The embedded graph payload must surface the recomputed
+    # totals — anything less and the response is lying about
+    # itself.
+    graph = body["graph"]
+    assert len(graph["nodes"]) == 3
+    assert len(graph["edges"]) == 2
+    assert graph["total_nodes"] == 3, (
+        "graph.total_nodes must equal len(graph.nodes) on the "
+        f"response. Got {graph['total_nodes']} alongside "
+        f"{len(graph['nodes'])} actual nodes."
+    )
+    assert graph["total_edges"] == 2

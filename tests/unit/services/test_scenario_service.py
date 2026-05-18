@@ -846,3 +846,109 @@ async def test_apply_mutations_postgres_writes_update_with_user_filter(
     # Positional params: (sql, Json(snapshot), scenario_id, user_id).
     assert args[2] == "sc-1"
     assert args[3] == "user-1"
+
+
+# ============================================================
+# Reviewer-fix: snapshot shape preservation through mutations
+# (Medium on 5e340ce)
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_recomputes_totals(memory_service):
+    """Reviewer-flagged Medium on commit 5e340ce. Pre-fix the
+    mutation path rebuilt the snapshot as just
+    ``{"nodes": ..., "edges": ...}`` — dropping ``total_nodes``
+    and ``total_edges``. ``GraphResponse.model_validate`` then
+    defaulted them to 0 on the response, so a PATCH would
+    return ``total_nodes: 0`` alongside a non-empty nodes list.
+
+    Pin: after a mutation, totals must equal the post-mutation
+    counts. Adding a node bumps total_nodes by 1; deleting an
+    edge drops total_edges by 1; both stay internally
+    consistent with their list lengths."""
+    scenario_id = await _seed(memory_service, n_nodes=2, n_edges=1)
+
+    new_node = NodeCreation(id="n-new", type="Person", label="Carol")
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(node_creates=[new_node], edge_deletes=["e0"]),
+    )
+
+    nodes = updated.graph_snapshot["nodes"]
+    edges = updated.graph_snapshot["edges"]
+    assert len(nodes) == 3
+    assert len(edges) == 0
+    assert updated.graph_snapshot.get("total_nodes") == 3, (
+        "total_nodes must be recomputed to match len(nodes) after "
+        f"mutation. Got {updated.graph_snapshot.get('total_nodes')!r} "
+        f"alongside {len(nodes)} actual nodes."
+    )
+    assert updated.graph_snapshot.get("total_edges") == 0
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_preserves_metadata(memory_service):
+    """Pre-fix the snapshot rewrite dropped every field beyond
+    nodes + edges — so any ``metadata`` populated at create
+    time (or by future writers) silently vanished on first
+    PATCH.
+
+    Pin: a metadata bag on the snapshot survives a mutation
+    untouched. Verified by manually injecting metadata into
+    the in-memory record (slice 1 doesn't expose metadata on
+    the create endpoint yet, but the GraphResponse shape
+    carries it), running a mutation, and asserting the bag
+    round-trips."""
+    scenario_id = await _seed(memory_service)
+    for stored in memory_service._memory_store:
+        if stored.id == scenario_id:
+            stored.graph_snapshot["metadata"] = {
+                "source_pipeline_version": "v1.2.0",
+                "extracted_at": "2026-05-18T00:00:00Z",
+            }
+            break
+
+    new_node = NodeCreation(id="n-new", type="Person", label="Carol")
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(node_creates=[new_node]),
+    )
+
+    metadata = updated.graph_snapshot.get("metadata") or {}
+    assert metadata.get("source_pipeline_version") == "v1.2.0", (
+        "metadata must round-trip through a mutation. Got "
+        f"{metadata!r} after a node-create."
+    )
+    assert metadata.get("extracted_at") == "2026-05-18T00:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_noop_preserves_full_snapshot(memory_service):
+    """A no-op mutation (empty SaveGraphRequest) must NOT
+    distort the snapshot. Pre-fix even a no-op PATCH would
+    zero out total_nodes and drop metadata — silent corruption
+    on a request the caller thought did nothing.
+
+    Pin: before vs after a no-op, the snapshot is identical on
+    the fields the API surface exposes (totals, metadata,
+    nodes, edges)."""
+    scenario_id = await _seed(memory_service, n_nodes=2, n_edges=1)
+    for stored in memory_service._memory_store:
+        if stored.id == scenario_id:
+            stored.graph_snapshot["metadata"] = {"k": "v"}
+            stored.graph_snapshot["total_nodes"] = 2
+            stored.graph_snapshot["total_edges"] = 1
+            break
+
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=SaveGraphRequest(),
+    )
+
+    assert updated.graph_snapshot["total_nodes"] == 2
+    assert updated.graph_snapshot["total_edges"] == 1
+    assert updated.graph_snapshot["metadata"] == {"k": "v"}
