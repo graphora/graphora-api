@@ -326,6 +326,21 @@ async def _tool_impl_review_diff(
     return await api.diff_transforms(base_transform_id, compare_transform_id)
 
 
+async def _tool_impl_list_contradictions(
+    api: GraphoraClient,
+    transform_id: str,
+    min_confidence: float = 0.0,
+) -> Dict[str, Any]:
+    """B1-prob slice 2a: agent-facing contradictions surface.
+
+    Pure HTTP passthrough — same architecture as the
+    review_diff tool. The API endpoint owns the read +
+    contradiction detection; MCP forwards the payload.
+    Transport errors propagate because contradictions are a
+    primary answer the agent asked for, not observability."""
+    return await api.list_contradictions(transform_id, min_confidence=min_confidence)
+
+
 async def _tool_impl_list_disputed_pairs(
     api: GraphoraClient,
     transform_id: Optional[str] = None,
@@ -621,6 +636,42 @@ def build_server(client: Optional[GraphoraClient] = None):
         """
         return await _tool_impl_review_diff(
             api, base_transform_id, compare_transform_id
+        )
+
+    @mcp.tool()
+    async def list_contradictions(
+        transform_id: str,
+        min_confidence: float = 0.0,
+    ) -> Dict[str, Any]:
+        """Surface (target, property) pairs where the pipeline
+        emitted multiple distinct claimed values.
+
+        Answers "what did the extractor disagree with itself
+        about?" — useful for agent-facing review flows that
+        want to highlight low-trust regions of a graph. Each
+        contradiction carries its competing_claims sorted by
+        confidence DESC (the winning value is first; the rest
+        are alternatives) and a severity count (distinct-value
+        count above the confidence floor).
+
+        Args:
+            transform_id: The transform to scan.
+            min_confidence: Confidence floor in [0.0, 1.0]. 0.0
+                returns every contradiction; raise to filter
+                low-confidence noise.
+
+        Returns a dict with:
+            transform_id (str): Echo.
+            min_confidence (float): The applied floor.
+            contradictions (list): Per-(target, property) group
+                with ``{target_id, target_kind, property_key,
+                competing_claims, severity}``.
+            total_claims_scanned (int): Reserved — zero until
+                B1-prob slice 2b's pipeline hooks emit claims
+                at extraction time.
+        """
+        return await _tool_impl_list_contradictions(
+            api, transform_id, min_confidence=min_confidence
         )
 
     @mcp.tool()

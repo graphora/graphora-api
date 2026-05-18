@@ -10,6 +10,7 @@ from graphora_server.services.decision_log_service import (
     DecisionLogService,
     DecisionType,
 )
+from graphora_server.services.claims_service import ClaimsService
 from graphora_server.services.diff_service import DiffService
 from graphora_server.services.usage_tracking import UsageTrackingService
 from graphora_server.utils.logger import logger
@@ -276,6 +277,104 @@ async def get_decisions_by_transform_id(
         raise HTTPException(
             status_code=500, detail=f"Error fetching decisions: {str(e)}"
         )
+
+
+@router.get(
+    "/{transform_id}/contradictions",
+    description=(
+        "B1-prob slice 2a: surface (target, property) pairs where the "
+        "extraction pipeline emitted multiple distinct claimed values. "
+        "Each contradiction carries its competing claims sorted by "
+        "confidence DESC — the 'winning' value is the first entry; "
+        "the rest are alternatives the contradiction detector wants "
+        "you to know about. ``min_confidence`` filters low-confidence "
+        "noise out of the result. Returns an empty list until B1-prob "
+        "slice 2b's pipeline hooks emit claims at extraction time; "
+        "the surface is live so CLI/MCP callers can build against "
+        "the wire shape today."
+    ),
+)
+async def get_contradictions_by_transform_id(
+    transform_id: str,
+    min_confidence: float = 0.0,
+    auth: AuthContext = Depends(get_current_auth),
+) -> Dict[str, Any]:
+    """B1-prob slice 2a: agent-facing contradictions surface.
+
+    Tenant-scoped via auth.user_id (same pattern as /decisions
+    and /cost — a request for another user's transform_id
+    returns an empty contradictions list, never leaking
+    existence). The underlying read goes through
+    ``ClaimsService.contradictions_for_transform`` which
+    groups claims by (target_id, target_kind, property_key)
+    and counts distinct JSON-equal values.
+
+    Returns:
+        transform_id (str): Echo.
+        min_confidence (float): The applied floor (default 0.0).
+        contradictions (list): Per-(target, property) group with
+            competing_claims + severity.
+        total_claims_scanned (int): Reserved — zero until slice
+            2b hooks emit claims.
+    """
+    # Pydantic's ge/le on the query parameter would catch this
+    # too, but the explicit early-return gives a clearer error
+    # message than the framework's "Input should be greater
+    # than or equal to 0".
+    if min_confidence < 0.0 or min_confidence > 1.0:
+        raise HTTPException(
+            status_code=400,
+            detail=("min_confidence must be in [0.0, 1.0]; got " f"{min_confidence!r}"),
+        )
+
+    service = ClaimsService()
+    contradictions = await service.contradictions_for_transform(
+        transform_id=transform_id,
+        user_id=auth.user_id,
+        min_confidence=min_confidence,
+    )
+
+    # Project service-layer dataclasses into wire dicts. The
+    # claims_service dataclass uses TargetKind enum members; the
+    # wire shape uses the string value. Project + adapt here so
+    # the service stays Pydantic-free.
+    contradiction_dicts: List[Dict[str, Any]] = []
+    total_claims_scanned = 0
+    for c in contradictions:
+        claims_list = [
+            {
+                "id": claim.id,
+                "transform_id": claim.transform_id,
+                "target_id": claim.target_id,
+                "target_kind": claim.target_kind.value,
+                "property_key": claim.property_key,
+                "value": claim.value,
+                "confidence": claim.confidence,
+                "source_chunk_id": claim.source_chunk_id,
+                "source_extractor_model": claim.source_extractor_model,
+                "source_prompt_version": claim.source_prompt_version,
+                "user_id": claim.user_id,
+                "created_at": claim.created_at,
+            }
+            for claim in c.competing_claims
+        ]
+        total_claims_scanned += len(claims_list)
+        contradiction_dicts.append(
+            {
+                "target_id": c.target_id,
+                "target_kind": c.target_kind.value,
+                "property_key": c.property_key,
+                "competing_claims": claims_list,
+                "severity": c.severity,
+            }
+        )
+
+    return {
+        "transform_id": transform_id,
+        "min_confidence": min_confidence,
+        "contradictions": contradiction_dicts,
+        "total_claims_scanned": total_claims_scanned,
+    }
 
 
 @router.get(

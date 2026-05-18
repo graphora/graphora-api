@@ -351,6 +351,35 @@ class GraphoraClient:
         )
         return _ok(resp)
 
+    async def list_contradictions(
+        self,
+        transform_id: str,
+        min_confidence: float = 0.0,
+    ) -> Dict[str, Any]:
+        """B1-prob slice 2a: surface (target, property) pairs
+        where the pipeline emitted multiple distinct claimed
+        values.
+
+        Returns the wire shape from
+        ``/api/v1/graph/{tx}/contradictions``: ``{transform_id,
+        min_confidence, contradictions, total_claims_scanned}``.
+        Each entry in ``contradictions`` carries
+        ``competing_claims`` sorted by confidence DESC (the
+        first claim is the 'winning' value the pipeline
+        picked) and a ``severity`` count (distinct-value count
+        above the confidence floor).
+
+        ``min_confidence`` filters low-confidence noise — set
+        to 0.0 (default) to see everything; raise to surface
+        only high-confidence disagreements.
+        """
+        params: Dict[str, Any] = {"min_confidence": min_confidence}
+        resp = await self._client.get(
+            f"{_API_V1}/graph/{transform_id}/contradictions",
+            params=params,
+        )
+        return _ok(resp)
+
     async def list_disputed_pairs(
         self,
         transform_id: Optional[str] = None,

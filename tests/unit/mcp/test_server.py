@@ -20,6 +20,7 @@ from graphora_server.mcp.server import (
     _tool_impl_get_cost_report,
     _tool_impl_get_evidence,
     _tool_impl_label_disputed_pair,
+    _tool_impl_list_contradictions,
     _tool_impl_list_disputed_pairs,
     _tool_impl_query_graph,
     _tool_impl_refine_ontology,
@@ -48,6 +49,8 @@ class FakeAPIClient:
         budget_status_error: Optional[Exception] = None,
         diff_return: Optional[Dict[str, Any]] = None,
         diff_error: Optional[Exception] = None,
+        contradictions_return: Optional[Dict[str, Any]] = None,
+        contradictions_error: Optional[Exception] = None,
         list_disputed_pairs_return: Optional[List[Dict[str, Any]]] = None,
         list_disputed_pairs_error: Optional[Exception] = None,
         label_disputed_pair_return: Optional[Dict[str, Any]] = None,
@@ -108,6 +111,13 @@ class FakeAPIClient:
             "changed_edges": [],
         }
         self.diff_error = diff_error
+        self.contradictions_return = contradictions_return or {
+            "transform_id": "tx-default",
+            "min_confidence": 0.0,
+            "contradictions": [],
+            "total_claims_scanned": 0,
+        }
+        self.contradictions_error = contradictions_error
         self.list_disputed_pairs_return = (
             list_disputed_pairs_return if list_disputed_pairs_return is not None else []
         )
@@ -236,6 +246,16 @@ class FakeAPIClient:
         if self.diff_error is not None:
             raise self.diff_error
         return self.diff_return
+
+    async def list_contradictions(
+        self,
+        transform_id: str,
+        min_confidence: float = 0.0,
+    ) -> Dict[str, Any]:
+        self.calls.append(("list_contradictions", transform_id, min_confidence))
+        if self.contradictions_error is not None:
+            raise self.contradictions_error
+        return self.contradictions_return
 
     async def list_disputed_pairs(
         self,
@@ -966,6 +986,110 @@ class TestReviewDiff:
         )
         with pytest.raises(GraphoraClientError):
             await _tool_impl_review_diff(api, "tx-1", "tx-2")
+
+
+# ---- list_contradictions --------------------------------------------------
+
+
+class TestListContradictions:
+    """B1-prob slice 2a: agent-facing contradictions surface. Pure
+    passthrough — same architectural pattern as review_diff and
+    get_cost_report. The API endpoint owns the read +
+    contradiction detection; MCP forwards the payload."""
+
+    @pytest.mark.asyncio
+    async def test_passthrough_returns_endpoint_payload_unchanged(self) -> None:
+        """Whatever the API returns, the tool surfaces verbatim.
+        Pin the wire shape so a "helpful" client-side
+        re-aggregation can't slip into the tool — agents
+        consuming this surface need a deterministic shape."""
+        payload = {
+            "transform_id": "tx-1",
+            "min_confidence": 0.5,
+            "contradictions": [
+                {
+                    "target_id": "node-alice",
+                    "target_kind": "node",
+                    "property_key": "title",
+                    "competing_claims": [
+                        {
+                            "id": "c-1",
+                            "transform_id": "tx-1",
+                            "target_id": "node-alice",
+                            "target_kind": "node",
+                            "property_key": "title",
+                            "value": "Senior Engineer",
+                            "confidence": 0.95,
+                            "source_chunk_id": "chunk-1",
+                            "source_extractor_model": "gemini-2.5-flash",
+                            "source_prompt_version": "v1.0",
+                            "user_id": "user-1",
+                            "created_at": "2026-05-18T00:00:00+00:00",
+                        },
+                        {
+                            "id": "c-2",
+                            "transform_id": "tx-1",
+                            "target_id": "node-alice",
+                            "target_kind": "node",
+                            "property_key": "title",
+                            "value": "Staff Engineer",
+                            "confidence": 0.7,
+                            "source_chunk_id": "chunk-2",
+                            "source_extractor_model": "gemini-2.5-flash",
+                            "source_prompt_version": "v1.0",
+                            "user_id": "user-1",
+                            "created_at": "2026-05-18T00:00:00+00:00",
+                        },
+                    ],
+                    "severity": 2,
+                }
+            ],
+            "total_claims_scanned": 2,
+        }
+        api = FakeAPIClient(contradictions_return=payload)
+        result = await _tool_impl_list_contradictions(api, "tx-1", min_confidence=0.5)
+
+        assert result == payload
+        assert api.calls == [("list_contradictions", "tx-1", 0.5)]
+
+    @pytest.mark.asyncio
+    async def test_empty_contradictions_returns_stable_envelope(self) -> None:
+        """No contradictions returns the envelope shape, not a
+        bare list or a 404. Agents render "no contradictions
+        found" without conditional access patterns. Pin the
+        no-data shape so a refactor that compacts the response
+        regresses."""
+        api = FakeAPIClient()
+        result = await _tool_impl_list_contradictions(api, "tx-clean")
+
+        assert result["contradictions"] == []
+        assert result["total_claims_scanned"] == 0
+        # Default min_confidence reaches the underlying call.
+        assert api.calls == [("list_contradictions", "tx-clean", 0.0)]
+
+    @pytest.mark.asyncio
+    async def test_min_confidence_threads_through_to_api(self) -> None:
+        """Pin the parameter wiring — a refactor that drops the
+        kwarg silently turns the agent's confidence filter into
+        a no-op."""
+        api = FakeAPIClient()
+        await _tool_impl_list_contradictions(api, "tx-1", min_confidence=0.85)
+        assert api.calls == [("list_contradictions", "tx-1", 0.85)]
+
+    @pytest.mark.asyncio
+    async def test_transport_error_propagates(self) -> None:
+        """Contradictions are a primary agent answer, same as
+        diff. Errors propagate rather than silently report
+        'no contradictions found' — the latter is
+        indistinguishable from a real clean result, which would
+        train agents to ignore transport errors."""
+        from graphora_server.mcp.client import GraphoraClientError
+
+        api = FakeAPIClient(
+            contradictions_error=GraphoraClientError(503, "Service Unavailable"),
+        )
+        with pytest.raises(GraphoraClientError):
+            await _tool_impl_list_contradictions(api, "tx-1")
 
 
 # ---- list_disputed_pairs / label_disputed_pair ----------------------------

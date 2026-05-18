@@ -7624,6 +7624,66 @@
         ]
       }
     },
+    "/api/v1/graph/{transform_id}/contradictions": {
+      "get": {
+        "description": "B1-prob slice 2a: surface (target, property) pairs where the extraction pipeline emitted multiple distinct claimed values. Each contradiction carries its competing claims sorted by confidence DESC \u2014 the 'winning' value is the first entry; the rest are alternatives the contradiction detector wants you to know about. ``min_confidence`` filters low-confidence noise out of the result. Returns an empty list until B1-prob slice 2b's pipeline hooks emit claims at extraction time; the surface is live so CLI/MCP callers can build against the wire shape today.",
+        "operationId": "get_contradictions_by_transform_id_api_v1_graph__transform_id__contradictions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transform_id",
+            "required": true,
+            "schema": {
+              "title": "Transform Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_confidence",
+            "required": false,
+            "schema": {
+              "default": 0.0,
+              "title": "Min Confidence",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Contradictions By Transform Id Api V1 Graph  Transform Id  Contradictions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Contradictions By Transform Id",
+        "tags": [
+          "Graph"
+        ]
+      }
+    },
     "/api/v1/graph/{transform_id}/cost": {
       "get": {
         "description": "Per-transform LLM cost / token report. Aggregates llm_usage rows for the transform: total calls, input/output/total tokens, estimated cost in USD, distinct models used, and a per-operation-type breakdown.",
