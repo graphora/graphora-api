@@ -34,6 +34,7 @@ from graphora_server.services.scenario_service import (
     ScenarioNotFoundError,
     ScenarioService,
     _DEFAULT_MEMORY_STORE,
+    _empty_diff,
     _reset_default_memory_store_for_tests,
 )
 
@@ -595,7 +596,10 @@ async def test_apply_mutations_creates_node(memory_service):
         changes=_request(node_creates=[new_node]),
     )
 
-    node_ids = {n["id"] for n in updated.graph_snapshot["nodes"]}
+    # Slice 2c: observe via resolved_graph() since graph_snapshot
+    # is now the immutable base. Mutations land in graph_diff
+    # and surface through the resolved view.
+    node_ids = {n["id"] for n in updated.resolved_graph()["nodes"]}
     assert "n-new" in node_ids
     # The seed's nodes are still there too — creates are
     # additive, not a replace.
@@ -622,7 +626,9 @@ async def test_apply_mutations_updates_node_properties_merge(memory_service):
         changes=_request(node_updates=[update]),
     )
 
-    n0 = next(n for n in updated.graph_snapshot["nodes"] if n["id"] == "n0")
+    # Slice 2c: read via resolved_graph().
+    resolved = updated.resolved_graph()
+    n0 = next(n for n in resolved["nodes"] if n["id"] == "n0")
     assert n0["properties"].get("title") == "Engineer", (
         "Update should add the new key. Got " f"{n0['properties']!r}"
     )
@@ -652,10 +658,14 @@ async def test_apply_mutations_rejects_dangling_edge_after_node_delete(
         )
 
     # Atomicity pin: nothing was persisted. The seed's nodes +
-    # edges must still all be there.
+    # edges must still all be there. Slice 2c: observed via the
+    # resolved view because graph_snapshot now only carries the
+    # base — but with no mutations applied the resolved view
+    # equals the seed.
     after = await memory_service.get(scenario_id, "user-1")
-    node_ids = {n["id"] for n in after.graph_snapshot["nodes"]}
-    edge_ids = {e["id"] for e in after.graph_snapshot["edges"]}
+    resolved = after.resolved_graph()
+    node_ids = {n["id"] for n in resolved["nodes"]}
+    edge_ids = {e["id"] for e in resolved["edges"]}
     assert node_ids == {"n0", "n1"}
     assert edge_ids == {"e0"}
 
@@ -675,8 +685,9 @@ async def test_apply_mutations_node_delete_with_edge_delete_succeeds(
         changes=_request(node_deletes=["n0"], edge_deletes=["e0"]),
     )
 
-    node_ids = {n["id"] for n in updated.graph_snapshot["nodes"]}
-    edge_ids = {e["id"] for e in updated.graph_snapshot["edges"]}
+    resolved = updated.resolved_graph()
+    node_ids = {n["id"] for n in resolved["nodes"]}
+    edge_ids = {e["id"] for e in resolved["edges"]}
     assert node_ids == {"n1"}
     assert edge_ids == set()
 
@@ -758,8 +769,9 @@ async def test_apply_mutations_create_node_then_edge_to_it_in_same_batch(
         changes=_request(node_creates=[new_node], edge_creates=[new_edge]),
     )
 
-    assert any(n["id"] == "n-new" for n in updated.graph_snapshot["nodes"])
-    assert any(e["id"] == "e-new" for e in updated.graph_snapshot["edges"])
+    resolved = updated.resolved_graph()
+    assert any(n["id"] == "n-new" for n in resolved["nodes"])
+    assert any(e["id"] == "e-new" for e in resolved["edges"])
 
 
 @pytest.mark.asyncio
@@ -876,16 +888,20 @@ async def test_apply_mutations_recomputes_totals(memory_service):
         changes=_request(node_creates=[new_node], edge_deletes=["e0"]),
     )
 
-    nodes = updated.graph_snapshot["nodes"]
-    edges = updated.graph_snapshot["edges"]
+    # Slice 2c: totals come from the resolved view. graph_snapshot
+    # is the immutable base; resolved_graph() computes
+    # post-mutation counts from len(nodes_by_id).
+    resolved = updated.resolved_graph()
+    nodes = resolved["nodes"]
+    edges = resolved["edges"]
     assert len(nodes) == 3
     assert len(edges) == 0
-    assert updated.graph_snapshot.get("total_nodes") == 3, (
+    assert resolved.get("total_nodes") == 3, (
         "total_nodes must be recomputed to match len(nodes) after "
-        f"mutation. Got {updated.graph_snapshot.get('total_nodes')!r} "
-        f"alongside {len(nodes)} actual nodes."
+        f"mutation. Got {resolved.get('total_nodes')!r} alongside "
+        f"{len(nodes)} actual nodes."
     )
-    assert updated.graph_snapshot.get("total_edges") == 0
+    assert resolved.get("total_edges") == 0
 
 
 @pytest.mark.asyncio
@@ -917,7 +933,10 @@ async def test_apply_mutations_preserves_metadata(memory_service):
         changes=_request(node_creates=[new_node]),
     )
 
-    metadata = updated.graph_snapshot.get("metadata") or {}
+    # Slice 2c: metadata lives on the immutable base and is
+    # passed through by resolved_graph(). The immutable-base
+    # invariant is what makes this preservation automatic.
+    metadata = updated.resolved_graph().get("metadata") or {}
     assert metadata.get("source_pipeline_version") == "v1.2.0", (
         "metadata must round-trip through a mutation. Got "
         f"{metadata!r} after a node-create."
@@ -949,6 +968,249 @@ async def test_apply_mutations_noop_preserves_full_snapshot(memory_service):
         changes=SaveGraphRequest(),
     )
 
-    assert updated.graph_snapshot["total_nodes"] == 2
-    assert updated.graph_snapshot["total_edges"] == 1
-    assert updated.graph_snapshot["metadata"] == {"k": "v"}
+    # Slice 2c: a no-op SaveGraphRequest produces an empty diff,
+    # so resolved_graph() == graph_snapshot (passes through).
+    resolved = updated.resolved_graph()
+    assert resolved["total_nodes"] == 2
+    assert resolved["total_edges"] == 1
+    assert resolved["metadata"] == {"k": "v"}
+
+
+# ============================================================
+# B6-scenario slice 2c: CoW invariants
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_leaves_graph_snapshot_immutable(memory_service):
+    """The defining invariant of the slice 2c CoW storage:
+    ``graph_snapshot`` is the immutable base, captured once at
+    create time and never touched again. Mutations land in
+    ``graph_diff``.
+
+    Pin so a refactor that "simplifies" by rewriting
+    graph_snapshot (the slice 2b behavior) regresses noisily.
+    Storing the mutation in graph_snapshot defeats the
+    write-amplification win of CoW and breaks the metadata-
+    preservation invariant the reviewer-fix on 5e340ce
+    established."""
+    scenario_id = await _seed(memory_service, n_nodes=2, n_edges=1)
+
+    # Snapshot the base BEFORE the mutation so we can compare
+    # by value after.
+    before = await memory_service.get(scenario_id, "user-1")
+    base_before = dict(before.graph_snapshot)
+
+    new_node = NodeCreation(id="n-new", type="Person", label="Carol")
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(node_creates=[new_node]),
+    )
+
+    # Base must be UNCHANGED.
+    assert updated.graph_snapshot == base_before, (
+        "graph_snapshot must be immutable after a mutation; "
+        "diff lives in graph_diff. Got snapshot delta: "
+        f"before={base_before!r}, after={updated.graph_snapshot!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_records_canonical_diff(memory_service):
+    """Mutations land in ``graph_diff`` as a canonical-state
+    delta. Pin the diff shape so callers/tests can rely on
+    field names + semantics — and so a refactor to a different
+    diff representation (operation log, etc.) regresses
+    explicitly rather than silently."""
+    scenario_id = await _seed(memory_service, n_nodes=2, n_edges=1)
+
+    new_node = NodeCreation(id="n-new", type="Person", label="Carol")
+    update = NodeUpdate(id="n0", properties={"title": "Engineer"})
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(
+            node_creates=[new_node],
+            node_updates=[update],
+            edge_deletes=["e0"],
+        ),
+    )
+
+    diff = updated.graph_diff
+    # Six keys, canonical names.
+    assert set(diff.keys()) == {
+        "added_nodes",
+        "removed_node_ids",
+        "updated_nodes",
+        "added_edges",
+        "removed_edge_ids",
+        "updated_edges",
+    }, f"Diff shape drifted: {sorted(diff.keys())!r}"
+    # The new node is in added_nodes (not updated_nodes).
+    assert any(n["id"] == "n-new" for n in diff["added_nodes"])
+    # n0 was modified vs base → in updated_nodes.
+    assert any(n["id"] == "n0" for n in diff["updated_nodes"])
+    # e0 was removed → in removed_edge_ids.
+    assert "e0" in diff["removed_edge_ids"]
+
+
+@pytest.mark.asyncio
+async def test_apply_mutations_repeated_mutations_produce_canonical_diff(
+    memory_service,
+):
+    """Slice 2c's diff is canonical-state, not operation-log:
+    two distinct mutation batches that produce the same
+    end-state should produce the same final diff. Pin so a
+    refactor that switches to append-only operation logs
+    regresses (the diff would grow unbounded with redundant
+    ops).
+
+    Test setup: starting from the seed, apply two mutation
+    batches — one creates n-temp then deletes it; another
+    creates n-keep. The final state should have n-keep added
+    and n-temp NOT in the diff (since it doesn't exist in
+    either base or target)."""
+    scenario_id = await _seed(memory_service, n_nodes=2, n_edges=1)
+
+    # Batch 1: add a temp node.
+    temp = NodeCreation(id="n-temp", type="Person", label="Temp")
+    await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(node_creates=[temp]),
+    )
+
+    # Batch 2: remove the temp node, add a permanent one.
+    keep = NodeCreation(id="n-keep", type="Person", label="Keep")
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(node_creates=[keep], node_deletes=["n-temp"]),
+    )
+
+    # Canonical diff: only the net change vs base should be
+    # represented. n-temp existed only transiently and must
+    # NOT appear in added_nodes (or anywhere else).
+    diff = updated.graph_diff
+    added_ids = {n["id"] for n in diff["added_nodes"]}
+    assert added_ids == {"n-keep"}, (
+        "Canonical diff must show only the net add (n-keep); "
+        "transient n-temp must NOT appear. Got added_nodes ids="
+        f"{added_ids!r}"
+    )
+    # Resolved view confirms the end-state.
+    resolved_ids = {n["id"] for n in updated.resolved_graph()["nodes"]}
+    assert resolved_ids == {"n0", "n1", "n-keep"}
+
+
+@pytest.mark.asyncio
+async def test_resolved_graph_with_empty_diff_equals_base(memory_service):
+    """Newly-created scenarios start with an empty diff —
+    resolved_graph() must equal the base graph_snapshot's view
+    (modulo total_nodes/total_edges/metadata defaults). Pin so
+    a refactor that breaks the no-op resolve regresses (it
+    would silently drift the API response shape for unmutated
+    scenarios)."""
+    scenario_id = await _seed(memory_service, n_nodes=3, n_edges=2)
+    fresh = await memory_service.get(scenario_id, "user-1")
+
+    # Diff must be empty at create time.
+    assert fresh.graph_diff == _empty_diff()
+
+    resolved = fresh.resolved_graph()
+    base = fresh.graph_snapshot
+    # Same nodes + edges (compared by id sets — order may
+    # differ post-dict-rehydration).
+    assert {n["id"] for n in resolved["nodes"]} == {n["id"] for n in base["nodes"]}
+    assert {e["id"] for e in resolved["edges"]} == {e["id"] for e in base["edges"]}
+
+
+@pytest.mark.asyncio
+async def test_compute_diff_skips_unchanged_nodes(memory_service):
+    """The diff computer must NOT mark a target node as
+    "updated" if its content matches the base. Pin so the diff
+    stays minimal — without this every node would land in
+    updated_nodes after any rebuild, defeating the storage
+    win.
+
+    Reason this is subtle: the apply_mutations loop rebuilds
+    nodes_by_id from the resolved view, so even nodes the
+    caller didn't touch flow through. _compute_diff must
+    compare structurally and skip identical entries."""
+    scenario_id = await _seed(memory_service, n_nodes=3, n_edges=0)
+
+    # Mutate just one node's properties.
+    update = NodeUpdate(id="n0", properties={"title": "X"})
+    updated = await memory_service.apply_mutations(
+        scenario_id=scenario_id,
+        user_id="user-1",
+        changes=_request(node_updates=[update]),
+    )
+
+    diff = updated.graph_diff
+    updated_ids = {n["id"] for n in diff["updated_nodes"]}
+    assert updated_ids == {"n0"}, (
+        "Only the touched node (n0) should appear in updated_nodes; "
+        f"untouched n1, n2 must NOT. Got updated_nodes ids={updated_ids!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_postgres_apply_mutations_writes_graph_diff_not_snapshot(
+    monkeypatch,
+):
+    """Postgres write path pin: the UPDATE targets ``graph_diff``,
+    not ``graph_snapshot``. The immutable-base invariant is
+    enforced at the SQL boundary too — even if a future refactor
+    changes the service-side logic, the SQL would have to
+    explicitly add graph_snapshot to the SET clause to break
+    the invariant."""
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgres://fake/url")
+    service = ScenarioService()
+
+    existing = {
+        "id": "sc-1",
+        "user_id": "user-1",
+        "transform_id": "tx-1",
+        "parent_scenario_id": None,
+        "name": "n",
+        "description": None,
+        "graph_snapshot": {
+            "nodes": [
+                {"id": "n1", "label": "x", "type": "t", "properties": {}},
+            ],
+            "edges": [],
+        },
+        "graph_diff": _empty_diff(),
+        "created_at": "2026-05-18T00:00:00+00:00",
+    }
+    fake_fetch = AsyncMock(return_value=[existing])
+    fake_execute = AsyncMock()
+    with (
+        patch(
+            "graphora_server.services.scenario_service.db.fetch",
+            new=fake_fetch,
+        ),
+        patch(
+            "graphora_server.services.scenario_service.db.execute",
+            new=fake_execute,
+        ),
+    ):
+        update = NodeUpdate(id="n1", properties={"title": "new"})
+        await service.apply_mutations(
+            scenario_id="sc-1",
+            user_id="user-1",
+            changes=_request(node_updates=[update]),
+        )
+
+    fake_execute.assert_awaited_once()
+    sql = fake_execute.await_args.args[0]
+    assert "UPDATE scenarios" in sql
+    assert "SET graph_diff" in sql, (
+        "UPDATE must target graph_diff, not graph_snapshot. "
+        "Pre-2c the SET clause modified graph_snapshot; the CoW "
+        "fix relies on graph_snapshot staying immutable at the "
+        f"SQL boundary. Got SQL: {sql!r}"
+    )
+    assert "graph_snapshot = " not in sql

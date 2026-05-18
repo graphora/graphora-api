@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -79,6 +79,91 @@ class ScenarioMutationError(Exception):
     """
 
 
+def _empty_diff() -> Dict[str, Any]:
+    """Canonical empty diff shape. Used at create time and as
+    the default for the migration's column. Centralized so the
+    six keys stay in lockstep across the service, the migration
+    default, and tests."""
+    return {
+        "added_nodes": [],
+        "removed_node_ids": [],
+        "updated_nodes": [],
+        "added_edges": [],
+        "removed_edge_ids": [],
+        "updated_edges": [],
+    }
+
+
+def _compute_diff(
+    *,
+    base: Dict[str, Any],
+    target_nodes_by_id: Dict[str, Dict[str, Any]],
+    target_edges_by_id: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Compute the canonical-state diff for (base → target).
+
+    The diff is one-representation-per-(base, target) pair: any
+    two callers asking the same question get the same diff
+    back, which means diff equality is a meaningful test
+    assertion and incremental changes can be diffed against
+    each other for review purposes.
+
+    Algorithm: index base by id; for each target item, classify
+    as ``added`` (not in base), ``updated`` (in base, different
+    content), or unchanged (in base, identical — not emitted).
+    For each base id not in target, emit ``removed``.
+
+    Equality is structural via Python's ``==`` on dicts (recursive,
+    type-aware). A target node whose properties bag has the
+    same keys + values as the base — even if dict ordering
+    differs internally — is treated as unchanged. That keeps
+    the diff small for property-update-only mutations where
+    the unchanged keys still serialize alongside the changed
+    ones.
+    """
+    base_nodes_by_id: Dict[str, Dict[str, Any]] = {
+        node["id"]: node for node in (base.get("nodes") or [])
+    }
+    base_edges_by_id: Dict[str, Dict[str, Any]] = {
+        edge["id"]: edge for edge in (base.get("edges") or [])
+    }
+
+    added_nodes: List[Dict[str, Any]] = []
+    updated_nodes: List[Dict[str, Any]] = []
+    removed_node_ids: List[str] = []
+    for nid, target in target_nodes_by_id.items():
+        base_node = base_nodes_by_id.get(nid)
+        if base_node is None:
+            added_nodes.append(target)
+        elif base_node != target:
+            updated_nodes.append(target)
+    for nid in base_nodes_by_id:
+        if nid not in target_nodes_by_id:
+            removed_node_ids.append(nid)
+
+    added_edges: List[Dict[str, Any]] = []
+    updated_edges: List[Dict[str, Any]] = []
+    removed_edge_ids: List[str] = []
+    for eid, target in target_edges_by_id.items():
+        base_edge = base_edges_by_id.get(eid)
+        if base_edge is None:
+            added_edges.append(target)
+        elif base_edge != target:
+            updated_edges.append(target)
+    for eid in base_edges_by_id:
+        if eid not in target_edges_by_id:
+            removed_edge_ids.append(eid)
+
+    return {
+        "added_nodes": added_nodes,
+        "removed_node_ids": removed_node_ids,
+        "updated_nodes": updated_nodes,
+        "added_edges": added_edges,
+        "removed_edge_ids": removed_edge_ids,
+        "updated_edges": updated_edges,
+    }
+
+
 @dataclass
 class Scenario:
     """Service-layer scenario record.
@@ -88,6 +173,18 @@ class Scenario:
     Pydantic-import-free. The API layer adapts via
     ``GraphResponse.model_validate`` before returning to the
     client.
+
+    Storage layout (B6-scenario slice 2c): the graph lives in
+    two columns. ``graph_snapshot`` is the IMMUTABLE base captured
+    at create_from_transform time — it never changes after the
+    create. ``graph_diff`` accumulates all mutations as a
+    canonical-state delta. The "current view" of the scenario is
+    ``resolved_graph()`` which applies the diff to the base; the
+    API surface uses that helper so callers never see the split.
+
+    CoW win: a mutation writes only the diff (typically small),
+    not the full snapshot — eliminating write amplification on
+    repeat mutations.
     """
 
     id: str
@@ -98,6 +195,63 @@ class Scenario:
     graph_snapshot: Dict[str, Any]
     created_at: str
     parent_scenario_id: Optional[str] = None
+    # Slice 2c: canonical-state diff vs ``graph_snapshot``. The
+    # default field reads ``_empty_diff()`` so a Scenario built
+    # without an explicit diff (e.g., in tests, or in the
+    # in-memory create path) starts in the "no mutations yet"
+    # state — its resolved_graph() equals graph_snapshot.
+    graph_diff: Dict[str, Any] = field(default_factory=_empty_diff)
+
+    def resolved_graph(self) -> Dict[str, Any]:
+        """Apply ``graph_diff`` to ``graph_snapshot`` and return
+        the materialized view.
+
+        Order matters: remove first, then add, then update.
+          * Remove first so an id that appears in both
+            ``removed_node_ids`` and ``added_nodes`` ends up
+            present (the add wins) — useful for "delete + re-
+            create with new properties" patterns the
+            apply_mutations diff computer may produce.
+          * Add second so newly-introduced ids exist before any
+            updates would try to reach them.
+          * Update last so it overrides anything the add+remove
+            pair left behind.
+
+        Returns a GraphResponse-shaped dict including
+        ``total_nodes``, ``total_edges``, and ``metadata``
+        passed through from the immutable base. Callers (the
+        API layer's ``_to_response``) feed this directly into
+        ``GraphResponse.model_validate``.
+        """
+        base = self.graph_snapshot or {}
+        diff = self.graph_diff or {}
+
+        nodes_by_id = {n["id"]: dict(n) for n in (base.get("nodes") or [])}
+        edges_by_id = {e["id"]: dict(e) for e in (base.get("edges") or [])}
+
+        for nid in diff.get("removed_node_ids") or []:
+            nodes_by_id.pop(nid, None)
+        for eid in diff.get("removed_edge_ids") or []:
+            edges_by_id.pop(eid, None)
+        for node in diff.get("added_nodes") or []:
+            nodes_by_id[node["id"]] = dict(node)
+        for edge in diff.get("added_edges") or []:
+            edges_by_id[edge["id"]] = dict(edge)
+        for node in diff.get("updated_nodes") or []:
+            nodes_by_id[node["id"]] = dict(node)
+        for edge in diff.get("updated_edges") or []:
+            edges_by_id[edge["id"]] = dict(edge)
+
+        return {
+            "nodes": list(nodes_by_id.values()),
+            "edges": list(edges_by_id.values()),
+            "total_nodes": len(nodes_by_id),
+            "total_edges": len(edges_by_id),
+            # Metadata lives on the immutable base — mutations
+            # don't touch it. Preserves the same invariant the
+            # snapshot-shape reviewer-fix established.
+            "metadata": dict(base.get("metadata") or {}),
+        }
 
 
 # Module-level shared dev-mode store. Reviewer-flagged High on
@@ -226,13 +380,20 @@ class ScenarioService:
 
         if self._enabled:
             try:
+                # Slice 2c: include the empty graph_diff so new
+                # scenarios start with the canonical "no
+                # mutations yet" state. The column has a server-
+                # side default but we send it explicitly so the
+                # in-memory + postgres paths produce structurally
+                # identical Scenario records.
                 await db.execute(
                     """
                     INSERT INTO scenarios (
                         id, user_id, transform_id, parent_scenario_id,
-                        name, description, graph_snapshot, created_at
+                        name, description, graph_snapshot, graph_diff,
+                        created_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     scenario.id,
                     scenario.user_id,
@@ -241,6 +402,7 @@ class ScenarioService:
                     scenario.name,
                     scenario.description,
                     Json(scenario.graph_snapshot),
+                    Json(scenario.graph_diff),
                     scenario.created_at,
                 )
             except Exception as exc:
@@ -278,7 +440,8 @@ class ScenarioService:
             rows = await db.fetch(
                 """
                 SELECT id, user_id, transform_id, parent_scenario_id,
-                       name, description, graph_snapshot, created_at
+                       name, description, graph_snapshot, graph_diff,
+                       created_at
                 FROM scenarios
                 WHERE user_id = %s
                 ORDER BY created_at DESC
@@ -310,7 +473,8 @@ class ScenarioService:
             rows = await db.fetch(
                 """
                 SELECT id, user_id, transform_id, parent_scenario_id,
-                       name, description, graph_snapshot, created_at
+                       name, description, graph_snapshot, graph_diff,
+                       created_at
                 FROM scenarios
                 WHERE id = %s AND user_id = %s
                 """,
@@ -374,48 +538,56 @@ class ScenarioService:
         user_id: str,
         changes: SaveGraphRequest,
     ) -> Scenario:
-        """Apply node + edge mutations to a scenario's graph snapshot.
+        """Apply node + edge mutations to a scenario's graph.
 
-        Slice 2b: this rewrites the materialized JSONB snapshot
-        in place. Slice 2c is expected to migrate to a
-        diff-from-parent (CoW) storage layout that keeps the
-        public API contract identical — callers see the same
-        mutated graph regardless of how it's stored.
+        Slice 2c (CoW): writes a canonical-state diff vs the
+        immutable ``graph_snapshot`` base captured at create
+        time. ``graph_snapshot`` itself is never modified —
+        mutations only update ``graph_diff``. The slice 2b
+        contract is unchanged for callers: this still returns
+        the updated Scenario record with the resolved view
+        reachable via ``scenario.resolved_graph()``.
 
         Algorithm:
-          1. Load the current scenario (raises NotFound on
-             missing or cross-tenant).
-          2. Build the target graph in memory: start from the
-             current snapshot, apply node creates → node
-             updates → node deletes → edge creates → edge
-             updates → edge deletes. Order matters within
-             each pass — within nodes, creates/updates must
-             land BEFORE deletes so a mutation can add a new
-             node, update its properties, and delete the old
-             one in one batch.
-          3. Validate the target state:
-               - No id collisions between existing + newly
-                 created nodes/edges.
-               - Every edge's source + target id resolves to a
-                 surviving node.
-             Failures raise ScenarioMutationError → API 422.
-          4. Persist the new snapshot back to storage.
+          1. Load the scenario (raises NotFound on missing /
+             cross-tenant).
+          2. Get the CURRENT resolved view (base + existing
+             diff) — this is the state the caller's mutations
+             are described against.
+          3. Build the target graph in memory: start from the
+             current resolved view, apply node creates →
+             updates → deletes, then edge creates → updates →
+             deletes. Same per-dimension ordering slice 2b
+             established.
+          4. Validate the target state (no id collisions on
+             creates; no dangling edges after deletes). Same
+             rules as slice 2b — failures raise
+             ScenarioMutationError → API 422.
+          5. Compute the new canonical-state diff between the
+             immutable base and the target state. Persist
+             only the diff.
 
-        Returns the updated Scenario record so callers don't
-        need a follow-up get. Mirrors create_from_transform's
-        return shape.
+        Failure isolation: the dangling-edge / id-collision
+        validation happens BEFORE any persist, so a rejected
+        mutation leaves the diff untouched (slice 2b's
+        atomicity property still holds).
         """
         scenario = await self.get(scenario_id, user_id)
-        snapshot = scenario.graph_snapshot or {"nodes": [], "edges": []}
+        # Start from the CURRENT view (base + existing diff),
+        # not from the immutable base. A mutation describes
+        # what the caller wants the END state to look like;
+        # they're not aware of the storage split between base
+        # and diff.
+        current_view = scenario.resolved_graph()
 
         # Build mutable index of the current graph. Dicts keyed
         # by id make the apply loops O(1) per operation; the
         # cost is one extra pass to repack to lists at the end.
         nodes_by_id: Dict[str, Dict[str, Any]] = {
-            node["id"]: dict(node) for node in (snapshot.get("nodes") or [])
+            node["id"]: dict(node) for node in (current_view.get("nodes") or [])
         }
         edges_by_id: Dict[str, Dict[str, Any]] = {
-            edge["id"]: dict(edge) for edge in (snapshot.get("edges") or [])
+            edge["id"]: dict(edge) for edge in (current_view.get("edges") or [])
         }
 
         # ---- Nodes ----------------------------------------------------------
@@ -522,37 +694,28 @@ class ScenarioService:
                 f"source/target nodes."
             )
 
-        # ---- Persist --------------------------------------------------------
-        # Reviewer-flagged Medium on commit 5e340ce. Pre-fix this
-        # rebuilt the snapshot as ``{"nodes": ..., "edges": ...}``
-        # only — which silently dropped ``total_nodes``,
-        # ``total_edges``, and ``metadata`` (the rest of the
-        # GraphResponse shape). The API layer then validated the
-        # truncated dict via ``GraphResponse.model_validate``
-        # which defaulted the totals back to 0, so a PATCH
-        # response showed N nodes but reported total_nodes=0 and
-        # any metadata field on the original snapshot was gone.
-        #
-        # Fix: start from the original snapshot dict (preserves
-        # metadata + any future GraphResponse fields we don't
-        # know about) and overwrite only the four fields that
-        # actually change on a mutation. The totals are
-        # recomputed from the post-mutation counts so they're
-        # internally consistent with the new nodes/edges lists.
-        new_snapshot = dict(snapshot)
-        new_snapshot["nodes"] = list(nodes_by_id.values())
-        new_snapshot["edges"] = list(edges_by_id.values())
-        new_snapshot["total_nodes"] = len(nodes_by_id)
-        new_snapshot["total_edges"] = len(edges_by_id)
+        # ---- Compute canonical-state diff vs immutable base ----------------
+        # Slice 2c: instead of rewriting graph_snapshot, write
+        # a diff that, when applied to the immutable base via
+        # ``Scenario.resolved_graph()``, produces the same
+        # post-mutation view. Canonical-state form (one
+        # representation per (base, target) pair) keeps the
+        # diff equality-testable and bounds compaction needs
+        # to the slice 2c scope.
+        new_diff = _compute_diff(
+            base=scenario.graph_snapshot or {"nodes": [], "edges": []},
+            target_nodes_by_id=nodes_by_id,
+            target_edges_by_id=edges_by_id,
+        )
 
         if self._enabled:
             await db.execute(
                 """
                 UPDATE scenarios
-                SET graph_snapshot = %s
+                SET graph_diff = %s
                 WHERE id = %s AND user_id = %s
                 """,
-                Json(new_snapshot),
+                Json(new_diff),
                 scenario_id,
                 user_id,
             )
@@ -563,10 +726,13 @@ class ScenarioService:
             # current scenario").
             return await self.get(scenario_id, user_id)
 
-        # Memory path — mutate the in-memory record in place.
+        # Memory path — mutate the in-memory record's diff in
+        # place. graph_snapshot is intentionally NOT touched:
+        # the immutability of the base is the load-bearing
+        # invariant of the CoW design.
         for stored in self._memory_store:
             if stored.id == scenario_id and stored.user_id == user_id:
-                stored.graph_snapshot = new_snapshot
+                stored.graph_diff = new_diff
                 return stored
         # Should be unreachable — get() returned successfully
         # above. Defensive raise to avoid a silent None return.
@@ -591,7 +757,8 @@ class ScenarioService:
             rows = await db.fetch(
                 """
                 SELECT id, user_id, transform_id, parent_scenario_id,
-                       name, description, graph_snapshot, created_at
+                       name, description, graph_snapshot, graph_diff,
+                       created_at
                 FROM scenarios
                 WHERE user_id = %s AND transform_id = %s AND name = %s
                 LIMIT 1
@@ -631,6 +798,13 @@ class ScenarioService:
     @staticmethod
     def _row_to_scenario(row: Dict[str, Any]) -> Scenario:
         created_at = row["created_at"]
+        # graph_diff may be missing on rows written before
+        # migration 21 ran (the column was added with a default,
+        # but a row read mid-deploy or a test fixture might
+        # omit it). Fall back to the canonical empty diff so
+        # resolved_graph() degrades to "base only" rather than
+        # KeyError-ing.
+        graph_diff = row.get("graph_diff") or _empty_diff()
         return Scenario(
             id=str(row["id"]),
             user_id=row["user_id"],
@@ -643,6 +817,7 @@ class ScenarioService:
             name=row["name"],
             description=row.get("description"),
             graph_snapshot=row.get("graph_snapshot") or {"nodes": [], "edges": []},
+            graph_diff=graph_diff,
             created_at=(
                 created_at.isoformat()
                 if hasattr(created_at, "isoformat")

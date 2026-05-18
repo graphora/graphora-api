@@ -57,14 +57,20 @@ def _to_summary(record: ScenarioRecord) -> ScenarioSummary:
     """Project a service-layer record into the wire summary.
 
     The list view never needs the full graph payload — counting
-    nodes/edges from the snapshot is enough for the operator to
-    decide which scenario to drill into. Keeping the projection
-    here (not in the service) means the service stays free of
-    Pydantic-vs-dataclass ceremony.
+    nodes/edges from the resolved view (base + diff) is enough
+    for the operator to decide which scenario to drill into.
+    Keeping the projection here (not in the service) means the
+    service stays free of Pydantic-vs-dataclass ceremony.
+
+    Slice 2c: uses ``record.resolved_graph()`` not
+    ``record.graph_snapshot`` directly. Pre-slice-2c the
+    snapshot field held the current view; post-2c it holds the
+    immutable base. Reading the resolved view is the only way
+    to get accurate counts after mutations land.
     """
-    snapshot = record.graph_snapshot or {}
-    nodes = snapshot.get("nodes") or []
-    edges = snapshot.get("edges") or []
+    resolved = record.resolved_graph()
+    nodes = resolved.get("nodes") or []
+    edges = resolved.get("edges") or []
     return ScenarioSummary(
         id=record.id,
         transform_id=record.transform_id,
@@ -79,14 +85,20 @@ def _to_summary(record: ScenarioRecord) -> ScenarioSummary:
 
 def _to_response(record: ScenarioRecord) -> ScenarioResponse:
     """Project a service-layer record into the full wire shape
-    (summary + embedded graph). The graph snapshot is JSON in
-    the service layer; GraphResponse.model_validate adapts it
-    to the typed Pydantic shape for response."""
+    (summary + embedded graph). The embedded graph is the
+    resolved view (base + diff), so callers see the same
+    contract whether the scenario has been mutated or not.
+
+    Slice 2c: ``record.graph_snapshot`` is now the immutable
+    base; the embedded ``graph`` field on the response is the
+    resolved view computed at access time. Wire shape is
+    unchanged from pre-2c — clients can't tell whether storage
+    is materialized or CoW."""
     summary = _to_summary(record)
-    snapshot = record.graph_snapshot or {"nodes": [], "edges": []}
+    resolved = record.resolved_graph()
     return ScenarioResponse(
         **summary.model_dump(),
-        graph=GraphResponse.model_validate(snapshot),
+        graph=GraphResponse.model_validate(resolved),
     )
 
 
