@@ -122,17 +122,25 @@ class ContradictionsResponse(BaseModel):
     )
     contradictions: List[Contradiction]
     total_claims_scanned: int = Field(
-        default=0,
+        ...,
+        ge=0,
         description=(
             "Total claims for this transform at/above "
             "``min_confidence`` — NOT just the ones inside "
             "contradiction groups. Lets callers tell apart "
             "'no writer yet' (count=0) from 'writer healthy, "
             "consistent data' (count>0, contradictions empty). "
-            "Reviewer-flagged Medium on commit 66987b2: pre-fix "
-            "this counted only claims inside contradictions, "
-            "collapsing both states to 0 once slice 2b's writer "
-            "lands."
+            "Required (not optional with default=0) — this is "
+            "the load-bearing signal for distinguishing the two "
+            "empty-contradictions states; OpenAPI consumers "
+            "treating it as optional would write conditional "
+            "access logic that hides the signal. Reviewer-flagged "
+            "Low on commit 86c1dbd: pre-fix this was "
+            "``default=0`` so generated clients saw an optional "
+            "field. Reviewer-flagged Medium on commit 66987b2: "
+            "pre-fix this counted only claims inside "
+            "contradictions, collapsing both empty states to 0 "
+            "once slice 2b's writer lands."
         ),
     )
 

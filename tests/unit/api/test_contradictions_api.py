@@ -381,3 +381,35 @@ def test_contradictions_openapi_uses_typed_response_model():
     crefs = components["ContradictionsResponse"]
     assert "contradictions" in crefs.get("properties", {})
     assert "total_claims_scanned" in crefs.get("properties", {})
+
+
+def test_contradictions_response_required_fields_include_total_claims_scanned():
+    """Reviewer-flagged Low on commit 86c1dbd. ``total_claims_scanned``
+    is the load-bearing signal for distinguishing "no writer
+    yet" (count=0) from "writer healthy, consistent data"
+    (count>0, empty contradictions list). Pre-fix the schema
+    declared ``Field(default=0, ...)`` so OpenAPI marked it
+    optional — generated clients would have written
+    conditional access logic that hides the signal.
+
+    Pin: ``total_claims_scanned`` (alongside ``transform_id``
+    and ``contradictions``) must appear in the schema's
+    ``required`` list so consumers know they can always rely
+    on it. ``min_confidence`` legitimately has a default
+    (0.0), so it stays optional."""
+    from graphora_server.main import app
+
+    spec = app.openapi()
+    components = spec.get("components", {}).get("schemas", {})
+    required = set(components.get("ContradictionsResponse", {}).get("required", []))
+
+    assert "transform_id" in required
+    assert "contradictions" in required
+    assert "total_claims_scanned" in required, (
+        "total_claims_scanned must be required so OpenAPI "
+        "consumers can rely on it as the empty-state "
+        f"distinguishing signal. Required list: {required!r}"
+    )
+    # min_confidence is genuinely optional (defaults to 0.0)
+    # and should stay that way.
+    assert "min_confidence" not in required
