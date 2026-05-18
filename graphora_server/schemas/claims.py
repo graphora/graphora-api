@@ -121,14 +121,18 @@ class ContradictionsResponse(BaseModel):
         description="Confidence floor applied to the underlying claim set.",
     )
     contradictions: List[Contradiction]
-    # Reserved for slice 2b once pipeline hooks emit claims;
-    # zero until then.
     total_claims_scanned: int = Field(
         default=0,
         description=(
-            "Number of claims considered for contradiction detection "
-            "(post-confidence-filter). Returns 0 until B1-prob slice "
-            "2b's pipeline hooks emit claims at extraction time."
+            "Total claims for this transform at/above "
+            "``min_confidence`` — NOT just the ones inside "
+            "contradiction groups. Lets callers tell apart "
+            "'no writer yet' (count=0) from 'writer healthy, "
+            "consistent data' (count>0, contradictions empty). "
+            "Reviewer-flagged Medium on commit 66987b2: pre-fix "
+            "this counted only claims inside contradictions, "
+            "collapsing both states to 0 once slice 2b's writer "
+            "lands."
         ),
     )
 

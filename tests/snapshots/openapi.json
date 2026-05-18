@@ -701,6 +701,109 @@
         "title": "ChunkingTestResponse",
         "type": "object"
       },
+      "Claim": {
+        "description": "One extractor's assertion about a target's property.\n\nMatches the service-layer ``Claim`` dataclass field-for-field\nso JSON serialization roundtrips cleanly. The\n``target_kind`` field is the string value (``\"node\"`` /\n``\"edge\"``) rather than the enum, mirroring how the wire\nsurfaces the same enum elsewhere (Decision Log endpoints).",
+        "properties": {
+          "confidence": {
+            "description": "Extractor-reported confidence in [0.0, 1.0].",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "property_key": {
+            "title": "Property Key",
+            "type": "string"
+          },
+          "source_chunk_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Chunk Id"
+          },
+          "source_extractor_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Extractor Model"
+          },
+          "source_prompt_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Prompt Version"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "description": "``node`` or ``edge`` \u2014 the kind of target this claim is about.",
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "transform_id": {
+            "title": "Transform Id",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          },
+          "value": {
+            "description": "The claimed property value. JSON-serializable; can be a string, number, list, or nested object.",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "transform_id",
+          "target_id",
+          "target_kind",
+          "property_key",
+          "value",
+          "confidence"
+        ],
+        "title": "Claim",
+        "type": "object"
+      },
       "ConfigRequest": {
         "description": "Schema for creating user configuration.\n\nAt least one database (staging or production) must be provided.\nStaging DB is optional (system uses in-memory storage if not configured).\nProduction DB is required for merge operations.",
         "properties": {
@@ -814,6 +917,82 @@
           "message"
         ],
         "title": "ConnectionTestResponse",
+        "type": "object"
+      },
+      "Contradiction": {
+        "description": "A (target, property) pair carrying multiple distinct claimed values.\n\nA group with 2+ distinct values above the\n``min_confidence`` floor surfaces as a contradiction; the\n``competing_claims`` list is sorted by confidence DESC so the\n\"winning\" value is the first entry.\n\n``severity`` is the distinct-value count \u2014 a heuristic on\n\"how many alternative values disagree on this property.\" A\nslice 3 refinement may swap to a confidence-weighted entropy\nmeasure once enough real data lands; the wire shape stays the\nsame (severity is just an int).",
+        "properties": {
+          "competing_claims": {
+            "description": "All claims about this (target, property) above the confidence floor, sorted by confidence DESC. The first entry is the 'winning' claim the pipeline picked; the rest are alternatives the contradiction detector wants you to know about.",
+            "items": {
+              "$ref": "#/components/schemas/Claim"
+            },
+            "title": "Competing Claims",
+            "type": "array"
+          },
+          "property_key": {
+            "title": "Property Key",
+            "type": "string"
+          },
+          "severity": {
+            "description": "Distinct-value count (always >= 2 \u2014 single-value groups don't surface as contradictions).",
+            "minimum": 2.0,
+            "title": "Severity",
+            "type": "integer"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "title": "Target Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_id",
+          "target_kind",
+          "property_key",
+          "competing_claims",
+          "severity"
+        ],
+        "title": "Contradiction",
+        "type": "object"
+      },
+      "ContradictionsResponse": {
+        "description": "Wire envelope for GET /api/v1/graph/{tx}/contradictions.\n\nThe envelope (rather than a bare list) gives room for future\npagination + summary stats without breaking the wire\ncontract. The shape mirrors the diff endpoint's response\npattern \u2014 a summary at the top, the per-item list below.",
+        "properties": {
+          "contradictions": {
+            "items": {
+              "$ref": "#/components/schemas/Contradiction"
+            },
+            "title": "Contradictions",
+            "type": "array"
+          },
+          "min_confidence": {
+            "default": 0.0,
+            "description": "Confidence floor applied to the underlying claim set.",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Confidence",
+            "type": "number"
+          },
+          "total_claims_scanned": {
+            "default": 0,
+            "description": "Total claims for this transform at/above ``min_confidence`` \u2014 NOT just the ones inside contradiction groups. Lets callers tell apart 'no writer yet' (count=0) from 'writer healthy, consistent data' (count>0, contradictions empty). Reviewer-flagged Medium on commit 66987b2: pre-fix this counted only claims inside contradictions, collapsing both states to 0 once slice 2b's writer lands.",
+            "title": "Total Claims Scanned",
+            "type": "integer"
+          },
+          "transform_id": {
+            "title": "Transform Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transform_id",
+          "contradictions"
+        ],
+        "title": "ContradictionsResponse",
         "type": "object"
       },
       "CreateSchemaRequest": {
@@ -7654,9 +7833,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Contradictions By Transform Id Api V1 Graph  Transform Id  Contradictions Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ContradictionsResponse"
                 }
               }
             },

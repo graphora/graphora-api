@@ -769,3 +769,91 @@ async def test_postgres_contradictions_propagates_db_exception(monkeypatch):
     with patch("graphora_server.services.claims_service.db.fetch", new=fake_fetch):
         with pytest.raises(RuntimeError, match="connection refused"):
             await service.contradictions_for_transform(transform_id="tx", user_id="u")
+
+
+# ============================================================
+# count_claims_for_transform (reviewer-fix Medium on 66987b2)
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_count_claims_for_transform_returns_total(memory_service):
+    """Pin the count for a multi-claim transform. 3 stored
+    claims at confidence 0.9 + min_confidence=0.0 → 3."""
+    for chunk in ("a", "b", "c"):
+        c = _claim(confidence=0.9)
+        c.source_chunk_id = f"chunk-{chunk}"
+        await memory_service.append(c)
+    count = await memory_service.count_claims_for_transform(
+        transform_id="tx-1", user_id="user-1"
+    )
+    assert count == 3
+
+
+@pytest.mark.asyncio
+async def test_count_claims_for_transform_honors_min_confidence(memory_service):
+    """``min_confidence`` filters out low-confidence claims
+    from the count — same floor the contradiction detector
+    uses, so the count + the detector results are consistent
+    by construction."""
+    await memory_service.append(_claim(confidence=0.95))
+    await memory_service.append(_claim(confidence=0.1))
+
+    # No floor: both contribute.
+    assert (
+        await memory_service.count_claims_for_transform(
+            transform_id="tx-1", user_id="user-1", min_confidence=0.0
+        )
+        == 2
+    )
+    # Floor 0.5: low-confidence claim drops out.
+    assert (
+        await memory_service.count_claims_for_transform(
+            transform_id="tx-1", user_id="user-1", min_confidence=0.5
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_count_claims_for_transform_filters_by_tenant(memory_service):
+    """Tenant scoping pin — same defense the read paths get.
+    Cross-tenant claims must NOT contribute to the count."""
+    await memory_service.append(_claim(user_id="user-1"))
+    await memory_service.append(_claim(user_id="user-2"))
+    assert (
+        await memory_service.count_claims_for_transform(
+            transform_id="tx-1", user_id="user-1"
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_postgres_count_uses_count_star_not_load(monkeypatch):
+    """The Postgres path must use ``SELECT COUNT(*)`` rather
+    than loading every row just to count them. Pin the SQL so
+    a refactor to a ``len(for_transform(...))`` pattern would
+    explode at scale — loading 10k claims into Python just to
+    return ``int`` is the wrong shape."""
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgres://fake/url")
+    service = ClaimsService()
+
+    fake_fetch = AsyncMock(return_value=[{"n": 42}])
+    with patch("graphora_server.services.claims_service.db.fetch", new=fake_fetch):
+        result = await service.count_claims_for_transform(
+            transform_id="tx", user_id="u", min_confidence=0.5
+        )
+
+    fake_fetch.assert_awaited_once()
+    sql = fake_fetch.await_args.args[0]
+    assert "SELECT COUNT(*)" in sql, (
+        "count_claims_for_transform must use SELECT COUNT(*) "
+        f"to avoid loading every row. Got SQL: {sql!r}"
+    )
+    assert result == 42
+    # Confidence floor must reach the SQL bind args.
+    args = fake_fetch.await_args.args
+    assert args[1] == "tx"
+    assert args[2] == "u"
+    assert args[3] == 0.5

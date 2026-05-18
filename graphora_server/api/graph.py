@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Any, Dict, List, Optional
+from graphora_server.schemas.claims import ContradictionsResponse
 from graphora_server.schemas.graph import GraphResponse
 from graphora_server.schemas.graph_changes import SaveGraphRequest, SaveGraphResponse
 from graphora_server.services.user_db_service import (
@@ -281,6 +282,7 @@ async def get_decisions_by_transform_id(
 
 @router.get(
     "/{transform_id}/contradictions",
+    response_model=ContradictionsResponse,
     description=(
         "B1-prob slice 2a: surface (target, property) pairs where the "
         "extraction pipeline emitted multiple distinct claimed values. "
@@ -309,13 +311,28 @@ async def get_contradictions_by_transform_id(
     groups claims by (target_id, target_kind, property_key)
     and counts distinct JSON-equal values.
 
+    Reviewer-flagged Medium on commit 66987b2: the route now
+    declares ``response_model=ContradictionsResponse`` so
+    OpenAPI exposes the typed Claim/Contradiction contract to
+    generated clients. Pre-fix the 200 response was a generic
+    object — schema documents existed but the wire surface
+    didn't claim them, so the OpenAPI snapshot test pinned a
+    permissive shape rather than the real one.
+
     Returns:
         transform_id (str): Echo.
         min_confidence (float): The applied floor (default 0.0).
         contradictions (list): Per-(target, property) group with
             competing_claims + severity.
-        total_claims_scanned (int): Reserved — zero until slice
-            2b hooks emit claims.
+        total_claims_scanned (int): Total claims at/above
+            min_confidence for this transform — NOT just the
+            ones inside contradiction groups. Lets callers
+            distinguish "no writer yet" (count=0) from "writer
+            healthy, consistent data" (count>0, empty
+            contradictions list). Reviewer-flagged Medium on
+            commit 66987b2: pre-fix this counted only claims
+            INSIDE contradiction groups, which collapses both
+            states to 0 once slice 2b's writer lands.
     """
     # Pydantic's ge/le on the query parameter would catch this
     # too, but the explicit early-return gives a clearer error
@@ -333,13 +350,27 @@ async def get_contradictions_by_transform_id(
         user_id=auth.user_id,
         min_confidence=min_confidence,
     )
+    # Reviewer-flagged Medium on commit 66987b2: the
+    # ``total_claims_scanned`` field documents itself as
+    # "claims considered for contradiction detection (post-
+    # confidence-filter)" — counting only claims inside
+    # contradiction groups breaks that contract. A clean
+    # 100-claim transform would report 0, indistinguishable
+    # from the "no writer yet" empty state. The new
+    # ``count_claims_for_transform`` does the true count via
+    # ``SELECT COUNT(*)`` so we don't load every claim just to
+    # count them.
+    total_claims_scanned = await service.count_claims_for_transform(
+        transform_id=transform_id,
+        user_id=auth.user_id,
+        min_confidence=min_confidence,
+    )
 
     # Project service-layer dataclasses into wire dicts. The
     # claims_service dataclass uses TargetKind enum members; the
     # wire shape uses the string value. Project + adapt here so
     # the service stays Pydantic-free.
     contradiction_dicts: List[Dict[str, Any]] = []
-    total_claims_scanned = 0
     for c in contradictions:
         claims_list = [
             {
@@ -358,7 +389,6 @@ async def get_contradictions_by_transform_id(
             }
             for claim in c.competing_claims
         ]
-        total_claims_scanned += len(claims_list)
         contradiction_dicts.append(
             {
                 "target_id": c.target_id,

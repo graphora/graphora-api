@@ -272,3 +272,112 @@ async def test_contradictions_endpoint_threads_user_id_to_service(
         "user_id": "user-1",
         "min_confidence": 0.5,
     }
+
+
+# ============================================================
+# Reviewer-fix: total_claims_scanned semantic + response_model
+# (Medium x2 on 66987b2)
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_total_claims_scanned_counts_consistent_claims_too(test_client):
+    """Reviewer-flagged Medium on commit 66987b2. Pre-fix the
+    endpoint summed claims INSIDE contradiction groups, so a
+    transform with N consistent claims (no conflicts) would
+    report ``total_claims_scanned: 0`` — indistinguishable
+    from the "writer hasn't emitted any claims yet" state.
+
+    Pin: when N claims exist for a transform but they all
+    agree (one distinct value per property), the response's
+    contradictions list is empty AND total_claims_scanned
+    equals N. This lets CLI / dashboard callers tell the two
+    states apart."""
+    service = ClaimsService()
+    # Three claims, all consistent (same value across all
+    # three chunks) — should NOT surface as a contradiction.
+    for chunk in ("a", "b", "c"):
+        c = _seed_claim(value="Engineer", confidence=0.9)
+        c.source_chunk_id = f"chunk-{chunk}"
+        await service.append(c)
+
+    response = test_client.get("/api/v1/graph/tx-1/contradictions")
+    assert response.status_code == 200
+    body = response.json()
+    # No contradictions (consistent values).
+    assert body["contradictions"] == []
+    # But the count reflects the claims that DID exist + were
+    # scanned. Pre-fix this would have been 0, masking the
+    # consistent-data case as "no data."
+    assert body["total_claims_scanned"] == 3, (
+        "total_claims_scanned must count ALL claims above the "
+        "confidence floor, not just the ones inside "
+        "contradictions. Got "
+        f"{body['total_claims_scanned']} alongside 3 stored claims."
+    )
+
+
+@pytest.mark.asyncio
+async def test_total_claims_scanned_honors_min_confidence_filter(test_client):
+    """The count must respect the same ``min_confidence`` floor
+    the contradictions detector does — otherwise the count
+    would overstate what's actually being considered. Pin so
+    a refactor that splits the floor across the two methods
+    regresses."""
+    service = ClaimsService()
+    await service.append(_seed_claim(value="A", confidence=0.95))
+    await service.append(_seed_claim(value="B", confidence=0.1))
+
+    # No filter: both claims contribute.
+    response = test_client.get("/api/v1/graph/tx-1/contradictions?min_confidence=0.0")
+    assert response.json()["total_claims_scanned"] == 2
+
+    # Floor 0.5: low-confidence claim drops out of the count too.
+    response = test_client.get("/api/v1/graph/tx-1/contradictions?min_confidence=0.5")
+    assert response.json()["total_claims_scanned"] == 1
+
+
+def test_contradictions_openapi_uses_typed_response_model():
+    """Reviewer-flagged Medium on commit 66987b2. Pre-fix the
+    route returned ``Dict[str, Any]`` so OpenAPI exposed a
+    generic object as the 200 response — generated clients
+    (e.g., openapi-generator) wouldn't see the Claim /
+    Contradiction shape at all. The wire-shape pin in the
+    OpenAPI snapshot was pinning a permissive shape rather
+    than the real one.
+
+    Pin: the endpoint's OpenAPI spec must reference the
+    ContradictionsResponse schema (via $ref) on its 200
+    response. A refactor that drops ``response_model`` would
+    silently downgrade the wire contract back to ``object``."""
+    from graphora_server.main import app
+
+    spec = app.openapi()
+    route_spec = (
+        spec.get("paths", {})
+        .get("/api/v1/graph/{transform_id}/contradictions", {})
+        .get("get", {})
+    )
+    response_200 = (
+        route_spec.get("responses", {})
+        .get("200", {})
+        .get("content", {})
+        .get("application/json", {})
+    )
+    schema = response_200.get("schema", {})
+    # FastAPI represents response_model as a $ref to a named
+    # component schema; the ref string ends with the class name.
+    ref = schema.get("$ref", "")
+    assert ref.endswith("ContradictionsResponse"), (
+        "Route must declare response_model=ContradictionsResponse "
+        "so OpenAPI exposes the typed Claim/Contradiction "
+        f"contract. Got schema={schema!r}"
+    )
+    # And the referenced component must actually exist with the
+    # expected fields. Pin so a partial removal (response_model
+    # declared but model deleted) regresses.
+    components = spec.get("components", {}).get("schemas", {})
+    assert "ContradictionsResponse" in components
+    crefs = components["ContradictionsResponse"]
+    assert "contradictions" in crefs.get("properties", {})
+    assert "total_claims_scanned" in crefs.get("properties", {})

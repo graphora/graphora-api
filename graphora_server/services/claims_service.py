@@ -361,6 +361,50 @@ class ClaimsService:
             ),
         )
 
+    async def count_claims_for_transform(
+        self,
+        transform_id: str,
+        user_id: str,
+        *,
+        min_confidence: float = 0.0,
+    ) -> int:
+        """Count claims for a transform at/above the confidence floor.
+
+        Reviewer-flagged Medium on commit 66987b2: the
+        /contradictions endpoint surfaces this count via
+        ``total_claims_scanned`` to let callers distinguish
+        "no claims at all" (writer hasn't emitted any) from
+        "claims exist, no conflicts" (writer is healthy, the
+        graph is internally consistent). Without it the empty-
+        contradictions response is ambiguous — a high-quality
+        clean run is indistinguishable from a broken pipeline.
+
+        Postgres path uses ``SELECT COUNT(*)`` so we don't load
+        every row just to count; memory path uses ``sum(1 ...)``
+        with the same filter for parity.
+        """
+        if self._enabled:
+            rows = await db.fetch(
+                """
+                SELECT COUNT(*) AS n
+                FROM claims
+                WHERE transform_id = %s
+                  AND user_id = %s
+                  AND confidence >= %s
+                """,
+                transform_id,
+                user_id,
+                min_confidence,
+            )
+            return int(rows[0]["n"]) if rows else 0
+        return sum(
+            1
+            for c in self._memory_store
+            if c.transform_id == transform_id
+            and c.user_id == user_id
+            and c.confidence >= min_confidence
+        )
+
     async def contradictions_for_transform(
         self,
         transform_id: str,
