@@ -17,16 +17,27 @@ single `Organization` node referenced by both employees'
 ## Failure signals
 
 - An extractor that creates two separate `Organization` nodes
-  (one per mention of "Acme Corp") drops **precision** on the
-  Organization type — one expected, one of the two actuals
-  matches it, the other is an extra FP. The scorer reports
-  `Organization.precision ≈ 0.5` (1 TP / (1 TP + 1 FP)) while
-  `Organization.recall` stays 1.0 (the expected node was
-  still matched). Edges then take a hit too: one of the two
-  WORKS_AT edges points at the unmatched duplicate Org, so
-  that edge fails source/target identity match and the
-  scorer records `WORKS_AT` precision **and** recall around
-  0.5.
-- Worse: an extractor that uses the per-chunk node id (instead
-  of the helper-derived `canonical_id`) splits the two
-  references entirely and both `WORKS_AT` edges go dangling.
+  for the two mentions of "Acme Corp" drops **precision** on
+  the Organization type. With one expected node and two
+  actual nodes that share the helper-derived `canonical_id`
+  ("Organization:name=acme corp"), the scorer records
+  `TP=1, FP=1, FN=0` → `Organization.precision ≈ 0.5`,
+  `Organization.recall = 1.0`. The expected node still has a
+  match; the duplicate just contaminates the actual set with
+  an unmatched extra.
+  Edges are **not** affected in this case: both `WORKS_AT`
+  edges in the actual graph point at the same canonical Org
+  identity, so the canonical-id grouping in the edge-matching
+  layer aligns them with the two expected edges and
+  `WORKS_AT` stays at `TP=2, FP=0, FN=0`. Edges only take a
+  hit when the duplicate has a *different* canonical_id from
+  the matched one (the next bullet).
+- Worse: an extractor that fails to compute `canonical_id` at
+  all (or computes it differently per chunk — e.g., from a
+  name with stray whitespace) splits the two Org references
+  into two distinct canonical identities. Now only one Org
+  matches, the other is unmatched, and one of the `WORKS_AT`
+  edges points at the unmatched node — that edge fails
+  source/target identity match. Both Organization and
+  WORKS_AT precision drop below 1.0; recall on WORKS_AT
+  drops too.

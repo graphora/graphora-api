@@ -21,12 +21,21 @@ property extraction (`effective_date` on the Agreement).
 
 - An extractor that produces two separate Agreement nodes for
   the two "Service Agreement" mentions drops **precision** on
-  the Agreement type — `Agreement.precision ≈ 0.5` (1 TP,
-  1 FP, 0 FN) while `Agreement.recall` stays 1.0. One of the
-  two `PARTY_TO` edges then points at the duplicate Agreement
-  node that has no expected counterpart, so that edge fails
-  source/target match and `PARTY_TO` shows ~0.5 on both
-  precision and recall.
+  the Agreement type. With one expected and two actuals that
+  share the helper-derived canonical_id
+  ("Agreement:name=service agreement"), the scorer records
+  `TP=1, FP=1, FN=0` → `Agreement.precision ≈ 0.5`,
+  `Agreement.recall = 1.0`.
+  `PARTY_TO` edges are **not** affected in this case: both
+  edges in the actual graph point at the same canonical
+  Agreement identity, so the edge-matching layer aligns them
+  with the two expected edges and `PARTY_TO` stays at
+  `TP=2, FP=0, FN=0`. Edges only take a hit when the
+  duplicate Agreement has a *different* canonical_id from
+  the matched one (e.g., from name-parsing drift like
+  "Service Agreement" vs "Service agreement.") — then one of
+  the `PARTY_TO` edges points at the unmatched duplicate and
+  both PARTY_TO precision and recall drop.
 - An extractor that drops `effective_date` because it sits
   outside the parties' immediate context → `Agreement` itself
   still matches via canonical_id, but the changed-properties
