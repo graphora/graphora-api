@@ -95,6 +95,19 @@ README's "source" field is where attribution lands when applicable.
 
 ## Current roster
 
-| Slug | Pattern | Entity types | Edge types |
-|---|---|---|---|
-| `single_person_works_at_org` | One Person, one Organization, one WORKS_AT edge | Person, Organization | WORKS_AT |
+| Slug | Domain | Pattern | Entity types | Edge types |
+|---|---|---|---|---|
+| `single_person_works_at_org` | Business | One Person, one Organization, one WORKS_AT edge | Person, Organization | WORKS_AT |
+| `two_people_same_org` | Business | Two people at one shared Organization — dedup pin on the shared node | Person, Organization | WORKS_AT |
+| `healthcare_clinical_note` | Healthcare | Patient + Doctor + Diagnosis; honorific normalization + cross-type edges | Patient, Doctor, Diagnosis | SEEN_BY, DIAGNOSED_WITH |
+| `legal_simple_agreement` | Legal | Two Parties + one Agreement; multi-reference dedup across three nodes | Party, Agreement | PARTY_TO |
+| `financial_transaction` | Finance | Two Accounts + one Transaction; direction-sensitive debit/credit edges | Account, Transaction | DEBITED_FROM, CREDITED_TO |
+| `academic_paper_citation` | Academic | Multi-author paper citing another paper; same-type self-referential CITES edge | Paper, Author | AUTHORED_BY, CITES |
+
+### Growth target
+
+Plan calls for 50+ documents at Gate-4 exit. As of 2026-05-19
+we're at 6. Each new entry should add either a new domain or
+a new pattern not yet covered above — duplicating an existing
+pattern hurts coverage diversity more than it helps test
+volume.

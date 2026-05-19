@@ -1,0 +1,51 @@
+{
+  "nodes": [
+    {
+      "id": "f530efaa-9169-5ec5-8919-90fd11fdb643",
+      "type": "Account",
+      "label": "#4521",
+      "properties": {
+        "account_number": "4521",
+        "canonical_id": "f530efaa-9169-5ec5-8919-90fd11fdb643",
+        "canonical_key": "Account:account_number=4521"
+      }
+    },
+    {
+      "id": "7c16f809-6075-5a54-99c0-38aa8676d621",
+      "type": "Account",
+      "label": "#3300",
+      "properties": {
+        "account_number": "3300",
+        "canonical_id": "7c16f809-6075-5a54-99c0-38aa8676d621",
+        "canonical_key": "Account:account_number=3300"
+      }
+    },
+    {
+      "id": "39d80422-e289-534f-a1a1-8a03192e36b7",
+      "type": "Transaction",
+      "label": "TX-2026-05-01-4521-3300",
+      "properties": {
+        "reference": "TX-2026-05-01-4521-3300",
+        "amount": "$5,000 USD",
+        "canonical_id": "39d80422-e289-534f-a1a1-8a03192e36b7",
+        "canonical_key": "Transaction:reference=tx-2026-05-01-4521-3300"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "tx-debited-from-3300",
+      "type": "DEBITED_FROM",
+      "source": "39d80422-e289-534f-a1a1-8a03192e36b7",
+      "target": "7c16f809-6075-5a54-99c0-38aa8676d621",
+      "properties": {}
+    },
+    {
+      "id": "tx-credited-to-4521",
+      "type": "CREDITED_TO",
+      "source": "39d80422-e289-534f-a1a1-8a03192e36b7",
+      "target": "f530efaa-9169-5ec5-8919-90fd11fdb643",
+      "properties": {}
+    }
+  ]
+}

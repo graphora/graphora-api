@@ -1,0 +1,54 @@
+version: "0.1.0"
+entities:
+  Patient:
+    description: An individual receiving medical care.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Patient's full name. Used as the unique identifier — a
+          re-extraction across chunks of the same chart should
+          land on the same Patient canonical_id.
+  Doctor:
+    description: A licensed medical practitioner.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Doctor's name (with or without the "Dr." honorific —
+          ``_generate_node_key`` lowercases and strips, so
+          "Dr. Robert Smith" and "Robert Smith" should land on
+          the SAME canonical_id when the extractor normalizes
+          the honorific. (The expected.json pins the
+          normalized form.)
+  Diagnosis:
+    description: A medical condition or disease identified during the visit.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Clinical name of the condition. Stable across chunks
+          because the condition itself is the identity — two
+          mentions of "Type 2 diabetes" in different chunks must
+          collapse to one canonical Diagnosis node.
+relationships:
+  SEEN_BY:
+    source: Patient
+    target: Doctor
+    description: Patient-doctor encounter.
+    properties:
+      date:
+        type: str
+        required: false
+        description: Visit date as it appears in the document.
+  DIAGNOSED_WITH:
+    source: Patient
+    target: Diagnosis
+    description: Patient confirmed with a clinical condition.
+    properties: {}

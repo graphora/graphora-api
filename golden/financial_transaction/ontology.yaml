@@ -1,0 +1,44 @@
+version: "0.1.0"
+entities:
+  Account:
+    description: A bank or ledger account identified by its number.
+    properties:
+      account_number:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The account's numeric identifier. Pinned as ``unique:
+          true`` so two mentions of "account #4521" collapse to
+          one Account node — and the source/target of the
+          transaction edges resolve consistently.
+  Transaction:
+    description: A money movement between accounts.
+    properties:
+      reference:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The transaction's external reference id (e.g., what
+          the clearing house records). Used as the stable
+          identity for cross-chunk dedup — a re-extraction of
+          the same posting must collapse on this reference.
+      amount:
+        type: str
+        required: false
+        description: |
+          Transaction amount as it appears in the document
+          (with currency symbol intact; downstream parsing
+          isn't part of the test signal).
+relationships:
+  DEBITED_FROM:
+    source: Transaction
+    target: Account
+    description: The Transaction was debited from this Account.
+    properties: {}
+  CREDITED_TO:
+    source: Transaction
+    target: Account
+    description: The Transaction was credited to this Account.
+    properties: {}

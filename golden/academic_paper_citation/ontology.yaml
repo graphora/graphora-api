@@ -1,0 +1,43 @@
+version: "0.1.0"
+entities:
+  Paper:
+    description: A scholarly publication.
+    properties:
+      title:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The paper's title as written. ``unique: true`` keys
+          the canonical_id off the title — two mentions of
+          "Bayesian Networks" in the document (intro + body)
+          must collapse to one Paper node.
+      year:
+        type: str
+        required: false
+        description: Publication year.
+  Author:
+    description: A named individual credited as a paper's author.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Author's name. Same honorific-normalization expectation
+          as the healthcare doctor entry: "Dr. Maya Patel",
+          "Prof. James Chen", and the bare "Pearl" must all
+          land on the right canonical_id with the honorific /
+          title stripped from the canonical_key. (The
+          expected.json pins the normalized form.)
+relationships:
+  AUTHORED_BY:
+    source: Paper
+    target: Author
+    description: A paper's authorship relationship.
+    properties: {}
+  CITES:
+    source: Paper
+    target: Paper
+    description: One paper citing another.
+    properties: {}

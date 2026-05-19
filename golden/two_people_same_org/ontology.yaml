@@ -1,0 +1,44 @@
+version: "0.1.0"
+entities:
+  Person:
+    description: A named human individual mentioned in the text.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Full name as it appears in the text. ``unique: true`` makes
+          this the sole input to ``_generate_node_key``: the
+          canonical_key becomes ``Person:name=<lowercased name>`` and
+          two extractions of "Bob Chen" from different chunks land
+          on the same canonical_id regardless of which optional
+          properties surfaced.
+      title:
+        type: str
+        required: false
+        description: Job title or role at the named organization.
+  Organization:
+    description: A company, institution, or other named organization.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Organization name. ``unique: true`` is the load-bearing
+          test signal here — both Bob and Carol reference "Acme
+          Corp", and the extractor must produce a single
+          Organization node (deduplicated by canonical_id), not
+          two separate ones, even though the name appears twice
+          in the source.
+relationships:
+  WORKS_AT:
+    source: Person
+    target: Organization
+    description: Employment or affiliation relationship.
+    properties:
+      role:
+        type: str
+        required: false
+        description: The person's role at the organization at the time of mention.

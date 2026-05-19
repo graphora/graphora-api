@@ -1,0 +1,86 @@
+{
+  "nodes": [
+    {
+      "id": "fa23a7a0-40b9-5e89-be66-04b6fd6d9367",
+      "type": "Paper",
+      "label": "Probabilistic Graph Models",
+      "properties": {
+        "title": "Probabilistic Graph Models",
+        "year": "2025",
+        "canonical_id": "fa23a7a0-40b9-5e89-be66-04b6fd6d9367",
+        "canonical_key": "Paper:title=probabilistic graph models"
+      }
+    },
+    {
+      "id": "6c7ae748-743f-5d22-bf29-f11e3a7f014b",
+      "type": "Paper",
+      "label": "Bayesian Networks",
+      "properties": {
+        "title": "Bayesian Networks",
+        "year": "1988",
+        "canonical_id": "6c7ae748-743f-5d22-bf29-f11e3a7f014b",
+        "canonical_key": "Paper:title=bayesian networks"
+      }
+    },
+    {
+      "id": "f2151fd7-1e4c-59e9-9279-dcbbfe54678b",
+      "type": "Author",
+      "label": "Maya Patel",
+      "properties": {
+        "name": "Maya Patel",
+        "canonical_id": "f2151fd7-1e4c-59e9-9279-dcbbfe54678b",
+        "canonical_key": "Author:name=maya patel"
+      }
+    },
+    {
+      "id": "0c3a33fd-4d5f-531d-a1e2-93c72c746d91",
+      "type": "Author",
+      "label": "James Chen",
+      "properties": {
+        "name": "James Chen",
+        "canonical_id": "0c3a33fd-4d5f-531d-a1e2-93c72c746d91",
+        "canonical_key": "Author:name=james chen"
+      }
+    },
+    {
+      "id": "afeba668-e9c6-5827-8d05-eb5b7d1359b6",
+      "type": "Author",
+      "label": "Judea Pearl",
+      "properties": {
+        "name": "Judea Pearl",
+        "canonical_id": "afeba668-e9c6-5827-8d05-eb5b7d1359b6",
+        "canonical_key": "Author:name=judea pearl"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "pgm-authored-by-patel",
+      "type": "AUTHORED_BY",
+      "source": "fa23a7a0-40b9-5e89-be66-04b6fd6d9367",
+      "target": "f2151fd7-1e4c-59e9-9279-dcbbfe54678b",
+      "properties": {}
+    },
+    {
+      "id": "pgm-authored-by-chen",
+      "type": "AUTHORED_BY",
+      "source": "fa23a7a0-40b9-5e89-be66-04b6fd6d9367",
+      "target": "0c3a33fd-4d5f-531d-a1e2-93c72c746d91",
+      "properties": {}
+    },
+    {
+      "id": "bn-authored-by-pearl",
+      "type": "AUTHORED_BY",
+      "source": "6c7ae748-743f-5d22-bf29-f11e3a7f014b",
+      "target": "afeba668-e9c6-5827-8d05-eb5b7d1359b6",
+      "properties": {}
+    },
+    {
+      "id": "pgm-cites-bn",
+      "type": "CITES",
+      "source": "fa23a7a0-40b9-5e89-be66-04b6fd6d9367",
+      "target": "6c7ae748-743f-5d22-bf29-f11e3a7f014b",
+      "properties": {}
+    }
+  ]
+}

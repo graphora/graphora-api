@@ -1,0 +1,52 @@
+{
+  "nodes": [
+    {
+      "id": "c69abbde-a56b-5244-8a73-2b934821fbac",
+      "type": "Patient",
+      "label": "Jane Doe",
+      "properties": {
+        "name": "Jane Doe",
+        "canonical_id": "c69abbde-a56b-5244-8a73-2b934821fbac",
+        "canonical_key": "Patient:name=jane doe"
+      }
+    },
+    {
+      "id": "2760af12-f3e3-5273-a47e-06e3f49de292",
+      "type": "Doctor",
+      "label": "Robert Smith",
+      "properties": {
+        "name": "Robert Smith",
+        "canonical_id": "2760af12-f3e3-5273-a47e-06e3f49de292",
+        "canonical_key": "Doctor:name=robert smith"
+      }
+    },
+    {
+      "id": "771d9b65-e174-5c3e-bca5-ff613162de3f",
+      "type": "Diagnosis",
+      "label": "Type 2 diabetes",
+      "properties": {
+        "name": "Type 2 diabetes",
+        "canonical_id": "771d9b65-e174-5c3e-bca5-ff613162de3f",
+        "canonical_key": "Diagnosis:name=type 2 diabetes"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "jane-seen-by-smith",
+      "type": "SEEN_BY",
+      "source": "c69abbde-a56b-5244-8a73-2b934821fbac",
+      "target": "2760af12-f3e3-5273-a47e-06e3f49de292",
+      "properties": {
+        "date": "March 12, 2026"
+      }
+    },
+    {
+      "id": "jane-diagnosed-with-t2d",
+      "type": "DIAGNOSED_WITH",
+      "source": "c69abbde-a56b-5244-8a73-2b934821fbac",
+      "target": "771d9b65-e174-5c3e-bca5-ff613162de3f",
+      "properties": {}
+    }
+  ]
+}

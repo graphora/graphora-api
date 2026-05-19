@@ -1,0 +1,56 @@
+{
+  "nodes": [
+    {
+      "id": "7d155d53-d1c2-506a-837f-d64244483088",
+      "type": "Person",
+      "label": "Bob Chen",
+      "properties": {
+        "name": "Bob Chen",
+        "title": "senior designer",
+        "canonical_id": "7d155d53-d1c2-506a-837f-d64244483088",
+        "canonical_key": "Person:name=bob chen"
+      }
+    },
+    {
+      "id": "3c22539e-be5c-53a8-9278-a225608e72ee",
+      "type": "Person",
+      "label": "Carol Lee",
+      "properties": {
+        "name": "Carol Lee",
+        "title": "product manager",
+        "canonical_id": "3c22539e-be5c-53a8-9278-a225608e72ee",
+        "canonical_key": "Person:name=carol lee"
+      }
+    },
+    {
+      "id": "0bc97b26-c2ef-5bef-b04f-5dc95df76600",
+      "type": "Organization",
+      "label": "Acme Corp",
+      "properties": {
+        "name": "Acme Corp",
+        "canonical_id": "0bc97b26-c2ef-5bef-b04f-5dc95df76600",
+        "canonical_key": "Organization:name=acme corp"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "bob-works-at-acme",
+      "type": "WORKS_AT",
+      "source": "7d155d53-d1c2-506a-837f-d64244483088",
+      "target": "0bc97b26-c2ef-5bef-b04f-5dc95df76600",
+      "properties": {
+        "role": "senior designer"
+      }
+    },
+    {
+      "id": "carol-works-at-acme",
+      "type": "WORKS_AT",
+      "source": "3c22539e-be5c-53a8-9278-a225608e72ee",
+      "target": "0bc97b26-c2ef-5bef-b04f-5dc95df76600",
+      "properties": {
+        "role": "product manager"
+      }
+    }
+  ]
+}

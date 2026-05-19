@@ -1,0 +1,51 @@
+{
+  "nodes": [
+    {
+      "id": "94ef6368-2f51-5492-8d07-d63e9aa2c980",
+      "type": "Party",
+      "label": "Globex Industries",
+      "properties": {
+        "name": "Globex Industries",
+        "canonical_id": "94ef6368-2f51-5492-8d07-d63e9aa2c980",
+        "canonical_key": "Party:name=globex industries"
+      }
+    },
+    {
+      "id": "07d81206-559c-51b5-b694-dfecc0f553e1",
+      "type": "Party",
+      "label": "Initech LLC",
+      "properties": {
+        "name": "Initech LLC",
+        "canonical_id": "07d81206-559c-51b5-b694-dfecc0f553e1",
+        "canonical_key": "Party:name=initech llc"
+      }
+    },
+    {
+      "id": "a91d03f8-c155-57bf-bb88-1ba29013fe83",
+      "type": "Agreement",
+      "label": "Service Agreement",
+      "properties": {
+        "name": "Service Agreement",
+        "effective_date": "April 1, 2026",
+        "canonical_id": "a91d03f8-c155-57bf-bb88-1ba29013fe83",
+        "canonical_key": "Agreement:name=service agreement"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "globex-party-to-agreement",
+      "type": "PARTY_TO",
+      "source": "94ef6368-2f51-5492-8d07-d63e9aa2c980",
+      "target": "a91d03f8-c155-57bf-bb88-1ba29013fe83",
+      "properties": {}
+    },
+    {
+      "id": "initech-party-to-agreement",
+      "type": "PARTY_TO",
+      "source": "07d81206-559c-51b5-b694-dfecc0f553e1",
+      "target": "a91d03f8-c155-57bf-bb88-1ba29013fe83",
+      "properties": {}
+    }
+  ]
+}

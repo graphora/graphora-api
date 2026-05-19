@@ -1,0 +1,36 @@
+version: "0.1.0"
+entities:
+  Party:
+    description: A signatory to an agreement (typically a company or individual).
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Party's legal name as it appears in the agreement.
+          ``unique: true`` keys the canonical_id off the name so
+          multiple references to "Globex Industries" within the
+          same document collapse to one Party node.
+  Agreement:
+    description: A named contract or legal arrangement between parties.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The agreement's name as introduced in the text
+          (e.g., "Service Agreement"). The document references it
+          twice; the extractor must produce one canonical
+          Agreement node, not one per mention.
+      effective_date:
+        type: str
+        required: false
+        description: When the agreement becomes effective.
+relationships:
+  PARTY_TO:
+    source: Party
+    target: Agreement
+    description: A party's participation in an agreement.
+    properties: {}

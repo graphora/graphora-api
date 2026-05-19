@@ -1,0 +1,6 @@
+The 2025 paper "Probabilistic Graph Models", co-authored by
+Dr. Maya Patel and Prof. James Chen, builds on Judea Pearl's
+seminal 1988 work "Bayesian Networks". Patel and Chen cite
+Bayesian Networks throughout their introduction and credit
+Pearl with founding the field of probabilistic graphical
+models.

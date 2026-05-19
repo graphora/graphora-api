@@ -1,0 +1,4 @@
+Patient Jane Doe was seen by Dr. Robert Smith on March 12, 2026
+at Mercy Hospital. After reviewing recent lab work and family
+history, Dr. Smith confirmed a diagnosis of Type 2 diabetes
+and started Jane on metformin therapy.
