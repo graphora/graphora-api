@@ -59,9 +59,7 @@ def _node(
         type=type,
         properties={"name": node_id},
         canonical_id=canonical_id,
-        canonical_key=(
-            f"{type}:name={node_id.lower()}" if canonical_id else None
-        ),
+        canonical_key=(f"{type}:name={node_id.lower()}" if canonical_id else None),
         original_extraction_ids=original_extraction_ids or [],
     )
 
