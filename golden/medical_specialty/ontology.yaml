@@ -1,0 +1,38 @@
+version: "0.1.0"
+entities:
+  Doctor:
+    description: A practicing physician.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Honorific ("Dr.") is part of the name as written.
+          The canonical_key lowercases but preserves the
+          prefix — ``Doctor:name=dr. aisha patel``.
+  Specialty:
+    description: A medical specialty.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Hospital:
+    description: A hospital.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  BOARD_CERTIFIED_IN:
+    source: Doctor
+    target: Specialty
+    description: The Doctor is board-certified in this Specialty.
+    properties: {}
+  PRACTICES_AT:
+    source: Doctor
+    target: Hospital
+    description: The Doctor practices at this Hospital.
+    properties: {}

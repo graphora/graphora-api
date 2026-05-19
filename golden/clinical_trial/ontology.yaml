@@ -1,0 +1,53 @@
+version: "0.1.0"
+entities:
+  Trial:
+    description: A clinical trial.
+    properties:
+      nct_id:
+        type: str
+        required: true
+        unique: true
+        description: |
+          ClinicalTrials.gov identifier. Pinned ``unique:
+          true``. NCT04501239 appears four times.
+      phase:
+        type: str
+        required: false
+        description: Trial phase as a string.
+  Sponsor:
+    description: A clinical trial sponsor.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Drug:
+    description: A drug under study.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Condition:
+    description: A medical condition or indication.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  SPONSORED_BY:
+    source: Trial
+    target: Sponsor
+    description: The Trial is sponsored by this Sponsor.
+    properties: {}
+  EVALUATES:
+    source: Trial
+    target: Drug
+    description: The Trial evaluates this Drug.
+    properties: {}
+  TARGETS_CONDITION:
+    source: Trial
+    target: Condition
+    description: The Trial targets this Condition.
+    properties: {}

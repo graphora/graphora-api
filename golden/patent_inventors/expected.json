@@ -1,0 +1,85 @@
+{
+  "nodes": [
+    {
+      "id": "f42d9d3a-e3f0-53a4-a882-ea45ae32bfea",
+      "type": "Patent",
+      "label": "US-11923456-B2",
+      "properties": {
+        "number": "US-11923456-B2",
+        "title": "Method for cooperative drone routing",
+        "canonical_id": "f42d9d3a-e3f0-53a4-a882-ea45ae32bfea",
+        "canonical_key": "Patent:number=us-11923456-b2"
+      }
+    },
+    {
+      "id": "974ced9d-5be2-5d36-ba9f-f1ffb5568251",
+      "type": "Inventor",
+      "label": "Kenji Tanaka",
+      "properties": {
+        "name": "Kenji Tanaka",
+        "canonical_id": "974ced9d-5be2-5d36-ba9f-f1ffb5568251",
+        "canonical_key": "Inventor:name=kenji tanaka"
+      }
+    },
+    {
+      "id": "df734cf1-3f6c-5ad9-a3c0-278899f904ad",
+      "type": "Inventor",
+      "label": "Sara Ahmed",
+      "properties": {
+        "name": "Sara Ahmed",
+        "canonical_id": "df734cf1-3f6c-5ad9-a3c0-278899f904ad",
+        "canonical_key": "Inventor:name=sara ahmed"
+      }
+    },
+    {
+      "id": "d4380e95-95a0-507a-a418-ed4766383817",
+      "type": "Inventor",
+      "label": "Luca Rossi",
+      "properties": {
+        "name": "Luca Rossi",
+        "canonical_id": "d4380e95-95a0-507a-a418-ed4766383817",
+        "canonical_key": "Inventor:name=luca rossi"
+      }
+    },
+    {
+      "id": "d68292bf-d5d3-5252-9289-8755812c7b33",
+      "type": "Company",
+      "label": "Aero Systems Corp",
+      "properties": {
+        "name": "Aero Systems Corp",
+        "canonical_id": "d68292bf-d5d3-5252-9289-8755812c7b33",
+        "canonical_key": "Company:name=aero systems corp"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "patent-invented-tanaka",
+      "type": "INVENTED_BY",
+      "source": "f42d9d3a-e3f0-53a4-a882-ea45ae32bfea",
+      "target": "974ced9d-5be2-5d36-ba9f-f1ffb5568251",
+      "properties": {}
+    },
+    {
+      "id": "patent-invented-ahmed",
+      "type": "INVENTED_BY",
+      "source": "f42d9d3a-e3f0-53a4-a882-ea45ae32bfea",
+      "target": "df734cf1-3f6c-5ad9-a3c0-278899f904ad",
+      "properties": {}
+    },
+    {
+      "id": "patent-invented-rossi",
+      "type": "INVENTED_BY",
+      "source": "f42d9d3a-e3f0-53a4-a882-ea45ae32bfea",
+      "target": "d4380e95-95a0-507a-a418-ed4766383817",
+      "properties": {}
+    },
+    {
+      "id": "patent-assigned-aero",
+      "type": "ASSIGNED_TO",
+      "source": "f42d9d3a-e3f0-53a4-a882-ea45ae32bfea",
+      "target": "d68292bf-d5d3-5252-9289-8755812c7b33",
+      "properties": {}
+    }
+  ]
+}

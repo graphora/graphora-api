@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "514b894c-1b5e-5f97-80ea-a888cfb8bc09",
+      "type": "Person",
+      "label": "Patricia Wong",
+      "properties": {
+        "name": "Patricia Wong",
+        "canonical_id": "514b894c-1b5e-5f97-80ea-a888cfb8bc09",
+        "canonical_key": "Person:name=patricia wong"
+      }
+    },
+    {
+      "id": "06f24916-e94a-5044-b44c-ed3a72d4845c",
+      "type": "Company",
+      "label": "Helix Pharmaceuticals",
+      "properties": {
+        "name": "Helix Pharmaceuticals",
+        "canonical_id": "06f24916-e94a-5044-b44c-ed3a72d4845c",
+        "canonical_key": "Company:name=helix pharmaceuticals"
+      }
+    },
+    {
+      "id": "6bdf659e-eaa0-578d-b91b-61d7947d62de",
+      "type": "Company",
+      "label": "Aurora Logistics",
+      "properties": {
+        "name": "Aurora Logistics",
+        "canonical_id": "6bdf659e-eaa0-578d-b91b-61d7947d62de",
+        "canonical_key": "Company:name=aurora logistics"
+      }
+    },
+    {
+      "id": "39d96f86-6b23-5415-9845-d43777e3ed5a",
+      "type": "Company",
+      "label": "Crestview Bank",
+      "properties": {
+        "name": "Crestview Bank",
+        "canonical_id": "39d96f86-6b23-5415-9845-d43777e3ed5a",
+        "canonical_key": "Company:name=crestview bank"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "patricia-director-helix",
+      "type": "DIRECTOR_OF",
+      "source": "514b894c-1b5e-5f97-80ea-a888cfb8bc09",
+      "target": "06f24916-e94a-5044-b44c-ed3a72d4845c",
+      "properties": {}
+    },
+    {
+      "id": "patricia-director-aurora",
+      "type": "DIRECTOR_OF",
+      "source": "514b894c-1b5e-5f97-80ea-a888cfb8bc09",
+      "target": "6bdf659e-eaa0-578d-b91b-61d7947d62de",
+      "properties": {}
+    },
+    {
+      "id": "patricia-director-crestview",
+      "type": "DIRECTOR_OF",
+      "source": "514b894c-1b5e-5f97-80ea-a888cfb8bc09",
+      "target": "39d96f86-6b23-5415-9845-d43777e3ed5a",
+      "properties": {}
+    }
+  ]
+}

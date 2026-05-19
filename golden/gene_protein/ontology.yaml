@@ -1,0 +1,38 @@
+version: "0.1.0"
+entities:
+  Gene:
+    description: A gene identified by its HGNC symbol.
+    properties:
+      symbol:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The gene's symbol (e.g., "BRCA1"). Pinned
+          ``unique: true``. Non-name canonical identity — Gene
+          uses ``symbol``, not ``name``.
+  Protein:
+    description: A protein product.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Function:
+    description: A biological function or process.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  ENCODES:
+    source: Gene
+    target: Protein
+    description: The Gene encodes the target Protein.
+    properties: {}
+  PARTICIPATES_IN:
+    source: Protein
+    target: Function
+    description: The Protein participates in the target Function.
+    properties: {}

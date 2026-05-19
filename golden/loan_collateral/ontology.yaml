@@ -1,0 +1,37 @@
+version: "0.1.0"
+entities:
+  Lender:
+    description: A lending institution.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Borrower:
+    description: A borrower entity.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Asset:
+    description: A specific asset pledged as collateral.
+    properties:
+      identifier:
+        type: str
+        required: true
+        unique: true
+relationships:
+  LOANED_TO:
+    source: Lender
+    target: Borrower
+    description: The Lender extended a loan to this Borrower.
+    properties: {}
+  COLLATERAL_FOR:
+    source: Asset
+    target: Borrower
+    description: |
+      The Asset secures a loan extended to this Borrower.
+      Asset → Borrower (rather than Asset → Lender) keeps the
+      "what backs whose obligation" reading clear.
+    properties: {}

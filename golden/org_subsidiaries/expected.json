@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "6233c73a-caf2-5862-8d59-bb673d646831",
+      "type": "Company",
+      "label": "Voltaic Holdings",
+      "properties": {
+        "name": "Voltaic Holdings",
+        "canonical_id": "6233c73a-caf2-5862-8d59-bb673d646831",
+        "canonical_key": "Company:name=voltaic holdings"
+      }
+    },
+    {
+      "id": "4232c4f7-8707-5a17-9771-20e3a0ca6f0c",
+      "type": "Company",
+      "label": "Voltaic Energy",
+      "properties": {
+        "name": "Voltaic Energy",
+        "canonical_id": "4232c4f7-8707-5a17-9771-20e3a0ca6f0c",
+        "canonical_key": "Company:name=voltaic energy"
+      }
+    },
+    {
+      "id": "494a28c8-a95e-5ac7-8fe1-c50d7c6d4c95",
+      "type": "Company",
+      "label": "Voltaic Storage",
+      "properties": {
+        "name": "Voltaic Storage",
+        "canonical_id": "494a28c8-a95e-5ac7-8fe1-c50d7c6d4c95",
+        "canonical_key": "Company:name=voltaic storage"
+      }
+    },
+    {
+      "id": "e98033bc-6726-59dc-9939-513649178c17",
+      "type": "Company",
+      "label": "Voltaic Grid",
+      "properties": {
+        "name": "Voltaic Grid",
+        "canonical_id": "e98033bc-6726-59dc-9939-513649178c17",
+        "canonical_key": "Company:name=voltaic grid"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "energy-sub-holdings",
+      "type": "SUBSIDIARY_OF",
+      "source": "4232c4f7-8707-5a17-9771-20e3a0ca6f0c",
+      "target": "6233c73a-caf2-5862-8d59-bb673d646831",
+      "properties": {}
+    },
+    {
+      "id": "storage-sub-holdings",
+      "type": "SUBSIDIARY_OF",
+      "source": "494a28c8-a95e-5ac7-8fe1-c50d7c6d4c95",
+      "target": "6233c73a-caf2-5862-8d59-bb673d646831",
+      "properties": {}
+    },
+    {
+      "id": "grid-sub-holdings",
+      "type": "SUBSIDIARY_OF",
+      "source": "e98033bc-6726-59dc-9939-513649178c17",
+      "target": "6233c73a-caf2-5862-8d59-bb673d646831",
+      "properties": {}
+    }
+  ]
+}

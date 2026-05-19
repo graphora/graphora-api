@@ -1,0 +1,51 @@
+{
+  "nodes": [
+    {
+      "id": "ac4e2ffc-b469-5da4-8709-0d644bb46990",
+      "type": "Person",
+      "label": "Olivia Park",
+      "properties": {
+        "name": "Olivia Park",
+        "canonical_id": "ac4e2ffc-b469-5da4-8709-0d644bb46990",
+        "canonical_key": "Person:name=olivia park"
+      }
+    },
+    {
+      "id": "3f2b94bf-7950-5c15-ac24-067d7924ab8f",
+      "type": "Degree",
+      "label": "PhD EECS 2025",
+      "properties": {
+        "identifier": "MIT-PhD-EECS-2025-OPark",
+        "year": "2025",
+        "canonical_id": "3f2b94bf-7950-5c15-ac24-067d7924ab8f",
+        "canonical_key": "Degree:identifier=mit-phd-eecs-2025-opark"
+      }
+    },
+    {
+      "id": "77699bfe-4bfb-5b44-8408-36de437c4977",
+      "type": "Institution",
+      "label": "Massachusetts Institute of Technology",
+      "properties": {
+        "name": "Massachusetts Institute of Technology",
+        "canonical_id": "77699bfe-4bfb-5b44-8408-36de437c4977",
+        "canonical_key": "Institution:name=massachusetts institute of technology"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "olivia-earned",
+      "type": "EARNED",
+      "source": "ac4e2ffc-b469-5da4-8709-0d644bb46990",
+      "target": "3f2b94bf-7950-5c15-ac24-067d7924ab8f",
+      "properties": {}
+    },
+    {
+      "id": "degree-from-mit",
+      "type": "CONFERRED_BY",
+      "source": "3f2b94bf-7950-5c15-ac24-067d7924ab8f",
+      "target": "77699bfe-4bfb-5b44-8408-36de437c4977",
+      "properties": {}
+    }
+  ]
+}

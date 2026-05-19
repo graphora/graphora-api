@@ -1,0 +1,50 @@
+{
+  "nodes": [
+    {
+      "id": "70247027-08a4-5341-b05b-716909e66f70",
+      "type": "Bank",
+      "label": "Coastal Federal Credit Union",
+      "properties": {
+        "name": "Coastal Federal Credit Union",
+        "canonical_id": "70247027-08a4-5341-b05b-716909e66f70",
+        "canonical_key": "Bank:name=coastal federal credit union"
+      }
+    },
+    {
+      "id": "c21b64a6-982a-5f88-a447-3206af86c1e2",
+      "type": "Property",
+      "label": "412 Magnolia Lane",
+      "properties": {
+        "address": "412 Magnolia Lane, Charleston, SC 29401",
+        "canonical_id": "c21b64a6-982a-5f88-a447-3206af86c1e2",
+        "canonical_key": "Property:address=412 magnolia lane, charleston, sc 29401"
+      }
+    },
+    {
+      "id": "42058566-7760-532d-b001-4554f0ba5132",
+      "type": "Person",
+      "label": "Daniel Park",
+      "properties": {
+        "name": "Daniel Park",
+        "canonical_id": "42058566-7760-532d-b001-4554f0ba5132",
+        "canonical_key": "Person:name=daniel park"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "coastal-orig-magnolia",
+      "type": "ORIGINATED",
+      "source": "70247027-08a4-5341-b05b-716909e66f70",
+      "target": "c21b64a6-982a-5f88-a447-3206af86c1e2",
+      "properties": {}
+    },
+    {
+      "id": "daniel-borrower-magnolia",
+      "type": "BORROWER_OF",
+      "source": "42058566-7760-532d-b001-4554f0ba5132",
+      "target": "c21b64a6-982a-5f88-a447-3206af86c1e2",
+      "properties": {}
+    }
+  ]
+}

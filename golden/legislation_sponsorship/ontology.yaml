@@ -1,0 +1,39 @@
+version: "0.1.0"
+entities:
+  Bill:
+    description: A legislative bill.
+    properties:
+      number:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Bill number with leading prefix (e.g., ``H.R. 4521``).
+          The period after ``H.R`` stays in the canonical_key
+          — pin against a normalizer that strips trailing
+          punctuation.
+  Legislator:
+    description: A member of Congress.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Committee:
+    description: A congressional committee.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  SPONSORED_BY:
+    source: Bill
+    target: Legislator
+    description: The Bill was sponsored by this Legislator.
+    properties: {}
+  REFERRED_TO:
+    source: Bill
+    target: Committee
+    description: The Bill was referred to this Committee.
+    properties: {}

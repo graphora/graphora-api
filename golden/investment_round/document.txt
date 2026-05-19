@@ -1,0 +1,11 @@
+Polyhedron AI closed its Series B funding round on April 15,
+2026. The Series B for Polyhedron AI, internally tracked as
+Polyhedron-Series-B-2026, raised $45M.
+
+The Polyhedron-Series-B-2026 round was co-led by Sequoia
+Capital and Andreessen Horowitz. Both Sequoia Capital and
+Andreessen Horowitz had also participated in Polyhedron AI's
+seed round in 2023.
+
+Polyhedron AI plans to use the proceeds of
+Polyhedron-Series-B-2026 to scale its training infrastructure.

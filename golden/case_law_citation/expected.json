@@ -1,0 +1,50 @@
+{
+  "nodes": [
+    {
+      "id": "00dc80f4-3c23-51f1-8055-b65829400c51",
+      "type": "Case",
+      "label": "Brennan v. Adler",
+      "properties": {
+        "citation": "Brennan v. Adler, 540 F.3d 218 (3d Cir. 2008)",
+        "canonical_id": "00dc80f4-3c23-51f1-8055-b65829400c51",
+        "canonical_key": "Case:citation=brennan v. adler, 540 f.3d 218 (3d cir. 2008)"
+      }
+    },
+    {
+      "id": "acec91bb-9fa4-5937-a4e8-7607c5e4dab8",
+      "type": "Court",
+      "label": "United States Court of Appeals for the Third Circuit",
+      "properties": {
+        "name": "United States Court of Appeals for the Third Circuit",
+        "canonical_id": "acec91bb-9fa4-5937-a4e8-7607c5e4dab8",
+        "canonical_key": "Court:name=united states court of appeals for the third circuit"
+      }
+    },
+    {
+      "id": "908a0219-d38c-5bec-9187-df34bf95b50e",
+      "type": "Judge",
+      "label": "Judge Hardiman",
+      "properties": {
+        "name": "Judge Hardiman",
+        "canonical_id": "908a0219-d38c-5bec-9187-df34bf95b50e",
+        "canonical_key": "Judge:name=judge hardiman"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "case-decided-3rd",
+      "type": "DECIDED_BY",
+      "source": "00dc80f4-3c23-51f1-8055-b65829400c51",
+      "target": "acec91bb-9fa4-5937-a4e8-7607c5e4dab8",
+      "properties": {}
+    },
+    {
+      "id": "case-authored-hardiman",
+      "type": "AUTHORED_BY",
+      "source": "00dc80f4-3c23-51f1-8055-b65829400c51",
+      "target": "908a0219-d38c-5bec-9187-df34bf95b50e",
+      "properties": {}
+    }
+  ]
+}

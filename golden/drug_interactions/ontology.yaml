@@ -1,0 +1,21 @@
+version: "0.1.0"
+entities:
+  Drug:
+    description: A pharmaceutical drug.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  INTERACTS_WITH:
+    source: Drug
+    target: Drug
+    description: |
+      The two drugs are known to interact. Same-type
+      symmetric-meaning relationship modeled as directional —
+      the ontology assigns one direction per pair. The
+      expected graph has the source-side warfarin as the
+      starting point for both interactions, mirroring how
+      the document leads with warfarin.
+    properties: {}

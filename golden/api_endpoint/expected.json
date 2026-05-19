@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "06af65ea-76d6-5814-ab5a-cd144a0ca7dd",
+      "type": "Endpoint",
+      "label": "/api/v1/users/{id}",
+      "properties": {
+        "path": "/api/v1/users/{id}",
+        "canonical_id": "06af65ea-76d6-5814-ab5a-cd144a0ca7dd",
+        "canonical_key": "Endpoint:path=/api/v1/users/{id}"
+      }
+    },
+    {
+      "id": "23ad0192-60fc-51a8-b26d-118430d15cf8",
+      "type": "Service",
+      "label": "user-service",
+      "properties": {
+        "name": "user-service",
+        "canonical_id": "23ad0192-60fc-51a8-b26d-118430d15cf8",
+        "canonical_key": "Service:name=user-service"
+      }
+    },
+    {
+      "id": "fbedae18-6759-5a46-b1ef-8cd497601903",
+      "type": "Method",
+      "label": "GET",
+      "properties": {
+        "verb": "GET",
+        "canonical_id": "fbedae18-6759-5a46-b1ef-8cd497601903",
+        "canonical_key": "Method:verb=get"
+      }
+    },
+    {
+      "id": "8b0c1c67-4d69-50c1-9d65-f6ea2bbb6041",
+      "type": "Method",
+      "label": "PATCH",
+      "properties": {
+        "verb": "PATCH",
+        "canonical_id": "8b0c1c67-4d69-50c1-9d65-f6ea2bbb6041",
+        "canonical_key": "Method:verb=patch"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "endpoint-exposed",
+      "type": "EXPOSED_BY",
+      "source": "06af65ea-76d6-5814-ab5a-cd144a0ca7dd",
+      "target": "23ad0192-60fc-51a8-b26d-118430d15cf8",
+      "properties": {}
+    },
+    {
+      "id": "endpoint-get",
+      "type": "ACCEPTS",
+      "source": "06af65ea-76d6-5814-ab5a-cd144a0ca7dd",
+      "target": "fbedae18-6759-5a46-b1ef-8cd497601903",
+      "properties": {}
+    },
+    {
+      "id": "endpoint-patch",
+      "type": "ACCEPTS",
+      "source": "06af65ea-76d6-5814-ab5a-cd144a0ca7dd",
+      "target": "8b0c1c67-4d69-50c1-9d65-f6ea2bbb6041",
+      "properties": {}
+    }
+  ]
+}

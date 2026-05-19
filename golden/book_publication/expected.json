@@ -1,0 +1,51 @@
+{
+  "nodes": [
+    {
+      "id": "ecdf7e6b-5b7f-5c20-b2b9-22852d139b3d",
+      "type": "Book",
+      "label": "978-1-2345-6789-0",
+      "properties": {
+        "isbn": "978-1-2345-6789-0",
+        "title": "The Patterns Beneath",
+        "canonical_id": "ecdf7e6b-5b7f-5c20-b2b9-22852d139b3d",
+        "canonical_key": "Book:isbn=978-1-2345-6789-0"
+      }
+    },
+    {
+      "id": "45cedc86-efca-533f-942a-746bc9112cd7",
+      "type": "Author",
+      "label": "Elena Vargas",
+      "properties": {
+        "name": "Elena Vargas",
+        "canonical_id": "45cedc86-efca-533f-942a-746bc9112cd7",
+        "canonical_key": "Author:name=elena vargas"
+      }
+    },
+    {
+      "id": "4eb67b8f-6ea9-552e-a4d9-093bb85b7886",
+      "type": "Publisher",
+      "label": "Lighthouse Press",
+      "properties": {
+        "name": "Lighthouse Press",
+        "canonical_id": "4eb67b8f-6ea9-552e-a4d9-093bb85b7886",
+        "canonical_key": "Publisher:name=lighthouse press"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "book-by-elena",
+      "type": "AUTHORED_BY",
+      "source": "ecdf7e6b-5b7f-5c20-b2b9-22852d139b3d",
+      "target": "45cedc86-efca-533f-942a-746bc9112cd7",
+      "properties": {}
+    },
+    {
+      "id": "book-by-lighthouse",
+      "type": "PUBLISHED_BY",
+      "source": "ecdf7e6b-5b7f-5c20-b2b9-22852d139b3d",
+      "target": "4eb67b8f-6ea9-552e-a4d9-093bb85b7886",
+      "properties": {}
+    }
+  ]
+}

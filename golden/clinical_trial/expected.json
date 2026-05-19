@@ -1,0 +1,68 @@
+{
+  "nodes": [
+    {
+      "id": "6ae6cef4-817e-5d47-9a1e-c974afb4e48a",
+      "type": "Trial",
+      "label": "NCT04501239",
+      "properties": {
+        "nct_id": "NCT04501239",
+        "phase": "Phase 2",
+        "canonical_id": "6ae6cef4-817e-5d47-9a1e-c974afb4e48a",
+        "canonical_key": "Trial:nct_id=nct04501239"
+      }
+    },
+    {
+      "id": "9eb1bc22-e309-5b75-8d70-353698a2de7e",
+      "type": "Sponsor",
+      "label": "Sentinel Therapeutics",
+      "properties": {
+        "name": "Sentinel Therapeutics",
+        "canonical_id": "9eb1bc22-e309-5b75-8d70-353698a2de7e",
+        "canonical_key": "Sponsor:name=sentinel therapeutics"
+      }
+    },
+    {
+      "id": "b9b97a2c-d7d0-51e0-9cf8-1a1ffd139e4e",
+      "type": "Drug",
+      "label": "sentilumab",
+      "properties": {
+        "name": "sentilumab",
+        "canonical_id": "b9b97a2c-d7d0-51e0-9cf8-1a1ffd139e4e",
+        "canonical_key": "Drug:name=sentilumab"
+      }
+    },
+    {
+      "id": "01eaed44-ef9d-5d6b-8e2f-c2184ecb92de",
+      "type": "Condition",
+      "label": "metastatic melanoma",
+      "properties": {
+        "name": "metastatic melanoma",
+        "canonical_id": "01eaed44-ef9d-5d6b-8e2f-c2184ecb92de",
+        "canonical_key": "Condition:name=metastatic melanoma"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "trial-sponsored",
+      "type": "SPONSORED_BY",
+      "source": "6ae6cef4-817e-5d47-9a1e-c974afb4e48a",
+      "target": "9eb1bc22-e309-5b75-8d70-353698a2de7e",
+      "properties": {}
+    },
+    {
+      "id": "trial-evaluates",
+      "type": "EVALUATES",
+      "source": "6ae6cef4-817e-5d47-9a1e-c974afb4e48a",
+      "target": "b9b97a2c-d7d0-51e0-9cf8-1a1ffd139e4e",
+      "properties": {}
+    },
+    {
+      "id": "trial-targets",
+      "type": "TARGETS_CONDITION",
+      "source": "6ae6cef4-817e-5d47-9a1e-c974afb4e48a",
+      "target": "01eaed44-ef9d-5d6b-8e2f-c2184ecb92de",
+      "properties": {}
+    }
+  ]
+}

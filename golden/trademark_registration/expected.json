@@ -1,0 +1,51 @@
+{
+  "nodes": [
+    {
+      "id": "84a86621-4393-523b-87ce-eef58eac5b22",
+      "type": "Trademark",
+      "label": "USPTO-6543210",
+      "properties": {
+        "registration_number": "USPTO-6543210",
+        "text": "STARFOLD",
+        "canonical_id": "84a86621-4393-523b-87ce-eef58eac5b22",
+        "canonical_key": "Trademark:registration_number=uspto-6543210"
+      }
+    },
+    {
+      "id": "ebaaf7de-2ba6-5522-a2f0-fe84d2b58d2b",
+      "type": "Company",
+      "label": "Starfold Apparel LLC",
+      "properties": {
+        "name": "Starfold Apparel LLC",
+        "canonical_id": "ebaaf7de-2ba6-5522-a2f0-fe84d2b58d2b",
+        "canonical_key": "Company:name=starfold apparel llc"
+      }
+    },
+    {
+      "id": "6f225f6c-96e0-5d04-8d86-1aa6193adb88",
+      "type": "Class",
+      "label": "Class 25",
+      "properties": {
+        "code": "25",
+        "canonical_id": "6f225f6c-96e0-5d04-8d86-1aa6193adb88",
+        "canonical_key": "Class:code=25"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "mark-owned-starfold",
+      "type": "OWNED_BY",
+      "source": "84a86621-4393-523b-87ce-eef58eac5b22",
+      "target": "ebaaf7de-2ba6-5522-a2f0-fe84d2b58d2b",
+      "properties": {}
+    },
+    {
+      "id": "mark-registered-class25",
+      "type": "REGISTERED_IN",
+      "source": "84a86621-4393-523b-87ce-eef58eac5b22",
+      "target": "6f225f6c-96e0-5d04-8d86-1aa6193adb88",
+      "properties": {}
+    }
+  ]
+}

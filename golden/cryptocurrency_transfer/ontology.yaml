@@ -1,0 +1,42 @@
+version: "0.1.0"
+entities:
+  Wallet:
+    description: A cryptocurrency wallet address.
+    properties:
+      address:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The wallet's hex-encoded address. Pinned ``unique:
+          true``. The canonical_key lowercases the hex string
+          — pin that the case-insensitive comparison the
+          Ethereum address format permits is reflected in
+          dedup behavior.
+  Token:
+    description: A cryptocurrency token.
+    properties:
+      symbol:
+        type: str
+        required: true
+        unique: true
+      amount:
+        type: str
+        required: false
+relationships:
+  SENT_TO:
+    source: Wallet
+    target: Wallet
+    description: |
+      The source Wallet sent funds to the target Wallet.
+      Same-type Wallet → Wallet edge (mirrors the family
+      relationships pattern but on a different domain).
+    properties: {}
+  TRANSFERRED:
+    source: Wallet
+    target: Token
+    description: |
+      The source Wallet transferred this Token (in this
+      transaction). The token's amount rides on the Token
+      node.
+    properties: {}

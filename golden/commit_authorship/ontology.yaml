@@ -1,0 +1,46 @@
+version: "0.1.0"
+entities:
+  Author:
+    description: A commit author.
+    properties:
+      email:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Email address. Pinned ``unique: true`` — git uses
+          email-as-identity by convention; this corpus
+          mirrors that.
+  Repository:
+    description: A source-code repository.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Commit:
+    description: A specific commit.
+    properties:
+      sha:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The commit SHA. Pinned ``unique: true``. Mixed
+          letters/digits in the lowercased canonical_key —
+          the seed examples use abbreviated SHAs for
+          readability but the form is the same.
+      message:
+        type: str
+        required: false
+relationships:
+  AUTHORED_BY:
+    source: Commit
+    target: Author
+    description: The Commit was authored by this Author.
+    properties: {}
+  IN_REPOSITORY:
+    source: Commit
+    target: Repository
+    description: The Commit belongs to this Repository.
+    properties: {}

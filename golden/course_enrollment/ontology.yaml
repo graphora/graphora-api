@@ -1,0 +1,38 @@
+version: "0.1.0"
+entities:
+  Student:
+    description: A student.
+    properties:
+      identifier:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Anonymous student ID (e.g., ``STU-77103``).
+          PHI-safe by design — no student name in the
+          graph.
+  Course:
+    description: A course.
+    properties:
+      code:
+        type: str
+        required: true
+        unique: true
+  Instructor:
+    description: A course instructor.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  ENROLLED_IN:
+    source: Student
+    target: Course
+    description: The Student is enrolled in this Course.
+    properties: {}
+  TAUGHT_BY:
+    source: Course
+    target: Instructor
+    description: The Course is taught by this Instructor.
+    properties: {}

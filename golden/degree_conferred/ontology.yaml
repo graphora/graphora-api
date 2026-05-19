@@ -1,0 +1,46 @@
+version: "0.1.0"
+entities:
+  Person:
+    description: A person who earned a degree.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Degree:
+    description: A conferred degree record.
+    properties:
+      identifier:
+        type: str
+        required: true
+        unique: true
+      year:
+        type: str
+        required: false
+  Institution:
+    description: An institution conferring the degree.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Pinned ``unique: true``. The institution name
+          carries no abbreviation in the canonical_key
+          (``Institution:name=massachusetts institute of
+          technology``). Pin against an extractor that
+          substitutes "MIT" — both forms would have to
+          collapse to one Institution node, and the
+          canonical_key from the full form is the helper's
+          output.
+relationships:
+  EARNED:
+    source: Person
+    target: Degree
+    description: The Person earned this Degree.
+    properties: {}
+  CONFERRED_BY:
+    source: Degree
+    target: Institution
+    description: The Degree was conferred by this Institution.
+    properties: {}

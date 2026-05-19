@@ -1,0 +1,11 @@
+Paper TPAMI-2026-04567 entered review on March 1, 2026. The
+handling editor for TPAMI-2026-04567 is Prof. Maria Theron.
+
+Reviewer 1 returned a positive review of TPAMI-2026-04567
+recommending minor revisions. Reviewer 2 returned a more
+cautious review of TPAMI-2026-04567 recommending major
+revisions.
+
+Prof. Maria Theron will mediate the differences between
+Reviewer 1 and Reviewer 2 before issuing a decision on
+TPAMI-2026-04567.

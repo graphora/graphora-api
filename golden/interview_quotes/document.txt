@@ -1,0 +1,13 @@
+Dr. Reed Marshall sat for a long-form interview with The
+Atlantic this month. Dr. Reed Marshall discussed two main
+topics in his interview with The Atlantic.
+
+On AI safety governance, Dr. Reed Marshall argued for a
+mandatory licensing regime for frontier models. On
+open-source model release, Dr. Reed Marshall took a more
+permissive stance, supporting community access to mid-tier
+models.
+
+The interview with Dr. Reed Marshall is The Atlantic's
+fourth in a series on AI policy. Dr. Reed Marshall agreed
+to a follow-up conversation later this year.

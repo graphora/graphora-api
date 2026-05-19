@@ -1,0 +1,51 @@
+{
+  "nodes": [
+    {
+      "id": "8e77f37f-662c-5bad-9a05-5667370d5469",
+      "type": "Patient",
+      "label": "MRN-88241",
+      "properties": {
+        "mrn": "MRN-88241",
+        "admission_date": "May 3, 2026",
+        "canonical_id": "8e77f37f-662c-5bad-9a05-5667370d5469",
+        "canonical_key": "Patient:mrn=mrn-88241"
+      }
+    },
+    {
+      "id": "311c7cbb-66dd-59f3-bcd3-fc61e5e1cb5e",
+      "type": "Hospital",
+      "label": "Riverside General Hospital",
+      "properties": {
+        "name": "Riverside General Hospital",
+        "canonical_id": "311c7cbb-66dd-59f3-bcd3-fc61e5e1cb5e",
+        "canonical_key": "Hospital:name=riverside general hospital"
+      }
+    },
+    {
+      "id": "cf2e877b-067a-54d7-ba54-0e28d5d0cafc",
+      "type": "Procedure",
+      "label": "laparoscopic cholecystectomy",
+      "properties": {
+        "name": "laparoscopic cholecystectomy",
+        "canonical_id": "cf2e877b-067a-54d7-ba54-0e28d5d0cafc",
+        "canonical_key": "Procedure:name=laparoscopic cholecystectomy"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "patient-admitted",
+      "type": "ADMITTED_TO",
+      "source": "8e77f37f-662c-5bad-9a05-5667370d5469",
+      "target": "311c7cbb-66dd-59f3-bcd3-fc61e5e1cb5e",
+      "properties": {}
+    },
+    {
+      "id": "patient-underwent",
+      "type": "UNDERWENT",
+      "source": "8e77f37f-662c-5bad-9a05-5667370d5469",
+      "target": "cf2e877b-067a-54d7-ba54-0e28d5d0cafc",
+      "properties": {}
+    }
+  ]
+}

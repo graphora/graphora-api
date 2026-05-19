@@ -1,0 +1,38 @@
+version: "0.1.0"
+entities:
+  Paper:
+    description: A submitted paper.
+    properties:
+      identifier:
+        type: str
+        required: true
+        unique: true
+  Reviewer:
+    description: A pseudonymous reviewer.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Reviewer pseudonyms (``Reviewer 1``, ``Reviewer 2``)
+          look identifier-like but are treated as ``name``
+          to keep the ontology consistent across entries.
+  Editor:
+    description: An editor.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  REVIEWED_BY:
+    source: Paper
+    target: Reviewer
+    description: The Paper was reviewed by this Reviewer.
+    properties: {}
+  HANDLED_BY:
+    source: Paper
+    target: Editor
+    description: The Paper is handled by this Editor.
+    properties: {}

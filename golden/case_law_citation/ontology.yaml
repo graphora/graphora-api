@@ -1,0 +1,40 @@
+version: "0.1.0"
+entities:
+  Case:
+    description: A reported court case.
+    properties:
+      citation:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Full Bluebook-style citation. Pinned ``unique:
+          true`` and load-bearing — the same case is
+          referenced three times by the full citation, and
+          the canonical_key collapses on the lowercased
+          string.
+  Court:
+    description: A court.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Judge:
+    description: A judge.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  DECIDED_BY:
+    source: Case
+    target: Court
+    description: The Case was decided by this Court.
+    properties: {}
+  AUTHORED_BY:
+    source: Case
+    target: Judge
+    description: The Case's majority opinion was authored by this Judge.
+    properties: {}

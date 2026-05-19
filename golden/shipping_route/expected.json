@@ -1,0 +1,74 @@
+{
+  "nodes": [
+    {
+      "id": "85c14421-fb5f-5fb9-bf60-f2edb4f48fbf",
+      "type": "Port",
+      "label": "Shanghai",
+      "properties": {
+        "code": "Shanghai",
+        "canonical_id": "85c14421-fb5f-5fb9-bf60-f2edb4f48fbf",
+        "canonical_key": "Port:code=shanghai"
+      }
+    },
+    {
+      "id": "39b14945-d8ab-50f2-a8f6-3bfd578935cd",
+      "type": "Port",
+      "label": "Long Beach",
+      "properties": {
+        "code": "Long Beach",
+        "canonical_id": "39b14945-d8ab-50f2-a8f6-3bfd578935cd",
+        "canonical_key": "Port:code=long beach"
+      }
+    },
+    {
+      "id": "1293de4b-5753-53da-822b-92e4c7c32847",
+      "type": "Carrier",
+      "label": "Pacific Star Lines",
+      "properties": {
+        "name": "Pacific Star Lines",
+        "canonical_id": "1293de4b-5753-53da-822b-92e4c7c32847",
+        "canonical_key": "Carrier:name=pacific star lines"
+      }
+    },
+    {
+      "id": "4b927b45-0720-5df4-a983-eae11358f983",
+      "type": "Carrier",
+      "label": "Trident Shipping",
+      "properties": {
+        "name": "Trident Shipping",
+        "canonical_id": "4b927b45-0720-5df4-a983-eae11358f983",
+        "canonical_key": "Carrier:name=trident shipping"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "pacific-orig-shanghai",
+      "type": "ORIGIN_OF",
+      "source": "1293de4b-5753-53da-822b-92e4c7c32847",
+      "target": "85c14421-fb5f-5fb9-bf60-f2edb4f48fbf",
+      "properties": {}
+    },
+    {
+      "id": "pacific-dest-lb",
+      "type": "DESTINATION_OF",
+      "source": "1293de4b-5753-53da-822b-92e4c7c32847",
+      "target": "39b14945-d8ab-50f2-a8f6-3bfd578935cd",
+      "properties": {}
+    },
+    {
+      "id": "trident-orig-shanghai",
+      "type": "ORIGIN_OF",
+      "source": "4b927b45-0720-5df4-a983-eae11358f983",
+      "target": "85c14421-fb5f-5fb9-bf60-f2edb4f48fbf",
+      "properties": {}
+    },
+    {
+      "id": "trident-dest-lb",
+      "type": "DESTINATION_OF",
+      "source": "4b927b45-0720-5df4-a983-eae11358f983",
+      "target": "39b14945-d8ab-50f2-a8f6-3bfd578935cd",
+      "properties": {}
+    }
+  ]
+}

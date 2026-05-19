@@ -1,0 +1,42 @@
+version: "0.1.0"
+entities:
+  Book:
+    description: A published book.
+    properties:
+      isbn:
+        type: str
+        required: true
+        unique: true
+        description: |
+          ISBN-13 with hyphens. Pin that the canonical_key
+          preserves the hyphenated form — a normalizer that
+          strips hyphens to derive a numeric ISBN would
+          diverge from the helper output.
+      title:
+        type: str
+        required: false
+  Author:
+    description: A book author.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Publisher:
+    description: A publishing house.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  AUTHORED_BY:
+    source: Book
+    target: Author
+    description: The Book is authored by this Author.
+    properties: {}
+  PUBLISHED_BY:
+    source: Book
+    target: Publisher
+    description: The Book is published by this Publisher.
+    properties: {}

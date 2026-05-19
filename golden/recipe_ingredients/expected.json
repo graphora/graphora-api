@@ -1,0 +1,84 @@
+{
+  "nodes": [
+    {
+      "id": "42f84864-3b7e-5c57-986c-324889490a32",
+      "type": "Recipe",
+      "label": "lemon-garlic chicken",
+      "properties": {
+        "name": "lemon-garlic chicken",
+        "canonical_id": "42f84864-3b7e-5c57-986c-324889490a32",
+        "canonical_key": "Recipe:name=lemon-garlic chicken"
+      }
+    },
+    {
+      "id": "121d4c91-5341-5232-817f-dd4747c9e532",
+      "type": "Ingredient",
+      "label": "chicken thighs",
+      "properties": {
+        "name": "chicken thighs",
+        "canonical_id": "121d4c91-5341-5232-817f-dd4747c9e532",
+        "canonical_key": "Ingredient:name=chicken thighs"
+      }
+    },
+    {
+      "id": "9fc557db-caea-5d08-8d00-d7431e0cd38e",
+      "type": "Ingredient",
+      "label": "lemon",
+      "properties": {
+        "name": "lemon",
+        "canonical_id": "9fc557db-caea-5d08-8d00-d7431e0cd38e",
+        "canonical_key": "Ingredient:name=lemon"
+      }
+    },
+    {
+      "id": "f2dcc430-79a0-5be6-beb4-575345257ce8",
+      "type": "Ingredient",
+      "label": "garlic",
+      "properties": {
+        "name": "garlic",
+        "canonical_id": "f2dcc430-79a0-5be6-beb4-575345257ce8",
+        "canonical_key": "Ingredient:name=garlic"
+      }
+    },
+    {
+      "id": "d93fc543-810b-5a0b-9003-f967e2d49c51",
+      "type": "Cuisine",
+      "label": "Mediterranean",
+      "properties": {
+        "name": "Mediterranean",
+        "canonical_id": "d93fc543-810b-5a0b-9003-f967e2d49c51",
+        "canonical_key": "Cuisine:name=mediterranean"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "recipe-uses-chicken",
+      "type": "USES_INGREDIENT",
+      "source": "42f84864-3b7e-5c57-986c-324889490a32",
+      "target": "121d4c91-5341-5232-817f-dd4747c9e532",
+      "properties": {}
+    },
+    {
+      "id": "recipe-uses-lemon",
+      "type": "USES_INGREDIENT",
+      "source": "42f84864-3b7e-5c57-986c-324889490a32",
+      "target": "9fc557db-caea-5d08-8d00-d7431e0cd38e",
+      "properties": {}
+    },
+    {
+      "id": "recipe-uses-garlic",
+      "type": "USES_INGREDIENT",
+      "source": "42f84864-3b7e-5c57-986c-324889490a32",
+      "target": "f2dcc430-79a0-5be6-beb4-575345257ce8",
+      "properties": {}
+    },
+    {
+      "id": "recipe-in-med",
+      "type": "IN_CUISINE",
+      "source": "42f84864-3b7e-5c57-986c-324889490a32",
+      "target": "d93fc543-810b-5a0b-9003-f967e2d49c51",
+      "properties": {}
+    }
+  ]
+}

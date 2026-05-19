@@ -1,0 +1,46 @@
+version: "0.1.0"
+entities:
+  Candidate:
+    description: A political candidate.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Office:
+    description: A political office.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  District:
+    description: A political district or jurisdiction.
+    properties:
+      identifier:
+        type: str
+        required: true
+        unique: true
+  Endorser:
+    description: An organization endorsing the candidate.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  RUNNING_FOR:
+    source: Candidate
+    target: Office
+    description: The Candidate is running for this Office.
+    properties: {}
+  IN_DISTRICT:
+    source: Candidate
+    target: District
+    description: The Candidate is running in this District.
+    properties: {}
+  ENDORSED_BY:
+    source: Candidate
+    target: Endorser
+    description: The Candidate has been endorsed by this Endorser.
+    properties: {}

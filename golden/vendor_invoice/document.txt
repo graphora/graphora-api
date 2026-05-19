@@ -1,0 +1,10 @@
+Acme Office Supplies issued invoice INV-2026-0421 to Globex
+Inc on April 21, 2026. Invoice INV-2026-0421 covers 12 line
+items totaling $3,481.50 USD.
+
+Globex Inc's accounts payable team confirmed receipt of
+INV-2026-0421 on April 23. Payment under invoice
+INV-2026-0421 is due within Net 30 terms.
+
+Acme Office Supplies will follow up with Globex Inc if
+INV-2026-0421 remains unpaid past the due date.

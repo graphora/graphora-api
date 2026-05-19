@@ -1,0 +1,39 @@
+version: "0.1.0"
+entities:
+  Article:
+    description: A news article.
+    properties:
+      identifier:
+        type: str
+        required: true
+        unique: true
+  Reporter:
+    description: A reporter.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Source:
+    description: A source quoted in the article.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Source identity is the descriptive label as used
+          in the article (e.g., "Emerald spokesperson") —
+          not a personal name. Pin that this still
+          canonical_keys correctly.
+relationships:
+  REPORTED_BY:
+    source: Article
+    target: Reporter
+    description: The Article was reported by this Reporter.
+    properties: {}
+  CITES_SOURCE:
+    source: Article
+    target: Source
+    description: The Article cites this Source.
+    properties: {}

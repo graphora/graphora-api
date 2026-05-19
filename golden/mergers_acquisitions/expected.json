@@ -1,0 +1,58 @@
+{
+  "nodes": [
+    {
+      "id": "2f8f6a54-7105-54e8-a628-b418018df098",
+      "type": "Company",
+      "label": "Hexagon Industries",
+      "properties": {
+        "name": "Hexagon Industries",
+        "canonical_id": "2f8f6a54-7105-54e8-a628-b418018df098",
+        "canonical_key": "Company:name=hexagon industries"
+      }
+    },
+    {
+      "id": "32db18d6-996b-5dec-a0d4-47a3a8bd71f3",
+      "type": "Company",
+      "label": "Octane Robotics",
+      "properties": {
+        "name": "Octane Robotics",
+        "canonical_id": "32db18d6-996b-5dec-a0d4-47a3a8bd71f3",
+        "canonical_key": "Company:name=octane robotics"
+      }
+    },
+    {
+      "id": "5036576e-fa6c-5020-b3c4-42ee73a3941d",
+      "type": "Acquisition",
+      "label": "HEX-OCT-2026-03",
+      "properties": {
+        "reference": "HEX-OCT-2026-03",
+        "closing_date": "March 14, 2026",
+        "canonical_id": "5036576e-fa6c-5020-b3c4-42ee73a3941d",
+        "canonical_key": "Acquisition:reference=hex-oct-2026-03"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "hexagon-acquired-octane",
+      "type": "ACQUIRED",
+      "source": "2f8f6a54-7105-54e8-a628-b418018df098",
+      "target": "32db18d6-996b-5dec-a0d4-47a3a8bd71f3",
+      "properties": {}
+    },
+    {
+      "id": "deal-acquisition-of-octane",
+      "type": "ACQUISITION_OF",
+      "source": "5036576e-fa6c-5020-b3c4-42ee73a3941d",
+      "target": "32db18d6-996b-5dec-a0d4-47a3a8bd71f3",
+      "properties": {}
+    },
+    {
+      "id": "deal-acquisition-by-hexagon",
+      "type": "ACQUISITION_BY",
+      "source": "5036576e-fa6c-5020-b3c4-42ee73a3941d",
+      "target": "2f8f6a54-7105-54e8-a628-b418018df098",
+      "properties": {}
+    }
+  ]
+}

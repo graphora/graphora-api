@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "2b74d8a3-2e73-54c8-83f0-cb5f0b0a97a1",
+      "type": "Lender",
+      "label": "First Cascade Bank",
+      "properties": {
+        "name": "First Cascade Bank",
+        "canonical_id": "2b74d8a3-2e73-54c8-83f0-cb5f0b0a97a1",
+        "canonical_key": "Lender:name=first cascade bank"
+      }
+    },
+    {
+      "id": "ea736925-37ef-5b13-8bb1-4517ead11cc5",
+      "type": "Borrower",
+      "label": "Skyline Construction",
+      "properties": {
+        "name": "Skyline Construction",
+        "canonical_id": "ea736925-37ef-5b13-8bb1-4517ead11cc5",
+        "canonical_key": "Borrower:name=skyline construction"
+      }
+    },
+    {
+      "id": "844489e6-637c-5919-ab3f-7cd43052cea9",
+      "type": "Asset",
+      "label": "EQUIP-CRANE-7831",
+      "properties": {
+        "identifier": "EQUIP-CRANE-7831",
+        "canonical_id": "844489e6-637c-5919-ab3f-7cd43052cea9",
+        "canonical_key": "Asset:identifier=equip-crane-7831"
+      }
+    },
+    {
+      "id": "059efb88-0875-56b2-9088-661a3605606b",
+      "type": "Asset",
+      "label": "EQUIP-EXCAVATOR-2204",
+      "properties": {
+        "identifier": "EQUIP-EXCAVATOR-2204",
+        "canonical_id": "059efb88-0875-56b2-9088-661a3605606b",
+        "canonical_key": "Asset:identifier=equip-excavator-2204"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "cascade-loaned-skyline",
+      "type": "LOANED_TO",
+      "source": "2b74d8a3-2e73-54c8-83f0-cb5f0b0a97a1",
+      "target": "ea736925-37ef-5b13-8bb1-4517ead11cc5",
+      "properties": {}
+    },
+    {
+      "id": "crane-collateral-skyline",
+      "type": "COLLATERAL_FOR",
+      "source": "844489e6-637c-5919-ab3f-7cd43052cea9",
+      "target": "ea736925-37ef-5b13-8bb1-4517ead11cc5",
+      "properties": {}
+    },
+    {
+      "id": "exc-collateral-skyline",
+      "type": "COLLATERAL_FOR",
+      "source": "059efb88-0875-56b2-9088-661a3605606b",
+      "target": "ea736925-37ef-5b13-8bb1-4517ead11cc5",
+      "properties": {}
+    }
+  ]
+}

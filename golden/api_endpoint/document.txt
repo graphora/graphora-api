@@ -1,0 +1,10 @@
+The /api/v1/users/{id} endpoint is exposed by the
+user-service. The /api/v1/users/{id} endpoint supports two
+HTTP methods: GET and PATCH.
+
+GET /api/v1/users/{id} returns the user record. PATCH
+/api/v1/users/{id} accepts a partial-update body and applies
+field-level diffs to the user record in the user-service.
+
+Both GET and PATCH operations on /api/v1/users/{id} require
+authenticated callers.

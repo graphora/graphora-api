@@ -1,0 +1,52 @@
+version: "0.1.0"
+entities:
+  Vendor:
+    description: A supplier of goods or services.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Pinned ``unique: true``. Acme Office Supplies is
+          referenced three times.
+  Customer:
+    description: A customer organization.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Pinned ``unique: true``. Globex Inc is referenced
+          three times.
+  Invoice:
+    description: A commercial invoice.
+    properties:
+      number:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The invoice's reference number. Used for stable
+          cross-paragraph dedup — INV-2026-0421 appears five
+          times.
+      total_amount:
+        type: str
+        required: false
+        description: Total as it appears in the source.
+      line_item_count:
+        type: str
+        required: false
+        description: Count of line items as a string.
+relationships:
+  ISSUED_BY:
+    source: Invoice
+    target: Vendor
+    description: The Invoice was issued by this Vendor.
+    properties: {}
+  BILLED_TO:
+    source: Invoice
+    target: Customer
+    description: The Invoice is billed to this Customer.
+    properties: {}

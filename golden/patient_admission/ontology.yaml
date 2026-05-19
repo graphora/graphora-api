@@ -1,0 +1,44 @@
+version: "0.1.0"
+entities:
+  Patient:
+    description: A patient.
+    properties:
+      mrn:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Medical record number. Pinned ``unique: true``.
+          Non-name canonical identity — PHI-safe by design
+          (no patient name in the graph).
+      admission_date:
+        type: str
+        required: false
+        description: |
+          Date string as it appears in the source. Not part
+          of canonical_key.
+  Hospital:
+    description: A hospital.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Procedure:
+    description: A medical procedure.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  ADMITTED_TO:
+    source: Patient
+    target: Hospital
+    description: The Patient was admitted to this Hospital.
+    properties: {}
+  UNDERWENT:
+    source: Patient
+    target: Procedure
+    description: The Patient underwent this Procedure.
+    properties: {}

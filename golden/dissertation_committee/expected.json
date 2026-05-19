@@ -1,0 +1,91 @@
+{
+  "nodes": [
+    {
+      "id": "64b416fd-4b90-5c9e-b755-efa3cd37eb54",
+      "type": "Student",
+      "label": "Ana Rodr\u00edguez",
+      "properties": {
+        "name": "Ana Rodr\u00edguez",
+        "canonical_id": "64b416fd-4b90-5c9e-b755-efa3cd37eb54",
+        "canonical_key": "Student:name=ana rodr\u00edguez"
+      }
+    },
+    {
+      "id": "409a1e09-1f5d-56d8-97fd-5c091eca4161",
+      "type": "Faculty",
+      "label": "Prof. Karim Hassan",
+      "properties": {
+        "name": "Prof. Karim Hassan",
+        "canonical_id": "409a1e09-1f5d-56d8-97fd-5c091eca4161",
+        "canonical_key": "Faculty:name=prof. karim hassan"
+      }
+    },
+    {
+      "id": "844790df-9af5-5155-901d-408584a2031e",
+      "type": "Faculty",
+      "label": "Prof. Yuki Nakamura",
+      "properties": {
+        "name": "Prof. Yuki Nakamura",
+        "canonical_id": "844790df-9af5-5155-901d-408584a2031e",
+        "canonical_key": "Faculty:name=prof. yuki nakamura"
+      }
+    },
+    {
+      "id": "5ffe7373-d7c9-5814-9d38-e1ccef09852d",
+      "type": "Faculty",
+      "label": "Prof. Sarah Chen",
+      "properties": {
+        "name": "Prof. Sarah Chen",
+        "canonical_id": "5ffe7373-d7c9-5814-9d38-e1ccef09852d",
+        "canonical_key": "Faculty:name=prof. sarah chen"
+      }
+    },
+    {
+      "id": "d1e44187-eff1-50f7-83f1-b2f03c41a7e4",
+      "type": "Department",
+      "label": "Department of Computer Science",
+      "properties": {
+        "name": "Department of Computer Science",
+        "canonical_id": "d1e44187-eff1-50f7-83f1-b2f03c41a7e4",
+        "canonical_key": "Department:name=department of computer science"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "karim-advises-ana",
+      "type": "ADVISES",
+      "source": "409a1e09-1f5d-56d8-97fd-5c091eca4161",
+      "target": "64b416fd-4b90-5c9e-b755-efa3cd37eb54",
+      "properties": {}
+    },
+    {
+      "id": "karim-committee-ana",
+      "type": "COMMITTEE_FOR",
+      "source": "409a1e09-1f5d-56d8-97fd-5c091eca4161",
+      "target": "64b416fd-4b90-5c9e-b755-efa3cd37eb54",
+      "properties": {}
+    },
+    {
+      "id": "yuki-committee-ana",
+      "type": "COMMITTEE_FOR",
+      "source": "844790df-9af5-5155-901d-408584a2031e",
+      "target": "64b416fd-4b90-5c9e-b755-efa3cd37eb54",
+      "properties": {}
+    },
+    {
+      "id": "sarah-committee-ana",
+      "type": "COMMITTEE_FOR",
+      "source": "5ffe7373-d7c9-5814-9d38-e1ccef09852d",
+      "target": "64b416fd-4b90-5c9e-b755-efa3cd37eb54",
+      "properties": {}
+    },
+    {
+      "id": "ana-in-cs",
+      "type": "ENROLLED_IN",
+      "source": "64b416fd-4b90-5c9e-b755-efa3cd37eb54",
+      "target": "d1e44187-eff1-50f7-83f1-b2f03c41a7e4",
+      "properties": {}
+    }
+  ]
+}

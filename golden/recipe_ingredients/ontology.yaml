@@ -1,0 +1,34 @@
+version: "0.1.0"
+entities:
+  Recipe:
+    description: A recipe.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Ingredient:
+    description: A recipe ingredient.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Cuisine:
+    description: A culinary tradition.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  USES_INGREDIENT:
+    source: Recipe
+    target: Ingredient
+    description: The Recipe uses this Ingredient.
+    properties: {}
+  IN_CUISINE:
+    source: Recipe
+    target: Cuisine
+    description: The Recipe belongs to this Cuisine.
+    properties: {}

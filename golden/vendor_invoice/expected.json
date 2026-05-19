@@ -1,0 +1,52 @@
+{
+  "nodes": [
+    {
+      "id": "d41f6667-0c50-595b-bc57-efc12b85ecdf",
+      "type": "Vendor",
+      "label": "Acme Office Supplies",
+      "properties": {
+        "name": "Acme Office Supplies",
+        "canonical_id": "d41f6667-0c50-595b-bc57-efc12b85ecdf",
+        "canonical_key": "Vendor:name=acme office supplies"
+      }
+    },
+    {
+      "id": "e3a820a7-997a-54c5-b2d9-2e194e35ca73",
+      "type": "Customer",
+      "label": "Globex Inc",
+      "properties": {
+        "name": "Globex Inc",
+        "canonical_id": "e3a820a7-997a-54c5-b2d9-2e194e35ca73",
+        "canonical_key": "Customer:name=globex inc"
+      }
+    },
+    {
+      "id": "2d42ecca-0a17-5524-86d2-c9c172a51fda",
+      "type": "Invoice",
+      "label": "INV-2026-0421",
+      "properties": {
+        "number": "INV-2026-0421",
+        "total_amount": "$3,481.50 USD",
+        "line_item_count": "12",
+        "canonical_id": "2d42ecca-0a17-5524-86d2-c9c172a51fda",
+        "canonical_key": "Invoice:number=inv-2026-0421"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "invoice-issued-by-acme",
+      "type": "ISSUED_BY",
+      "source": "2d42ecca-0a17-5524-86d2-c9c172a51fda",
+      "target": "d41f6667-0c50-595b-bc57-efc12b85ecdf",
+      "properties": {}
+    },
+    {
+      "id": "invoice-billed-to-globex",
+      "type": "BILLED_TO",
+      "source": "2d42ecca-0a17-5524-86d2-c9c172a51fda",
+      "target": "e3a820a7-997a-54c5-b2d9-2e194e35ca73",
+      "properties": {}
+    }
+  ]
+}

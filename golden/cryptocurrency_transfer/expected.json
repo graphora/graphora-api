@@ -1,0 +1,51 @@
+{
+  "nodes": [
+    {
+      "id": "345f9067-c5a5-5ebf-9b8a-26767ceb9775",
+      "type": "Wallet",
+      "label": "0x742d\u2026f44e",
+      "properties": {
+        "address": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+        "canonical_id": "345f9067-c5a5-5ebf-9b8a-26767ceb9775",
+        "canonical_key": "Wallet:address=0x742d35cc6634c0532925a3b844bc454e4438f44e"
+      }
+    },
+    {
+      "id": "faf96629-d6f3-5394-b1d0-917d1c63e9a6",
+      "type": "Wallet",
+      "label": "0x5aAe\u2026BeAed",
+      "properties": {
+        "address": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+        "canonical_id": "faf96629-d6f3-5394-b1d0-917d1c63e9a6",
+        "canonical_key": "Wallet:address=0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"
+      }
+    },
+    {
+      "id": "bedc62c6-1ffa-5b08-8cd3-a3d4ef0f772e",
+      "type": "Token",
+      "label": "USDC",
+      "properties": {
+        "symbol": "USDC",
+        "amount": "1,250,000 USDC",
+        "canonical_id": "bedc62c6-1ffa-5b08-8cd3-a3d4ef0f772e",
+        "canonical_key": "Token:symbol=usdc"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "w1-sent-w2",
+      "type": "SENT_TO",
+      "source": "345f9067-c5a5-5ebf-9b8a-26767ceb9775",
+      "target": "faf96629-d6f3-5394-b1d0-917d1c63e9a6",
+      "properties": {}
+    },
+    {
+      "id": "w1-transferred-usdc",
+      "type": "TRANSFERRED",
+      "source": "345f9067-c5a5-5ebf-9b8a-26767ceb9775",
+      "target": "bedc62c6-1ffa-5b08-8cd3-a3d4ef0f772e",
+      "properties": {}
+    }
+  ]
+}

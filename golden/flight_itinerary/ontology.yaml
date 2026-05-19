@@ -1,0 +1,42 @@
+version: "0.1.0"
+entities:
+  Passenger:
+    description: An airline passenger.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Flight:
+    description: A flight.
+    properties:
+      number:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Flight number with hyphen (e.g., ``UA-2841``).
+  Airport:
+    description: An airport.
+    properties:
+      code:
+        type: str
+        required: true
+        unique: true
+        description: IATA code.
+relationships:
+  BOOKED_ON:
+    source: Passenger
+    target: Flight
+    description: The Passenger is booked on this Flight.
+    properties: {}
+  DEPARTS_FROM:
+    source: Flight
+    target: Airport
+    description: The Flight departs from this Airport.
+    properties: {}
+  ARRIVES_AT:
+    source: Flight
+    target: Airport
+    description: The Flight arrives at this Airport.
+    properties: {}

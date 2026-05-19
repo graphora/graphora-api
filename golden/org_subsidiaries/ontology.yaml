@@ -1,0 +1,23 @@
+version: "0.1.0"
+entities:
+  Company:
+    description: A company (parent or subsidiary).
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Pinned ``unique: true``. Voltaic Holdings is
+          mentioned three times across the document; the three
+          subsidiaries each twice.
+relationships:
+  SUBSIDIARY_OF:
+    source: Company
+    target: Company
+    description: |
+      The source Company is a subsidiary of the target Company.
+      Same-source-and-target type — Company → Company. The
+      expected graph has three such edges, all converging on
+      the same parent.
+    properties: {}

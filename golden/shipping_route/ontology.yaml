@@ -1,0 +1,32 @@
+version: "0.1.0"
+entities:
+  Port:
+    description: A shipping port.
+    properties:
+      code:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Port name used as identifier (e.g., ``Shanghai``,
+          ``Long Beach``). For ports without standard short
+          codes the descriptive name is the practical
+          identifier.
+  Carrier:
+    description: A shipping carrier.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  ORIGIN_OF:
+    source: Carrier
+    target: Port
+    description: The Carrier originates its route at this Port.
+    properties: {}
+  DESTINATION_OF:
+    source: Carrier
+    target: Port
+    description: The Carrier's route terminates at this Port.
+    properties: {}

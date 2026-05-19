@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "bab26772-802e-5b1a-a8c0-01f3b8c31c98",
+      "type": "Paper",
+      "label": "TPAMI-2026-04567",
+      "properties": {
+        "identifier": "TPAMI-2026-04567",
+        "canonical_id": "bab26772-802e-5b1a-a8c0-01f3b8c31c98",
+        "canonical_key": "Paper:identifier=tpami-2026-04567"
+      }
+    },
+    {
+      "id": "11c8c0e7-3d64-50ab-b4be-9c99ce4fbaa0",
+      "type": "Reviewer",
+      "label": "Reviewer 1",
+      "properties": {
+        "name": "Reviewer 1",
+        "canonical_id": "11c8c0e7-3d64-50ab-b4be-9c99ce4fbaa0",
+        "canonical_key": "Reviewer:name=reviewer 1"
+      }
+    },
+    {
+      "id": "3a4f92e0-edec-5ed5-8480-f9544b0adefd",
+      "type": "Reviewer",
+      "label": "Reviewer 2",
+      "properties": {
+        "name": "Reviewer 2",
+        "canonical_id": "3a4f92e0-edec-5ed5-8480-f9544b0adefd",
+        "canonical_key": "Reviewer:name=reviewer 2"
+      }
+    },
+    {
+      "id": "d208bf4c-dd93-59c8-b459-f99cbd40cbc0",
+      "type": "Editor",
+      "label": "Prof. Maria Theron",
+      "properties": {
+        "name": "Prof. Maria Theron",
+        "canonical_id": "d208bf4c-dd93-59c8-b459-f99cbd40cbc0",
+        "canonical_key": "Editor:name=prof. maria theron"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "paper-by-rev1",
+      "type": "REVIEWED_BY",
+      "source": "bab26772-802e-5b1a-a8c0-01f3b8c31c98",
+      "target": "11c8c0e7-3d64-50ab-b4be-9c99ce4fbaa0",
+      "properties": {}
+    },
+    {
+      "id": "paper-by-rev2",
+      "type": "REVIEWED_BY",
+      "source": "bab26772-802e-5b1a-a8c0-01f3b8c31c98",
+      "target": "3a4f92e0-edec-5ed5-8480-f9544b0adefd",
+      "properties": {}
+    },
+    {
+      "id": "paper-handled",
+      "type": "HANDLED_BY",
+      "source": "bab26772-802e-5b1a-a8c0-01f3b8c31c98",
+      "target": "d208bf4c-dd93-59c8-b459-f99cbd40cbc0",
+      "properties": {}
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+version: "0.1.0"
+entities:
+  Bank:
+    description: A mortgage originator.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Property:
+    description: A real-estate property.
+    properties:
+      address:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The full property address. Pinned ``unique: true``.
+          The canonical_key carries the lowercased full
+          address including commas — pin against a
+          normalizer that strips punctuation.
+  Person:
+    description: A borrower.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  ORIGINATED:
+    source: Bank
+    target: Property
+    description: The Bank originated a mortgage on this Property.
+    properties: {}
+  BORROWER_OF:
+    source: Person
+    target: Property
+    description: |
+      The Person is the borrower for the mortgage on this
+      Property.
+    properties: {}

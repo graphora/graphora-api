@@ -1,0 +1,34 @@
+version: "0.1.0"
+entities:
+  Conference:
+    description: An academic conference.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Paper:
+    description: A conference paper.
+    properties:
+      title:
+        type: str
+        required: true
+        unique: true
+  Author:
+    description: A paper author.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  ACCEPTED_AT:
+    source: Paper
+    target: Conference
+    description: The Paper was accepted at this Conference.
+    properties: {}
+  AUTHORED_BY:
+    source: Paper
+    target: Author
+    description: The Paper is authored by this Author.
+    properties: {}

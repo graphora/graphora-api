@@ -1,0 +1,44 @@
+version: "0.1.0"
+entities:
+  Endpoint:
+    description: An API endpoint path.
+    properties:
+      path:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The path pattern. Pinned ``unique: true``. The
+          ``{id}`` placeholder stays in the canonical_key —
+          pin against a normalizer that strips path
+          parameters.
+  Service:
+    description: A service exposing the endpoint.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Method:
+    description: An HTTP method.
+    properties:
+      verb:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The HTTP verb (GET, PATCH, etc.). Pinned
+          ``unique: true``. The canonical_key lowercases
+          (``Method:verb=get``) but the source-display form
+          stays uppercase.
+relationships:
+  EXPOSED_BY:
+    source: Endpoint
+    target: Service
+    description: The Endpoint is exposed by this Service.
+    properties: {}
+  ACCEPTS:
+    source: Endpoint
+    target: Method
+    description: The Endpoint accepts this HTTP Method.
+    properties: {}

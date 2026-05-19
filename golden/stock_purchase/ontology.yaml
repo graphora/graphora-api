@@ -1,0 +1,39 @@
+version: "0.1.0"
+entities:
+  Investor:
+    description: An investor (institutional or individual).
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Stock:
+    description: A publicly-traded stock.
+    properties:
+      ticker:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Stock ticker symbol. Pinned ``unique: true`` and
+          uppercased in the source — the canonical_key
+          lowercases (``Stock:ticker=glbx``). Pin that
+          ticker normalization preserves the helper output
+          form, not the source-display form.
+      quantity:
+        type: str
+        required: false
+      price:
+        type: str
+        required: false
+relationships:
+  PURCHASED:
+    source: Investor
+    target: Stock
+    description: The Investor purchased this Stock (in this transaction).
+    properties: {}
+  SOLD:
+    source: Investor
+    target: Stock
+    description: The Investor sold this Stock (in this transaction).
+    properties: {}

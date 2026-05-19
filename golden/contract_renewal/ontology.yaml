@@ -1,0 +1,25 @@
+version: "0.1.0"
+entities:
+  Contract:
+    description: A commercial contract.
+    properties:
+      reference:
+        type: str
+        required: true
+        unique: true
+      renewal_date:
+        type: str
+        required: false
+  Party:
+    description: A party to the contract.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  PARTY_TO:
+    source: Party
+    target: Contract
+    description: The Party is a party to the Contract.
+    properties: {}

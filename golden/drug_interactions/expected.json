@@ -1,0 +1,50 @@
+{
+  "nodes": [
+    {
+      "id": "0d01cd90-7385-56e6-aa3d-33908dc352aa",
+      "type": "Drug",
+      "label": "warfarin",
+      "properties": {
+        "name": "warfarin",
+        "canonical_id": "0d01cd90-7385-56e6-aa3d-33908dc352aa",
+        "canonical_key": "Drug:name=warfarin"
+      }
+    },
+    {
+      "id": "56b4c7de-c8c2-5eda-a3d5-a31ef3581e9e",
+      "type": "Drug",
+      "label": "aspirin",
+      "properties": {
+        "name": "aspirin",
+        "canonical_id": "56b4c7de-c8c2-5eda-a3d5-a31ef3581e9e",
+        "canonical_key": "Drug:name=aspirin"
+      }
+    },
+    {
+      "id": "a4e06b49-9620-5d00-80cf-97dc71f541ce",
+      "type": "Drug",
+      "label": "amoxicillin",
+      "properties": {
+        "name": "amoxicillin",
+        "canonical_id": "a4e06b49-9620-5d00-80cf-97dc71f541ce",
+        "canonical_key": "Drug:name=amoxicillin"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "warfarin-interacts-aspirin",
+      "type": "INTERACTS_WITH",
+      "source": "0d01cd90-7385-56e6-aa3d-33908dc352aa",
+      "target": "56b4c7de-c8c2-5eda-a3d5-a31ef3581e9e",
+      "properties": {}
+    },
+    {
+      "id": "warfarin-interacts-amox",
+      "type": "INTERACTS_WITH",
+      "source": "0d01cd90-7385-56e6-aa3d-33908dc352aa",
+      "target": "a4e06b49-9620-5d00-80cf-97dc71f541ce",
+      "properties": {}
+    }
+  ]
+}

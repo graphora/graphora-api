@@ -1,0 +1,69 @@
+{
+  "nodes": [
+    {
+      "id": "456f4add-a523-5f4e-88dc-4fd59ef72abb",
+      "type": "Startup",
+      "label": "Polyhedron AI",
+      "properties": {
+        "name": "Polyhedron AI",
+        "canonical_id": "456f4add-a523-5f4e-88dc-4fd59ef72abb",
+        "canonical_key": "Startup:name=polyhedron ai"
+      }
+    },
+    {
+      "id": "9aca6581-31e6-5a01-a83f-892a5a937e6b",
+      "type": "Investor",
+      "label": "Sequoia Capital",
+      "properties": {
+        "name": "Sequoia Capital",
+        "canonical_id": "9aca6581-31e6-5a01-a83f-892a5a937e6b",
+        "canonical_key": "Investor:name=sequoia capital"
+      }
+    },
+    {
+      "id": "f798b2c5-5362-51a9-b938-728f26e87e3d",
+      "type": "Investor",
+      "label": "Andreessen Horowitz",
+      "properties": {
+        "name": "Andreessen Horowitz",
+        "canonical_id": "f798b2c5-5362-51a9-b938-728f26e87e3d",
+        "canonical_key": "Investor:name=andreessen horowitz"
+      }
+    },
+    {
+      "id": "a207d026-ccb9-5cf9-8451-ebcc73354754",
+      "type": "Round",
+      "label": "Series B",
+      "properties": {
+        "identifier": "Polyhedron-Series-B-2026",
+        "amount": "$45M",
+        "round_type": "Series B",
+        "canonical_id": "a207d026-ccb9-5cf9-8451-ebcc73354754",
+        "canonical_key": "Round:identifier=polyhedron-series-b-2026"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "polyhedron-raised-b",
+      "type": "RAISED",
+      "source": "456f4add-a523-5f4e-88dc-4fd59ef72abb",
+      "target": "a207d026-ccb9-5cf9-8451-ebcc73354754",
+      "properties": {}
+    },
+    {
+      "id": "sequoia-in-b",
+      "type": "PARTICIPATED_IN",
+      "source": "9aca6581-31e6-5a01-a83f-892a5a937e6b",
+      "target": "a207d026-ccb9-5cf9-8451-ebcc73354754",
+      "properties": {}
+    },
+    {
+      "id": "a16z-in-b",
+      "type": "PARTICIPATED_IN",
+      "source": "f798b2c5-5362-51a9-b938-728f26e87e3d",
+      "target": "a207d026-ccb9-5cf9-8451-ebcc73354754",
+      "properties": {}
+    }
+  ]
+}

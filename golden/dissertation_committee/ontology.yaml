@@ -1,0 +1,49 @@
+version: "0.1.0"
+entities:
+  Student:
+    description: A doctoral student.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Names with non-ASCII characters (``Ana Rodríguez``)
+          must round-trip through canonical_key. Pin against
+          a normalizer that ASCII-folds.
+  Faculty:
+    description: A faculty member.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Department:
+    description: An academic department.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  ADVISES:
+    source: Faculty
+    target: Student
+    description: |
+      The Faculty member advises this Student. The
+      directionality reads as "advisor → advisee".
+    properties: {}
+  COMMITTEE_FOR:
+    source: Faculty
+    target: Student
+    description: |
+      The Faculty member serves on this Student's committee
+      (any role). The advisor role is captured separately
+      via ADVISES; this edge captures committee membership
+      regardless of role.
+    properties: {}
+  ENROLLED_IN:
+    source: Student
+    target: Department
+    description: The Student is enrolled in this Department.
+    properties: {}

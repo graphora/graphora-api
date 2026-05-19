@@ -1,0 +1,108 @@
+{
+  "nodes": [
+    {
+      "id": "f6f5cdf2-ae5c-5aaa-b1c2-91837a22c599",
+      "type": "Conference",
+      "label": "NeurIPS 2025",
+      "properties": {
+        "name": "NeurIPS 2025",
+        "canonical_id": "f6f5cdf2-ae5c-5aaa-b1c2-91837a22c599",
+        "canonical_key": "Conference:name=neurips 2025"
+      }
+    },
+    {
+      "id": "12097492-447b-5aa5-89da-6009b32642dd",
+      "type": "Paper",
+      "label": "Causal Structure",
+      "properties": {
+        "title": "Learning Causal Structure from Noisy Observations",
+        "canonical_id": "12097492-447b-5aa5-89da-6009b32642dd",
+        "canonical_key": "Paper:title=learning causal structure from noisy observations"
+      }
+    },
+    {
+      "id": "55d5af41-9b14-54f4-b0b1-cf33347e24cd",
+      "type": "Paper",
+      "label": "Sparse Attention",
+      "properties": {
+        "title": "Sparse Attention for Long-Context Models",
+        "canonical_id": "55d5af41-9b14-54f4-b0b1-cf33347e24cd",
+        "canonical_key": "Paper:title=sparse attention for long-context models"
+      }
+    },
+    {
+      "id": "e93dcc0e-90f8-5ffa-852c-9a71f728c464",
+      "type": "Paper",
+      "label": "Diffusion Robustness",
+      "properties": {
+        "title": "Robustness of Diffusion-Based Image Generation",
+        "canonical_id": "e93dcc0e-90f8-5ffa-852c-9a71f728c464",
+        "canonical_key": "Paper:title=robustness of diffusion-based image generation"
+      }
+    },
+    {
+      "id": "9637adf2-59d3-5ca7-a294-14eabe607ffb",
+      "type": "Author",
+      "label": "Hana Suzuki",
+      "properties": {
+        "name": "Hana Suzuki",
+        "canonical_id": "9637adf2-59d3-5ca7-a294-14eabe607ffb",
+        "canonical_key": "Author:name=hana suzuki"
+      }
+    },
+    {
+      "id": "3dfd437d-4666-5382-8aff-0178f506c5ea",
+      "type": "Author",
+      "label": "Felipe Costa",
+      "properties": {
+        "name": "Felipe Costa",
+        "canonical_id": "3dfd437d-4666-5382-8aff-0178f506c5ea",
+        "canonical_key": "Author:name=felipe costa"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "p1-at-nips",
+      "type": "ACCEPTED_AT",
+      "source": "12097492-447b-5aa5-89da-6009b32642dd",
+      "target": "f6f5cdf2-ae5c-5aaa-b1c2-91837a22c599",
+      "properties": {}
+    },
+    {
+      "id": "p2-at-nips",
+      "type": "ACCEPTED_AT",
+      "source": "55d5af41-9b14-54f4-b0b1-cf33347e24cd",
+      "target": "f6f5cdf2-ae5c-5aaa-b1c2-91837a22c599",
+      "properties": {}
+    },
+    {
+      "id": "p3-at-nips",
+      "type": "ACCEPTED_AT",
+      "source": "e93dcc0e-90f8-5ffa-852c-9a71f728c464",
+      "target": "f6f5cdf2-ae5c-5aaa-b1c2-91837a22c599",
+      "properties": {}
+    },
+    {
+      "id": "p1-by-hana",
+      "type": "AUTHORED_BY",
+      "source": "12097492-447b-5aa5-89da-6009b32642dd",
+      "target": "9637adf2-59d3-5ca7-a294-14eabe607ffb",
+      "properties": {}
+    },
+    {
+      "id": "p2-by-felipe",
+      "type": "AUTHORED_BY",
+      "source": "55d5af41-9b14-54f4-b0b1-cf33347e24cd",
+      "target": "3dfd437d-4666-5382-8aff-0178f506c5ea",
+      "properties": {}
+    },
+    {
+      "id": "p3-by-hana",
+      "type": "AUTHORED_BY",
+      "source": "e93dcc0e-90f8-5ffa-852c-9a71f728c464",
+      "target": "9637adf2-59d3-5ca7-a294-14eabe607ffb",
+      "properties": {}
+    }
+  ]
+}

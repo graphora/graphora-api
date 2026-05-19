@@ -1,0 +1,51 @@
+{
+  "nodes": [
+    {
+      "id": "a8d7e21f-0747-59e4-86fb-d3ac48618ab3",
+      "type": "Contract",
+      "label": "MSA-2023-NORTHWIND",
+      "properties": {
+        "reference": "MSA-2023-NORTHWIND",
+        "renewal_date": "January 1, 2027",
+        "canonical_id": "a8d7e21f-0747-59e4-86fb-d3ac48618ab3",
+        "canonical_key": "Contract:reference=msa-2023-northwind"
+      }
+    },
+    {
+      "id": "a5cb6d8c-081f-513b-9068-41404fd364c4",
+      "type": "Party",
+      "label": "Northwind Logistics",
+      "properties": {
+        "name": "Northwind Logistics",
+        "canonical_id": "a5cb6d8c-081f-513b-9068-41404fd364c4",
+        "canonical_key": "Party:name=northwind logistics"
+      }
+    },
+    {
+      "id": "da0d6cb6-fe1e-510f-9815-18a62745bbf9",
+      "type": "Party",
+      "label": "Trident Software Services",
+      "properties": {
+        "name": "Trident Software Services",
+        "canonical_id": "da0d6cb6-fe1e-510f-9815-18a62745bbf9",
+        "canonical_key": "Party:name=trident software services"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "north-party-msa",
+      "type": "PARTY_TO",
+      "source": "a5cb6d8c-081f-513b-9068-41404fd364c4",
+      "target": "a8d7e21f-0747-59e4-86fb-d3ac48618ab3",
+      "properties": {}
+    },
+    {
+      "id": "trident-party-msa",
+      "type": "PARTY_TO",
+      "source": "da0d6cb6-fe1e-510f-9815-18a62745bbf9",
+      "target": "a8d7e21f-0747-59e4-86fb-d3ac48618ab3",
+      "properties": {}
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+NeurIPS 2025 accepted three papers from our group.
+"Learning Causal Structure from Noisy Observations" by Hana
+Suzuki was selected for an oral presentation. "Sparse
+Attention for Long-Context Models", co-authored by Felipe
+Costa, received a spotlight. "Robustness of Diffusion-Based
+Image Generation", also by Hana Suzuki, will appear as a
+poster.
+
+All three papers — "Learning Causal Structure from Noisy
+Observations", "Sparse Attention for Long-Context Models",
+and "Robustness of Diffusion-Based Image Generation" — are
+in the proceedings of NeurIPS 2025.
+
+Hana Suzuki authored two of the three accepted papers.

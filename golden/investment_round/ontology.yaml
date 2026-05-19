@@ -1,0 +1,40 @@
+version: "0.1.0"
+entities:
+  Startup:
+    description: A startup company.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Investor:
+    description: An investor in the round.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Round:
+    description: A funding round.
+    properties:
+      identifier:
+        type: str
+        required: true
+        unique: true
+      amount:
+        type: str
+        required: false
+      round_type:
+        type: str
+        required: false
+relationships:
+  RAISED:
+    source: Startup
+    target: Round
+    description: The Startup raised this Round.
+    properties: {}
+  PARTICIPATED_IN:
+    source: Investor
+    target: Round
+    description: The Investor participated in this Round.
+    properties: {}

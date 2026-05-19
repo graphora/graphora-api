@@ -1,0 +1,74 @@
+{
+  "nodes": [
+    {
+      "id": "70361024-e03d-5ec9-bbb8-019841798237",
+      "type": "Student",
+      "label": "STU-77103",
+      "properties": {
+        "identifier": "STU-77103",
+        "canonical_id": "70361024-e03d-5ec9-bbb8-019841798237",
+        "canonical_key": "Student:identifier=stu-77103"
+      }
+    },
+    {
+      "id": "ed5910bf-e4ee-5730-a201-3df1c35cc7a8",
+      "type": "Course",
+      "label": "CS-401",
+      "properties": {
+        "code": "CS-401",
+        "canonical_id": "ed5910bf-e4ee-5730-a201-3df1c35cc7a8",
+        "canonical_key": "Course:code=cs-401"
+      }
+    },
+    {
+      "id": "826003bc-1f2b-51fd-aa0f-4281a76b9529",
+      "type": "Course",
+      "label": "MATH-220",
+      "properties": {
+        "code": "MATH-220",
+        "canonical_id": "826003bc-1f2b-51fd-aa0f-4281a76b9529",
+        "canonical_key": "Course:code=math-220"
+      }
+    },
+    {
+      "id": "25cbaebf-ce80-5590-aa90-d46f58e4d083",
+      "type": "Instructor",
+      "label": "Prof. Lakshmi Iyer",
+      "properties": {
+        "name": "Prof. Lakshmi Iyer",
+        "canonical_id": "25cbaebf-ce80-5590-aa90-d46f58e4d083",
+        "canonical_key": "Instructor:name=prof. lakshmi iyer"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "stu-in-cs401",
+      "type": "ENROLLED_IN",
+      "source": "70361024-e03d-5ec9-bbb8-019841798237",
+      "target": "ed5910bf-e4ee-5730-a201-3df1c35cc7a8",
+      "properties": {}
+    },
+    {
+      "id": "stu-in-math220",
+      "type": "ENROLLED_IN",
+      "source": "70361024-e03d-5ec9-bbb8-019841798237",
+      "target": "826003bc-1f2b-51fd-aa0f-4281a76b9529",
+      "properties": {}
+    },
+    {
+      "id": "cs401-by-iyer",
+      "type": "TAUGHT_BY",
+      "source": "ed5910bf-e4ee-5730-a201-3df1c35cc7a8",
+      "target": "25cbaebf-ce80-5590-aa90-d46f58e4d083",
+      "properties": {}
+    },
+    {
+      "id": "math220-by-iyer",
+      "type": "TAUGHT_BY",
+      "source": "826003bc-1f2b-51fd-aa0f-4281a76b9529",
+      "target": "25cbaebf-ce80-5590-aa90-d46f58e4d083",
+      "properties": {}
+    }
+  ]
+}

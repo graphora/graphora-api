@@ -1,0 +1,37 @@
+version: "0.1.0"
+entities:
+  Patent:
+    description: A granted patent.
+    properties:
+      number:
+        type: str
+        required: true
+        unique: true
+      title:
+        type: str
+        required: false
+  Inventor:
+    description: A patent inventor.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Company:
+    description: A company (assignee).
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  INVENTED_BY:
+    source: Patent
+    target: Inventor
+    description: The Patent was invented by this Inventor.
+    properties: {}
+  ASSIGNED_TO:
+    source: Patent
+    target: Company
+    description: The Patent is assigned to this Company.
+    properties: {}

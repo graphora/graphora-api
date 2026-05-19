@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "6e306e24-c3e4-5454-aa7a-c604ce0406f8",
+      "type": "AuditFirm",
+      "label": "Quintar Compliance",
+      "properties": {
+        "name": "Quintar Compliance",
+        "canonical_id": "6e306e24-c3e4-5454-aa7a-c604ce0406f8",
+        "canonical_key": "AuditFirm:name=quintar compliance"
+      }
+    },
+    {
+      "id": "4680dc67-b879-5140-956b-08309065c231",
+      "type": "Company",
+      "label": "Northwind Logistics",
+      "properties": {
+        "name": "Northwind Logistics",
+        "canonical_id": "4680dc67-b879-5140-956b-08309065c231",
+        "canonical_key": "Company:name=northwind logistics"
+      }
+    },
+    {
+      "id": "4a3f3a19-8f08-5443-ab2a-22f5f43916f0",
+      "type": "Company",
+      "label": "Southshore Holdings",
+      "properties": {
+        "name": "Southshore Holdings",
+        "canonical_id": "4a3f3a19-8f08-5443-ab2a-22f5f43916f0",
+        "canonical_key": "Company:name=southshore holdings"
+      }
+    },
+    {
+      "id": "d19423b8-4c1f-51b8-b45e-82d3f0a53ab3",
+      "type": "Standard",
+      "label": "ISO 27001:2022",
+      "properties": {
+        "reference": "ISO 27001:2022",
+        "canonical_id": "d19423b8-4c1f-51b8-b45e-82d3f0a53ab3",
+        "canonical_key": "Standard:reference=iso 27001:2022"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "quintar-audited-north",
+      "type": "AUDITED",
+      "source": "6e306e24-c3e4-5454-aa7a-c604ce0406f8",
+      "target": "4680dc67-b879-5140-956b-08309065c231",
+      "properties": {}
+    },
+    {
+      "id": "quintar-audited-south",
+      "type": "AUDITED",
+      "source": "6e306e24-c3e4-5454-aa7a-c604ce0406f8",
+      "target": "4a3f3a19-8f08-5443-ab2a-22f5f43916f0",
+      "properties": {}
+    },
+    {
+      "id": "quintar-against-iso",
+      "type": "AUDIT_AGAINST",
+      "source": "6e306e24-c3e4-5454-aa7a-c604ce0406f8",
+      "target": "d19423b8-4c1f-51b8-b45e-82d3f0a53ab3",
+      "properties": {}
+    }
+  ]
+}

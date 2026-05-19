@@ -1,0 +1,108 @@
+{
+  "nodes": [
+    {
+      "id": "d8798ac2-c66e-52da-9c48-096739e73a5c",
+      "type": "Passenger",
+      "label": "Aaliyah Banks",
+      "properties": {
+        "name": "Aaliyah Banks",
+        "canonical_id": "d8798ac2-c66e-52da-9c48-096739e73a5c",
+        "canonical_key": "Passenger:name=aaliyah banks"
+      }
+    },
+    {
+      "id": "29e36f84-6a49-5475-aac0-f750a71071c5",
+      "type": "Flight",
+      "label": "UA-2841",
+      "properties": {
+        "number": "UA-2841",
+        "canonical_id": "29e36f84-6a49-5475-aac0-f750a71071c5",
+        "canonical_key": "Flight:number=ua-2841"
+      }
+    },
+    {
+      "id": "a2826d3c-a325-5357-b894-881962fd3e93",
+      "type": "Flight",
+      "label": "UA-417",
+      "properties": {
+        "number": "UA-417",
+        "canonical_id": "a2826d3c-a325-5357-b894-881962fd3e93",
+        "canonical_key": "Flight:number=ua-417"
+      }
+    },
+    {
+      "id": "711af5f5-771f-59b8-8984-611209340762",
+      "type": "Airport",
+      "label": "SFO",
+      "properties": {
+        "code": "SFO",
+        "canonical_id": "711af5f5-771f-59b8-8984-611209340762",
+        "canonical_key": "Airport:code=sfo"
+      }
+    },
+    {
+      "id": "b080106e-112f-50a0-86da-47e2cb5b54f1",
+      "type": "Airport",
+      "label": "ORD",
+      "properties": {
+        "code": "ORD",
+        "canonical_id": "b080106e-112f-50a0-86da-47e2cb5b54f1",
+        "canonical_key": "Airport:code=ord"
+      }
+    },
+    {
+      "id": "db20d925-2b25-5b11-b6b6-dfee67b91069",
+      "type": "Airport",
+      "label": "FRA",
+      "properties": {
+        "code": "FRA",
+        "canonical_id": "db20d925-2b25-5b11-b6b6-dfee67b91069",
+        "canonical_key": "Airport:code=fra"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "pass-on-ua2841",
+      "type": "BOOKED_ON",
+      "source": "d8798ac2-c66e-52da-9c48-096739e73a5c",
+      "target": "29e36f84-6a49-5475-aac0-f750a71071c5",
+      "properties": {}
+    },
+    {
+      "id": "pass-on-ua417",
+      "type": "BOOKED_ON",
+      "source": "d8798ac2-c66e-52da-9c48-096739e73a5c",
+      "target": "a2826d3c-a325-5357-b894-881962fd3e93",
+      "properties": {}
+    },
+    {
+      "id": "ua2841-from-sfo",
+      "type": "DEPARTS_FROM",
+      "source": "29e36f84-6a49-5475-aac0-f750a71071c5",
+      "target": "711af5f5-771f-59b8-8984-611209340762",
+      "properties": {}
+    },
+    {
+      "id": "ua2841-to-ord",
+      "type": "ARRIVES_AT",
+      "source": "29e36f84-6a49-5475-aac0-f750a71071c5",
+      "target": "b080106e-112f-50a0-86da-47e2cb5b54f1",
+      "properties": {}
+    },
+    {
+      "id": "ua417-from-ord",
+      "type": "DEPARTS_FROM",
+      "source": "a2826d3c-a325-5357-b894-881962fd3e93",
+      "target": "b080106e-112f-50a0-86da-47e2cb5b54f1",
+      "properties": {}
+    },
+    {
+      "id": "ua417-to-fra",
+      "type": "ARRIVES_AT",
+      "source": "a2826d3c-a325-5357-b894-881962fd3e93",
+      "target": "db20d925-2b25-5b11-b6b6-dfee67b91069",
+      "properties": {}
+    }
+  ]
+}

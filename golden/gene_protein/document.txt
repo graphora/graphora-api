@@ -1,0 +1,12 @@
+The BRCA1 gene encodes the breast cancer type 1
+susceptibility protein. The breast cancer type 1
+susceptibility protein participates in DNA double-strand
+break repair.
+
+Loss-of-function variants in BRCA1 are associated with elevated
+risk of hereditary breast and ovarian cancer, attributable to
+impaired DNA double-strand break repair.
+
+The breast cancer type 1 susceptibility protein interacts with
+multiple downstream effectors as part of its DNA double-strand
+break repair function.

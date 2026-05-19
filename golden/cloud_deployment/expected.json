@@ -1,0 +1,98 @@
+{
+  "nodes": [
+    {
+      "id": "16e0af40-521d-53e8-af10-93bc68752d70",
+      "type": "Service",
+      "label": "search-api",
+      "properties": {
+        "name": "search-api",
+        "canonical_id": "16e0af40-521d-53e8-af10-93bc68752d70",
+        "canonical_key": "Service:name=search-api"
+      }
+    },
+    {
+      "id": "78844e1c-a696-5376-8233-118990c04b83",
+      "type": "Region",
+      "label": "us-east-1",
+      "properties": {
+        "code": "us-east-1",
+        "canonical_id": "78844e1c-a696-5376-8233-118990c04b83",
+        "canonical_key": "Region:code=us-east-1"
+      }
+    },
+    {
+      "id": "9b130b06-a758-57b5-af54-813a69aad222",
+      "type": "Region",
+      "label": "eu-west-1",
+      "properties": {
+        "code": "eu-west-1",
+        "canonical_id": "9b130b06-a758-57b5-af54-813a69aad222",
+        "canonical_key": "Region:code=eu-west-1"
+      }
+    },
+    {
+      "id": "2d0cd32f-0351-5617-a9ce-e2a203d01051",
+      "type": "Region",
+      "label": "ap-southeast-2",
+      "properties": {
+        "code": "ap-southeast-2",
+        "canonical_id": "2d0cd32f-0351-5617-a9ce-e2a203d01051",
+        "canonical_key": "Region:code=ap-southeast-2"
+      }
+    },
+    {
+      "id": "7324397d-9422-5a39-bdc1-2c5707a52f2d",
+      "type": "Cluster",
+      "label": "search-prod",
+      "properties": {
+        "name": "search-prod",
+        "canonical_id": "7324397d-9422-5a39-bdc1-2c5707a52f2d",
+        "canonical_key": "Cluster:name=search-prod"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "search-to-use1",
+      "type": "DEPLOYED_TO",
+      "source": "16e0af40-521d-53e8-af10-93bc68752d70",
+      "target": "78844e1c-a696-5376-8233-118990c04b83",
+      "properties": {}
+    },
+    {
+      "id": "search-to-euw1",
+      "type": "DEPLOYED_TO",
+      "source": "16e0af40-521d-53e8-af10-93bc68752d70",
+      "target": "9b130b06-a758-57b5-af54-813a69aad222",
+      "properties": {}
+    },
+    {
+      "id": "search-to-aps2",
+      "type": "DEPLOYED_TO",
+      "source": "16e0af40-521d-53e8-af10-93bc68752d70",
+      "target": "2d0cd32f-0351-5617-a9ce-e2a203d01051",
+      "properties": {}
+    },
+    {
+      "id": "cluster-spans-use1",
+      "type": "SPANS",
+      "source": "7324397d-9422-5a39-bdc1-2c5707a52f2d",
+      "target": "78844e1c-a696-5376-8233-118990c04b83",
+      "properties": {}
+    },
+    {
+      "id": "cluster-spans-euw1",
+      "type": "SPANS",
+      "source": "7324397d-9422-5a39-bdc1-2c5707a52f2d",
+      "target": "9b130b06-a758-57b5-af54-813a69aad222",
+      "properties": {}
+    },
+    {
+      "id": "cluster-spans-aps2",
+      "type": "SPANS",
+      "source": "7324397d-9422-5a39-bdc1-2c5707a52f2d",
+      "target": "2d0cd32f-0351-5617-a9ce-e2a203d01051",
+      "properties": {}
+    }
+  ]
+}

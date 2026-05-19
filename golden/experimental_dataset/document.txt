@@ -1,0 +1,10 @@
+The DS-2026-CRYSTAL-001 dataset, containing 4,800 X-ray
+diffraction measurements, was collected by Dr. Yumi Tanaka and
+Dr. Marcus Webb.
+
+DS-2026-CRYSTAL-001 was produced using X-ray diffraction at
+the synchrotron beamline operated by the consortium.
+
+Both Dr. Yumi Tanaka and Dr. Marcus Webb contributed equally
+to DS-2026-CRYSTAL-001's collection and curation. The dataset
+DS-2026-CRYSTAL-001 is now available for community use.

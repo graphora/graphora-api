@@ -1,0 +1,37 @@
+version: "0.1.0"
+entities:
+  Dataset:
+    description: A research dataset.
+    properties:
+      identifier:
+        type: str
+        required: true
+        unique: true
+      sample_count:
+        type: str
+        required: false
+  Researcher:
+    description: A researcher.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Method:
+    description: A method or technique.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  COLLECTED_BY:
+    source: Dataset
+    target: Researcher
+    description: The Dataset was collected by this Researcher.
+    properties: {}
+  USES_METHOD:
+    source: Dataset
+    target: Method
+    description: The Dataset was produced using this Method.
+    properties: {}

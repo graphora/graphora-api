@@ -1,0 +1,68 @@
+{
+  "nodes": [
+    {
+      "id": "32e0b4de-a2a6-58ed-8397-54ce527f58cc",
+      "type": "Dataset",
+      "label": "DS-2026-CRYSTAL-001",
+      "properties": {
+        "identifier": "DS-2026-CRYSTAL-001",
+        "sample_count": "4,800",
+        "canonical_id": "32e0b4de-a2a6-58ed-8397-54ce527f58cc",
+        "canonical_key": "Dataset:identifier=ds-2026-crystal-001"
+      }
+    },
+    {
+      "id": "7eadb598-8cfa-5f23-9ed9-637e8469e4fb",
+      "type": "Researcher",
+      "label": "Dr. Yumi Tanaka",
+      "properties": {
+        "name": "Dr. Yumi Tanaka",
+        "canonical_id": "7eadb598-8cfa-5f23-9ed9-637e8469e4fb",
+        "canonical_key": "Researcher:name=dr. yumi tanaka"
+      }
+    },
+    {
+      "id": "9f4eb0a1-4283-58ea-8021-7e0465e7cfb9",
+      "type": "Researcher",
+      "label": "Dr. Marcus Webb",
+      "properties": {
+        "name": "Dr. Marcus Webb",
+        "canonical_id": "9f4eb0a1-4283-58ea-8021-7e0465e7cfb9",
+        "canonical_key": "Researcher:name=dr. marcus webb"
+      }
+    },
+    {
+      "id": "76818b83-e814-5633-9b01-725ae1621789",
+      "type": "Method",
+      "label": "X-ray diffraction",
+      "properties": {
+        "name": "X-ray diffraction",
+        "canonical_id": "76818b83-e814-5633-9b01-725ae1621789",
+        "canonical_key": "Method:name=x-ray diffraction"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "ds-by-yumi",
+      "type": "COLLECTED_BY",
+      "source": "32e0b4de-a2a6-58ed-8397-54ce527f58cc",
+      "target": "7eadb598-8cfa-5f23-9ed9-637e8469e4fb",
+      "properties": {}
+    },
+    {
+      "id": "ds-by-marcus",
+      "type": "COLLECTED_BY",
+      "source": "32e0b4de-a2a6-58ed-8397-54ce527f58cc",
+      "target": "9f4eb0a1-4283-58ea-8021-7e0465e7cfb9",
+      "properties": {}
+    },
+    {
+      "id": "ds-uses-xrd",
+      "type": "USES_METHOD",
+      "source": "32e0b4de-a2a6-58ed-8397-54ce527f58cc",
+      "target": "76818b83-e814-5633-9b01-725ae1621789",
+      "properties": {}
+    }
+  ]
+}

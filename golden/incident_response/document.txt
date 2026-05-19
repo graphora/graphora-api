@@ -1,0 +1,12 @@
+Incident INC-2026-0511-001 was opened at 14:23 UTC on May 11,
+2026 after the payments-api began returning elevated 5xx rates.
+INC-2026-0511-001 is classified SEV-2.
+
+Initial triage by Priya Ramanathan traced the spike to the
+ledger-db. Daniel Schmidt joined the response and confirmed
+that ledger-db was rejecting writes due to a full transaction
+log.
+
+Priya Ramanathan and Daniel Schmidt resolved INC-2026-0511-001
+within 47 minutes. The payments-api recovered after ledger-db
+rotated its transaction log; INC-2026-0511-001 is now closed.

@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "b496e29e-c1e8-55fa-89be-a7a81838f106",
+      "type": "Speaker",
+      "label": "Dr. Reed Marshall",
+      "properties": {
+        "name": "Dr. Reed Marshall",
+        "canonical_id": "b496e29e-c1e8-55fa-89be-a7a81838f106",
+        "canonical_key": "Speaker:name=dr. reed marshall"
+      }
+    },
+    {
+      "id": "bdbe56a6-d822-5ae6-a482-f5ed7aedb8ee",
+      "type": "Topic",
+      "label": "AI safety governance",
+      "properties": {
+        "name": "AI safety governance",
+        "canonical_id": "bdbe56a6-d822-5ae6-a482-f5ed7aedb8ee",
+        "canonical_key": "Topic:name=ai safety governance"
+      }
+    },
+    {
+      "id": "cb82ddcd-8b99-5977-8f45-12db268a7cce",
+      "type": "Topic",
+      "label": "open-source model release",
+      "properties": {
+        "name": "open-source model release",
+        "canonical_id": "cb82ddcd-8b99-5977-8f45-12db268a7cce",
+        "canonical_key": "Topic:name=open-source model release"
+      }
+    },
+    {
+      "id": "d4d438f5-f64d-56f3-82d5-ff1aae65a906",
+      "type": "Publication",
+      "label": "The Atlantic",
+      "properties": {
+        "name": "The Atlantic",
+        "canonical_id": "d4d438f5-f64d-56f3-82d5-ff1aae65a906",
+        "canonical_key": "Publication:name=the atlantic"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "reed-disc-safety",
+      "type": "DISCUSSED",
+      "source": "b496e29e-c1e8-55fa-89be-a7a81838f106",
+      "target": "bdbe56a6-d822-5ae6-a482-f5ed7aedb8ee",
+      "properties": {}
+    },
+    {
+      "id": "reed-disc-oss",
+      "type": "DISCUSSED",
+      "source": "b496e29e-c1e8-55fa-89be-a7a81838f106",
+      "target": "cb82ddcd-8b99-5977-8f45-12db268a7cce",
+      "properties": {}
+    },
+    {
+      "id": "reed-by-atlantic",
+      "type": "INTERVIEWED_BY",
+      "source": "b496e29e-c1e8-55fa-89be-a7a81838f106",
+      "target": "d4d438f5-f64d-56f3-82d5-ff1aae65a906",
+      "properties": {}
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+version: "0.1.0"
+entities:
+  AuditFirm:
+    description: A compliance audit firm.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Company:
+    description: A company subject to audit.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Standard:
+    description: A compliance standard.
+    properties:
+      reference:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Standard reference (e.g., ``ISO 27001:2022``).
+          Mixed letters / numbers / colons / hyphens stay in
+          the canonical_key after lowercasing — pin against
+          a future normalizer that strips structure.
+relationships:
+  AUDITED:
+    source: AuditFirm
+    target: Company
+    description: The AuditFirm audited this Company.
+    properties: {}
+  AUDIT_AGAINST:
+    source: AuditFirm
+    target: Standard
+    description: |
+      The AuditFirm conducts audits against this Standard.
+      The relationship is between firm and standard; the
+      specific company audited surfaces separately via
+      AUDITED.
+    properties: {}

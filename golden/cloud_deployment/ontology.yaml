@@ -1,0 +1,38 @@
+version: "0.1.0"
+entities:
+  Service:
+    description: A deployed service.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Region:
+    description: A cloud region.
+    properties:
+      code:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Region code (e.g., ``us-east-1``). Mixed
+          letters/digits/hyphens — pin against a normalizer
+          that strips dashes.
+  Cluster:
+    description: A compute cluster.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  DEPLOYED_TO:
+    source: Service
+    target: Region
+    description: The Service is deployed to this Region.
+    properties: {}
+  SPANS:
+    source: Cluster
+    target: Region
+    description: The Cluster spans this Region.
+    properties: {}

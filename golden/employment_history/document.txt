@@ -1,0 +1,10 @@
+Maria Lopez began her career at StartupCo, where she worked
+from 2015 to 2019 as a software engineer. In 2019 she joined
+BigCorp's platform team, eventually becoming a senior engineer
+before leaving in 2024.
+
+In early 2024, Maria Lopez moved to NewVenture as a founding
+engineer. She remains at NewVenture today.
+
+Across StartupCo, BigCorp, and NewVenture, Maria Lopez has
+focused on infrastructure and distributed systems.

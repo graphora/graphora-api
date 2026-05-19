@@ -1,0 +1,12 @@
+Quintar Compliance completed ISO 27001:2022 audits at two
+clients last quarter: Northwind Logistics and Southshore
+Holdings.
+
+Quintar Compliance's audit of Northwind Logistics surfaced
+three observations against ISO 27001:2022 controls. The
+parallel audit of Southshore Holdings against ISO 27001:2022
+identified one observation in access management.
+
+Both Northwind Logistics and Southshore Holdings have
+remediation plans in flight, with re-audit by Quintar
+Compliance scheduled for Q3.

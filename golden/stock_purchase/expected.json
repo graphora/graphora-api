@@ -1,0 +1,52 @@
+{
+  "nodes": [
+    {
+      "id": "15f5b1de-7995-5a73-82b5-ad90b9517a58",
+      "type": "Investor",
+      "label": "Atlas Capital Partners",
+      "properties": {
+        "name": "Atlas Capital Partners",
+        "canonical_id": "15f5b1de-7995-5a73-82b5-ad90b9517a58",
+        "canonical_key": "Investor:name=atlas capital partners"
+      }
+    },
+    {
+      "id": "9fa5af19-7675-5e0f-9560-821cbf026e7a",
+      "type": "Investor",
+      "label": "Beacon Hill Fund",
+      "properties": {
+        "name": "Beacon Hill Fund",
+        "canonical_id": "9fa5af19-7675-5e0f-9560-821cbf026e7a",
+        "canonical_key": "Investor:name=beacon hill fund"
+      }
+    },
+    {
+      "id": "311a1808-494a-5466-b12d-a78a5fb95dbb",
+      "type": "Stock",
+      "label": "GLBX",
+      "properties": {
+        "ticker": "GLBX",
+        "quantity": "250,000 shares",
+        "price": "$48.75",
+        "canonical_id": "311a1808-494a-5466-b12d-a78a5fb95dbb",
+        "canonical_key": "Stock:ticker=glbx"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "atlas-purchased-glbx",
+      "type": "PURCHASED",
+      "source": "15f5b1de-7995-5a73-82b5-ad90b9517a58",
+      "target": "311a1808-494a-5466-b12d-a78a5fb95dbb",
+      "properties": {}
+    },
+    {
+      "id": "beacon-sold-glbx",
+      "type": "SOLD",
+      "source": "9fa5af19-7675-5e0f-9560-821cbf026e7a",
+      "target": "311a1808-494a-5466-b12d-a78a5fb95dbb",
+      "properties": {}
+    }
+  ]
+}

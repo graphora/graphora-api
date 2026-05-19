@@ -1,0 +1,49 @@
+version: "0.1.0"
+entities:
+  Grant:
+    description: A research grant.
+    properties:
+      identifier:
+        type: str
+        required: true
+        unique: true
+      amount:
+        type: str
+        required: false
+  Funder:
+    description: A funding agency.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Researcher:
+    description: A researcher (PI or co-I).
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Project:
+    description: A research project.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  AWARDED_BY:
+    source: Grant
+    target: Funder
+    description: The Grant was awarded by this Funder.
+    properties: {}
+  PI_OF:
+    source: Researcher
+    target: Grant
+    description: The Researcher is the Principal Investigator of this Grant.
+    properties: {}
+  FUNDS:
+    source: Grant
+    target: Project
+    description: The Grant funds this Project.
+    properties: {}

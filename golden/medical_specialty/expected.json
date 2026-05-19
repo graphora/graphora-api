@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "c1dd8ea4-ab9e-5c5f-aa6e-230bf29a1f2b",
+      "type": "Doctor",
+      "label": "Dr. Aisha Patel",
+      "properties": {
+        "name": "Dr. Aisha Patel",
+        "canonical_id": "c1dd8ea4-ab9e-5c5f-aa6e-230bf29a1f2b",
+        "canonical_key": "Doctor:name=dr. aisha patel"
+      }
+    },
+    {
+      "id": "3f4e4dce-cc02-5144-b194-872de191d851",
+      "type": "Specialty",
+      "label": "cardiology",
+      "properties": {
+        "name": "cardiology",
+        "canonical_id": "3f4e4dce-cc02-5144-b194-872de191d851",
+        "canonical_key": "Specialty:name=cardiology"
+      }
+    },
+    {
+      "id": "fb62c146-7715-5700-b601-08913be09dd1",
+      "type": "Specialty",
+      "label": "internal medicine",
+      "properties": {
+        "name": "internal medicine",
+        "canonical_id": "fb62c146-7715-5700-b601-08913be09dd1",
+        "canonical_key": "Specialty:name=internal medicine"
+      }
+    },
+    {
+      "id": "65055798-058d-5440-999e-3debf624b42d",
+      "type": "Hospital",
+      "label": "Mount Sinai Medical Center",
+      "properties": {
+        "name": "Mount Sinai Medical Center",
+        "canonical_id": "65055798-058d-5440-999e-3debf624b42d",
+        "canonical_key": "Hospital:name=mount sinai medical center"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "patel-board-cardio",
+      "type": "BOARD_CERTIFIED_IN",
+      "source": "c1dd8ea4-ab9e-5c5f-aa6e-230bf29a1f2b",
+      "target": "3f4e4dce-cc02-5144-b194-872de191d851",
+      "properties": {}
+    },
+    {
+      "id": "patel-board-internal",
+      "type": "BOARD_CERTIFIED_IN",
+      "source": "c1dd8ea4-ab9e-5c5f-aa6e-230bf29a1f2b",
+      "target": "fb62c146-7715-5700-b601-08913be09dd1",
+      "properties": {}
+    },
+    {
+      "id": "patel-practices-sinai",
+      "type": "PRACTICES_AT",
+      "source": "c1dd8ea4-ab9e-5c5f-aa6e-230bf29a1f2b",
+      "target": "65055798-058d-5440-999e-3debf624b42d",
+      "properties": {}
+    }
+  ]
+}

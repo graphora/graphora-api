@@ -1,0 +1,38 @@
+version: "0.1.0"
+entities:
+  Trademark:
+    description: A registered trademark.
+    properties:
+      registration_number:
+        type: str
+        required: true
+        unique: true
+      text:
+        type: str
+        required: false
+        description: The mark text itself.
+  Company:
+    description: A trademark owner.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Class:
+    description: An international trademark class.
+    properties:
+      code:
+        type: str
+        required: true
+        unique: true
+relationships:
+  OWNED_BY:
+    source: Trademark
+    target: Company
+    description: The Trademark is owned by this Company.
+    properties: {}
+  REGISTERED_IN:
+    source: Trademark
+    target: Class
+    description: The Trademark is registered in this Class.
+    properties: {}

@@ -1,0 +1,12 @@
+The search-api service is deployed to three regions:
+us-east-1, eu-west-1, and ap-southeast-2. The search-prod
+cluster spans all three regions.
+
+In us-east-1, the search-api runs in a multi-AZ
+configuration. The eu-west-1 deployment of search-api was
+added in early 2025. ap-southeast-2 came online for search-api
+in March 2026.
+
+The search-prod cluster's control plane is replicated across
+us-east-1, eu-west-1, and ap-southeast-2 with quorum-based
+consensus.

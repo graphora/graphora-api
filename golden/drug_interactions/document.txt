@@ -1,0 +1,10 @@
+warfarin and aspirin are known to interact. Co-administration
+of warfarin and aspirin increases bleeding risk through the
+combined anticoagulant and antiplatelet effects.
+
+A separate interaction exists between warfarin and amoxicillin.
+amoxicillin can elevate the international normalized ratio
+(INR) in patients on warfarin, necessitating dose adjustment.
+
+There is no established interaction between aspirin and
+amoxicillin in the standard reference materials.

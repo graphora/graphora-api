@@ -1,0 +1,68 @@
+{
+  "nodes": [
+    {
+      "id": "c988a1dd-05a2-51de-a2e2-f83f1c040284",
+      "type": "Grant",
+      "label": "NSF-2401234",
+      "properties": {
+        "identifier": "NSF-2401234",
+        "amount": "$1.2M",
+        "canonical_id": "c988a1dd-05a2-51de-a2e2-f83f1c040284",
+        "canonical_key": "Grant:identifier=nsf-2401234"
+      }
+    },
+    {
+      "id": "dcf9d4c6-5bc2-5e86-86e5-8c08daae06e5",
+      "type": "Funder",
+      "label": "National Science Foundation",
+      "properties": {
+        "name": "National Science Foundation",
+        "canonical_id": "dcf9d4c6-5bc2-5e86-86e5-8c08daae06e5",
+        "canonical_key": "Funder:name=national science foundation"
+      }
+    },
+    {
+      "id": "1ad55be3-ec1f-58b8-bb56-87e146c1ced7",
+      "type": "Researcher",
+      "label": "Dr. Rohan Mehta",
+      "properties": {
+        "name": "Dr. Rohan Mehta",
+        "canonical_id": "1ad55be3-ec1f-58b8-bb56-87e146c1ced7",
+        "canonical_key": "Researcher:name=dr. rohan mehta"
+      }
+    },
+    {
+      "id": "7877f760-db60-5128-8386-2869f656e6b8",
+      "type": "Project",
+      "label": "Foundations of Verifiable Neural Networks",
+      "properties": {
+        "name": "Foundations of Verifiable Neural Networks",
+        "canonical_id": "7877f760-db60-5128-8386-2869f656e6b8",
+        "canonical_key": "Project:name=foundations of verifiable neural networks"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "nsf-awarded",
+      "type": "AWARDED_BY",
+      "source": "c988a1dd-05a2-51de-a2e2-f83f1c040284",
+      "target": "dcf9d4c6-5bc2-5e86-86e5-8c08daae06e5",
+      "properties": {}
+    },
+    {
+      "id": "rohan-pi",
+      "type": "PI_OF",
+      "source": "1ad55be3-ec1f-58b8-bb56-87e146c1ced7",
+      "target": "c988a1dd-05a2-51de-a2e2-f83f1c040284",
+      "properties": {}
+    },
+    {
+      "id": "nsf-funds-proj",
+      "type": "FUNDS",
+      "source": "c988a1dd-05a2-51de-a2e2-f83f1c040284",
+      "target": "7877f760-db60-5128-8386-2869f656e6b8",
+      "properties": {}
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "d82e53fa-97f9-5e1e-8a01-07f7c2e7b756",
+      "type": "Bill",
+      "label": "H.R. 4521",
+      "properties": {
+        "number": "H.R. 4521",
+        "canonical_id": "d82e53fa-97f9-5e1e-8a01-07f7c2e7b756",
+        "canonical_key": "Bill:number=h.r. 4521"
+      }
+    },
+    {
+      "id": "06cd5d49-bd7e-53df-9dde-995b2f2456a5",
+      "type": "Legislator",
+      "label": "Rep. Adam Walsh",
+      "properties": {
+        "name": "Rep. Adam Walsh",
+        "canonical_id": "06cd5d49-bd7e-53df-9dde-995b2f2456a5",
+        "canonical_key": "Legislator:name=rep. adam walsh"
+      }
+    },
+    {
+      "id": "cda09952-9bea-50fe-9c57-25da619de4c7",
+      "type": "Committee",
+      "label": "House Energy and Commerce Committee",
+      "properties": {
+        "name": "House Energy and Commerce Committee",
+        "canonical_id": "cda09952-9bea-50fe-9c57-25da619de4c7",
+        "canonical_key": "Committee:name=house energy and commerce committee"
+      }
+    },
+    {
+      "id": "7b364601-db79-5bbd-a54b-dbb1a7f6f5a2",
+      "type": "Committee",
+      "label": "House Ways and Means Committee",
+      "properties": {
+        "name": "House Ways and Means Committee",
+        "canonical_id": "7b364601-db79-5bbd-a54b-dbb1a7f6f5a2",
+        "canonical_key": "Committee:name=house ways and means committee"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "hr-by-walsh",
+      "type": "SPONSORED_BY",
+      "source": "d82e53fa-97f9-5e1e-8a01-07f7c2e7b756",
+      "target": "06cd5d49-bd7e-53df-9dde-995b2f2456a5",
+      "properties": {}
+    },
+    {
+      "id": "hr-to-energy",
+      "type": "REFERRED_TO",
+      "source": "d82e53fa-97f9-5e1e-8a01-07f7c2e7b756",
+      "target": "cda09952-9bea-50fe-9c57-25da619de4c7",
+      "properties": {}
+    },
+    {
+      "id": "hr-to-ways",
+      "type": "REFERRED_TO",
+      "source": "d82e53fa-97f9-5e1e-8a01-07f7c2e7b756",
+      "target": "7b364601-db79-5bbd-a54b-dbb1a7f6f5a2",
+      "properties": {}
+    }
+  ]
+}

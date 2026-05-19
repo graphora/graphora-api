@@ -1,0 +1,85 @@
+{
+  "nodes": [
+    {
+      "id": "6f282888-40d4-51e5-b20d-3e7db6bc5c54",
+      "type": "Incident",
+      "label": "INC-2026-0511-001",
+      "properties": {
+        "identifier": "INC-2026-0511-001",
+        "severity": "SEV-2",
+        "canonical_id": "6f282888-40d4-51e5-b20d-3e7db6bc5c54",
+        "canonical_key": "Incident:identifier=inc-2026-0511-001"
+      }
+    },
+    {
+      "id": "fcf428f0-810c-588f-aa05-7bc3994802d4",
+      "type": "System",
+      "label": "payments-api",
+      "properties": {
+        "name": "payments-api",
+        "canonical_id": "fcf428f0-810c-588f-aa05-7bc3994802d4",
+        "canonical_key": "System:name=payments-api"
+      }
+    },
+    {
+      "id": "73611b78-1f71-5223-abd8-c7431b080a46",
+      "type": "System",
+      "label": "ledger-db",
+      "properties": {
+        "name": "ledger-db",
+        "canonical_id": "73611b78-1f71-5223-abd8-c7431b080a46",
+        "canonical_key": "System:name=ledger-db"
+      }
+    },
+    {
+      "id": "14dcbaf5-2b8e-5c5c-90db-8759eaddba1c",
+      "type": "Engineer",
+      "label": "Priya Ramanathan",
+      "properties": {
+        "name": "Priya Ramanathan",
+        "canonical_id": "14dcbaf5-2b8e-5c5c-90db-8759eaddba1c",
+        "canonical_key": "Engineer:name=priya ramanathan"
+      }
+    },
+    {
+      "id": "2ee24ee2-dd8a-5be0-bb12-1349624280a6",
+      "type": "Engineer",
+      "label": "Daniel Schmidt",
+      "properties": {
+        "name": "Daniel Schmidt",
+        "canonical_id": "2ee24ee2-dd8a-5be0-bb12-1349624280a6",
+        "canonical_key": "Engineer:name=daniel schmidt"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "inc-impacts-payments",
+      "type": "IMPACTS",
+      "source": "6f282888-40d4-51e5-b20d-3e7db6bc5c54",
+      "target": "fcf428f0-810c-588f-aa05-7bc3994802d4",
+      "properties": {}
+    },
+    {
+      "id": "inc-impacts-ledger",
+      "type": "IMPACTS",
+      "source": "6f282888-40d4-51e5-b20d-3e7db6bc5c54",
+      "target": "73611b78-1f71-5223-abd8-c7431b080a46",
+      "properties": {}
+    },
+    {
+      "id": "inc-by-priya",
+      "type": "RESPONDED_BY",
+      "source": "6f282888-40d4-51e5-b20d-3e7db6bc5c54",
+      "target": "14dcbaf5-2b8e-5c5c-90db-8759eaddba1c",
+      "properties": {}
+    },
+    {
+      "id": "inc-by-daniel",
+      "type": "RESPONDED_BY",
+      "source": "6f282888-40d4-51e5-b20d-3e7db6bc5c54",
+      "target": "2ee24ee2-dd8a-5be0-bb12-1349624280a6",
+      "properties": {}
+    }
+  ]
+}

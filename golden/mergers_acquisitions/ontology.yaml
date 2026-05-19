@@ -1,0 +1,53 @@
+version: "0.1.0"
+entities:
+  Company:
+    description: A company.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          Pinned ``unique: true`` so multi-paragraph references
+          to the same company collapse to one node. Both
+          companies in this corpus are referenced three times
+          each.
+  Acquisition:
+    description: A corporate acquisition transaction.
+    properties:
+      reference:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The deal's internal reference id. Used as the stable
+          identity for cross-paragraph dedup of the
+          transaction itself — three paragraphs cite the same
+          ``HEX-OCT-2026-03`` and all must collapse.
+      closing_date:
+        type: str
+        required: false
+        description: |
+          Date string as it appears in the source. Not part of
+          the canonical_key — identity is the reference id.
+relationships:
+  ACQUIRED:
+    source: Company
+    target: Company
+    description: |
+      The source Company acquired the target Company.
+      Same-type self-referential edge (Company → Company).
+    properties: {}
+  ACQUISITION_OF:
+    source: Acquisition
+    target: Company
+    description: |
+      The Acquisition transaction targeted this Company (the
+      acquired party). Pinned so the deal record points at the
+      acquired Company directly, not via the acquirer.
+    properties: {}
+  ACQUISITION_BY:
+    source: Acquisition
+    target: Company
+    description: The Acquisition transaction was made by this Company.
+    properties: {}

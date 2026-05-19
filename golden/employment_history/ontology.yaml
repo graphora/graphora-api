@@ -1,0 +1,28 @@
+version: "0.1.0"
+entities:
+  Person:
+    description: A person.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Organization:
+    description: An employer organization.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  WORKED_AT:
+    source: Person
+    target: Organization
+    description: |
+      The Person worked at this Organization. The ontology
+      makes no claim about temporal sequencing — the edge
+      itself doesn't carry start/end dates. Downstream
+      analysis can derive sequence from edge properties on
+      future slices; for now the test signal is that all
+      three employments surface as distinct edges.
+    properties: {}

@@ -1,0 +1,9 @@
+Patient MRN-88241 was admitted to Riverside General Hospital
+on May 3, 2026 for a planned laparoscopic cholecystectomy.
+
+The laparoscopic cholecystectomy was performed without
+complications. MRN-88241 was discharged from Riverside General
+Hospital on May 5, 2026.
+
+Follow-up for MRN-88241 is scheduled at Riverside General
+Hospital's surgery clinic two weeks post-discharge.

@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "da9920c7-ae95-5ae9-82b9-131fafc9cf6d",
+      "type": "Candidate",
+      "label": "Senator Rebecca Cho",
+      "properties": {
+        "name": "Senator Rebecca Cho",
+        "canonical_id": "da9920c7-ae95-5ae9-82b9-131fafc9cf6d",
+        "canonical_key": "Candidate:name=senator rebecca cho"
+      }
+    },
+    {
+      "id": "0c4e8cd2-a47e-5bf0-b3dd-fbe96075dd2c",
+      "type": "Office",
+      "label": "Governor",
+      "properties": {
+        "name": "Governor",
+        "canonical_id": "0c4e8cd2-a47e-5bf0-b3dd-fbe96075dd2c",
+        "canonical_key": "Office:name=governor"
+      }
+    },
+    {
+      "id": "5140229c-d7f4-5e5a-9436-4320233ba24d",
+      "type": "District",
+      "label": "Oregon",
+      "properties": {
+        "identifier": "Oregon",
+        "canonical_id": "5140229c-d7f4-5e5a-9436-4320233ba24d",
+        "canonical_key": "District:identifier=oregon"
+      }
+    },
+    {
+      "id": "65216da5-0487-58a4-a704-bf8ecf319312",
+      "type": "Endorser",
+      "label": "Oregon Teachers Federation",
+      "properties": {
+        "name": "Oregon Teachers Federation",
+        "canonical_id": "65216da5-0487-58a4-a704-bf8ecf319312",
+        "canonical_key": "Endorser:name=oregon teachers federation"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "rebecca-for-gov",
+      "type": "RUNNING_FOR",
+      "source": "da9920c7-ae95-5ae9-82b9-131fafc9cf6d",
+      "target": "0c4e8cd2-a47e-5bf0-b3dd-fbe96075dd2c",
+      "properties": {}
+    },
+    {
+      "id": "rebecca-in-oregon",
+      "type": "IN_DISTRICT",
+      "source": "da9920c7-ae95-5ae9-82b9-131fafc9cf6d",
+      "target": "5140229c-d7f4-5e5a-9436-4320233ba24d",
+      "properties": {}
+    },
+    {
+      "id": "rebecca-by-otf",
+      "type": "ENDORSED_BY",
+      "source": "da9920c7-ae95-5ae9-82b9-131fafc9cf6d",
+      "target": "65216da5-0487-58a4-a704-bf8ecf319312",
+      "properties": {}
+    }
+  ]
+}

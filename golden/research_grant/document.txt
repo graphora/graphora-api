@@ -1,0 +1,12 @@
+The National Science Foundation awarded grant NSF-2401234 to
+Dr. Rohan Mehta. NSF-2401234 supports the project "Foundations
+of Verifiable Neural Networks" with $1.2M over three years.
+
+Dr. Rohan Mehta serves as Principal Investigator on
+NSF-2401234. The project "Foundations of Verifiable Neural
+Networks" will produce two cohorts of graduate students over
+the grant's term.
+
+The National Science Foundation's funding of NSF-2401234
+reflects continued interest in formal methods applied to
+machine learning.

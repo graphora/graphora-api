@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "785858fa-c2b0-5679-879b-d86b91aa0f8c",
+      "type": "Person",
+      "label": "Maria Lopez",
+      "properties": {
+        "name": "Maria Lopez",
+        "canonical_id": "785858fa-c2b0-5679-879b-d86b91aa0f8c",
+        "canonical_key": "Person:name=maria lopez"
+      }
+    },
+    {
+      "id": "95afb76e-d994-5ace-b604-8f8e16798be6",
+      "type": "Organization",
+      "label": "StartupCo",
+      "properties": {
+        "name": "StartupCo",
+        "canonical_id": "95afb76e-d994-5ace-b604-8f8e16798be6",
+        "canonical_key": "Organization:name=startupco"
+      }
+    },
+    {
+      "id": "5bccd6aa-c985-5f9b-82d7-9606b56cf2c5",
+      "type": "Organization",
+      "label": "BigCorp",
+      "properties": {
+        "name": "BigCorp",
+        "canonical_id": "5bccd6aa-c985-5f9b-82d7-9606b56cf2c5",
+        "canonical_key": "Organization:name=bigcorp"
+      }
+    },
+    {
+      "id": "774221ea-c502-5f0a-9a86-5a99d3c98428",
+      "type": "Organization",
+      "label": "NewVenture",
+      "properties": {
+        "name": "NewVenture",
+        "canonical_id": "774221ea-c502-5f0a-9a86-5a99d3c98428",
+        "canonical_key": "Organization:name=newventure"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "maria-worked-startup",
+      "type": "WORKED_AT",
+      "source": "785858fa-c2b0-5679-879b-d86b91aa0f8c",
+      "target": "95afb76e-d994-5ace-b604-8f8e16798be6",
+      "properties": {}
+    },
+    {
+      "id": "maria-worked-bigcorp",
+      "type": "WORKED_AT",
+      "source": "785858fa-c2b0-5679-879b-d86b91aa0f8c",
+      "target": "5bccd6aa-c985-5f9b-82d7-9606b56cf2c5",
+      "properties": {}
+    },
+    {
+      "id": "maria-worked-newvent",
+      "type": "WORKED_AT",
+      "source": "785858fa-c2b0-5679-879b-d86b91aa0f8c",
+      "target": "774221ea-c502-5f0a-9a86-5a99d3c98428",
+      "properties": {}
+    }
+  ]
+}

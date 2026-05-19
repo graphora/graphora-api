@@ -1,0 +1,37 @@
+version: "0.1.0"
+entities:
+  Incident:
+    description: A production incident.
+    properties:
+      identifier:
+        type: str
+        required: true
+        unique: true
+      severity:
+        type: str
+        required: false
+  System:
+    description: A production system.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Engineer:
+    description: An engineer participating in the response.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  IMPACTS:
+    source: Incident
+    target: System
+    description: The Incident impacts this System.
+    properties: {}
+  RESPONDED_BY:
+    source: Incident
+    target: Engineer
+    description: The Engineer responded to this Incident.
+    properties: {}

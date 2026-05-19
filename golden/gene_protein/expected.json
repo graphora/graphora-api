@@ -1,0 +1,50 @@
+{
+  "nodes": [
+    {
+      "id": "02820ffb-8bf1-5b29-8a4e-57b028316978",
+      "type": "Gene",
+      "label": "BRCA1",
+      "properties": {
+        "symbol": "BRCA1",
+        "canonical_id": "02820ffb-8bf1-5b29-8a4e-57b028316978",
+        "canonical_key": "Gene:symbol=brca1"
+      }
+    },
+    {
+      "id": "5458a0d4-44d4-51ff-8dcd-f7055203ee60",
+      "type": "Protein",
+      "label": "breast cancer type 1 susceptibility protein",
+      "properties": {
+        "name": "breast cancer type 1 susceptibility protein",
+        "canonical_id": "5458a0d4-44d4-51ff-8dcd-f7055203ee60",
+        "canonical_key": "Protein:name=breast cancer type 1 susceptibility protein"
+      }
+    },
+    {
+      "id": "d0d681bf-bf1d-54a0-8b3b-b756713a2b91",
+      "type": "Function",
+      "label": "DNA double-strand break repair",
+      "properties": {
+        "name": "DNA double-strand break repair",
+        "canonical_id": "d0d681bf-bf1d-54a0-8b3b-b756713a2b91",
+        "canonical_key": "Function:name=dna double-strand break repair"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "brca1-encodes",
+      "type": "ENCODES",
+      "source": "02820ffb-8bf1-5b29-8a4e-57b028316978",
+      "target": "5458a0d4-44d4-51ff-8dcd-f7055203ee60",
+      "properties": {}
+    },
+    {
+      "id": "brca1-protein-participates",
+      "type": "PARTICIPATES_IN",
+      "source": "5458a0d4-44d4-51ff-8dcd-f7055203ee60",
+      "target": "d0d681bf-bf1d-54a0-8b3b-b756713a2b91",
+      "properties": {}
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+version: "0.1.0"
+entities:
+  Person:
+    description: A person serving as a director.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+  Company:
+    description: A public company.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+relationships:
+  DIRECTOR_OF:
+    source: Person
+    target: Company
+    description: The Person is a director of this Company.
+    properties: {}

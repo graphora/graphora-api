@@ -1,0 +1,67 @@
+{
+  "nodes": [
+    {
+      "id": "86807f78-6bb6-5af8-8cd6-689b451a2121",
+      "type": "Article",
+      "label": "Emerald deal coverage",
+      "properties": {
+        "identifier": "story-2026-05-12-emerald",
+        "canonical_id": "86807f78-6bb6-5af8-8cd6-689b451a2121",
+        "canonical_key": "Article:identifier=story-2026-05-12-emerald"
+      }
+    },
+    {
+      "id": "4fe2450b-50fc-5104-81ff-3dcb356ff8b6",
+      "type": "Reporter",
+      "label": "Maya Singh",
+      "properties": {
+        "name": "Maya Singh",
+        "canonical_id": "4fe2450b-50fc-5104-81ff-3dcb356ff8b6",
+        "canonical_key": "Reporter:name=maya singh"
+      }
+    },
+    {
+      "id": "5406be64-2426-5a1a-91e6-3a4e5df51a77",
+      "type": "Source",
+      "label": "Emerald spokesperson",
+      "properties": {
+        "name": "Emerald spokesperson",
+        "canonical_id": "5406be64-2426-5a1a-91e6-3a4e5df51a77",
+        "canonical_key": "Source:name=emerald spokesperson"
+      }
+    },
+    {
+      "id": "2323c74b-28e9-5022-8f84-4e2d2c9c5d6a",
+      "type": "Source",
+      "label": "industry analyst Yuri Lev",
+      "properties": {
+        "name": "industry analyst Yuri Lev",
+        "canonical_id": "2323c74b-28e9-5022-8f84-4e2d2c9c5d6a",
+        "canonical_key": "Source:name=industry analyst yuri lev"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "art-by-maya",
+      "type": "REPORTED_BY",
+      "source": "86807f78-6bb6-5af8-8cd6-689b451a2121",
+      "target": "4fe2450b-50fc-5104-81ff-3dcb356ff8b6",
+      "properties": {}
+    },
+    {
+      "id": "art-cites-spox",
+      "type": "CITES_SOURCE",
+      "source": "86807f78-6bb6-5af8-8cd6-689b451a2121",
+      "target": "5406be64-2426-5a1a-91e6-3a4e5df51a77",
+      "properties": {}
+    },
+    {
+      "id": "art-cites-yuri",
+      "type": "CITES_SOURCE",
+      "source": "86807f78-6bb6-5af8-8cd6-689b451a2121",
+      "target": "2323c74b-28e9-5022-8f84-4e2d2c9c5d6a",
+      "properties": {}
+    }
+  ]
+}
