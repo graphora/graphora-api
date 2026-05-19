@@ -257,9 +257,17 @@ graphora-mcp
 
 The server speaks MCP over stdio — agent clients launch it on demand.
 
-### Claude Desktop config
+### Client configuration
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+The MCP server speaks the standard transport every agent client uses — `command` + `env` + stdio — so the snippet shape is identical across clients. The only difference is **which file you drop it in**.
+
+| Client | Config file | Notes |
+|--------|-------------|-------|
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) · `%APPDATA%\Claude\claude_desktop_config.json` (Windows) | Restart Claude Desktop after editing. |
+| Cursor | `.cursor/mcp.json` in the workspace, or `~/.cursor/mcp.json` for the user-global config | The workspace config wins when both exist. |
+| Cline (VS Code) | Cline → MCP Servers panel → "Edit MCP Settings" (writes the same JSON shape into the extension's storage) | The Cline UI ships its own editor; the underlying file format is the same as Claude Desktop's. |
+
+Drop this JSON in the file:
 
 ```json
 {
@@ -274,6 +282,23 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   }
 }
 ```
+
+If `graphora-mcp` isn't on the agent client's `PATH` (common when the client launches from a different shell environment than your terminal), point at the absolute path instead — e.g., `"command": "/Users/you/.local/bin/graphora-mcp"` or your venv's `.venv/bin/graphora-mcp`.
+
+### Verify the stdio handshake
+
+To confirm the local install talks MCP over stdio before plugging it into an agent client:
+
+```bash
+# Send an MCP `initialize` request and check the server echoes
+# a `protocolVersion` field back. A successful response means the
+# entry point + transport are wired correctly.
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+  | GRAPHORA_AUTH_TOKEN=noauth graphora-mcp 2>/dev/null \
+  | head -1
+```
+
+A reply line containing `"protocolVersion":"2024-11-05"` confirms the stdio path works end-to-end.
 
 ### Tools exposed
 
