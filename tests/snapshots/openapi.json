@@ -5989,6 +5989,30 @@
         ]
       }
     },
+    "/api/v1/bench/run": {
+      "get": {
+        "description": "B4-bench public benchmark report. Returns per-extractor aggregate scores plus per-corpus-entry breakdowns. The scores are computed from extractor outputs committed under ``bench/results/`` against the golden corpus ground truth \u2014 anyone with a checkout can re-run the same computation locally and get matching numbers. The response is unauthenticated because the data is by definition public.",
+        "operationId": "run_bench_api_v1_bench_run_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Bench Api V1 Bench Run Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Run Bench",
+        "tags": [
+          "Bench"
+        ]
+      }
+    },
     "/api/v1/budgets/me": {
       "delete": {
         "description": "Remove the authenticated user's monthly budget cap.",
