@@ -171,3 +171,53 @@ def test_run_endpoint_empty_bench_returns_zero_extractors(test_client, tmp_path)
     assert body["corpus_size"] == 1
     assert body["extractor_count"] == 0
     assert body["extractors"] == []
+
+
+def test_run_endpoint_response_validates_against_pydantic_schema(test_client, tmp_path):
+    """Reviewer-flagged Medium on commit 06fc210: pre-fix the
+    route returned ``Dict[str, Any]`` with no ``response_model``,
+    so OpenAPI consumers saw a permissive
+    ``{"additionalProperties": true, "type": "object"}`` shape
+    that couldn't catch wire-shape regressions.
+
+    Post-fix: the route declares ``response_model=BenchRunReport``,
+    so FastAPI runs the response through Pydantic on the way out.
+    A response with a renamed/missing field — say if a future
+    refactor drops ``micro_node_f1`` from BenchExtractorReport —
+    would 500 at the framework boundary rather than ship a
+    silently-broken contract. This test pins that the response
+    structure matches the BenchRunReport Pydantic schema.
+
+    Asserting through ``model_validate`` exercises the same
+    validation FastAPI uses internally; a regression in the
+    dataclass→Pydantic projection in ``api/bench.py`` would fail
+    here with a clear ``ValidationError`` rather than as an
+    opaque 500."""
+    from graphora_server.schemas.bench import BenchRunReport
+
+    payload = _seed_corpus(tmp_path)
+    _seed_extractor_output(tmp_path, "smoke", "alpha", payload)
+    _seed_corpus(tmp_path, slug="beta")
+    # beta is errored — no output committed.
+
+    with patch(
+        "graphora_server.api.bench.BenchRunner",
+        side_effect=_fake_runner_factory(tmp_path),
+    ):
+        resp = test_client.get("/api/v1/bench/run")
+    assert resp.status_code == 200
+
+    # Round-trip through the Pydantic schema. Raises
+    # ValidationError on any missing/wrong-typed field.
+    validated = BenchRunReport.model_validate(resp.json())
+    assert validated.corpus_size == 2
+    assert validated.extractor_count == 1
+    assert validated.extractors[0].extractor_name == "smoke"
+    assert validated.extractors[0].scored_count == 1
+    assert validated.extractors[0].errored_count == 1
+    # Entries carry the per-slug rows.
+    assert len(validated.extractors[0].entries) == 2
+    alpha = next(e for e in validated.extractors[0].entries if e.corpus_slug == "alpha")
+    beta = next(e for e in validated.extractors[0].entries if e.corpus_slug == "beta")
+    assert alpha.error is None
+    assert beta.error is not None

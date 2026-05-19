@@ -112,6 +112,236 @@
         "title": "ApprovalRequest",
         "type": "object"
       },
+      "BenchEntryScore": {
+        "description": "One extractor's score on one corpus entry.\n\nMatches ``services.bench.models.BenchEntryScore`` field-for-\nfield. ``error`` is set when the runner couldn't score this\nentry (missing actual.json, malformed shape, etc.); when\nnon-None the numeric fields are zeroed and the entry is\nexcluded from the extractor's aggregate. The frontend\ndistinguishes \"extractor failed on this doc\" from \"extractor\nscored 0 on this doc\" via this field \u2014 both look like zero\nF1 otherwise.",
+        "properties": {
+          "corpus_slug": {
+            "title": "Corpus Slug",
+            "type": "string"
+          },
+          "edge_f1": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Edge F1",
+            "type": "number"
+          },
+          "edge_false_negatives": {
+            "minimum": 0.0,
+            "title": "Edge False Negatives",
+            "type": "integer"
+          },
+          "edge_false_positives": {
+            "minimum": 0.0,
+            "title": "Edge False Positives",
+            "type": "integer"
+          },
+          "edge_precision": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Edge Precision",
+            "type": "number"
+          },
+          "edge_recall": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Edge Recall",
+            "type": "number"
+          },
+          "edge_true_positives": {
+            "minimum": 0.0,
+            "title": "Edge True Positives",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Failure reason when this (extractor, slug) pair couldn't be scored. ``None`` means scoring succeeded. Coverage gaps (missing extractor output for a corpus entry) surface here rather than as silent zero-F1 rows so the denominator stays honest.",
+            "title": "Error"
+          },
+          "node_f1": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Node F1",
+            "type": "number"
+          },
+          "node_false_negatives": {
+            "minimum": 0.0,
+            "title": "Node False Negatives",
+            "type": "integer"
+          },
+          "node_false_positives": {
+            "minimum": 0.0,
+            "title": "Node False Positives",
+            "type": "integer"
+          },
+          "node_precision": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Node Precision",
+            "type": "number"
+          },
+          "node_recall": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Node Recall",
+            "type": "number"
+          },
+          "node_true_positives": {
+            "minimum": 0.0,
+            "title": "Node True Positives",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "corpus_slug",
+          "node_precision",
+          "node_recall",
+          "node_f1",
+          "edge_precision",
+          "edge_recall",
+          "edge_f1",
+          "node_true_positives",
+          "node_false_positives",
+          "node_false_negatives",
+          "edge_true_positives",
+          "edge_false_positives",
+          "edge_false_negatives"
+        ],
+        "title": "BenchEntryScore",
+        "type": "object"
+      },
+      "BenchExtractorReport": {
+        "description": "Aggregated scores for one extractor across the full corpus.\n\nBoth micro (entity-count weighted) and macro (per-doc mean)\nF1 surface so consumers can pick the right headline. Micro\nanswers \"across all the entities, what fraction did the\nextractor get right?\" \u2014 a 50-node doc dominates a 3-node\ndoc. Macro asks \"across all the docs, what's the average per-\ndoc F1?\" \u2014 every doc gets equal weight. An extractor that\nwins on micro but loses on macro is strong on dense docs and\nweak on sparse ones; the headline F1 alone would hide that.\n\n``errored_count`` is required (not optional with a default)\nso OpenAPI consumers can't treat it as ignorable. It's the\nload-bearing signal for distinguishing \"writer healthy\" from\n\"writer missing data for some entries\" \u2014 the same posture as\n``total_claims_scanned`` on the contradictions surface\n(reviewer-flagged Medium on commit 86c1dbd / 66987b2).",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/BenchEntryScore"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "errored_count": {
+            "description": "Number of corpus entries the extractor failed to score (missing output, malformed JSON, etc.). Required field \u2014 callers must NOT treat it as optional, since collapsing errored + scored into one bucket hides coverage gaps.",
+            "minimum": 0.0,
+            "title": "Errored Count",
+            "type": "integer"
+          },
+          "extractor_name": {
+            "title": "Extractor Name",
+            "type": "string"
+          },
+          "macro_edge_f1": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Macro Edge F1",
+            "type": "number"
+          },
+          "macro_node_f1": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Macro Node F1",
+            "type": "number"
+          },
+          "micro_edge_f1": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Micro Edge F1",
+            "type": "number"
+          },
+          "micro_edge_precision": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Micro Edge Precision",
+            "type": "number"
+          },
+          "micro_edge_recall": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Micro Edge Recall",
+            "type": "number"
+          },
+          "micro_node_f1": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Micro Node F1",
+            "type": "number"
+          },
+          "micro_node_precision": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Micro Node Precision",
+            "type": "number"
+          },
+          "micro_node_recall": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Micro Node Recall",
+            "type": "number"
+          },
+          "scored_count": {
+            "minimum": 0.0,
+            "title": "Scored Count",
+            "type": "integer"
+          },
+          "total_entries": {
+            "minimum": 0.0,
+            "title": "Total Entries",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "extractor_name",
+          "total_entries",
+          "scored_count",
+          "errored_count",
+          "micro_node_precision",
+          "micro_node_recall",
+          "micro_node_f1",
+          "micro_edge_precision",
+          "micro_edge_recall",
+          "micro_edge_f1",
+          "macro_node_f1",
+          "macro_edge_f1",
+          "entries"
+        ],
+        "title": "BenchExtractorReport",
+        "type": "object"
+      },
+      "BenchRunReport": {
+        "description": "Top-level public benchmark report. One ``extractors`` row\nper ``bench/results/<extractor>/`` directory.\n\n``corpus_size`` is the discovered count of ``golden/<slug>/``\nentries \u2014 exposed so frontend consumers can render \"N of M\nentries scored\" without computing it from ``entries``.",
+        "properties": {
+          "corpus_size": {
+            "minimum": 0.0,
+            "title": "Corpus Size",
+            "type": "integer"
+          },
+          "extractor_count": {
+            "minimum": 0.0,
+            "title": "Extractor Count",
+            "type": "integer"
+          },
+          "extractors": {
+            "items": {
+              "$ref": "#/components/schemas/BenchExtractorReport"
+            },
+            "title": "Extractors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "corpus_size",
+          "extractor_count",
+          "extractors"
+        ],
+        "title": "BenchRunReport",
+        "type": "object"
+      },
       "Body_upload_documents_api_v1_transform__ontology_id__upload_post": {
         "properties": {
           "chunking_config": {
@@ -5998,9 +6228,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Run Bench Api V1 Bench Run Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/BenchRunReport"
                 }
               }
             },
