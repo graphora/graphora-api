@@ -16,6 +16,7 @@ from graphora_server.api.ai_config import router as ai_config_router
 from graphora_server.api.audit import router as audit_router
 from graphora_server.api.bench import router as bench_router
 from graphora_server.api.budgets import router as budgets_router
+from graphora_server.api.capabilities import router as capabilities_router
 from graphora_server.api.chat import router as chat_router
 from graphora_server.api.disputed_pairs import router as disputed_pairs_router
 from graphora_server.api.chunking import router as chunking_router
@@ -148,6 +149,7 @@ app.include_router(budgets_router)
 app.include_router(disputed_pairs_router)
 app.include_router(golden_router)
 app.include_router(bench_router)
+app.include_router(capabilities_router)
 app.include_router(scenarios_router)
 
 

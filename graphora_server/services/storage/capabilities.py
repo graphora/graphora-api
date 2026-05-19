@@ -28,7 +28,8 @@ the human-readable view; this file is the runtime mirror.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Tuple
 
 
 @dataclass(frozen=True)
@@ -123,3 +124,121 @@ MEMORY_CAPABILITIES = BackendCapabilities(
     embedding_similarity=False,
     per_user_routing=False,
 )
+
+
+# ============================================================
+# M-matrix — static aggregate view over the per-backend caps.
+# ============================================================
+#
+# The runtime ``capabilities`` property on each adapter answers
+# "what does THIS instance support?" (with AGE's pg_trgm-derived
+# full_text_indexes flag flipping based on the live Postgres
+# state). The matrix below answers the prior question: "what do
+# I get if I pick this backend type?" — the operator-facing view
+# before any instance exists.
+#
+# Conservative defaults for dynamic flags. The ``dynamic_flags``
+# list tells consumers (frontend matrix page, docs renderer)
+# which capability values are NOT guaranteed at runtime; they're
+# the safe-floor value, and the actual instance may report
+# higher capability after bootstrap. Without this annotation,
+# the matrix would either lie (claim AGE supports FT indexes
+# unconditionally — wrong when pg_trgm isn't installed) or be
+# uselessly pessimistic (claim it never does).
+#
+# Per-backend ``notes`` carry the human-readable caveats that
+# can't be encoded in flags — "dev/demo only", "requires extra
+# X", etc. The docs page renders them as footnotes on the
+# matrix cells.
+
+
+@dataclass(frozen=True)
+class BackendMatrixEntry:
+    """One row in the public capability matrix.
+
+    ``name`` is the ``STORAGE_TYPE`` value that selects the
+    backend in ``settings``. ``display_name`` is the
+    operator-facing label. ``default_capabilities`` is the
+    conservative/static capability set — the safe floor.
+    ``dynamic_flags`` lists capability names whose runtime value
+    depends on instance detection (currently only AGE's
+    ``full_text_indexes``). ``extras`` is the pip extra to
+    install, useful for ``pip install 'graphora-server[<extra>]'``
+    install hints.
+    """
+
+    name: str
+    display_name: str
+    default_capabilities: BackendCapabilities
+    dynamic_flags: Tuple[str, ...] = field(default_factory=tuple)
+    notes: Tuple[str, ...] = field(default_factory=tuple)
+    extras: Tuple[str, ...] = field(default_factory=tuple)
+
+
+# AGE's static (conservative) capability snapshot. Mirrors
+# AGE_STATIC_CAPABILITIES above but typed as a full
+# BackendCapabilities for the matrix view. ``full_text_indexes``
+# defaults False (pre-bootstrap or pg_trgm-not-installed); the
+# runtime PostgresAGEStorage.capabilities property may flip it
+# True. The ``dynamic_flags`` annotation surfaces that to
+# matrix consumers.
+_AGE_DEFAULT_CAPABILITIES = BackendCapabilities(
+    persistent=AGE_STATIC_CAPABILITIES["persistent"],
+    full_text_indexes=False,
+    similarity_search=AGE_STATIC_CAPABILITIES["similarity_search"],
+    embedding_similarity=AGE_STATIC_CAPABILITIES["embedding_similarity"],
+    per_user_routing=AGE_STATIC_CAPABILITIES["per_user_routing"],
+)
+
+
+BACKEND_MATRIX: Tuple[BackendMatrixEntry, ...] = (
+    BackendMatrixEntry(
+        name="neo4j",
+        display_name="Neo4j",
+        default_capabilities=NEO4J_CAPABILITIES,
+        extras=("neo4j",),
+        notes=(
+            "Reference backend. Full feature support; "
+            "per-user staging/prod routing via Neo4jStorage's "
+            "stagingDb/prodDb configuration.",
+        ),
+    ),
+    BackendMatrixEntry(
+        name="postgres",
+        display_name="Postgres + Apache AGE",
+        default_capabilities=_AGE_DEFAULT_CAPABILITIES,
+        dynamic_flags=("full_text_indexes",),
+        extras=("postgres",),
+        notes=(
+            "full_text_indexes depends on pg_trgm being installed "
+            "in the target Postgres instance — the matrix reports "
+            "the conservative (False) default; PostgresAGEStorage's "
+            "runtime capabilities property reports the live state.",
+            "Per-user staging/prod routing isn't wired yet — all "
+            "users share POSTGRES_AGE_DSN.",
+        ),
+    ),
+    BackendMatrixEntry(
+        name="memory",
+        display_name="In-memory (dev/demo)",
+        default_capabilities=MEMORY_CAPABILITIES,
+        extras=(),
+        notes=(
+            "Dev/demo path only — process-local store, lost on "
+            "restart. Use for quickstart and integration tests; "
+            "STORAGE_TYPE=neo4j or =postgres for production.",
+        ),
+    ),
+)
+
+
+def matrix_entry_by_name(name: str) -> BackendMatrixEntry:
+    """Lookup helper used by the API + tests. Raises ValueError on
+    unknown names so a typo surfaces rather than returning a
+    fallback row that would silently lie about capabilities.
+    """
+    for entry in BACKEND_MATRIX:
+        if entry.name == name:
+            return entry
+    known = ", ".join(repr(e.name) for e in BACKEND_MATRIX)
+    raise ValueError(f"Unknown backend name {name!r}. Known: {known}")

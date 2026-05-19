@@ -112,6 +112,95 @@
         "title": "ApprovalRequest",
         "type": "object"
       },
+      "BackendCapabilities": {
+        "description": "Runtime-or-static feature flags for a graph storage backend.\n\nBoolean flags only \u2014 each one answers \"would calling this\ncapability today succeed?\" with True/False. The matrix view\nreports the static default; live instances may diverge for\nflags listed in the parent ``BackendMatrixEntry.dynamic_flags``.",
+        "properties": {
+          "embedding_similarity": {
+            "description": "True if vector-distance similarity is wired (not just property-string fuzzy match). False on every backend today; flips True per-backend as embedding wiring lands upstream.",
+            "title": "Embedding Similarity",
+            "type": "boolean"
+          },
+          "full_text_indexes": {
+            "description": "True if create_or_replace_ft_index_* creates a real index. False means the methods are no-op or unavailable; CONTAINS-style query correctness is preserved (scan fallback), only performance differs.",
+            "title": "Full Text Indexes",
+            "type": "boolean"
+          },
+          "per_user_routing": {
+            "description": "True if UserDatabaseService carries per-user staging/prod connection details for this backend. False on single-tenant Postgres and in-memory.",
+            "title": "Per User Routing",
+            "type": "boolean"
+          },
+          "persistent": {
+            "description": "True if the backend survives process restart. False for in-memory; True for any backend that writes to disk or a remote database.",
+            "title": "Persistent",
+            "type": "boolean"
+          },
+          "similarity_search": {
+            "description": "True if find_similar_nodes returns real candidate matches. False means it returns an empty list \u2014 callers should treat as 'no fuzzy fallback'.",
+            "title": "Similarity Search",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "persistent",
+          "full_text_indexes",
+          "similarity_search",
+          "embedding_similarity",
+          "per_user_routing"
+        ],
+        "title": "BackendCapabilities",
+        "type": "object"
+      },
+      "BackendMatrixEntry": {
+        "description": "One row in the M-matrix.\n\n``name`` matches the ``STORAGE_TYPE`` setting that selects the\nbackend. ``dynamic_flags`` lists which capability fields are\nNOT guaranteed by the static default \u2014 the runtime adapter\ninstance's ``capabilities`` property may report higher than\nthe matrix-reported default. ``extras`` is the pip extra to\ninstall (empty tuple = no extra needed).",
+        "properties": {
+          "default_capabilities": {
+            "$ref": "#/components/schemas/BackendCapabilities",
+            "description": "Conservative/static capability set \u2014 the safe floor. Live instances may report higher values for fields listed in ``dynamic_flags``."
+          },
+          "display_name": {
+            "description": "Operator-facing label for the backend.",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "dynamic_flags": {
+            "description": "Capability field names whose runtime value depends on instance detection (e.g., AGE's ``full_text_indexes`` depends on pg_trgm install). Frontend matrix renderers should annotate these cells as 'depends on runtime detection'.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Dynamic Flags",
+            "type": "array"
+          },
+          "extras": {
+            "description": "Pip extras required to install this backend. Compose into ``pip install 'graphora-server[X]'`` for the install hint. Empty list = no extra needed.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Extras",
+            "type": "array"
+          },
+          "name": {
+            "description": "STORAGE_TYPE value that selects this backend (e.g., 'neo4j', 'postgres', 'memory').",
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "description": "Human-readable caveats that don't fit in boolean flags (deployment requirements, multi-tenant gaps, etc.). Rendered as footnotes on the matrix page.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "display_name",
+          "default_capabilities"
+        ],
+        "title": "BackendMatrixEntry",
+        "type": "object"
+      },
       "BenchEntryScore": {
         "description": "One extractor's score on one corpus entry.\n\nMatches ``services.bench.models.BenchEntryScore`` field-for-\nfield. ``error`` is set when the runner couldn't score this\nentry (missing actual.json, malformed shape, etc.); when\nnon-None the numeric fields are zeroed and the entry is\nexcluded from the extractor's aggregate. The frontend\ndistinguishes \"extractor failed on this doc\" from \"extractor\nscored 0 on this doc\" via this field \u2014 both look like zero\nF1 otherwise.",
         "properties": {
@@ -539,6 +628,24 @@
           "monthly_cap_usd"
         ],
         "title": "BudgetWriteRequest",
+        "type": "object"
+      },
+      "CapabilityMatrixResponse": {
+        "description": "Wire envelope for ``GET /api/v1/capabilities/matrix``.\n\nThe list is ordered the way the matrix table should render \u2014\nreference backend (Neo4j) first, then alternatives, then\ndev/demo. Frontend consumers should preserve order rather\nthan re-sort.",
+        "properties": {
+          "backends": {
+            "description": "Per-backend capability rows; render order matters.",
+            "items": {
+              "$ref": "#/components/schemas/BackendMatrixEntry"
+            },
+            "title": "Backends",
+            "type": "array"
+          }
+        },
+        "required": [
+          "backends"
+        ],
+        "title": "CapabilityMatrixResponse",
         "type": "object"
       },
       "ChangeLog": {
@@ -6374,6 +6481,28 @@
         "summary": "Get My Budget Status",
         "tags": [
           "Budgets"
+        ]
+      }
+    },
+    "/api/v1/capabilities/matrix": {
+      "get": {
+        "description": "M-matrix (Gate 5) \u2014 feature-compatibility matrix across all supported storage backends. Returns per-backend default capabilities + the list of dynamic flags whose runtime value depends on instance detection (e.g., Postgres+AGE's ``full_text_indexes`` depends on pg_trgm being installed). Unauthenticated \u2014 the matrix is repo-level documentation.",
+        "operationId": "get_capability_matrix_api_v1_capabilities_matrix_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityMatrixResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Capability Matrix",
+        "tags": [
+          "Capabilities"
         ]
       }
     },
