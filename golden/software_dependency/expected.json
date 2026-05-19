@@ -1,0 +1,81 @@
+{
+  "nodes": [
+    {
+      "id": "aaee36c2-9eb9-5f71-94ee-18893a709cc9",
+      "type": "Package",
+      "label": "react",
+      "properties": {
+        "name": "react",
+        "canonical_id": "aaee36c2-9eb9-5f71-94ee-18893a709cc9",
+        "canonical_key": "Package:name=react"
+      }
+    },
+    {
+      "id": "fc5309ff-1d88-5d0a-aa2f-401b7a009959",
+      "type": "Package",
+      "label": "react-dom",
+      "properties": {
+        "name": "react-dom",
+        "canonical_id": "fc5309ff-1d88-5d0a-aa2f-401b7a009959",
+        "canonical_key": "Package:name=react-dom"
+      }
+    },
+    {
+      "id": "9c04b8e4-6042-54b1-ae2d-767c3598ed0f",
+      "type": "Package",
+      "label": "scheduler",
+      "properties": {
+        "name": "scheduler",
+        "canonical_id": "9c04b8e4-6042-54b1-ae2d-767c3598ed0f",
+        "canonical_key": "Package:name=scheduler"
+      }
+    },
+    {
+      "id": "aa9916a7-f667-5cc1-9e94-468bc6f8daa7",
+      "type": "Organization",
+      "label": "Meta",
+      "properties": {
+        "name": "Meta",
+        "canonical_id": "aa9916a7-f667-5cc1-9e94-468bc6f8daa7",
+        "canonical_key": "Organization:name=meta"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "react-depends-react-dom",
+      "type": "DEPENDS_ON",
+      "source": "aaee36c2-9eb9-5f71-94ee-18893a709cc9",
+      "target": "fc5309ff-1d88-5d0a-aa2f-401b7a009959",
+      "properties": {}
+    },
+    {
+      "id": "react-depends-scheduler",
+      "type": "DEPENDS_ON",
+      "source": "aaee36c2-9eb9-5f71-94ee-18893a709cc9",
+      "target": "9c04b8e4-6042-54b1-ae2d-767c3598ed0f",
+      "properties": {}
+    },
+    {
+      "id": "react-maintained-by-meta",
+      "type": "MAINTAINED_BY",
+      "source": "aaee36c2-9eb9-5f71-94ee-18893a709cc9",
+      "target": "aa9916a7-f667-5cc1-9e94-468bc6f8daa7",
+      "properties": {}
+    },
+    {
+      "id": "scheduler-maintained-by-meta",
+      "type": "MAINTAINED_BY",
+      "source": "9c04b8e4-6042-54b1-ae2d-767c3598ed0f",
+      "target": "aa9916a7-f667-5cc1-9e94-468bc6f8daa7",
+      "properties": {}
+    },
+    {
+      "id": "react-dom-maintained-by-meta",
+      "type": "MAINTAINED_BY",
+      "source": "fc5309ff-1d88-5d0a-aa2f-401b7a009959",
+      "target": "aa9916a7-f667-5cc1-9e94-468bc6f8daa7",
+      "properties": {}
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+version: "0.1.0"
+entities:
+  Person:
+    description: A person — the only entity type in this small ontology.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The person's full name. Pinned ``unique: true`` so
+          the four Carter family members each collapse to one
+          node despite multiple paragraph-level mentions. Note
+          the canonical_key lowercases the full name including
+          the shared "carter" surname — the helper doesn't
+          attempt name-component parsing.
+relationships:
+  MARRIED_TO:
+    source: Person
+    target: Person
+    description: |
+      One direction of the marriage relationship. The
+      ontology models marriage as a directional edge from
+      the first person to the second; downstream callers
+      that want symmetric behavior can post-process. Pinned
+      as directional rather than bidirectional so the
+      expected graph has a single MARRIED_TO edge, not two.
+    properties: {}
+  PARENT_OF:
+    source: Person
+    target: Person
+    description: |
+      Directional parent-to-child relationship. Same source
+      and target type as MARRIED_TO — distinguished by the
+      relationship name, not by the entity-type pair.
+    properties: {}

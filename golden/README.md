@@ -103,11 +103,15 @@ README's "source" field is where attribution lands when applicable.
 | `legal_simple_agreement` | Legal | Two Parties + one Agreement; multi-reference dedup across three nodes | Party, Agreement | PARTY_TO |
 | `financial_transaction` | Finance | Two Accounts + one Transaction; direction-sensitive debit/credit edges | Account, Transaction | DEBITED_FROM, CREDITED_TO |
 | `academic_paper_citation` | Academic | Multi-author paper citing another paper; same-type self-referential CITES edge | Paper, Author | AUTHORED_BY, CITES |
+| `government_regulation` | Government | Agency + CFR citation + Industry; non-name canonical identity (citation, not name) | Agency, Regulation, Industry | ISSUED_BY, TARGETS |
+| `software_dependency` | Software | Same-type DEPENDS_ON between packages + shared maintainer convergence | Package, Organization | DEPENDS_ON, MAINTAINED_BY |
+| `manufacturing_supply` | Manufacturing | Product → Component → Supplier two-step chain; multiple components per product | Product, Component, Supplier | USES, SUPPLIED_BY |
+| `family_relationships` | Family / personal | Single-entity-type ontology; same-source-and-target Person-Person edges (MARRIED_TO + PARENT_OF) | Person | MARRIED_TO, PARENT_OF |
 
 ### Growth target
 
 Plan calls for 50+ documents at Gate-4 exit. As of 2026-05-19
-we're at 6. Each new entry should add either a new domain or
+we're at 10. Each new entry should add either a new domain or
 a new pattern not yet covered above — duplicating an existing
 pattern hurts coverage diversity more than it helps test
 volume.

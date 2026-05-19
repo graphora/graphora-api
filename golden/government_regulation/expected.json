@@ -1,0 +1,50 @@
+{
+  "nodes": [
+    {
+      "id": "e2b75f9b-fb32-5694-9887-23fd8f8f9241",
+      "type": "Agency",
+      "label": "EPA",
+      "properties": {
+        "name": "EPA",
+        "canonical_id": "e2b75f9b-fb32-5694-9887-23fd8f8f9241",
+        "canonical_key": "Agency:name=epa"
+      }
+    },
+    {
+      "id": "0b9d5546-02e6-5dfa-b73e-d774f527a7a4",
+      "type": "Regulation",
+      "label": "40 CFR Part 60",
+      "properties": {
+        "citation": "40 CFR Part 60",
+        "canonical_id": "0b9d5546-02e6-5dfa-b73e-d774f527a7a4",
+        "canonical_key": "Regulation:citation=40 cfr part 60"
+      }
+    },
+    {
+      "id": "7f3e3981-c4d2-53c9-8095-4bee23d977ac",
+      "type": "Industry",
+      "label": "Coal-Fired Power Generation",
+      "properties": {
+        "name": "Coal-Fired Power Generation",
+        "canonical_id": "7f3e3981-c4d2-53c9-8095-4bee23d977ac",
+        "canonical_key": "Industry:name=coal-fired power generation"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "rule-issued-by-epa",
+      "type": "ISSUED_BY",
+      "source": "0b9d5546-02e6-5dfa-b73e-d774f527a7a4",
+      "target": "e2b75f9b-fb32-5694-9887-23fd8f8f9241",
+      "properties": {}
+    },
+    {
+      "id": "rule-targets-coal",
+      "type": "TARGETS",
+      "source": "0b9d5546-02e6-5dfa-b73e-d774f527a7a4",
+      "target": "7f3e3981-c4d2-53c9-8095-4bee23d977ac",
+      "properties": {}
+    }
+  ]
+}

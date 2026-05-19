@@ -117,9 +117,9 @@ def test_corpus_is_not_empty(all_corpus_dirs: list[Path]) -> None:
     # so a "regression that wipes out N-1 entries" surfaces —
     # the corpus shouldn't shrink below the current count
     # without an explicit removal.
-    assert len(all_corpus_dirs) >= 6, (
+    assert len(all_corpus_dirs) >= 10, (
         f"Corpus shrank to {len(all_corpus_dirs)} entries — current "
-        "floor is 6 (the post-slice-1 growth set). If you're "
+        "floor is 10 (the post-slice-2 growth set). If you're "
         "intentionally removing entries, lower the floor in this "
         "test in the same commit. Slugs found: "
         f"{sorted(d.name for d in all_corpus_dirs)!r}"

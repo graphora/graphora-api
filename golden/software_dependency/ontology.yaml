@@ -1,0 +1,42 @@
+version: "0.1.0"
+entities:
+  Package:
+    description: A software package or library.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The package's distribution name (e.g., "react",
+          "react-dom"). Pinned ``unique: true`` so each
+          package collapses to one node — both ``react`` and
+          ``scheduler`` are referenced in multiple paragraphs.
+  Organization:
+    description: An organization that maintains a software package.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The organization's short name. Pinned ``unique: true``
+          so "Meta" mentioned three times collapses to a single
+          Organization node referenced by all three
+          MAINTAINED_BY edges.
+relationships:
+  DEPENDS_ON:
+    source: Package
+    target: Package
+    description: |
+      The source package has a runtime or compile-time
+      dependency on the target package. Same-source-and-target
+      type is the test signal — verifies the ontology can
+      describe self-referential relationships in the type
+      system.
+    properties: {}
+  MAINTAINED_BY:
+    source: Package
+    target: Organization
+    description: The Package is maintained by this Organization.
+    properties: {}

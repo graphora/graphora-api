@@ -1,0 +1,48 @@
+version: "0.1.0"
+entities:
+  Product:
+    description: A finished manufactured product.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The product's marketed name. Pinned ``unique: true``
+          so "Model X" mentioned three times collapses to one
+          node — the assembly, the production line, and the
+          QA reference all point at the same Product.
+  Component:
+    description: A part or material consumed by a Product.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The component's descriptive name (e.g., "lithium
+          battery", "aluminum frame"). Pinned ``unique: true``
+          so multi-paragraph mentions of the same component
+          collapse to one node.
+  Supplier:
+    description: A vendor that supplies a Component.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The supplier's commercial name. Pinned ``unique: true``
+          so cross-paragraph supplier references collapse to
+          a single node.
+relationships:
+  USES:
+    source: Product
+    target: Component
+    description: The Product uses (consumes) this Component.
+    properties: {}
+  SUPPLIED_BY:
+    source: Component
+    target: Supplier
+    description: The Component is supplied by this Supplier.
+    properties: {}

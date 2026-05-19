@@ -1,0 +1,11 @@
+The Model X assembly relies on two critical inputs. The
+lithium battery for the Model X is sourced from Acme
+Materials, an Ohio-based cell manufacturer. The aluminum
+frame is supplied by Beta Metals, headquartered in
+Pittsburgh.
+
+Quality assurance review noted that both the lithium battery
+and the aluminum frame meet specification. The Model X
+production line consumes these components from Acme
+Materials and Beta Metals at the cadence set by the master
+schedule.

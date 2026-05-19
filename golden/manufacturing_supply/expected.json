@@ -1,0 +1,84 @@
+{
+  "nodes": [
+    {
+      "id": "cacdb46f-9dec-5268-b237-e43fe8c877d5",
+      "type": "Product",
+      "label": "Model X",
+      "properties": {
+        "name": "Model X",
+        "canonical_id": "cacdb46f-9dec-5268-b237-e43fe8c877d5",
+        "canonical_key": "Product:name=model x"
+      }
+    },
+    {
+      "id": "100135a8-c647-5779-98c9-e56382a7dd6d",
+      "type": "Component",
+      "label": "lithium battery",
+      "properties": {
+        "name": "lithium battery",
+        "canonical_id": "100135a8-c647-5779-98c9-e56382a7dd6d",
+        "canonical_key": "Component:name=lithium battery"
+      }
+    },
+    {
+      "id": "27050c6f-1fcc-5036-927c-00a278a644ea",
+      "type": "Component",
+      "label": "aluminum frame",
+      "properties": {
+        "name": "aluminum frame",
+        "canonical_id": "27050c6f-1fcc-5036-927c-00a278a644ea",
+        "canonical_key": "Component:name=aluminum frame"
+      }
+    },
+    {
+      "id": "e2b4240b-24e8-50dd-a3f9-ca1ed0c75a7b",
+      "type": "Supplier",
+      "label": "Acme Materials",
+      "properties": {
+        "name": "Acme Materials",
+        "canonical_id": "e2b4240b-24e8-50dd-a3f9-ca1ed0c75a7b",
+        "canonical_key": "Supplier:name=acme materials"
+      }
+    },
+    {
+      "id": "d638e312-8e05-5133-a02c-71df2a376823",
+      "type": "Supplier",
+      "label": "Beta Metals",
+      "properties": {
+        "name": "Beta Metals",
+        "canonical_id": "d638e312-8e05-5133-a02c-71df2a376823",
+        "canonical_key": "Supplier:name=beta metals"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "modelx-uses-battery",
+      "type": "USES",
+      "source": "cacdb46f-9dec-5268-b237-e43fe8c877d5",
+      "target": "100135a8-c647-5779-98c9-e56382a7dd6d",
+      "properties": {}
+    },
+    {
+      "id": "modelx-uses-frame",
+      "type": "USES",
+      "source": "cacdb46f-9dec-5268-b237-e43fe8c877d5",
+      "target": "27050c6f-1fcc-5036-927c-00a278a644ea",
+      "properties": {}
+    },
+    {
+      "id": "battery-from-acme",
+      "type": "SUPPLIED_BY",
+      "source": "100135a8-c647-5779-98c9-e56382a7dd6d",
+      "target": "e2b4240b-24e8-50dd-a3f9-ca1ed0c75a7b",
+      "properties": {}
+    },
+    {
+      "id": "frame-from-beta",
+      "type": "SUPPLIED_BY",
+      "source": "27050c6f-1fcc-5036-927c-00a278a644ea",
+      "target": "d638e312-8e05-5133-a02c-71df2a376823",
+      "properties": {}
+    }
+  ]
+}

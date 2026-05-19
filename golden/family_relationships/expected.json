@@ -1,0 +1,81 @@
+{
+  "nodes": [
+    {
+      "id": "25cae9c5-76de-5a0e-98b2-3de41c316480",
+      "type": "Person",
+      "label": "Alice Carter",
+      "properties": {
+        "name": "Alice Carter",
+        "canonical_id": "25cae9c5-76de-5a0e-98b2-3de41c316480",
+        "canonical_key": "Person:name=alice carter"
+      }
+    },
+    {
+      "id": "cbb6d83b-904a-5719-bff6-acb15a951b25",
+      "type": "Person",
+      "label": "Bob Carter",
+      "properties": {
+        "name": "Bob Carter",
+        "canonical_id": "cbb6d83b-904a-5719-bff6-acb15a951b25",
+        "canonical_key": "Person:name=bob carter"
+      }
+    },
+    {
+      "id": "a3db1fdb-3b6f-5cc9-bbcf-8266d096d428",
+      "type": "Person",
+      "label": "Charlie Carter",
+      "properties": {
+        "name": "Charlie Carter",
+        "canonical_id": "a3db1fdb-3b6f-5cc9-bbcf-8266d096d428",
+        "canonical_key": "Person:name=charlie carter"
+      }
+    },
+    {
+      "id": "861fedd5-2b6e-5628-a4df-25fe01405b2f",
+      "type": "Person",
+      "label": "Diana Carter",
+      "properties": {
+        "name": "Diana Carter",
+        "canonical_id": "861fedd5-2b6e-5628-a4df-25fe01405b2f",
+        "canonical_key": "Person:name=diana carter"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "alice-married-bob",
+      "type": "MARRIED_TO",
+      "source": "25cae9c5-76de-5a0e-98b2-3de41c316480",
+      "target": "cbb6d83b-904a-5719-bff6-acb15a951b25",
+      "properties": {}
+    },
+    {
+      "id": "alice-parent-charlie",
+      "type": "PARENT_OF",
+      "source": "25cae9c5-76de-5a0e-98b2-3de41c316480",
+      "target": "a3db1fdb-3b6f-5cc9-bbcf-8266d096d428",
+      "properties": {}
+    },
+    {
+      "id": "alice-parent-diana",
+      "type": "PARENT_OF",
+      "source": "25cae9c5-76de-5a0e-98b2-3de41c316480",
+      "target": "861fedd5-2b6e-5628-a4df-25fe01405b2f",
+      "properties": {}
+    },
+    {
+      "id": "bob-parent-charlie",
+      "type": "PARENT_OF",
+      "source": "cbb6d83b-904a-5719-bff6-acb15a951b25",
+      "target": "a3db1fdb-3b6f-5cc9-bbcf-8266d096d428",
+      "properties": {}
+    },
+    {
+      "id": "bob-parent-diana",
+      "type": "PARENT_OF",
+      "source": "cbb6d83b-904a-5719-bff6-acb15a951b25",
+      "target": "861fedd5-2b6e-5628-a4df-25fe01405b2f",
+      "properties": {}
+    }
+  ]
+}

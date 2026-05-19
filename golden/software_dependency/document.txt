@@ -1,0 +1,12 @@
+react is a JavaScript library for building user interfaces.
+It is maintained by Meta and depends on react-dom for
+DOM-rendering primitives. react also depends on scheduler
+for cooperative task scheduling.
+
+scheduler is also maintained by Meta. It exposes the
+unstable_scheduleCallback API that react uses to coordinate
+concurrent renders.
+
+The react-dom package adapts react's renderer output for the
+browser DOM. Like react and scheduler, it is maintained by
+Meta.

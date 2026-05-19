@@ -1,0 +1,56 @@
+version: "0.1.0"
+entities:
+  Agency:
+    description: A government regulatory body.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The agency's commonly-used short name (e.g., "EPA",
+          "FDA", "SEC"). Pinned ``unique: true`` so repeated
+          mentions of the same agency across paragraphs
+          collapse to one node — the document references the
+          EPA four times and the expected graph has a single
+          Agency node.
+  Regulation:
+    description: A specific regulatory citation.
+    properties:
+      citation:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The CFR-style or jurisdiction-specific citation
+          (e.g., "40 CFR Part 60"). Used as the stable
+          identity for cross-paragraph dedup — the document
+          cites "Rule 40 CFR Part 60" then refers to it
+          three more times by the same string; all four
+          should collapse on this citation.
+  Industry:
+    description: A regulated industry segment.
+    properties:
+      name:
+        type: str
+        required: true
+        unique: true
+        description: |
+          The industry segment as named in the source. Pinned
+          ``unique: true`` so "coal-fired power generation"
+          mentioned in two paragraphs collapses to one node.
+relationships:
+  ISSUED_BY:
+    source: Regulation
+    target: Agency
+    description: The Regulation was issued by this Agency.
+    properties: {}
+  TARGETS:
+    source: Regulation
+    target: Industry
+    description: |
+      The Regulation applies to this Industry segment. Pinned
+      as its own relationship type rather than a generic
+      "APPLIES_TO" so the directional reading is clear: the
+      regulation targets the industry, not vice versa.
+    properties: {}
