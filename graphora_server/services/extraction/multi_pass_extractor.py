@@ -11,6 +11,7 @@ from graphora_server.services.transform.helpers import (
     transform_as_nodes,
     transform_as_relationships,
     merge_nodes,
+    emit_edge_property_claims,
     emit_node_property_claims,
 )
 from graphora_server.services.claims_service import ClaimsService
@@ -479,6 +480,19 @@ class MultiPassExtractor:
                 prompt_version=get_prompt_version("ExtractRelationshipsFromChunk"),
             )
 
+            # B1-prob slice 2b-edge: emit per-chunk edge claims
+            # BEFORE dedup, mirroring the single-pass site in
+            # graph_transformer. Same rationale — cross-chunk
+            # contradictions on edge properties would be lost if
+            # we collapsed first.
+            await emit_edge_property_claims(
+                claims_service,
+                base_relationships,
+                nodes,
+                transform_id=transform_id,
+                user_id=user_id,
+            )
+
             # Deduplicate relationships
             for new_rel in base_relationships:
                 is_dup = any(
@@ -730,6 +744,20 @@ class MultiPassExtractor:
                         prompt_version=get_prompt_version(
                             "ExtractRelationshipsFromChunk"
                         ),
+                    )
+                    # B1-prob slice 2b-edge: refinement-pass edges
+                    # contribute to the contradiction surface too,
+                    # mirroring the node refinement emit. Without
+                    # this, a relationship the refinement pass
+                    # introduces with a different role/title than
+                    # the initial-pass extraction wouldn't surface
+                    # as a contradiction even though it should.
+                    await emit_edge_property_claims(
+                        claims_service,
+                        extracted_rels,
+                        existing_nodes + new_nodes,
+                        transform_id=transform_id,
+                        user_id=user_id,
                     )
                     new_relationships.extend(extracted_rels)
                 except Exception as e:

@@ -13,6 +13,7 @@ from graphora_server.services.transform.helpers import (
     transform_as_relationships,
     prune_orphaned_nodes,
     deduplicate_entities_with_splink,
+    emit_edge_property_claims,
     emit_node_property_claims,
 )
 from graphora_server.services.llm.client import LLMClient
@@ -689,6 +690,22 @@ async def _build_graph_from(
                     if rel_baml_function
                     else None
                 ),
+            )
+            # B1-prob slice 2b-edge: emit one claim per (edge,
+            # property) BEFORE the dedup loop below. Same reason
+            # as the node emit at line 584: two chunks emitting
+            # the same canonical edge signature with different
+            # property values ARE the contradiction signal, and
+            # dedup would collapse them. Pass `nodes` because the
+            # canonical edge signature derives from the endpoints'
+            # canonical_ids — see _build_node_canonical_lookup in
+            # helpers.py for the alias-aware resolution.
+            await emit_edge_property_claims(
+                claims_service,
+                base_relationships,
+                nodes,
+                transform_id=transform_id,
+                user_id=user_id,
             )
             for new_relationship in base_relationships:
                 is_duplicate = any(

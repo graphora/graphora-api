@@ -3252,3 +3252,152 @@ async def emit_node_property_claims(
                     property_key,
                     exc,
                 )
+
+
+def _build_node_canonical_lookup(nodes: List[BaseNode]) -> Dict[str, str]:
+    """Build per-extraction-id → canonical-id map for edge endpoint
+    resolution.
+
+    Edges carry ``source_id`` / ``target_id`` that point at
+    ``BaseNode.id`` (the per-extraction id). To compute a stable
+    canonical edge signature we need the canonical_id of each
+    endpoint — which lives on the matching node.
+
+    Post-merge nodes carry alias ids in ``original_extraction_ids``
+    (see models.py: the list grows when chunk-1's ``company_0``
+    and chunk-2's ``company_1`` resolve to the same Acme). The
+    lookup includes every alias too, so a relationship whose
+    LLM-emitted source_id matches a pre-merge alias still
+    resolves.
+
+    Build it once, scan it O(1) per edge — beats walking the full
+    nodes list per endpoint for batches with many edges.
+    """
+    lookup: Dict[str, str] = {}
+    for node in nodes:
+        canonical = node.canonical_id or node.id
+        # Both the post-merge id and every pre-merge alias map to
+        # the same canonical. Last-write wins on collision, but
+        # collisions would mean two nodes share the same alias —
+        # the merge step would already have collapsed them.
+        lookup[node.id] = canonical
+        for alias in node.original_extraction_ids:
+            lookup[alias] = canonical
+    return lookup
+
+
+async def emit_edge_property_claims(
+    claims_service: Optional[ClaimsService],
+    edges: List[RelationshipInstance],
+    nodes: List[BaseNode],
+    transform_id: Optional[str],
+    user_id: Optional[str],
+) -> None:
+    """B1-prob slice 2b-edge: emit one Claim per (edge, property)
+    pair so the /contradictions surface groups cross-chunk
+    disagreements about the same relationship.
+
+    Mirrors :func:`emit_node_property_claims` for relationships.
+    The key difference is target identity: nodes have a stable
+    ``canonical_id`` directly, edges don't — the canonical edge
+    signature has to be derived from the endpoints' canonical
+    ids plus the relationship type. Two chunks both claiming
+    "Alice WORKS_AT Acme with role=Engineer" vs
+    "...role=Senior Engineer" produce the same signature
+    (cid-alice|WORKS_AT|cid-acme) so the contradiction detector
+    groups them.
+
+    Called from per-chunk relationship-extraction loops BEFORE
+    any dedup-by-content check, so claims for both extractions
+    land — the contradiction detector groups by (target_id,
+    target_kind, property_key) and surfaces the disagreement.
+
+    Target identity, in priority order:
+      1. ``"{src_cid}|{type}|{tgt_cid}"`` — both endpoints have
+         a canonical_id resolvable through the nodes list.
+      2. ``"{src_id}|{type}|{tgt_id}"`` — one or both endpoints
+         can't be resolved (LLM emitted a phantom id, or the
+         nodes list is stale). Per-chunk ids stay separate so no
+         cross-chunk grouping happens — graceful degrade, not
+         crash.
+      3. ``edge.id`` — last-resort fallback for edges whose
+         endpoints are both missing AND whose source/target ids
+         are unset (shouldn't happen post-transform_as_relationships
+         but defensive).
+
+    Endpoint resolution uses :func:`_build_node_canonical_lookup`
+    which indexes by ``node.id`` and every alias in
+    ``original_extraction_ids`` — handles the post-merge case
+    where the relationship's source_id is a pre-merge alias.
+
+    Failure posture: log-and-swallow, same as the node helper.
+    Each claim is its own try/except so one bad row doesn't
+    poison the rest of the batch.
+
+    No-ops when:
+      * claims_service is None.
+      * transform_id is None.
+      * user_id is None.
+    """
+    if not claims_service or not transform_id or not user_id:
+        return
+
+    canonical_lookup = _build_node_canonical_lookup(nodes)
+
+    for edge in edges:
+        # Resolve endpoints. Fall back to the raw per-chunk id
+        # when the lookup misses — emits the claim but won't
+        # cross-chunk-group with edges in other chunks.
+        src_cid = canonical_lookup.get(edge.source_id, edge.source_id)
+        tgt_cid = canonical_lookup.get(edge.target_id, edge.target_id)
+
+        # Canonical edge signature. The pipe separator is safe:
+        # canonical_ids are UUID5 hex (no pipes); edge types come
+        # from the ontology and are validated to ascii-identifier
+        # shape upstream. Last-resort fallback to edge.id if both
+        # endpoints AND type are empty (defensive — shouldn't
+        # happen post-transform_as_relationships).
+        if src_cid and tgt_cid and edge.type:
+            target_id = f"{src_cid}|{edge.type}|{tgt_cid}"
+        else:
+            target_id = edge.id
+
+        prov = edge.provenance
+        confidence = 1.0
+        if prov is not None and prov.confidence_score is not None:
+            confidence = max(0.0, min(1.0, float(prov.confidence_score)))
+        source_chunk_id = None
+        source_extractor_model = None
+        source_prompt_version = None
+        if prov is not None:
+            source_chunk_id = prov.chunk_ids[0] if prov.chunk_ids else None
+            source_extractor_model = prov.extractor_model
+            source_prompt_version = prov.prompt_version
+
+        for property_key, value in (edge.properties or {}).items():
+            if property_key in SYSTEM_PROPERTIES:
+                continue
+            if value is None:
+                continue
+            try:
+                await claims_service.append(
+                    Claim(
+                        transform_id=transform_id,
+                        target_id=target_id,
+                        target_kind=ClaimTargetKind.EDGE,
+                        property_key=property_key,
+                        value=value,
+                        confidence=confidence,
+                        user_id=user_id,
+                        source_chunk_id=source_chunk_id,
+                        source_extractor_model=source_extractor_model,
+                        source_prompt_version=source_prompt_version,
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "Failed to emit claim for edge=%s property=%s: %s",
+                    target_id,
+                    property_key,
+                    exc,
+                )
