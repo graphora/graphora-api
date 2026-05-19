@@ -19,9 +19,14 @@ property extraction (`effective_date` on the Agreement).
 
 ## Failure signals
 
-- An extractor that produces separate Agreement nodes for the
-  two "Service Agreement" mentions → `Agreement.recall = 0.5`,
-  one of the two `PARTY_TO` edges dangles.
+- An extractor that produces two separate Agreement nodes for
+  the two "Service Agreement" mentions drops **precision** on
+  the Agreement type — `Agreement.precision ≈ 0.5` (1 TP,
+  1 FP, 0 FN) while `Agreement.recall` stays 1.0. One of the
+  two `PARTY_TO` edges then points at the duplicate Agreement
+  node that has no expected counterpart, so that edge fails
+  source/target match and `PARTY_TO` shows ~0.5 on both
+  precision and recall.
 - An extractor that drops `effective_date` because it sits
   outside the parties' immediate context → `Agreement` itself
   still matches via canonical_id, but the changed-properties

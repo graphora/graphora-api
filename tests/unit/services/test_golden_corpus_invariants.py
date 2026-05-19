@@ -90,6 +90,42 @@ def all_corpus_dirs() -> list[Path]:
     return _CORPUS_DIRS
 
 
+def test_corpus_is_not_empty(all_corpus_dirs: list[Path]) -> None:
+    """Reviewer-flagged Low on commit a68225f. The parametrized
+    tests below get their parameter list from ``_CORPUS_DIRS``,
+    which is captured at module import time. If ``golden/``
+    disappears or every entry loses one of the trio files
+    (document.txt + ontology.yaml + expected.json), the
+    discoverer returns ``[]`` and the parametrized tests run
+    with zero parameters — pytest **skips** them silently
+    rather than failing.
+
+    That's the dangerous-mute-pass shape: a corpus regression
+    that wipes out coverage would let the suite report green.
+    This test pulls the ``all_corpus_dirs`` fixture, which
+    fails the whole module on empty, so an empty corpus
+    surfaces as a hard test failure with the diagnostic the
+    fixture writes.
+
+    The check is also non-parametrized, so it runs even when
+    the parametrized tests skip — closing the only gap where
+    silent-skip could hide regression."""
+    assert len(all_corpus_dirs) > 0
+    # Belt-and-suspenders: the fixture would have already
+    # called pytest.fail() if the list were empty, so reaching
+    # here means at least one entry. Also pin a numeric floor
+    # so a "regression that wipes out N-1 entries" surfaces —
+    # the corpus shouldn't shrink below the current count
+    # without an explicit removal.
+    assert len(all_corpus_dirs) >= 6, (
+        f"Corpus shrank to {len(all_corpus_dirs)} entries — current "
+        "floor is 6 (the post-slice-1 growth set). If you're "
+        "intentionally removing entries, lower the floor in this "
+        "test in the same commit. Slugs found: "
+        f"{sorted(d.name for d in all_corpus_dirs)!r}"
+    )
+
+
 @pytest.mark.parametrize("corpus_dir", _CORPUS_DIRS, ids=[d.name for d in _CORPUS_DIRS])
 def test_corpus_entry_has_readme(corpus_dir: Path):
     """Every entry must document what it tests. README.md is
