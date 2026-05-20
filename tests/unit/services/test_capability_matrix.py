@@ -196,19 +196,24 @@ def test_extras_align_with_pyproject_extras():
     """The matrix advertises pip extras that operators
     compose into ``pip install 'graphora-server[<extra>]'``.
     Memory needs no extra (empty); Neo4j needs ``[neo4j]``;
-    Postgres+AGE needs ``[age]`` — NOT ``[postgres]`` which is
-    the lower-level psycopg + pool dependency. The factory's
-    ImportError at factory.py:49 routes operators to
-    ``graphora-server[age]`` precisely because installing just
-    ``[postgres]`` would land them with database connectivity
-    but no AGE adapter — wrong outcome.
+    Postgres+AGE needs ``[age]`` — the user-facing graph
+    backend extra, sister to ``[neo4j]`` and ``[kuzu]``.
+
+    Mechanically ``[age]`` is an alias for
+    ``["graphora-server[postgres]"]`` (pyproject.toml:158), so
+    installing ``[postgres]`` directly would functionally work
+    too. But the matrix is the public "which graph backend do
+    I want?" surface — the correct answer at that layer is the
+    named backend extra, not the lower-level dependency group.
+    Pin against a future refactor that "simplifies" by
+    advertising the underlying ``[postgres]`` group: the install
+    hint would mechanically work but break the
+    neo4j / age / kuzu naming convention operators see in
+    every other surface (factory ImportError, docs, plan
+    references).
 
     Reviewer-flagged Medium on commit bb9efc9: pre-fix the
-    matrix advertised ``[postgres]`` for the AGE row, which
-    would have shipped a broken install hint to every
-    frontend/docs consumer. Pin so a future refactor that
-    re-confuses the layered extras (``[postgres]`` is
-    transitively pulled in by ``[age]``) regresses here."""
+    matrix advertised ``[postgres]`` for the AGE row."""
     expected = {
         "neo4j": ("neo4j",),
         "postgres": ("age",),

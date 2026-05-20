@@ -210,16 +210,19 @@ BACKEND_MATRIX: Tuple[BackendMatrixEntry, ...] = (
         dynamic_flags=("full_text_indexes",),
         # Reviewer-flagged Medium on commit bb9efc9: pre-fix
         # this advertised ``("postgres",)`` as the install
-        # hint, but the user-facing graph backend extra is
-        # ``[age]`` — see the factory's ImportError at
-        # graphora_server/services/storage/factory.py:49 which
-        # routes operators to ``pip install
-        # 'graphora-server[age]'``. ``[postgres]`` is the
-        # lower-level psycopg + pool dependency that ``[age]``
-        # itself pulls in (pyproject.toml:158). Public matrix
-        # API has to advertise the correct top-level extra so
-        # frontend/docs install hints don't ship operators a
-        # bare-Postgres install missing the AGE adapter.
+        # hint. ``[age]`` is the user-facing top-level graph
+        # backend extra — sister to ``[neo4j]`` and ``[kuzu]``
+        # — and is what the factory's ImportError routes
+        # operators to (factory.py:49). Mechanically
+        # ``[age] = ["graphora-server[postgres]"]`` (an alias
+        # in pyproject.toml:158), so ``[postgres]`` alone WOULD
+        # functionally work. We advertise ``[age]`` because the
+        # matrix is the public "which graph backend do I want?"
+        # surface and the correct answer at that layer is the
+        # named backend extra, not the lower-level dependency
+        # group. Keeps the install hint aligned with the
+        # neo4j / age / kuzu naming convention operators see
+        # everywhere else.
         extras=("age",),
         notes=(
             "full_text_indexes depends on pg_trgm being installed "
