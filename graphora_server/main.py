@@ -27,6 +27,7 @@ from graphora_server.api.graph import router as graph_router
 from graphora_server.api.merge import router as merge_router
 from graphora_server.api.ontology import router as ontology_router
 from graphora_server.api.quality import router as quality_router
+from graphora_server.api.samples import router as samples_router
 from graphora_server.api.scenarios import router as scenarios_router
 from graphora_server.api.schema import router as schema_router
 from graphora_server.api.transform import router as transform_router
@@ -150,6 +151,7 @@ app.include_router(disputed_pairs_router)
 app.include_router(golden_router)
 app.include_router(bench_router)
 app.include_router(capabilities_router)
+app.include_router(samples_router)
 app.include_router(scenarios_router)
 
 

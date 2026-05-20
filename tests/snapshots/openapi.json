@@ -4316,6 +4316,126 @@
         "title": "ResourceMetrics",
         "type": "object"
       },
+      "SampleDetail": {
+        "description": "Full sample payload for the detail-page view.\n\nCarries the source document, the ontology used for\nextraction, the resulting graph, and the README content\n(which explains what the sample exercises \u2014 useful as the\n\"what this demonstrates\" panel on the detail page).",
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "document": {
+            "description": "Source document text the extraction ran against.",
+            "title": "Document",
+            "type": "string"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "expected_graph": {
+            "additionalProperties": true,
+            "description": "Extracted graph in GraphResponse shape (nodes + edges). Frontend renders via the same graph-viz component the real Explorer uses.",
+            "title": "Expected Graph",
+            "type": "object"
+          },
+          "ontology_yaml": {
+            "description": "Ontology used for this extraction \u2014 the schema the extractor was given. Rendered in a code block alongside the graph so visitors can see the input-side of the contract.",
+            "title": "Ontology Yaml",
+            "type": "string"
+          },
+          "readme_markdown": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Markdown content of the sample's README \u2014 explains what extraction patterns this entry exercises. Rendered on the detail page as the 'about this sample' panel.",
+            "title": "Readme Markdown"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "display_name",
+          "domain",
+          "document",
+          "ontology_yaml",
+          "expected_graph"
+        ],
+        "title": "SampleDetail",
+        "type": "object"
+      },
+      "SampleSummary": {
+        "description": "Lightweight entry for the gallery grid.\n\nThe list endpoint returns these without the heavyweight\ndocument/ontology/graph content so an unauthed gallery view\ncan render fast and small. ``GET /samples/{slug}`` fetches\nthe full payload for the detail page.",
+        "properties": {
+          "display_name": {
+            "description": "Human-readable title derived from the slug (snake_case \u2192 Title Case).",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "domain": {
+            "description": "Subject domain \u2014 used by the gallery's filter chips. Examples: Healthcare, Legal, Finance, Software. Sourced from the golden/README.md roster table.",
+            "title": "Domain",
+            "type": "string"
+          },
+          "edge_count": {
+            "minimum": 0.0,
+            "title": "Edge Count",
+            "type": "integer"
+          },
+          "node_count": {
+            "minimum": 0.0,
+            "title": "Node Count",
+            "type": "integer"
+          },
+          "slug": {
+            "description": "Stable identifier matching the ``golden/<slug>/`` directory. Used in /samples/{slug} URLs and as the react ``key`` on the gallery grid.",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "display_name",
+          "domain",
+          "node_count",
+          "edge_count"
+        ],
+        "title": "SampleSummary",
+        "type": "object"
+      },
+      "SamplesListResponse": {
+        "description": "Wire envelope for ``GET /api/v1/samples``.",
+        "properties": {
+          "domains": {
+            "description": "Unique domain names across all samples \u2014 for populating the gallery's filter chip list without the frontend having to derive them from the samples array.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Domains",
+            "type": "array"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/SampleSummary"
+            },
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "samples",
+          "domains"
+        ],
+        "title": "SamplesListResponse",
+        "type": "object"
+      },
       "SaveGraphRequest": {
         "description": "Request model for saving graph changes",
         "properties": {
@@ -9660,6 +9780,74 @@
         "summary": "List Quality Violations",
         "tags": [
           "quality"
+        ]
+      }
+    },
+    "/api/v1/samples": {
+      "get": {
+        "description": "Lightweight gallery list \u2014 slug + display_name + domain + node/edge counts per sample. Use ``GET /samples/{slug}`` for the full document + ontology + graph payload. Unauthenticated.",
+        "operationId": "list_samples_api_v1_samples_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SamplesListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Samples",
+        "tags": [
+          "Samples"
+        ]
+      }
+    },
+    "/api/v1/samples/{slug}": {
+      "get": {
+        "description": "Full payload for a single sample: source document, ontology yaml, extracted graph (in GraphResponse shape \u2014 frontend renders via the same graph-viz component the Explorer uses), and the README markdown explaining what extraction patterns the sample exercises. Unauthenticated.",
+        "operationId": "get_sample_api_v1_samples__slug__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SampleDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No sample with that slug"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Sample",
+        "tags": [
+          "Samples"
         ]
       }
     },
