@@ -195,13 +195,23 @@ def test_memory_marks_itself_dev_demo():
 def test_extras_align_with_pyproject_extras():
     """The matrix advertises pip extras that operators
     compose into ``pip install 'graphora-server[<extra>]'``.
-    Memory needs no extra (empty); Neo4j needs [neo4j];
-    Postgres needs [postgres]. Pin these so the install
-    hints in any downstream consumer (docs, CLI install
-    command, error messages) stay aligned with reality."""
+    Memory needs no extra (empty); Neo4j needs ``[neo4j]``;
+    Postgres+AGE needs ``[age]`` — NOT ``[postgres]`` which is
+    the lower-level psycopg + pool dependency. The factory's
+    ImportError at factory.py:49 routes operators to
+    ``graphora-server[age]`` precisely because installing just
+    ``[postgres]`` would land them with database connectivity
+    but no AGE adapter — wrong outcome.
+
+    Reviewer-flagged Medium on commit bb9efc9: pre-fix the
+    matrix advertised ``[postgres]`` for the AGE row, which
+    would have shipped a broken install hint to every
+    frontend/docs consumer. Pin so a future refactor that
+    re-confuses the layered extras (``[postgres]`` is
+    transitively pulled in by ``[age]``) regresses here."""
     expected = {
         "neo4j": ("neo4j",),
-        "postgres": ("postgres",),
+        "postgres": ("age",),
         "memory": (),
     }
     for name, want in expected.items():

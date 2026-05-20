@@ -208,7 +208,19 @@ BACKEND_MATRIX: Tuple[BackendMatrixEntry, ...] = (
         display_name="Postgres + Apache AGE",
         default_capabilities=_AGE_DEFAULT_CAPABILITIES,
         dynamic_flags=("full_text_indexes",),
-        extras=("postgres",),
+        # Reviewer-flagged Medium on commit bb9efc9: pre-fix
+        # this advertised ``("postgres",)`` as the install
+        # hint, but the user-facing graph backend extra is
+        # ``[age]`` — see the factory's ImportError at
+        # graphora_server/services/storage/factory.py:49 which
+        # routes operators to ``pip install
+        # 'graphora-server[age]'``. ``[postgres]`` is the
+        # lower-level psycopg + pool dependency that ``[age]``
+        # itself pulls in (pyproject.toml:158). Public matrix
+        # API has to advertise the correct top-level extra so
+        # frontend/docs install hints don't ship operators a
+        # bare-Postgres install missing the AGE adapter.
+        extras=("age",),
         notes=(
             "full_text_indexes depends on pg_trgm being installed "
             "in the target Postgres instance — the matrix reports "
