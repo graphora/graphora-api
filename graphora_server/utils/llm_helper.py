@@ -435,9 +435,18 @@ def _resolve_ollama_host(
     to http://localhost:11434") was broken by the unconditional
     ``api_key`` fallback. With the URL-shape check, blank base_url +
     placeholder api_key now lands on the env default as advertised.
+
+    PR #26-#27 self-review followups:
+
+    - Whitespace-only ``stored_base_url`` is treated as blank (defense
+      in depth — the FE trims, but a stray space here would otherwise
+      pass through and yield a malformed URL like ``"  /v1"`` from
+      BAML's downstream concatenation).
+    - URL-shape check is case-insensitive per RFC 3986 (schemes are
+      case-insensitive), so ``"HTTP://my-server:11434"`` matches.
     """
-    if stored_base_url:
-        return stored_base_url
-    if api_key and (api_key.startswith("http://") or api_key.startswith("https://")):
+    if stored_base_url and stored_base_url.strip():
+        return stored_base_url.strip()
+    if api_key and api_key.lower().startswith(("http://", "https://")):
         return api_key
     return env_default

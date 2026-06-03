@@ -233,6 +233,42 @@ async def test_db_backed_ollama_uses_api_key_column_as_host() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ollama_placeholder_does_not_become_host_legacy_client() -> None:
+    """PR #26 review followup: parallel to
+    ``test_ollama_placeholder_api_key_does_not_become_host`` (which
+    pins the BAML path) — this pins the same fix for the legacy
+    genai-direct path via ``get_llm_client_for_user``. Both paths
+    call ``_resolve_ollama_host`` so they should behave identically
+    on the placeholder-vs-real-URL distinction."""
+    fake_module = MagicMock()
+    fake_module.Client.return_value = MagicMock()
+    fake_settings = MagicMock(
+        LLM_PROVIDER=None,
+        OLLAMA_HOST="http://localhost:11434",
+        OLLAMA_MODEL="x",
+    )
+    fake_ai_config = MagicMock()
+    fake_ai_config.get_user_ai_config = AsyncMock(return_value={"some": "config"})
+    fake_ai_config.get_user_provider_secret = AsyncMock(
+        return_value=("ollama", "ollama", "llama3.3:70b")
+    )
+    fake_ai_config.get_user_provider_extras = AsyncMock(return_value={})
+
+    with (
+        patch.dict("sys.modules", {"ollama": fake_module}),
+        patch("graphora_server.config.get_settings", return_value=fake_settings),
+        patch(
+            "graphora_server.utils.llm_helper.AIConfigService",
+            return_value=fake_ai_config,
+        ),
+    ):
+        await llm_helper.get_llm_client_for_user("user-1")
+
+    # Host MUST be the env default, NOT the placeholder ``"ollama"``.
+    fake_module.Client.assert_called_once_with(host="http://localhost:11434")
+
+
+@pytest.mark.asyncio
 async def test_no_user_config_raises() -> None:
     fake_settings = MagicMock(
         LLM_PROVIDER=None,
@@ -478,6 +514,86 @@ class TestBamlRegistryForUser:
         # Host MUST be the env default, NOT the placeholder api_key.
         assert captured["base_url"] == "http://localhost:11434"
         assert captured["base_url"] != "ollama"
+
+    @pytest.mark.asyncio
+    async def test_ollama_uppercase_url_in_api_key_routes_correctly(self) -> None:
+        """PR #26 review followup: URL-shape check is case-insensitive
+        per RFC 3986. A legacy ollama config storing ``"HTTP://..."``
+        in api_key should still be honored as a host."""
+        fake_settings = MagicMock(
+            LLM_PROVIDER=None,
+            OLLAMA_HOST="http://localhost:11434",
+            OLLAMA_MODEL="x",
+        )
+        fake_ai = MagicMock()
+        fake_ai.get_user_ai_config = AsyncMock(return_value={"x": 1})
+        fake_ai.get_user_provider_secret = AsyncMock(
+            return_value=("ollama", "HTTP://my-server:11434", "llama3.3:70b")
+        )
+        fake_ai.get_user_provider_extras = AsyncMock(return_value=None)
+
+        captured: dict = {}
+
+        def capture_registry(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        with (
+            patch("graphora_server.config.get_settings", return_value=fake_settings),
+            patch(
+                "graphora_server.utils.llm_helper.AIConfigService", return_value=fake_ai
+            ),
+            patch(
+                "graphora_server.utils.llm_helper.create_baml_client_registry",
+                side_effect=capture_registry,
+            ),
+        ):
+            await llm_helper.get_baml_registry_for_user("u1")
+
+        # Uppercase URL is recognized as URL-shaped → returned as-is
+        # (we don't normalize case; BAML / downstream handles it).
+        assert captured["base_url"] == "HTTP://my-server:11434"
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_base_url_treated_as_blank(self) -> None:
+        """PR #26 review followup: defense in depth. The FE trims, but
+        if a whitespace-only ``base_url`` somehow lands in the DB,
+        treat it as blank so we don't propagate ``"  /v1"`` style
+        garbage to BAML."""
+        fake_settings = MagicMock(
+            LLM_PROVIDER=None,
+            OLLAMA_HOST="http://localhost:11434",
+            OLLAMA_MODEL="x",
+        )
+        fake_ai = MagicMock()
+        fake_ai.get_user_ai_config = AsyncMock(return_value={"x": 1})
+        fake_ai.get_user_provider_secret = AsyncMock(
+            return_value=("ollama", "ollama", "llama3.3:70b")  # placeholder api_key
+        )
+        # Whitespace-only base_url stored — should NOT be used as host.
+        fake_ai.get_user_provider_extras = AsyncMock(return_value={"base_url": "   "})
+
+        captured: dict = {}
+
+        def capture_registry(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        with (
+            patch("graphora_server.config.get_settings", return_value=fake_settings),
+            patch(
+                "graphora_server.utils.llm_helper.AIConfigService", return_value=fake_ai
+            ),
+            patch(
+                "graphora_server.utils.llm_helper.create_baml_client_registry",
+                side_effect=capture_registry,
+            ),
+        ):
+            await llm_helper.get_baml_registry_for_user("u1")
+
+        # Whitespace base_url ignored; api_key isn't URL-shaped; fall
+        # to env default.
+        assert captured["base_url"] == "http://localhost:11434"
 
     @pytest.mark.asyncio
     async def test_db_backed_openai_dispatches_correctly(self) -> None:
