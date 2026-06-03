@@ -183,6 +183,7 @@ See [Local Development Guide](docs/LOCAL_DEVELOPMENT.md) for detailed setup inst
 - `make typecheck` - run mypy type checking
 - `make deadcode` - run Vulture to surface unused definitions
 - `make pre-commit` - run all pre-commit checks (lint, test, deadcode)
+- `make install-hooks` - install the git pre-commit hook (Black + Ruff + Vulture run on every `git commit` — bypass with `git commit --no-verify`)
 
 **Database:**
 - `make migrate` - run database migrations

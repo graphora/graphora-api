@@ -251,6 +251,10 @@ dev = [
     # Docker isn't available, so this is dev-only ergonomics — not
     # required to run the unit suite.
     "testcontainers[postgres,neo4j]>=4.0.0",
+    # pre-commit hook framework — runs the same black + ruff +
+    # vulture checks CI runs, before the commit lands. ``make
+    # install-hooks`` activates the hook on a fresh clone.
+    "pre-commit>=3.7.0",
 ]
 
 [project.scripts]
@@ -274,6 +278,10 @@ dev = [
     # Docker isn't available, so this is dev-only ergonomics — not
     # required to run the unit suite.
     "testcontainers[postgres,neo4j]>=4.0.0",
+    # pre-commit hook framework — runs the same black + ruff +
+    # vulture checks CI runs, before the commit lands. ``make
+    # install-hooks`` activates the hook on a fresh clone.
+    "pre-commit>=3.7.0",
 ]
 
 [tool.setuptools.packages.find]

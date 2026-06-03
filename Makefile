@@ -214,6 +214,14 @@ pre-commit:
 	$(MAKE) test
 	$(MAKE) deadcode
 
+# Install the git pre-commit hook defined in .pre-commit-config.yaml.
+# After running this once, every ``git commit`` runs black + ruff +
+# vulture (same checks CI runs) before the commit is recorded.
+# Override on a per-commit basis with ``git commit --no-verify``.
+install-hooks:
+	uv run pre-commit install
+	@echo "✓ pre-commit hook installed. Bypass with: git commit --no-verify"
+
 migrate:
 	PYTHONPATH=. uv run python scripts/run_migrations.py
 
