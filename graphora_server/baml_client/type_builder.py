@@ -22,7 +22,7 @@ from .globals import DO_NOT_USE_DIRECTLY_UNLESS_YOU_KNOW_WHAT_YOURE_DOING_RUNTIM
 class TypeBuilder(_TypeBuilder):
     def __init__(self):
         super().__init__(classes=set(
-          ["ChangeResult","ConflictAnalysis","ConflictClassification","ConflictGroupAnalysis","Correction","DynamicContainer","Entity","EntityProperty","EntitySimilarityAnalysis","GeneratedSchema","MatchingNode","PropertyConflictAnalysis","Relationship","RelationshipConflictAnalysis","RelationshipInference","RelationshipProperty","ResolutionOption","ResolutionOptions","ResolvedEntities","SchemaGenerationResult","SelectedResolution","StandardisedProperties",]
+          ["ChangeResult","ConflictAnalysis","ConflictClassification","ConflictGroupAnalysis","Correction","DynamicContainer","Entity","EntityProperty","EntitySimilarityAnalysis","GeneratedSchema","MatchingNode","PropertyConflictAnalysis","Relationship","RelationshipConflictAnalysis","RelationshipInference","RelationshipProperty","ResolutionOption","ResolutionOptions","ResolvedEntities","SchemaGenerationResult","SchemaRefinementResponse","SelectedResolution","StandardisedProperties",]
         ), enums=set(
           ["ResolutionStrategy",]
         ), runtime=DO_NOT_USE_DIRECTLY_UNLESS_YOU_KNOW_WHAT_YOURE_DOING_RUNTIME)
@@ -108,6 +108,10 @@ class TypeBuilder(_TypeBuilder):
     @property
     def SchemaGenerationResult(self) -> "SchemaGenerationResultAst":
         return SchemaGenerationResultAst(self)
+
+    @property
+    def SchemaRefinementResponse(self) -> "SchemaRefinementResponseAst":
+        return SchemaRefinementResponseAst(self)
 
     @property
     def SelectedResolution(self) -> "SelectedResolutionAst":
@@ -1115,6 +1119,56 @@ class SchemaGenerationResultProperties:
     @property
     def suggestions(self) -> ClassPropertyViewer:
         return ClassPropertyViewer(self.__bldr.property("suggestions"))
+
+    @property
+    def explanation(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("explanation"))
+
+    
+
+class SchemaRefinementResponseAst:
+    def __init__(self, tb: _TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("SchemaRefinementResponse")
+        self._properties: typing.Set[str] = set([ "refined_schema",  "changes_made",  "confidence",  "explanation", ])
+        self._props = SchemaRefinementResponseProperties(self._bldr, self._properties)
+
+    def type(self) -> FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "SchemaRefinementResponseProperties":
+        return self._props
+
+
+class SchemaRefinementResponseViewer(SchemaRefinementResponseAst):
+    def __init__(self, tb: _TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, ClassPropertyViewer]]:
+        return [(name, ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+
+
+
+class SchemaRefinementResponseProperties:
+    def __init__(self, bldr: ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties
+
+    
+
+    @property
+    def refined_schema(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("refined_schema"))
+
+    @property
+    def changes_made(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("changes_made"))
+
+    @property
+    def confidence(self) -> ClassPropertyViewer:
+        return ClassPropertyViewer(self.__bldr.property("confidence"))
 
     @property
     def explanation(self) -> ClassPropertyViewer:

@@ -29,17 +29,11 @@ from graphora_server.services.chat_session_service import (
     MessageType,
     ChatContextType,
 )
-from graphora_server.services.schema_generation_service import schema_generation_service
 from graphora_server.services.audit_service import (
     AuditService,
     OperationType,
     OperationStatus,
 )
-from graphora_server.utils.llm_helper import (
-    get_user_llm_credentials,
-    create_gemini_client,
-)
-from graphora_server.utils.llm_usage_tracker import track_gemini_usage
 
 logger = logging.getLogger(__name__)
 
@@ -499,45 +493,76 @@ What would you like to modify first?"""
         user_request: str,
         conversation_context: Dict[str, Any],
     ) -> Tuple[str, List[str], float, str]:
-        """Refine schema using LLM with conversation context"""
+        """Refine schema using LLM with conversation context.
+
+        Cross-provider via the BAML ``RefineSchemaConversational``
+        function — works for any provider the user has configured
+        (gemini / openai / anthropic / ollama). The legacy direct-
+        ``create_gemini_client`` call this method used to make has
+        been retired (graphora-api #18).
+
+        BAML's structured-output contract guarantees the four-field
+        response shape regardless of provider, so the brittle
+        ``CHANGES_MADE:`` / ``CONFIDENCE:`` / ``EXPLANATION:``
+        marker-parsing in ``_parse_refinement_response`` is no
+        longer on the happy path (kept on the fallback path for
+        completeness).
+        """
 
         try:
-            # Get user's LLM credentials
-            api_key, model_name = await get_user_llm_credentials(user_id)
-            client = create_gemini_client(api_key)
+            # Local imports keep test-environment imports tractable —
+            # mirrors the pattern used by schema_generation_service.
+            from graphora_server.baml_client import b
+            from graphora_server.utils.llm_helper import (
+                get_baml_registry_for_user,
+            )
 
-            # Build refinement prompt with conversation context
-            prompt = self._build_refinement_prompt(
+            registry, model_name, provider = await get_baml_registry_for_user(user_id)
+
+            # Pre-format the conversation-context slices in Python so
+            # the BAML template doesn't have to do slicing / fallback
+            # (BAML templating doesn't carry Python's expression power).
+            previous_requests = conversation_context.get("previous_requests", [])
+            changes_history = conversation_context.get("changes_history", [])
+            refinement_count = conversation_context.get("refinement_count", 0)
+            previous_requests_summary = (
+                ", ".join(previous_requests[-2:]) if previous_requests else "None"
+            )
+            changes_history_summary = (
+                ", ".join(changes_history[-3:]) if changes_history else "None"
+            )
+
+            result = b.RefineSchemaConversational(
                 current_schema=current_schema,
                 user_request=user_request,
-                conversation_context=conversation_context,
+                refinement_count=refinement_count + 1,
+                previous_requests_summary=previous_requests_summary,
+                changes_history_summary=changes_history_summary,
+                baml_options={"client_registry": registry},
             )
 
-            # Call LLM for refinement
-            response = client.models.generate_content(
-                model=model_name, contents=[prompt]
+            logger.info(
+                "Schema refinement via BAML completed",
+                extra={
+                    "user_id": user_id,
+                    "provider": provider,
+                    "model": model_name,
+                    "confidence": result.confidence,
+                    "changes_count": len(result.changes_made),
+                },
             )
 
-            # Track usage
-            await track_gemini_usage(
-                user_id=user_id,
-                model_name=model_name,
-                operation_type="schema_refinement",
-                response=response,
-                operation_context="chat_refinement",
+            return (
+                result.refined_schema,
+                list(result.changes_made),
+                float(result.confidence),
+                result.explanation,
             )
-
-            # Parse response
-            refined_schema, changes_made, confidence, explanation = (
-                schema_generation_service._parse_refinement_response(response.text)
-            )
-
-            return refined_schema, changes_made, confidence, explanation
 
         except Exception as e:
-            logger.error(f"LLM refinement failed: {str(e)}")
-
-            # Fallback to simple text-based refinement
+            logger.error(f"BAML schema refinement failed: {str(e)}")
+            # Fallback to the simple text-based refinement so a BAML
+            # outage doesn't take chat refinement offline.
             return await self._fallback_refinement(current_schema, user_request)
 
     def _build_refinement_prompt(
