@@ -167,6 +167,12 @@ class SchemaGenerationResult(BaseModel):
     suggestions: List[str]
     explanation: Optional[str] = None
 
+class SchemaRefinementResponse(BaseModel):
+    refined_schema: str
+    changes_made: List[str]
+    confidence: float
+    explanation: str
+
 class SelectedResolution(BaseModel):
     option_id: str
     resolution_type: str

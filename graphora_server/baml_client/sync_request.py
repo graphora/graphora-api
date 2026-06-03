@@ -957,6 +957,29 @@ class HttpRequest:
         False,
       )
     
+    def RefineSchemaConversational(
+        self,
+        current_schema: str,user_request: str,refinement_count: int,previous_requests_summary: str,changes_history_summary: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return self.__runtime.build_request_sync(
+        "RefineSchemaConversational",
+        {
+          "current_schema": current_schema,"user_request": user_request,"refinement_count": refinement_count,"previous_requests_summary": previous_requests_summary,"changes_history_summary": changes_history_summary,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
     def RefineUncertainEntities(
         self,
         chunk: str,uncertain_entities: str,ontology_context: str,
@@ -1973,6 +1996,29 @@ class HttpStreamRequest:
         "RefineKnowledgeGraphSchema",
         {
           "current_schema_yaml": current_schema_yaml,"user_feedback": user_feedback,"use_case": use_case,"domain": domain,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
+    def RefineSchemaConversational(
+        self,
+        current_schema: str,user_request: str,refinement_count: int,previous_requests_summary: str,changes_history_summary: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return self.__runtime.build_request_sync(
+        "RefineSchemaConversational",
+        {
+          "current_schema": current_schema,"user_request": user_request,"refinement_count": refinement_count,"previous_requests_summary": previous_requests_summary,"changes_history_summary": changes_history_summary,
         },
         self.__ctx_manager.get(),
         tb,

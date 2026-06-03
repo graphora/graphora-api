@@ -110,6 +110,74 @@ function GenerateKnowledgeGraphSchema(
   "#
 }
 
+// Schema Refinement Response — matches the existing return shape of
+// schema_refinement_service.py::_refine_schema_with_llm so the BAML
+// migration is a drop-in replacement for the legacy direct-genai call.
+class SchemaRefinementResponse {
+  refined_schema string @description(#"
+    YAML text of the refined schema, version 0.1.0. NO markdown code
+    fences. Schema must parse as valid YAML.
+  "#)
+  changes_made string[] @description(#"
+    Human-readable list of changes applied in this refinement
+    (one item per change).
+  "#)
+  confidence float @description(#"
+    0.0 to 1.0 confidence that the changes satisfy the user's request
+    AND keep the schema internally consistent.
+  "#)
+  explanation string @description(#"
+    1-2 sentence explanation of what was done and why.
+  "#)
+}
+
+// Conversational schema refinement — preserves session context across
+// multiple back-and-forth refinements with the user. Cross-provider
+// drop-in replacement for the legacy direct-genai call in
+// schema_refinement_service.py::_refine_schema_with_llm.
+function RefineSchemaConversational(
+  current_schema: string,
+  user_request: string,
+  refinement_count: int,
+  previous_requests_summary: string,
+  changes_history_summary: string
+) -> SchemaRefinementResponse {
+  client DynamicGemini
+  prompt #"
+    You are refining a knowledge graph schema based on user feedback.
+    This is part of an ongoing conversation.
+
+    **Current Schema:**
+    ```yaml
+    {{current_schema}}
+    ```
+
+    **Current User Request:**
+    {{user_request}}
+
+    **Conversation Context:**
+    - This is refinement #{{refinement_count}} in this session
+    - Previous requests: {{previous_requests_summary}}
+    - Recent changes: {{changes_history_summary}}
+
+    **Instructions:**
+    1. Analyze the user's request in the context of previous modifications
+    2. Make the requested changes while maintaining schema integrity
+    3. Preserve existing structure unless explicitly asked to change
+    4. Ensure all changes align with knowledge graph best practices
+    5. Maintain YAML format and property types
+    6. Be conservative — only change what's specifically requested
+
+    **Schema Format Requirements:**
+    - YAML format with version 0.1.0
+    - Structure: entities -> EntityName -> properties/relationships
+    - Property types must be: str, int, float, bool, date
+    - Naming: CamelCase entities, UPPER_CASE relationships, camelCase properties
+
+    {{ ctx.output_format }}
+  "#
+}
+
 // Schema Refinement Function
 function RefineKnowledgeGraphSchema(
   current_schema_yaml: string,
