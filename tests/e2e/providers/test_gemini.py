@@ -101,15 +101,28 @@ def _patch_credentials(
         )
         return registry, effective_model, "gemini"
 
-    # Legacy 2-tuple — covers extract_*_from_pdf callsites.
+    # Legacy 2-tuple in utils.llm_helper — still used by
+    # text-extraction callsites that haven't been BAML-migrated yet
+    # (schema_postprocess / schema_inference). The same helper used to
+    # be re-imported in services.llm.client too, but #18 Phase 3
+    # removed that import — PDF flows now go through
+    # AIConfigService.get_user_provider_secret instead.
     monkeypatch.setattr(
         "graphora_server.utils.llm_helper.get_user_llm_credentials",
         fake_creds,
     )
+
+    # Provider-aware provider-secret lookup — covers PDF extraction
+    # after the #18 Phase 3 refactor. Patch the method on the class so
+    # any AIConfigService() instance returns the gemini fake.
+    async def fake_provider_secret(self, user_id):
+        return ("gemini", gemini_api_key, gemini_model)
+
     monkeypatch.setattr(
-        "graphora_server.services.llm.client.get_user_llm_credentials",
-        fake_creds,
+        "graphora_server.services.ai_config_service.AIConfigService.get_user_provider_secret",
+        fake_provider_secret,
     )
+
     # Provider-aware BAML registry — covers chunk-based extraction.
     monkeypatch.setattr(
         "graphora_server.utils.llm_helper.get_baml_registry_for_user",
