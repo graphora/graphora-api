@@ -185,9 +185,10 @@ async def upload_documents(
       via `GET /transform/{id}/inferred-ontology` +
       `POST /transform/{id}/finalize-ontology`.
 
-    Example:
+    Example (local dev — replace host for hosted deployments):
 
-        curl -X POST /api/v1/transform/{ontology_id}/upload \\
+        curl -X POST http://localhost:8000/api/v1/transform/$ONTOLOGY_ID/upload \\
+            -H "Authorization: Bearer $GRAPHORA_AUTH_TOKEN" \\
             -F "files=@doc.pdf"
     """
     start_time = time.time()
@@ -405,9 +406,11 @@ async def upload_documents_auto_schema(
       defer ontology design until *after* seeing extraction
       results (no pre-extraction schema bias).
 
-    Example:
+    Example (local dev — replace host for hosted deployments):
 
-        curl -X POST /api/v1/transform/upload -F "files=@doc.pdf"
+        curl -X POST http://localhost:8000/api/v1/transform/upload \\
+            -H "Authorization: Bearer $GRAPHORA_AUTH_TOKEN" \\
+            -F "files=@doc.pdf"
     """
     start_time = time.time()
     temp_dir = Path(settings.UPLOAD_DIR)
@@ -880,9 +883,10 @@ async def upload_documents_schemaless(
     - `POST /transform/{ontology_id}/upload` — when you already
       have a pre-registered ontology.
 
-    Example:
+    Example (local dev — replace host for hosted deployments):
 
-        curl -X POST /api/v1/transform/schemaless/upload \\
+        curl -X POST http://localhost:8000/api/v1/transform/schemaless/upload \\
+            -H "Authorization: Bearer $GRAPHORA_AUTH_TOKEN" \\
             -F "files=@doc.pdf"
     """
     from graphora_server.services.schema_inference import get_default_generic_schema
