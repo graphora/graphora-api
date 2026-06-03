@@ -342,9 +342,7 @@ class AIConfigService:
                     (user_config_id, user_id, provider_config_id),
                 )
 
-            logger.info(
-                f"Created {provider_name} configuration for user: {user_id}"
-            )
+            logger.info(f"Created {provider_name} configuration for user: {user_id}")
             return await self.get_user_ai_config(user_id)
 
         except ValueError:
@@ -455,9 +453,7 @@ class AIConfigService:
                     f"{existing_config.provider_name} → {provider_name}"
                 )
 
-            logger.info(
-                f"Updated {provider_name} configuration for user: {user_id}"
-            )
+            logger.info(f"Updated {provider_name} configuration for user: {user_id}")
             return await self.get_user_ai_config(user_id)
 
         except ValueError:
