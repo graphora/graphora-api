@@ -218,8 +218,7 @@ class TestBuildConversationHistoryText:
         # Zero-pad so "msg-001" isn't a substring of "msg-010" etc.
         session = {
             "messages": [
-                {"type": "user_message", "content": f"msg-{i:03d}"}
-                for i in range(20)
+                {"type": "user_message", "content": f"msg-{i:03d}"} for i in range(20)
             ]
         }
         text = service._build_conversation_history_text(session)
