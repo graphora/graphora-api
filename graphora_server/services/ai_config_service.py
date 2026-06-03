@@ -8,6 +8,7 @@ from graphora_server.schemas.ai_config import (
     AIProvider,
     AIModel,
     GeminiConfigRequest,
+    ProviderConfigRequest,
     UserAIConfigDisplay,
 )
 from graphora_server.utils.logger import logger
@@ -205,57 +206,115 @@ class AIConfigService:
             row["model_name"],
         )
 
-    async def create_gemini_config(
-        self, user_id: str, config_request: GeminiConfigRequest
-    ) -> UserAIConfigDisplay:
+    async def get_user_provider_extras(self, user_id: str) -> Optional[dict]:
+        """Return provider-specific extras (``config_data`` JSON) for a user.
+
+        Companion to ``get_user_provider_secret`` — kept separate so the
+        existing 3-tuple unpacking in callers doesn't break. Returns
+        ``None`` when the user has no config, ``{}`` when they have one
+        but no extras were set.
+
+        Currently the only well-known extra is ``base_url`` (used by
+        Ollama and optionally by OpenAI for Azure / custom endpoints).
         """
-        Create a new Gemini configuration for a user
+        row = await db.fetchrow(
+            """
+            SELECT pc.config_data
+            FROM user_ai_configs u
+            JOIN ai_provider_configs pc ON u.active_provider_config_id = pc.id
+            WHERE u.user_id = %s
+            LIMIT 1
+            """,
+            user_id,
+        )
+        if not row:
+            return None
+        return dict(row["config_data"] or {})
 
-        Args:
-            user_id: User's ID
-            config_request: Gemini configuration data
+    # ─── Internal helpers (shared by generic + legacy paths) ─────────
 
-        Returns:
-            UserAIConfigDisplay: Created configuration with masked API key
+    async def _resolve_provider_id(self, provider_name: str) -> str:
+        """Look up provider_id by name. Raises ValueError if unknown."""
+        row = await db.fetchrow(
+            "SELECT id FROM ai_providers WHERE name = %s AND is_active = TRUE",
+            provider_name,
+        )
+        if not row:
+            available = await db.fetch(
+                "SELECT name FROM ai_providers WHERE is_active = TRUE"
+            )
+            names = ", ".join(r["name"] for r in available or [])
+            raise ValueError(
+                f"Provider '{provider_name}' not found. Available: {names}"
+            )
+        return row["id"]
+
+    async def _resolve_or_create_model_id(
+        self, provider_id: str, model_name: str
+    ) -> str:
+        """Return model_id for (provider_id, model_name).
+
+        If the model is in the curated catalog, returns its id. If not,
+        auto-registers it as ``version='custom'`` and returns the new id
+        — supports the UI's free-form model input without forcing users
+        to wait for catalog updates.
+        """
+        row = await db.fetchrow(
+            "SELECT id FROM ai_models WHERE provider_id = %s AND name = %s",
+            provider_id,
+            model_name,
+        )
+        if row:
+            return row["id"]
+
+        new_id = str(uuid.uuid4())
+        await db.fetchrow(
+            """
+            INSERT INTO ai_models (id, provider_id, name, display_name, version, is_active)
+            VALUES (%s, %s, %s, %s, 'custom', TRUE)
+            ON CONFLICT (provider_id, name) DO UPDATE SET is_active = TRUE
+            RETURNING id
+            """,
+            new_id,
+            provider_id,
+            model_name,
+            model_name,  # display_name = name for custom entries
+        )
+        logger.info(
+            f"Auto-registered custom model '{model_name}' "
+            f"under provider_id {provider_id}"
+        )
+        return new_id
+
+    # ─── Generic create / update — used by /ai-config/{provider} ────
+
+    async def create_provider_config(
+        self,
+        user_id: str,
+        provider_name: str,
+        config_request: ProviderConfigRequest,
+    ) -> UserAIConfigDisplay:
+        """Create the user's first AI provider config.
+
+        Raises ValueError if the user already has a config — callers
+        should detect the existing config first and route to
+        ``update_provider_config`` (which handles upsert + provider
+        switching).
         """
         try:
-            # Check if user already has a configuration
             existing_config = await self.get_user_ai_config(user_id)
             if existing_config:
                 raise ValueError(f"AI configuration already exists for user: {user_id}")
 
-            provider_row = await db.fetchrow(
-                "SELECT id FROM ai_providers WHERE name = %s",
-                "gemini",
+            provider_id = await self._resolve_provider_id(provider_name)
+            model_id = await self._resolve_or_create_model_id(
+                provider_id, config_request.default_model_name
             )
-            if not provider_row:
-                raise ValueError("Gemini provider not found")
-            provider_id = provider_row["id"]
-
-            model_row = await db.fetchrow(
-                """
-                SELECT id
-                FROM ai_models
-                WHERE provider_id = %s AND name = %s AND is_active = TRUE
-                """,
-                provider_id,
-                config_request.default_model_name,
-            )
-
-            if not model_row:
-                available_models = await db.fetch(
-                    "SELECT name FROM ai_models WHERE provider_id = %s AND is_active = TRUE",
-                    provider_id,
-                )
-                available_names = [model["name"] for model in available_models or []]
-                raise ValueError(
-                    f"Model '{config_request.default_model_name}' not found for Gemini. Available models: {', '.join(available_names)}"
-                )
-            model_id = model_row["id"]
 
             provider_config_id = str(uuid.uuid4())
             user_config_id = str(uuid.uuid4())
             encrypted_key = encrypt_password(config_request.api_key)
+            config_data = self._build_config_data(config_request)
 
             async with db.transaction() as cur:
                 await cur.execute(
@@ -270,10 +329,9 @@ class AIConfigService:
                         provider_id,
                         encrypted_key,
                         model_id,
-                        Json({}),
+                        Json(config_data),
                     ),
                 )
-
                 await cur.execute(
                     """
                     INSERT INTO user_ai_configs (
@@ -284,104 +342,167 @@ class AIConfigService:
                     (user_config_id, user_id, provider_config_id),
                 )
 
-            logger.info(f"Created Gemini configuration for user: {user_id}")
-
-            # Return the created configuration
+            logger.info(
+                f"Created {provider_name} configuration for user: {user_id}"
+            )
             return await self.get_user_ai_config(user_id)
 
         except ValueError:
             raise
         except Exception as e:
-            logger.error(f"Error creating Gemini config for {user_id}: {str(e)}")
-            raise Exception(f"Failed to create Gemini configuration: {str(e)}")
+            logger.error(
+                f"Error creating {provider_name} config for {user_id}: {str(e)}"
+            )
+            raise Exception(f"Failed to create {provider_name} configuration: {str(e)}")
+
+    async def update_provider_config(
+        self,
+        user_id: str,
+        provider_name: str,
+        config_request: ProviderConfigRequest,
+    ) -> UserAIConfigDisplay:
+        """Update or upsert the user's AI provider config.
+
+        Behavior:
+
+        - No existing config → falls through to create.
+        - Existing config, same provider → in-place update of the
+          ``ai_provider_configs`` row.
+        - Existing config, different provider → creates a new
+          ``ai_provider_configs`` row and repoints
+          ``user_ai_configs.active_provider_config_id``. The old row
+          stays in place (kept for audit; future GC can clean up
+          orphans).
+        """
+        try:
+            existing_config = await self.get_user_ai_config(user_id)
+            if not existing_config:
+                return await self.create_provider_config(
+                    user_id, provider_name, config_request
+                )
+
+            provider_id = await self._resolve_provider_id(provider_name)
+            model_id = await self._resolve_or_create_model_id(
+                provider_id, config_request.default_model_name
+            )
+            encrypted_key = encrypt_password(config_request.api_key)
+            config_data = self._build_config_data(config_request)
+
+            if existing_config.provider_name == provider_name:
+                # In-place update of the existing provider config
+                user_config_row = await db.fetchrow(
+                    "SELECT active_provider_config_id FROM user_ai_configs WHERE user_id = %s",
+                    user_id,
+                )
+                if not user_config_row:
+                    raise ValueError(
+                        f"User AI configuration not found for user: {user_id}"
+                    )
+                provider_config_id = user_config_row["active_provider_config_id"]
+
+                result = await db.fetchrow(
+                    """
+                    UPDATE ai_provider_configs
+                    SET api_key = %s,
+                        default_model_id = %s,
+                        config_data = %s,
+                        updated_at = %s
+                    WHERE id = %s
+                    RETURNING id
+                    """,
+                    encrypted_key,
+                    model_id,
+                    Json(config_data),
+                    datetime.now(timezone.utc),
+                    provider_config_id,
+                )
+                if not result:
+                    raise Exception("Failed to update AI provider configuration")
+            else:
+                # Provider switch — new ai_provider_configs row, repoint
+                new_provider_config_id = str(uuid.uuid4())
+                async with db.transaction() as cur:
+                    await cur.execute(
+                        """
+                        INSERT INTO ai_provider_configs (
+                            id, provider_id, api_key, default_model_id, config_data
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            new_provider_config_id,
+                            provider_id,
+                            encrypted_key,
+                            model_id,
+                            Json(config_data),
+                        ),
+                    )
+                    await cur.execute(
+                        """
+                        UPDATE user_ai_configs
+                        SET active_provider_config_id = %s,
+                            updated_at = %s
+                        WHERE user_id = %s
+                        """,
+                        (
+                            new_provider_config_id,
+                            datetime.now(timezone.utc),
+                            user_id,
+                        ),
+                    )
+                logger.info(
+                    f"Switched user {user_id} from "
+                    f"{existing_config.provider_name} → {provider_name}"
+                )
+
+            logger.info(
+                f"Updated {provider_name} configuration for user: {user_id}"
+            )
+            return await self.get_user_ai_config(user_id)
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(
+                f"Error updating {provider_name} config for {user_id}: {str(e)}"
+            )
+            raise Exception(f"Failed to update {provider_name} configuration: {str(e)}")
+
+    @staticmethod
+    def _build_config_data(config_request: ProviderConfigRequest) -> dict:
+        """Extract provider-specific extras into the config_data JSON blob."""
+        data: dict = {}
+        if config_request.base_url:
+            data["base_url"] = config_request.base_url
+        return data
+
+    # ─── Legacy Gemini-specific wrappers (kept for backward compat) ───
+
+    async def create_gemini_config(
+        self, user_id: str, config_request: GeminiConfigRequest
+    ) -> UserAIConfigDisplay:
+        """Backward-compat wrapper. Prefer ``create_provider_config``."""
+        return await self.create_provider_config(
+            user_id,
+            "gemini",
+            ProviderConfigRequest(
+                api_key=config_request.api_key,
+                default_model_name=config_request.default_model_name,
+            ),
+        )
 
     async def update_gemini_config(
         self, user_id: str, config_request: GeminiConfigRequest
     ) -> UserAIConfigDisplay:
-        """
-        Update an existing Gemini configuration for a user
-
-        Args:
-            user_id: User's ID
-            config_request: Updated Gemini configuration data
-
-        Returns:
-            UserAIConfigDisplay: Updated configuration with masked API key
-        """
-        try:
-            # Get existing configuration
-            existing_config = await self.get_user_ai_config(user_id)
-            if not existing_config:
-                # UI may call update before create (e.g., after DB reset); treat as upsert.
-                return await self.create_gemini_config(user_id, config_request)
-
-            user_config_row = await db.fetchrow(
-                "SELECT active_provider_config_id FROM user_ai_configs WHERE user_id = %s",
-                user_id,
-            )
-
-            if not user_config_row:
-                raise ValueError(f"User AI configuration not found for user: {user_id}")
-
-            provider_config_id = user_config_row["active_provider_config_id"]
-
-            provider_row = await db.fetchrow(
-                "SELECT id FROM ai_providers WHERE name = %s",
-                "gemini",
-            )
-            if not provider_row:
-                raise ValueError("Gemini provider not found")
-            provider_id = provider_row["id"]
-
-            model_row = await db.fetchrow(
-                """
-                SELECT id
-                FROM ai_models
-                WHERE provider_id = %s AND name = %s AND is_active = TRUE
-                """,
-                provider_id,
-                config_request.default_model_name,
-            )
-
-            if not model_row:
-                available_models = await db.fetch(
-                    "SELECT name FROM ai_models WHERE provider_id = %s AND is_active = TRUE",
-                    provider_id,
-                )
-                available_names = [model["name"] for model in available_models or []]
-                raise ValueError(
-                    f"Model '{config_request.default_model_name}' not found for Gemini. Available models: {', '.join(available_names)}"
-                )
-            model_id = model_row["id"]
-
-            result = await db.fetchrow(
-                """
-                UPDATE ai_provider_configs
-                SET api_key = %s,
-                    default_model_id = %s,
-                    updated_at = %s
-                WHERE id = %s
-                RETURNING id
-                """,
-                encrypt_password(config_request.api_key),
-                model_id,
-                datetime.now(timezone.utc),
-                provider_config_id,
-            )
-
-            if not result:
-                raise Exception("Failed to update AI provider configuration")
-
-            logger.info(f"Updated Gemini configuration for user: {user_id}")
-
-            # Return the updated configuration
-            return await self.get_user_ai_config(user_id)
-
-        except ValueError:
-            raise
-        except Exception as e:
-            logger.error(f"Error updating Gemini config for {user_id}: {str(e)}")
-            raise Exception(f"Failed to update Gemini configuration: {str(e)}")
+        """Backward-compat wrapper. Prefer ``update_provider_config``."""
+        return await self.update_provider_config(
+            user_id,
+            "gemini",
+            ProviderConfigRequest(
+                api_key=config_request.api_key,
+                default_model_name=config_request.default_model_name,
+            ),
+        )
 
     def _mask_api_key(self, api_key: str) -> str:
         """

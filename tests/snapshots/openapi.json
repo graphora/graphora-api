@@ -2437,7 +2437,7 @@
         "type": "object"
       },
       "GeminiConfigRequest": {
-        "description": "Schema for creating/updating Gemini configuration",
+        "description": "Schema for creating/updating Gemini configuration.\n\nKept for backward compatibility with the legacy\n``/ai-config/gemini`` endpoints. New callers should use\n``ProviderConfigRequest`` against ``/ai-config/{provider}``.",
         "properties": {
           "api_key": {
             "description": "Gemini API key",
@@ -3331,6 +3331,39 @@
         ],
         "title": "ProcessingPriority",
         "type": "string"
+      },
+      "ProviderConfigRequest": {
+        "description": "Generic provider-config payload \u2014 used by ``/ai-config/{provider}``.\n\nCovers all supported providers (gemini, openai, anthropic, ollama).\nProvider-specific extras land in ``config_data``:\n\n- ``base_url``: Ollama server URL, or OpenAI custom endpoint\n  (Azure / OpenRouter). Ignored for gemini and anthropic.",
+        "properties": {
+          "api_key": {
+            "description": "Provider API key. For Ollama with no-auth servers, pass any non-empty placeholder \u2014 the value is stored encrypted but not used to authenticate the request.",
+            "title": "Api Key",
+            "type": "string"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider endpoint URL. Required for Ollama (e.g., 'http://localhost:11434'), optional for OpenAI (custom Azure / OpenRouter endpoints). Ignored for gemini and anthropic.",
+            "title": "Base Url"
+          },
+          "default_model_name": {
+            "description": "Default model identifier. Must be a valid model name for the provider (e.g., 'gpt-4o-mini', 'claude-sonnet-4-6', 'llama3.3:70b'). If the name is not in the curated catalog, it is auto-registered as a custom model so the UI dropdown shows it next time.",
+            "title": "Default Model Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "api_key",
+          "default_model_name"
+        ],
+        "title": "ProviderConfigRequest",
+        "type": "object"
       },
       "QualityAnalyticsResponse": {
         "properties": {
@@ -6245,6 +6278,120 @@
           }
         ],
         "summary": "Update Gemini Config",
+        "tags": [
+          "AI Configuration"
+        ]
+      }
+    },
+    "/api/v1/ai-config/{provider}": {
+      "post": {
+        "description": "Create a user's AI config for ``provider``.\n\nSupported providers (call `GET /ai-providers` for the live list):\n`gemini`, `openai`, `anthropic`, `ollama`.\n\nFor Ollama / self-hosted endpoints, pass `base_url` in the request\nbody (e.g., `\"base_url\": \"http://localhost:11434\"`).\n\nIf `default_model_name` is not in the curated catalog for the\nprovider, it is auto-registered as a custom model so the UI\ndropdown will surface it next time.\n\nReturns 409 if the user already has a configuration \u2014 use\n`PUT /ai-config/{provider}` to update / switch providers.",
+        "operationId": "create_provider_config_api_v1_ai_config__provider__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAIConfigDisplay"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create AI config for any supported provider",
+        "tags": [
+          "AI Configuration"
+        ]
+      },
+      "put": {
+        "description": "Update the user's AI config.\n\n- If the user has no config yet \u2192 creates one (upsert behavior).\n- If the existing config matches `provider` \u2192 in-place update of\n  API key + model + base_url.\n- If the existing config is for a different provider \u2192 switches\n  to `provider`, repointing the user's active provider config.\n\nSee `POST /ai-config/{provider}` for `default_model_name` and\n`base_url` semantics \u2014 they're identical here.",
+        "operationId": "update_provider_config_api_v1_ai_config__provider__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAIConfigDisplay"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update or switch AI provider for the current user",
         "tags": [
           "AI Configuration"
         ]

@@ -307,6 +307,34 @@ class TestBamlClientRegistry:
                 provider="claude",
             )
 
+    def test_openai_path_succeeds(self) -> None:
+        """graphora-api#23: OpenAI is a first-class BAML provider."""
+        registry = llm_helper.create_baml_client_registry(
+            api_key="sk-test",
+            model_name="gpt-4o-mini",
+            provider="openai",
+        )
+        assert registry is not None
+
+    def test_openai_path_with_custom_base_url(self) -> None:
+        """Azure / OpenRouter routing via base_url."""
+        registry = llm_helper.create_baml_client_registry(
+            api_key="sk-test",
+            model_name="gpt-4o-mini",
+            provider="openai",
+            base_url="https://my-azure-endpoint/v1",
+        )
+        assert registry is not None
+
+    def test_anthropic_path_succeeds(self) -> None:
+        """graphora-api#23: Anthropic is a first-class BAML provider."""
+        registry = llm_helper.create_baml_client_registry(
+            api_key="sk-ant-test",
+            model_name="claude-sonnet-4-6",
+            provider="anthropic",
+        )
+        assert registry is not None
+
 
 # ---- get_baml_registry_for_user routing ----------------------------------
 
@@ -363,6 +391,9 @@ class TestBamlRegistryForUser:
         fake_ai.get_user_provider_secret = AsyncMock(
             return_value=("ollama", "http://stored-host:11434", "qwen2.5")
         )
+        # No base_url in config_data — host should fall back to api_key
+        # (legacy ollama config posture).
+        fake_ai.get_user_provider_extras = AsyncMock(return_value=None)
         with (
             patch("graphora_server.config.get_settings", return_value=fake_settings),
             patch(
@@ -380,8 +411,11 @@ class TestBamlRegistryForUser:
         fake_settings = MagicMock(LLM_PROVIDER=None, OLLAMA_HOST="x", OLLAMA_MODEL="x")
         fake_ai = MagicMock()
         fake_ai.get_user_ai_config = AsyncMock(return_value={"x": 1})
+        # ``anthropic`` was unsupported when this test was written but is
+        # now wired (graphora-api#23). Use a genuinely unrecognized
+        # provider name to keep exercising the fallthrough raise.
         fake_ai.get_user_provider_secret = AsyncMock(
-            return_value=("anthropic", "k", "claude")
+            return_value=("cohere", "k", "command-r")
         )
         with (
             patch("graphora_server.config.get_settings", return_value=fake_settings),
@@ -391,6 +425,51 @@ class TestBamlRegistryForUser:
         ):
             with pytest.raises(UnsupportedProviderError):
                 await llm_helper.get_baml_registry_for_user("u1")
+
+    @pytest.mark.asyncio
+    async def test_db_backed_openai_dispatches_correctly(self) -> None:
+        """graphora-api#23: per-user openai config → DynamicOpenAI registry."""
+        fake_settings = MagicMock(LLM_PROVIDER=None, OLLAMA_HOST="x", OLLAMA_MODEL="x")
+        fake_ai = MagicMock()
+        fake_ai.get_user_ai_config = AsyncMock(return_value={"x": 1})
+        fake_ai.get_user_provider_secret = AsyncMock(
+            return_value=("openai", "sk-test", "gpt-4o-mini")
+        )
+        fake_ai.get_user_provider_extras = AsyncMock(
+            return_value={"base_url": "https://my-azure-endpoint/v1"}
+        )
+        with (
+            patch("graphora_server.config.get_settings", return_value=fake_settings),
+            patch(
+                "graphora_server.utils.llm_helper.AIConfigService", return_value=fake_ai
+            ),
+        ):
+            _registry, model, provider = await llm_helper.get_baml_registry_for_user(
+                "u1"
+            )
+        assert provider == "openai"
+        assert model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_db_backed_anthropic_dispatches_correctly(self) -> None:
+        """graphora-api#23: per-user anthropic config → DynamicAnthropic registry."""
+        fake_settings = MagicMock(LLM_PROVIDER=None, OLLAMA_HOST="x", OLLAMA_MODEL="x")
+        fake_ai = MagicMock()
+        fake_ai.get_user_ai_config = AsyncMock(return_value={"x": 1})
+        fake_ai.get_user_provider_secret = AsyncMock(
+            return_value=("anthropic", "sk-ant-test", "claude-sonnet-4-6")
+        )
+        with (
+            patch("graphora_server.config.get_settings", return_value=fake_settings),
+            patch(
+                "graphora_server.utils.llm_helper.AIConfigService", return_value=fake_ai
+            ),
+        ):
+            _registry, model, provider = await llm_helper.get_baml_registry_for_user(
+                "u1"
+            )
+        assert provider == "anthropic"
+        assert model == "claude-sonnet-4-6"
 
     # ---- B5-obs slice 3: model_override routing ------------------------
 
