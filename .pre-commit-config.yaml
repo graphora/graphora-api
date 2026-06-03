@@ -1,0 +1,47 @@
+# Pre-commit hooks for graphora-api.
+#
+# Bootstrap: ``make install-hooks`` (runs ``pre-commit install`` against
+# this repo). After that, every ``git commit`` runs the hooks below
+# before the commit is recorded.
+#
+# Why: this repo has a codegen step (``baml-cli generate``) that emits
+# files with formatting subtly different from what local black accepts.
+# Targeted ``black <my-files>`` misses those, but ``black .`` from this
+# hook catches them. Same pattern for vulture's dead-code scan, which
+# only fires when run over the whole tree.
+#
+# Override (admin / urgent fix): ``git commit --no-verify``.
+
+repos:
+  - repo: local
+    hooks:
+      # ─── black: format Python ────────────────────────────────────────
+      # Autofixes files in-place. If any file is modified, pre-commit
+      # aborts the commit — re-stage and re-commit.
+      - id: black
+        name: black (format Python)
+        entry: uv run black
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      # ─── ruff: lint + autofix Python ─────────────────────────────────
+      # Same autofix posture as black — modifies files in-place, pre-
+      # commit aborts on changes so the staged set matches what runs.
+      - id: ruff
+        name: ruff (lint + autofix Python)
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      # ─── vulture: dead-code scan (whole repo) ────────────────────────
+      # Doesn't modify files. Runs unconditionally over the whole tree
+      # — passing changed files only would miss cross-file dead code
+      # (e.g., a fixture used in one file but never imported elsewhere).
+      - id: vulture
+        name: vulture (dead-code scan, whole repo)
+        entry: make deadcode
+        language: system
+        pass_filenames: false
+        always_run: true
