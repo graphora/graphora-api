@@ -37,7 +37,6 @@ from graphora_server.utils.logger import logger
 from graphora_server.utils.llm_helper import (
     create_gemini_client,
     get_baml_registry_for_user,
-    get_user_llm_credentials,
 )
 from graphora_server.config import settings
 
@@ -227,12 +226,44 @@ class LLMClient:
         transform_id: Optional[str] = None,
         document_usage_id: Optional[str] = None,
     ) -> BaseModel:
-        """Extract entities and relationships from PDF"""
+        """Extract entities from PDF — provider-aware routing.
+
+        Gemini users get the native PDF flow (binary PDF input, layout
+        + OCR preserved by Gemini's multimodal handling). Non-Gemini
+        users (openai / anthropic / ollama) get a PDF→text fallback
+        that routes through ``extract_nodes_from_chunk`` — same BAML
+        cross-provider chunk extraction the rest of the pipeline uses.
+
+        #18 Phase 3.
+        """
         if not user_id:
             raise ValueError("user_id is required to get LLM credentials")
 
-        # Get user's LLM credentials
-        api_key, model_name = await get_user_llm_credentials(user_id)
+        # Provider-aware dispatch — bypass get_user_llm_credentials
+        # (which raises UnsupportedProviderError for non-Gemini) so we
+        # can route to the chunk-based fallback.
+        from graphora_server.services.ai_config_service import AIConfigService
+        from graphora_server.exceptions import NoAIConfigurationError
+
+        secret = await AIConfigService().get_user_provider_secret(user_id)
+        if not secret:
+            raise NoAIConfigurationError(user_id)
+        provider_name, api_key, configured_model = secret
+
+        if provider_name != "gemini":
+            return await self._extract_nodes_from_pdf_via_text(
+                pdf_path=pdf_path,
+                response_model=response_model,
+                ontology_yaml=ontology_yaml,
+                context=context,
+                user_id=user_id,
+                model_id=model_id,
+                transform_id=transform_id,
+                document_usage_id=document_usage_id,
+            )
+
+        # Gemini-native path: full PDF binary → Gemini's multimodal API.
+        model_name = configured_model
 
         # Use provided model_id or default to user's configured model
         model_to_use = model_id if model_id else model_name
@@ -442,12 +473,38 @@ class LLMClient:
         transform_id: Optional[str] = None,
         document_usage_id: Optional[str] = None,
     ) -> BaseModel:
-        """Extract entities and relationships from PDF"""
+        """Extract relationships from PDF — provider-aware routing.
+
+        Mirrors ``extract_nodes_from_pdf``: Gemini-native binary PDF
+        flow for gemini users, PDF→text fallback to
+        ``extract_relationships_from_chunk`` for openai / anthropic /
+        ollama. #18 Phase 3.
+        """
         if not user_id:
             raise ValueError("user_id is required to get LLM credentials")
 
-        # Get user's LLM credentials
-        api_key, model_name = await get_user_llm_credentials(user_id)
+        from graphora_server.services.ai_config_service import AIConfigService
+        from graphora_server.exceptions import NoAIConfigurationError
+
+        secret = await AIConfigService().get_user_provider_secret(user_id)
+        if not secret:
+            raise NoAIConfigurationError(user_id)
+        provider_name, api_key, configured_model = secret
+
+        if provider_name != "gemini":
+            return await self._extract_relationships_from_pdf_via_text(
+                pdf_path=pdf_path,
+                response_model=response_model,
+                ontology_yaml=ontology_yaml,
+                context=context,
+                user_id=user_id,
+                model_id=model_id,
+                transform_id=transform_id,
+                document_usage_id=document_usage_id,
+            )
+
+        # Gemini-native path: full PDF binary → Gemini's multimodal API.
+        model_name = configured_model
 
         # Use provided model_id or default to user's configured model
         model_to_use = model_id if model_id else model_name
@@ -636,6 +693,100 @@ class LLMClient:
             },
         )
         return result_model
+
+    # ─── PDF → text fallback for non-Gemini providers (#18 Phase 3) ────
+
+    async def _extract_nodes_from_pdf_via_text(
+        self,
+        pdf_path: str,
+        response_model: Type[BaseModel],
+        ontology_yaml: str,
+        context: str,
+        user_id: str,
+        model_id: Optional[str],
+        transform_id: Optional[str],
+        document_usage_id: Optional[str],
+    ) -> BaseModel:
+        """Non-Gemini PDF extraction via PDF→text + BAML chunk extraction.
+
+        Trade-off vs the Gemini-native path: loses Gemini's
+        layout-aware OCR; gains cross-provider support. For non-
+        Gemini users this is the best we can do without standing up
+        per-provider PDF parsers (Anthropic/OpenAI vision flows are
+        future work).
+
+        Large PDFs are passed to chunk extraction as a single chunk —
+        if the resulting text exceeds the configured provider's
+        context window, the BAML call will surface a clear context-
+        limit error rather than failing silently here.
+        """
+        from graphora_server.services.document_parser import DocumentParser
+
+        parser = DocumentParser()
+        pdf_text = await parser.parse_file(pdf_path)
+        if not pdf_text:
+            raise ValueError(
+                f"Could not extract text from PDF at {pdf_path}. "
+                "PDF→text fallback (for non-Gemini providers) requires "
+                "a parseable PDF — switch to gemini provider for "
+                "native PDF handling, or check pymupdf / pypdf install."
+            )
+
+        logger.info(
+            "Non-Gemini PDF extraction via text fallback",
+            extra={
+                "transform_id": transform_id,
+                "pdf_path": pdf_path,
+                "pdf_text_chars": len(pdf_text),
+            },
+        )
+
+        return await self.extract_nodes_from_chunk(
+            chunk=pdf_text,
+            response_model=response_model,
+            ontology_yaml=ontology_yaml,
+            context=context,
+            user_id=user_id,
+            transform_id=transform_id,
+            document_usage_id=document_usage_id,
+            model_override=model_id,
+        )
+
+    async def _extract_relationships_from_pdf_via_text(
+        self,
+        pdf_path: str,
+        response_model: Type[BaseModel],
+        ontology_yaml: str,
+        context: str,
+        user_id: str,
+        model_id: Optional[str],
+        transform_id: Optional[str],
+        document_usage_id: Optional[str],
+    ) -> BaseModel:
+        """Non-Gemini PDF relationship extraction — mirrors
+        ``_extract_nodes_from_pdf_via_text`` but routes through
+        ``extract_relationships_from_chunk``."""
+        from graphora_server.services.document_parser import DocumentParser
+
+        parser = DocumentParser()
+        pdf_text = await parser.parse_file(pdf_path)
+        if not pdf_text:
+            raise ValueError(
+                f"Could not extract text from PDF at {pdf_path}. "
+                "See _extract_nodes_from_pdf_via_text for the same "
+                "constraint and remediation."
+            )
+
+        return await self.extract_relationships_from_chunk(
+            chunk=pdf_text,
+            response_model=response_model,
+            ontology_yaml=ontology_yaml,
+            context=context,
+            user_id=user_id,
+            transform_id=transform_id,
+            document_usage_id=document_usage_id,
+            model_override=model_id,
+        )
 
     # @cached(ttl=86400,
     #     key_builder=lambda f, *args, **kwargs: f"{md5(args[1])+':'+str(kwargs['response_model'])}")

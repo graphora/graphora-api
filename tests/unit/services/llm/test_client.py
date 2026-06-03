@@ -614,20 +614,21 @@ class TestLLMClient:
 
     @pytest.mark.asyncio
     async def test_extract_nodes_should_use_cache_on_hit(self):
-        """Should return cached result on cache hit."""
+        """Documents the cache-on-hit contract — the cache module
+        exists and is reachable from the client module.
+
+        #18 Phase 3 removed the ``get_user_llm_credentials`` patch
+        this previously stacked — that helper is no longer imported
+        by client.py after the provider-aware PDF routing landed.
+        """
         from graphora_server.services.llm.client import _PDF_NODE_CACHE
 
         # Pre-populate cache
         cached_result = {"entities": [{"name": "Acme"}]}
 
         with patch.object(_PDF_NODE_CACHE, "get", return_value=cached_result):
-            with patch(
-                "graphora_server.services.llm.client.get_user_llm_credentials",
-                return_value=("api-key", "model"),
-            ):
-                # The actual extraction should be skipped due to cache hit
-                # This documents the expected caching behavior
-                pass
+            # The actual extraction should be skipped due to cache hit.
+            pass
 
 
 # ============================================================
