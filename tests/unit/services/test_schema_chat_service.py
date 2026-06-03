@@ -46,10 +46,16 @@ def service():
     return SchemaChatService()
 
 
-@pytest.fixture
-def chat_service_stub(service):
+@pytest.fixture(name="_chat_service_stub")
+def chat_service_stub_fixture(service):
     """Mock the underlying chat session storage so we can focus tests
-    on the streaming flow."""
+    on the streaming flow.
+
+    The fixture is requested with a leading underscore in test method
+    signatures so vulture's dead-code scan doesn't flag the parameter
+    as unused — pytest injects the fixture for its side effect
+    (``service.chat_service = stub``), not for the returned value.
+    """
     stub = MagicMock()
     stub.add_message = AsyncMock()
     stub.get_session_history = AsyncMock(
@@ -65,7 +71,7 @@ def chat_service_stub(service):
 class TestStreamChatResponse:
     @pytest.mark.asyncio
     async def test_yields_text_deltas_not_duplicates(
-        self, service, chat_service_stub
+        self, service, _chat_service_stub
     ) -> None:
         """BAML yields the GROWING accumulated string per partial.
         The service must compute the delta so the FE doesn't render
@@ -93,7 +99,7 @@ class TestStreamChatResponse:
 
     @pytest.mark.asyncio
     async def test_schema_block_surfaces_as_schema_update_event(
-        self, service, chat_service_stub
+        self, service, _chat_service_stub
     ) -> None:
         """When the accumulated response contains a schema block, a
         schema_update event fires with the extracted YAML."""
@@ -129,7 +135,7 @@ class TestStreamChatResponse:
 
     @pytest.mark.asyncio
     async def test_registry_threaded_through_baml_options(
-        self, service, chat_service_stub
+        self, service, _chat_service_stub
     ) -> None:
         """Provider honored — the registry from
         get_baml_registry_for_user must reach the BAML stream call."""
@@ -156,7 +162,7 @@ class TestStreamChatResponse:
 
     @pytest.mark.asyncio
     async def test_baml_failure_surfaces_as_error_event(
-        self, service, chat_service_stub
+        self, service, _chat_service_stub
     ) -> None:
         """BAML stream raises → service yields a single error event
         rather than letting the exception propagate."""
