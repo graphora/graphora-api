@@ -178,6 +178,37 @@ function RefineSchemaConversational(
   "#
 }
 
+// Free-flow schema chat — streaming, cross-provider. Drop-in
+// replacement for the legacy direct-genai ``generate_content_stream``
+// call in schema_chat_service.py. Returns plain text (BAML's stream
+// yields the growing string per partial); the service layer extracts
+// ```schema ... ``` blocks via regex on the accumulated response so
+// the partial-detection contract stays identical to the pre-BAML
+// behavior.
+function StreamSchemaChat(
+  system_prompt: string,
+  conversation_history: string,
+  current_schema: string,
+  user_message: string
+) -> string {
+  client DynamicGemini
+  prompt #"
+    {{ system_prompt }}
+
+    **Current Schema:**
+    ```yaml
+    {{ current_schema }}
+    ```
+
+    **Conversation History:**
+    {{ conversation_history }}
+
+    **User:** {{ user_message }}
+
+    **Assistant:**
+  "#
+}
+
 // Schema Refinement Function
 function RefineKnowledgeGraphSchema(
   current_schema_yaml: string,

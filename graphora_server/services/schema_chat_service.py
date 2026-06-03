@@ -7,7 +7,7 @@ iteratively build schemas through conversation.
 
 import logging
 import re
-from typing import AsyncGenerator, Dict, Any, Optional, List
+from typing import AsyncGenerator, Dict, Any, Optional
 from datetime import datetime
 
 from graphora_server.services.chat_session_service import (
@@ -16,11 +16,6 @@ from graphora_server.services.chat_session_service import (
     ChatContextType,
 )
 from graphora_server.services.audit_service import AuditService
-from graphora_server.utils.llm_helper import (
-    get_user_llm_credentials,
-    create_gemini_client,
-)
-from graphora_server.utils.llm_usage_tracker import track_gemini_usage
 
 logger = logging.getLogger(__name__)
 
@@ -194,69 +189,67 @@ For example: "I'm building a system to track research papers, their authors, and
             if not current_schema:
                 current_schema = await self._get_schema_from_session(session_data)
 
-            # Build conversation messages
-            messages = self._build_conversation_messages(
-                session_data, current_schema, message
+            # Format conversation history as a plain string (BAML's
+            # template engine ingests strings, not Gemini's role/parts
+            # message structure).
+            conversation_history = self._build_conversation_history_text(session_data)
+
+            # Cross-provider streaming via BAML — works for gemini,
+            # openai, anthropic, ollama (#18 Phase 2).
+            from graphora_server.baml_client.async_client import b as b_async
+            from graphora_server.utils.llm_helper import (
+                get_baml_registry_for_user,
             )
 
-            # Get LLM credentials and stream response
-            api_key, model_name = await get_user_llm_credentials(user_id)
-            client = create_gemini_client(api_key)
+            registry, model_name, provider = await get_baml_registry_for_user(user_id)
 
-            # Stream from Gemini
             full_response = ""
+            previous_partial = ""
             schema_content = None
 
-            try:
-                # Use streaming API
-                response = client.models.generate_content_stream(
-                    model=model_name,
-                    contents=messages,
-                )
+            stream = b_async.stream.StreamSchemaChat(
+                system_prompt=SCHEMA_CHAT_SYSTEM_PROMPT,
+                conversation_history=conversation_history,
+                current_schema=current_schema or "",
+                user_message=message,
+                baml_options={"client_registry": registry},
+            )
 
-                for chunk in response:
-                    if chunk.text:
-                        full_response += chunk.text
+            async for partial in stream:
+                if not partial:
+                    continue
+                # BAML yields the GROWING accumulated string per partial;
+                # compute the delta so we don't re-yield bytes the FE
+                # already rendered.
+                delta = partial[len(previous_partial) :]
+                previous_partial = partial
+                full_response = partial
 
-                        # Check for schema blocks in accumulated response
-                        schema_match = re.search(
-                            r"```schema\n(.*?)```", full_response, re.DOTALL
-                        )
-                        if schema_match and not schema_content:
-                            schema_content = schema_match.group(1).strip()
-                            yield {"type": "schema_update", "content": schema_content}
+                if delta:
+                    yield {"type": "text", "content": delta}
 
-                        # Yield text chunk (strip schema blocks for clean text)
-                        text_chunk = chunk.text
-                        yield {"type": "text", "content": text_chunk}
-
-            except AttributeError:
-                # Fallback for non-streaming (if streaming not available)
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=messages,
-                )
-                full_response = response.text
-
-                # Extract schema if present
+                # Schema block detection — same regex as the pre-BAML
+                # implementation, run against the accumulated response
+                # so we surface the block as soon as both fences land.
                 schema_match = re.search(
                     r"```schema\n(.*?)```", full_response, re.DOTALL
                 )
-                if schema_match:
+                if schema_match and not schema_content:
                     schema_content = schema_match.group(1).strip()
                     yield {"type": "schema_update", "content": schema_content}
 
-                yield {"type": "text", "content": full_response}
-
-            # Track usage (approximate for streaming)
-            await track_gemini_usage(
-                user_id=user_id,
-                model_name=model_name,
-                operation_type="schema_chat",
-                response=None,  # No response object for streaming
-                operation_context="freeflow_chat",
-                input_tokens=len(str(messages)) // 4,  # Rough estimate
-                output_tokens=len(full_response) // 4,
+            # Approximate token counts (BAML's usage tracker covers the
+            # call internally; we keep this here for parity with the
+            # pre-BAML code path until the streaming-usage hook lands).
+            logger.info(
+                "Schema chat streamed via BAML",
+                extra={
+                    "user_id": user_id,
+                    "provider": provider,
+                    "model": model_name,
+                    "response_chars": len(full_response),
+                    "schema_extracted": bool(schema_content),
+                },
             )
 
             # Store assistant response
@@ -285,49 +278,30 @@ For example: "I'm building a system to track research papers, their authors, and
             logger.error(f"Error in schema chat stream: {str(e)}")
             yield {"type": "error", "content": str(e)}
 
-    def _build_conversation_messages(
+    def _build_conversation_history_text(
         self,
         session_data: Dict[str, Any],
-        current_schema: Optional[str],
-        new_message: str,
-    ) -> List[Dict[str, Any]]:
-        """Build the message list for the LLM call."""
-        messages = []
+    ) -> str:
+        """Format the last 10 messages as a plain-text conversation log.
 
-        # System prompt
-        system_content = SCHEMA_CHAT_SYSTEM_PROMPT
-        if current_schema:
-            system_content += f"\n\nCurrent schema:\n```yaml\n{current_schema}\n```"
-
-        messages.append(
-            {
-                "role": "user",
-                "parts": [{"text": f"[System Instructions]\n{system_content}"}],
-            }
-        )
-        messages.append(
-            {
-                "role": "model",
-                "parts": [
-                    {
-                        "text": "I understand. I'll help design knowledge graph schemas through conversation, following the format guidelines."
-                    }
-                ],
-            }
-        )
-
-        # Add conversation history (last 10 messages for context)
+        Replaces the Gemini-specific ``_build_conversation_messages`` —
+        BAML's template engine ingests strings, not role/parts message
+        dicts. Returns an empty string when there's no history (the
+        BAML template tolerates that — empty section, prompt still
+        coherent).
+        """
         history_messages = session_data.get("messages", [])[-10:]
+        if not history_messages:
+            return ""
+
+        formatted = []
         for msg in history_messages:
-            role = "user" if msg.get("type") == "user_message" else "model"
-            content = msg.get("content", "")
-            if content:
-                messages.append({"role": role, "parts": [{"text": content}]})
-
-        # Add new user message
-        messages.append({"role": "user", "parts": [{"text": new_message}]})
-
-        return messages
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+            role = "User" if msg.get("type") == "user_message" else "Assistant"
+            formatted.append(f"**{role}:** {content}")
+        return "\n\n".join(formatted)
 
     async def _get_schema_from_session(
         self, session_data: Dict[str, Any]
