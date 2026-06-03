@@ -327,7 +327,9 @@ async def get_baml_registry_for_user(
         return registry, effective_model, "gemini"
     if provider_name == "ollama":
         extras = await ai_config_service.get_user_provider_extras(user_id) or {}
-        host = extras.get("base_url") or api_key or settings.OLLAMA_HOST
+        host = _resolve_ollama_host(
+            extras.get("base_url"), api_key, settings.OLLAMA_HOST
+        )
         registry = create_baml_client_registry(
             api_key="",
             model_name=effective_model,
@@ -397,9 +399,45 @@ async def get_llm_client_for_user(
     if provider_name == "gemini":
         return create_gemini_client(api_key), model_name, "gemini"
     if provider_name == "ollama":
-        # DB-backed Ollama config: the api_key column doubles as the
-        # Ollama host URL (no schema migration). Empty value falls back
-        # to the env default for local-dev convenience.
-        host = api_key or settings.OLLAMA_HOST
+        # DB-backed Ollama config: legacy schema stored the host in the
+        # api_key column. The multi-provider refactor moved that to
+        # config_data.base_url — but legacy rows may still carry a URL
+        # in api_key. Use the shared resolver so non-URL placeholders
+        # (e.g., "ollama") don't get routed to as if they were hosts.
+        extras = await ai_config_service.get_user_provider_extras(user_id) or {}
+        host = _resolve_ollama_host(
+            extras.get("base_url"), api_key, settings.OLLAMA_HOST
+        )
         return create_ollama_client(host, model_name), model_name, "ollama"
     raise UnsupportedProviderError(provider_name)
+
+
+def _resolve_ollama_host(
+    stored_base_url: Optional[str],
+    api_key: str,
+    env_default: str,
+) -> str:
+    """Pick the Ollama server URL for a user.
+
+    Priority (first non-empty wins):
+      1. ``config_data.base_url`` — the canonical home set via the
+         multi-provider ``/ai-config/{provider}`` endpoint.
+      2. ``api_key`` column — only when it looks like a URL.
+         Backward-compat for legacy Ollama rows that pre-date the
+         ``base_url`` field, when the api_key column doubled as the
+         host. Without the URL-shape guard, placeholder values like
+         ``"ollama"`` (which the UI prompts users to enter when their
+         Ollama server has no auth) would silently route requests to
+         the literal string ``ollama`` instead of localhost.
+      3. ``OLLAMA_HOST`` env — the local-dev default.
+
+    Fix for PR #24 review High: blank-endpoint UX promise ("defaults
+    to http://localhost:11434") was broken by the unconditional
+    ``api_key`` fallback. With the URL-shape check, blank base_url +
+    placeholder api_key now lands on the env default as advertised.
+    """
+    if stored_base_url:
+        return stored_base_url
+    if api_key and (api_key.startswith("http://") or api_key.startswith("https://")):
+        return api_key
+    return env_default

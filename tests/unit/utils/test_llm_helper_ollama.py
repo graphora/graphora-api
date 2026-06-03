@@ -209,6 +209,10 @@ async def test_db_backed_ollama_uses_api_key_column_as_host() -> None:
     fake_ai_config.get_user_provider_secret = AsyncMock(
         return_value=("ollama", "http://192.168.1.42:11434", "qwen2.5")
     )
+    # PR #24 review High fix: get_llm_client_for_user now consults
+    # config_data.base_url too. No override here — legacy api_key (which
+    # is URL-shaped) still wins.
+    fake_ai_config.get_user_provider_extras = AsyncMock(return_value=None)
 
     with (
         patch.dict("sys.modules", {"ollama": fake_module}),
@@ -224,7 +228,7 @@ async def test_db_backed_ollama_uses_api_key_column_as_host() -> None:
 
     assert provider == "ollama"
     assert model_name == "qwen2.5"
-    # Host from the stored config wins, not the env default.
+    # Host from the stored URL-shaped api_key wins, not the env default.
     fake_module.Client.assert_called_once_with(host="http://192.168.1.42:11434")
 
 
@@ -425,6 +429,55 @@ class TestBamlRegistryForUser:
         ):
             with pytest.raises(UnsupportedProviderError):
                 await llm_helper.get_baml_registry_for_user("u1")
+
+    @pytest.mark.asyncio
+    async def test_ollama_placeholder_api_key_does_not_become_host(self) -> None:
+        """Regression for PR #24 review High.
+
+        When the UI saves with blank base_url + the placeholder
+        api_key ``"ollama"`` (as the multi-provider form prompts users
+        to do for no-auth Ollama servers), the BAML routing layer used
+        to ``or``-fallthrough to api_key as host — which silently
+        routed requests to the literal string ``ollama/v1`` instead of
+        the env default ``http://localhost:11434/v1``.
+        """
+        fake_settings = MagicMock(
+            LLM_PROVIDER=None,
+            OLLAMA_HOST="http://localhost:11434",
+            OLLAMA_MODEL="x",
+        )
+        fake_ai = MagicMock()
+        fake_ai.get_user_ai_config = AsyncMock(return_value={"x": 1})
+        fake_ai.get_user_provider_secret = AsyncMock(
+            return_value=("ollama", "ollama", "llama3.3:70b")
+        )
+        # User didn't fill in base_url — extras returns no override
+        fake_ai.get_user_provider_extras = AsyncMock(return_value={})
+
+        captured: dict = {}
+
+        def capture_registry(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        with (
+            patch("graphora_server.config.get_settings", return_value=fake_settings),
+            patch(
+                "graphora_server.utils.llm_helper.AIConfigService", return_value=fake_ai
+            ),
+            patch(
+                "graphora_server.utils.llm_helper.create_baml_client_registry",
+                side_effect=capture_registry,
+            ),
+        ):
+            _registry, _model, provider = await llm_helper.get_baml_registry_for_user(
+                "u1"
+            )
+
+        assert provider == "ollama"
+        # Host MUST be the env default, NOT the placeholder api_key.
+        assert captured["base_url"] == "http://localhost:11434"
+        assert captured["base_url"] != "ollama"
 
     @pytest.mark.asyncio
     async def test_db_backed_openai_dispatches_correctly(self) -> None:

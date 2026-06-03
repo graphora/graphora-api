@@ -58,13 +58,26 @@ class AIConfigService:
 
     async def get_models_by_provider(self, provider_name: str) -> List[AIModel]:
         """
-        Get all available models for a specific provider
+        Get all curated models for a specific provider.
+
+        Excludes user-added ``version='custom'`` rows from the public
+        catalog response. These rows are created by
+        ``_resolve_or_create_model_id`` when a user types a free-form
+        model name — they need to be persisted (the per-user join in
+        ``get_user_ai_config`` resolves the model from this table),
+        but surfacing them in the shared catalog would leak one
+        tenant's private deployment / model names into every other
+        user's dropdown (PR #24 review High).
+
+        Users still see their own custom model in the form: the UI
+        detects when the stored name is missing from the catalog and
+        auto-toggles to a pre-filled text input.
 
         Args:
             provider_name: Name of the provider (e.g., 'gemini')
 
         Returns:
-            List[AIModel]: List of available models for the provider
+            List[AIModel]: Curated, shared-safe models for the provider.
         """
         try:
             rows = await db.fetch(
@@ -72,7 +85,9 @@ class AIConfigService:
                 SELECT m.*
                 FROM ai_models m
                 JOIN ai_providers p ON m.provider_id = p.id
-                WHERE p.name = %s AND m.is_active = TRUE
+                WHERE p.name = %s
+                  AND m.is_active = TRUE
+                  AND m.version IS DISTINCT FROM 'custom'
                 """,
                 provider_name,
             )
