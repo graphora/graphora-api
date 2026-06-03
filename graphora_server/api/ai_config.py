@@ -160,9 +160,7 @@ async def create_provider_config(
         )
         raise HTTPException(status_code=status, detail=msg)
     except Exception as e:
-        logger.error(
-            f"Error creating {provider} configuration for {user_id}: {str(e)}"
-        )
+        logger.error(f"Error creating {provider} configuration for {user_id}: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
@@ -200,9 +198,7 @@ async def update_provider_config(
         )
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(
-            f"Error updating {provider} configuration for {user_id}: {str(e)}"
-        )
+        logger.error(f"Error updating {provider} configuration for {user_id}: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
