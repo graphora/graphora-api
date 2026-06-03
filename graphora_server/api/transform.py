@@ -156,7 +156,11 @@ async def run_transform_flow(
         raise
 
 
-@router.post("/transform/{ontology_id}/upload", response_model=TransformInitResponse)
+@router.post(
+    "/transform/{ontology_id}/upload",
+    response_model=TransformInitResponse,
+    summary="Extract using a registered ontology",
+)
 async def upload_documents(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -167,18 +171,24 @@ async def upload_documents(
         None, description="JSON string of chunking configuration"
     ),
 ) -> TransformInitResponse:
-    """
-    Upload documents for processing using Prefect workflow
+    """Run extraction with a pre-registered ontology.
 
-    Args:
-        request: FastAPI request object
-        background_tasks: FastAPI background tasks
-        ontology_id: Ontology ID to use for transformation
-        user_id: User's ID (from header)
-        files: List of files to process
+    The pipeline is biased toward the entity and relationship types
+    declared in the ontology (registered via `POST /ontology`).
 
-    Returns:
-        TransformInitResponse with Prefect flow_id for tracking progress
+    **Schema-free alternatives** — no separate ontology step required:
+
+    - `POST /transform/upload` — auto-infers an ontology from
+      document content *before* extracting.
+    - `POST /transform/schemaless/upload` — extracts with a generic
+      schema; ontology emerges from results and is refined post-hoc
+      via `GET /transform/{id}/inferred-ontology` +
+      `POST /transform/{id}/finalize-ontology`.
+
+    Example:
+
+        curl -X POST /api/v1/transform/{ontology_id}/upload \\
+            -F "files=@doc.pdf"
     """
     start_time = time.time()
     temp_dir = Path(settings.UPLOAD_DIR)
@@ -363,7 +373,11 @@ async def upload_documents(
         raise
 
 
-@router.post("/transform/upload", response_model=TransformInitResponse)
+@router.post(
+    "/transform/upload",
+    response_model=TransformInitResponse,
+    summary="Extract with auto-inferred ontology (zero-config)",
+)
 async def upload_documents_auto_schema(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -376,22 +390,24 @@ async def upload_documents_auto_schema(
         None, description="JSON string of chunking configuration"
     ),
 ) -> TransformInitResponse:
-    """
-    Upload documents for processing with auto-generated schema.
+    """Zero-config extraction: auto-infer the ontology, then extract.
 
-    This endpoint enables zero-config document processing by automatically
-    inferring an appropriate ontology schema from the document content.
+    This endpoint peeks at uploaded document text to infer an
+    ontology, then runs extraction biased toward that ontology.
+    **No `ontology_id` required** — there is no separate
+    `POST /ontology` registration step.
 
-    Args:
-        request: FastAPI request object
-        background_tasks: FastAPI background tasks
-        user_id: User's ID (from header)
-        files: List of files to process
-        auto_schema: Whether to auto-generate schema (default: True)
-        chunking_config: Optional chunking configuration JSON
+    **Related modes**:
 
-    Returns:
-        TransformInitResponse with transform_id for tracking progress
+    - `POST /transform/{ontology_id}/upload` — when you have a
+      pre-registered ontology you want to enforce.
+    - `POST /transform/schemaless/upload` — when you want to
+      defer ontology design until *after* seeing extraction
+      results (no pre-extraction schema bias).
+
+    Example:
+
+        curl -X POST /api/v1/transform/upload -F "files=@doc.pdf"
     """
     start_time = time.time()
     temp_dir = Path(settings.UPLOAD_DIR)
@@ -826,7 +842,11 @@ async def get_inferred_ontology(
             graph_service.close()
 
 
-@router.post("/transform/schemaless/upload", response_model=TransformInitResponse)
+@router.post(
+    "/transform/schemaless/upload",
+    response_model=TransformInitResponse,
+    summary="Extract with generic schema, refine ontology post-hoc",
+)
 async def upload_documents_schemaless(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -836,20 +856,34 @@ async def upload_documents_schemaless(
         None, description="JSON string of chunking configuration"
     ),
 ) -> TransformInitResponse:
-    """Start an extraction without pre-committing to a schema.
+    """Extract first, refine the ontology after — no pre-extraction schema bias.
 
-    Unlike ``/transform/upload`` (which peeks at the document text
-    to infer an ontology BEFORE extraction) this endpoint uses the
-    default generic schema to run extraction, then leaves post-hoc
-    ontology refinement to the agent/user via:
+    Unlike `/transform/upload` (which peeks at document text to
+    infer an ontology *before* extraction), this endpoint uses
+    the default generic schema (`Person`, `Organization`,
+    `Concept`, `Entity`) to run extraction, then leaves ontology
+    refinement to the agent or user via:
 
         GET  /transform/{id}/inferred-ontology   (preview)
-        POST /transform/{id}/finalize-ontology   (save the refinement)
+        POST /transform/{id}/finalize-ontology   (save refinement)
 
-    Effect on the pipeline: the LLM is not biased by a pre-inferred
-    category list — it extracts into broad buckets (Person,
-    Organization, Concept, Entity) and the specific refined types
-    emerge from what was actually surfaced.
+    Effect on the pipeline: the LLM is **not** biased by a
+    pre-inferred category list — it extracts into broad buckets
+    and the specific refined types emerge from what was actually
+    surfaced. Use this when you don't trust pre-extraction schema
+    inference to anticipate the corpus.
+
+    **Related modes**:
+
+    - `POST /transform/upload` — auto-infer ontology *before*
+      extracting (faster, biases toward what's expected).
+    - `POST /transform/{ontology_id}/upload` — when you already
+      have a pre-registered ontology.
+
+    Example:
+
+        curl -X POST /api/v1/transform/schemaless/upload \\
+            -F "files=@doc.pdf"
     """
     from graphora_server.services.schema_inference import get_default_generic_schema
     from graphora_server.services.ontology_storage_service import (
