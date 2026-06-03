@@ -267,21 +267,54 @@ class AIConfigService:
     async def _resolve_or_create_model_id(
         self, provider_id: str, model_name: str
     ) -> str:
-        """Return model_id for (provider_id, model_name).
+        """Return model_id for (provider_id, model_name) — strict.
 
-        If the model is in the curated catalog, returns its id. If not,
-        auto-registers it as ``version='custom'`` and returns the new id
-        — supports the UI's free-form model input without forcing users
-        to wait for catalog updates.
+        Behavior:
+
+          * Active row exists → returns its id.
+          * Inactive row exists (deactivated by a catalog refresh, e.g.,
+            ``gpt-4-turbo`` after migration 23) → raises ``ValueError``
+            with a clear "deprecated" message. This is the fix for
+            #29 — previously users could silently re-enable a
+            deprecated model by typing its name in the UI's custom
+            input, then discover the deprecation at extraction time
+            when OpenAI rejected the model.
+          * No row exists → auto-registers as ``version='custom'`` and
+            returns the new id (supports the UI's free-form model
+            input for genuinely-new model names).
+
+        Callers updating an existing user config with an UNCHANGED
+        model name should NOT route through this method — use
+        ``_resolve_existing_model_id`` instead, which preserves
+        backward compat for users whose stored model has since been
+        deactivated.
         """
-        row = await db.fetchrow(
-            "SELECT id FROM ai_models WHERE provider_id = %s AND name = %s",
+        active_row = await db.fetchrow(
+            "SELECT id FROM ai_models WHERE provider_id = %s AND name = %s AND is_active = TRUE",
             provider_id,
             model_name,
         )
-        if row:
-            return row["id"]
+        if active_row:
+            return active_row["id"]
 
+        # No active match — check for a deactivated row before
+        # auto-registering as custom. If a deprecated curated row
+        # exists with this name, reject loudly rather than silently
+        # routing the user to a known-broken model.
+        deactivated = await db.fetchrow(
+            "SELECT id, version FROM ai_models WHERE provider_id = %s AND name = %s AND is_active = FALSE",
+            provider_id,
+            model_name,
+        )
+        if deactivated:
+            raise ValueError(
+                f"Model '{model_name}' has been deprecated and is no "
+                "longer supported. Pick a current model from the "
+                "provider's catalog (GET /ai-models/{provider}) — "
+                "the dropdown in Settings reflects the current set."
+            )
+
+        # Genuinely new name — auto-register as custom.
         new_id = str(uuid.uuid4())
         await db.fetchrow(
             """
@@ -300,6 +333,25 @@ class AIConfigService:
             f"under provider_id {provider_id}"
         )
         return new_id
+
+    async def _resolve_existing_model_id(
+        self, provider_id: str, model_name: str
+    ) -> Optional[str]:
+        """Return model_id when ``(provider_id, model_name)`` already
+        exists in the catalog, regardless of ``is_active``. Returns
+        ``None`` when no row matches.
+
+        Used by ``update_provider_config`` for the
+        same-provider-same-model update path so users with stored
+        deprecated models can still update their api_key / other
+        fields without being forced to migrate model first.
+        """
+        row = await db.fetchrow(
+            "SELECT id FROM ai_models WHERE provider_id = %s AND name = %s",
+            provider_id,
+            model_name,
+        )
+        return row["id"] if row else None
 
     # ─── Generic create / update — used by /ai-config/{provider} ────
 
@@ -395,9 +447,38 @@ class AIConfigService:
                 )
 
             provider_id = await self._resolve_provider_id(provider_name)
-            model_id = await self._resolve_or_create_model_id(
-                provider_id, config_request.default_model_name
+
+            # #29: model-name resolution is strict (rejects deprecated
+            # rows) by default. But for users updating their own config
+            # with the SAME model name they had before — typically just
+            # rotating their api_key — we preserve backward compat by
+            # resolving the existing row regardless of is_active.
+            # Without this, a user whose stored model was since
+            # deactivated by a catalog refresh (e.g., migration 23
+            # deactivating gpt-4-turbo) couldn't update their api_key
+            # without also changing model — a confusing regression on
+            # what should be a routine rotation.
+            same_provider = existing_config.provider_name == provider_name
+            same_model = (
+                existing_config.default_model_name == config_request.default_model_name
             )
+            if same_provider and same_model:
+                model_id = await self._resolve_existing_model_id(
+                    provider_id, config_request.default_model_name
+                )
+                # Defensive fallthrough: if somehow the existing row
+                # vanished between get_user_ai_config and now, fall to
+                # strict resolution (which will raise if deactivated
+                # or auto-register if genuinely new).
+                if model_id is None:
+                    model_id = await self._resolve_or_create_model_id(
+                        provider_id, config_request.default_model_name
+                    )
+            else:
+                model_id = await self._resolve_or_create_model_id(
+                    provider_id, config_request.default_model_name
+                )
+
             encrypted_key = encrypt_password(config_request.api_key)
             config_data = self._build_config_data(config_request)
 
