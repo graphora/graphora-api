@@ -57,7 +57,12 @@ class UserAIConfig(BaseModel):
 
 
 class GeminiConfigRequest(BaseModel):
-    """Schema for creating/updating Gemini configuration"""
+    """Schema for creating/updating Gemini configuration.
+
+    Kept for backward compatibility with the legacy
+    ``/ai-config/gemini`` endpoints. New callers should use
+    ``ProviderConfigRequest`` against ``/ai-config/{provider}``.
+    """
 
     api_key: str = Field(..., description="Gemini API key")
     default_model_name: str = Field(
@@ -76,6 +81,57 @@ class GeminiConfigRequest(BaseModel):
     @validator("default_model_name")
     def validate_model_name(cls, v):
         """Validate model name is not empty"""
+        if not v or len(v.strip()) == 0:
+            raise ValueError("Model name cannot be empty")
+        return v.strip()
+
+
+class ProviderConfigRequest(BaseModel):
+    """Generic provider-config payload — used by ``/ai-config/{provider}``.
+
+    Covers all supported providers (gemini, openai, anthropic, ollama).
+    Provider-specific extras land in ``config_data``:
+
+    - ``base_url``: Ollama server URL, or OpenAI custom endpoint
+      (Azure / OpenRouter). Ignored for gemini and anthropic.
+    """
+
+    api_key: str = Field(
+        ...,
+        description=(
+            "Provider API key. For Ollama with no-auth servers, pass any "
+            "non-empty placeholder — the value is stored encrypted but "
+            "not used to authenticate the request."
+        ),
+    )
+    default_model_name: str = Field(
+        ...,
+        description=(
+            "Default model identifier. Must be a valid model name for the "
+            "provider (e.g., 'gpt-4o-mini', 'claude-sonnet-4-6', "
+            "'llama3.3:70b'). If the name is not in the curated catalog, "
+            "it is auto-registered as a custom model so the UI dropdown "
+            "shows it next time."
+        ),
+    )
+    base_url: Optional[str] = Field(
+        None,
+        description=(
+            "Provider endpoint URL. Required for Ollama (e.g., "
+            "'http://localhost:11434'), optional for OpenAI (custom "
+            "Azure / OpenRouter endpoints). Ignored for gemini and "
+            "anthropic."
+        ),
+    )
+
+    @validator("api_key")
+    def validate_api_key(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError("API key cannot be empty")
+        return v.strip()
+
+    @validator("default_model_name")
+    def validate_model_name(cls, v):
         if not v or len(v.strip()) == 0:
             raise ValueError("Model name cannot be empty")
         return v.strip()

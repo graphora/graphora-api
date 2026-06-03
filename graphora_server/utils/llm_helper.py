@@ -115,6 +115,34 @@ def create_baml_client_registry(
             },
         )
         client_registry.set_primary("DynamicOllama")
+    elif provider == "openai":
+        # ``base_url`` lets users point at Azure OpenAI, OpenRouter, or
+        # other OpenAI-compatible endpoints. None falls back to OpenAI's
+        # canonical https://api.openai.com.
+        options: dict = {
+            "model": model_name,
+            "api_key": api_key,
+            "default_options": {"temperature": 0.0},
+        }
+        if base_url:
+            options["base_url"] = base_url.rstrip("/")
+        client_registry.add_llm_client(
+            name="DynamicOpenAI",
+            provider="openai",
+            options=options,
+        )
+        client_registry.set_primary("DynamicOpenAI")
+    elif provider == "anthropic":
+        client_registry.add_llm_client(
+            name="DynamicAnthropic",
+            provider="anthropic",
+            options={
+                "model": model_name,
+                "api_key": api_key,
+                "default_options": {"temperature": 0.0},
+            },
+        )
+        client_registry.set_primary("DynamicAnthropic")
     else:
         raise UnsupportedProviderError(provider)
 
@@ -243,12 +271,18 @@ async def get_baml_registry_for_user(
     Mirrors ``get_llm_client_for_user`` but for the BAML extraction
     pipeline. Returns ``(registry, model_name, provider_name)``.
 
-    Provider resolution is identical to the genai path:
+    Provider resolution:
+
         1. ``LLM_PROVIDER=ollama`` env var → DynamicOllama registry
-        2. User's stored provider == "gemini" → DynamicGemini registry
-        3. User's stored provider == "ollama" → DynamicOllama registry,
-           api_key column doubles as the host URL (empty falls back
-           to OLLAMA_HOST env)
+        2. User's stored provider:
+           - ``gemini`` → DynamicGemini registry
+           - ``ollama`` → DynamicOllama; api_key column doubles as the
+             host URL, falls back to OLLAMA_HOST env when empty.
+             ``config_data.base_url`` also honored if set via the
+             generic ``/ai-config/{provider}`` endpoint.
+           - ``openai`` → DynamicOpenAI; optional ``config_data.base_url``
+             routes through Azure / OpenRouter / other compatible endpoints.
+           - ``anthropic`` → DynamicAnthropic.
 
     B5-obs slice 3: ``model_override`` lets the multi-pass extractor
     swap the model name without re-deriving the provider or
@@ -292,7 +326,8 @@ async def get_baml_registry_for_user(
         )
         return registry, effective_model, "gemini"
     if provider_name == "ollama":
-        host = api_key or settings.OLLAMA_HOST
+        extras = await ai_config_service.get_user_provider_extras(user_id) or {}
+        host = extras.get("base_url") or api_key or settings.OLLAMA_HOST
         registry = create_baml_client_registry(
             api_key="",
             model_name=effective_model,
@@ -300,6 +335,22 @@ async def get_baml_registry_for_user(
             base_url=host,
         )
         return registry, effective_model, "ollama"
+    if provider_name == "openai":
+        extras = await ai_config_service.get_user_provider_extras(user_id) or {}
+        registry = create_baml_client_registry(
+            api_key=api_key,
+            model_name=effective_model,
+            provider="openai",
+            base_url=extras.get("base_url"),
+        )
+        return registry, effective_model, "openai"
+    if provider_name == "anthropic":
+        registry = create_baml_client_registry(
+            api_key=api_key,
+            model_name=effective_model,
+            provider="anthropic",
+        )
+        return registry, effective_model, "anthropic"
     raise UnsupportedProviderError(provider_name)
 
 
