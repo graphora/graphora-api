@@ -1208,6 +1208,32 @@ class AsyncHttpRequest:
         False,
       )
     
+    async def StreamSchemaChat(
+        self,
+        system_prompt: str,conversation_history: str,current_schema: str,user_message: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "StreamSchemaChat",
+        {
+          "system_prompt": system_prompt,
+          "conversation_history": conversation_history,
+          "current_schema": current_schema,
+          "user_message": user_message,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        False,
+      )
+    
 
 
 class AsyncHttpStreamRequest:
@@ -2383,6 +2409,32 @@ class AsyncHttpStreamRequest:
         {
           "entity_group_type": entity_group_type,
           "entities_json": entities_json,
+        },
+        self.__ctx_manager.get(),
+        tb,
+        __cr__,
+        True,
+      )
+    
+    async def StreamSchemaChat(
+        self,
+        system_prompt: str,conversation_history: str,current_schema: str,user_message: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.HTTPRequest:
+      __tb__ = baml_options.get("tb", None)
+      if __tb__ is not None:
+        tb = __tb__._tb # type: ignore (we know how to use this private attribute)
+      else:
+        tb = None
+      __cr__ = baml_options.get("client_registry", None)
+
+      return await self.__runtime.build_request(
+        "StreamSchemaChat",
+        {
+          "system_prompt": system_prompt,
+          "conversation_history": conversation_history,
+          "current_schema": current_schema,
+          "user_message": user_message,
         },
         self.__ctx_manager.get(),
         tb,
